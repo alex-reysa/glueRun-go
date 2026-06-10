@@ -1,0 +1,24 @@
+{
+  "name": "gluerun-orchestration-graph",
+  "version": "0.2.0",
+  "description": "Read-only operator console for glueRun-go L0/L1/L2 orchestration state, deployed sub-agents, and per-task inspection from local durable records.",
+  "author": {
+    "name": "glueRun-go local tools"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "glueRun-go Orchestration Console",
+    "shortDescription": "Operator console for glueRun-go agents, tasks, and gates.",
+    "longDescription": "A read-only local console for glueRun-go orchestration: a top status/control bar (health, STOP, drift, frontier, active counts, disk, gates), a main L0 to L1 to L2 graph viewport with agents and list views, and a bottom inspector drawer that drills into any task — objective, owned and forbidden files, acceptance criteria, required evidence, lease metadata, run id, worktree existence, packets, integration audit, and task-scoped events. Deployed sub-agents are derived from durable facts only.",
+    "developerName": "glueRun-go local tools",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Open the glueRun-go orchestration console.",
+      "Show glueRun-go L0/L1/L2 status and deployed sub-agents."
+    ]
+  }
+}

@@ -1,0 +1,3433 @@
+#!/usr/bin/env python3
+"""Serve a read-only glueRun-go orchestration console for the Codex Browser panel.
+
+The server reads only durable glueRun-go records and runs read-only checks. It never
+mutates orchestration state, leases, worktrees, gates, branches, or the STOP
+sentinel. The UI is served from sibling ``assets/`` files (index.html, styles.css,
+app.js); the backend exposes a small read-only JSON API.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
+
+
+DEFAULT_REPO = os.environ.get("GLUERUN_REPO", ".")
+TARGET_BRANCH = "agent/integration"
+
+
+def load_repo_target_branch(repo) -> str:
+    """Read targetBranch from the target repo's gluerun.config.json so the console is
+    not bound to any one project's integration branch. Falls back to the default."""
+    try:
+        with open(os.path.join(str(repo), "gluerun.config.json"), encoding="utf-8") as f:
+            tb = json.load(f).get("targetBranch")
+        if isinstance(tb, str) and tb:
+            return tb
+    except Exception:
+        pass
+    return TARGET_BRANCH
+ASSETS_DIR = (Path(__file__).resolve().parent.parent / "assets")
+WATCH_DISK_CAPACITY = 99
+SNAPSHOT_TTL_SECONDS = 6.0
+TASK_ID_RE = re.compile(r"^TASK-\d+$")
+
+# Repo-relative orchestration layout. Externalizable via the console adapter
+# (paths.*); these literals remain the built-in fallback so a repo with no
+# adapter behaves exactly as before.
+TASKS_DIR_REL = "docs/orchestration/tasks"
+AREAS_DIR_REL = "docs/orchestration/areas"
+STATE_DIR_REL = ".gluerun-state"
+EVENTS_LOG_REL = "events.ndjson"            # within the state dir
+AUTONOMATE_LOG_REL = "autonomate.out.log"   # within the state dir
+
+# Lease/status vocabularies for durable agent-state derivation. These describe
+# only what the records assert; the UI maps them to tones.
+DONE_STATUSES = {"integrated", "merged", "complete", "completed", "released"}
+AWAITING_STATUSES = {"accepted"}
+BLOCKED_STATUSES = {"blocked"}
+FAILED_STATUSES = {"failed", "error", "errored"}
+# Terminal set used for "is this lease still owned by a worker" checks.
+TERMINAL_LEASE_STATUSES = DONE_STATUSES | AWAITING_STATUSES | BLOCKED_STATUSES | FAILED_STATUSES
+
+ASSET_CONTENT_TYPES = {
+    "styles.css": "text/css; charset=utf-8",
+    "app.js": "application/javascript; charset=utf-8",
+}
+
+# Which run-dir prompt file implies which worker role. Decider is matched by the
+# "decider-prompt-" prefix (its suffix carries the recovery reason).
+ROLE_PROMPT_MAP = {
+    "l2-prompt.md": "developer",
+    "l2-active-prompt.md": "developer",
+    "l2-repair-prompt.md": "recovery-worker",
+    "auditor-prompt.md": "auditor",
+    "planner-prompt.md": "planner",
+}
+
+# Declared role/skill catalog — sourced from docs/operating-model-selfdevelop.md
+# (§4.3 worker types, §8 test-first policy, §9 skills model, §14 autonomous decider).
+# This is REFERENCE data, not a live registry: glueRun-go records only owner/role on
+# leases and packets (uniformly l2-developer today); other roles are inferred from
+# run artifacts. Served static via /api/roles and cached client-side.
+ROLE_CATALOG = {
+    "schema": "gluerun.codex.role-catalog.v0",
+    "source": "operating-model-selfdevelop.md §4.3 worker types · §8 test-first · §9 skills · §14 decider",
+    "note": (
+        "Declared roles and disciplines from the operating model. This is a reference "
+        "catalog, not a live registry — glueRun-go records no per-agent skill list. Owner/role "
+        "is recorded on leases and packets (uniformly l2-developer today); other roles are "
+        "inferred from which prompt files exist in a task's run directory."
+    ),
+    "layers": [
+        {
+            "id": "L0", "label": "orchestration origin", "writes": False,
+            "summary": "Highest reconciler. Reconstructs state, supervises L1, enforces policy. Does not implement code.",
+            "disciplines": ["state reconciliation", "drift detection", "policy enforcement", "decision logging"],
+        },
+        {
+            "id": "L1", "label": "area orchestrator", "writes": False,
+            "summary": "Manages one bounded area. Decomposes work, imports packets, requires evidence. Does not implement code.",
+            "disciplines": ["task decomposition", "packet import", "evidence gating", "integration readiness"],
+        },
+    ],
+    "workers": [
+        {"id": "developer", "label": "developer", "recordedAs": "l2-developer", "writes": True,
+         "promptFile": "l2-prompt.md",
+         "disciplines": ["strict test-first development", "scoped implementation", "state packet emission"],
+         "typicalTools": ["go test", "go vet", "go build", "git diff"]},
+        {"id": "planner", "label": "planner", "writes": False,
+         "promptFile": "planner-prompt.md",
+         "disciplines": ["task planning", "batch decomposition"],
+         "typicalTools": ["planner batch json"]},
+        {"id": "test-engineer", "label": "test engineer", "writes": True,
+         "disciplines": ["test-first development", "characterization tests"],
+         "typicalTools": ["go test"]},
+        {"id": "auditor", "label": "auditor", "writes": False,
+         "promptFile": "auditor-prompt.md",
+         "disciplines": ["diff auditing", "scope-compliance check", "evidence verification"],
+         "typicalTools": ["git diff", "jq", "rg", "scope-check"]},
+        {"id": "reviewer", "label": "reviewer", "writes": False,
+         "disciplines": ["integration review", "cross-task consistency", "review hygiene"],
+         "typicalTools": ["git diff"]},
+        {"id": "integration-worker", "label": "integration worker", "writes": True,
+         "disciplines": ["branch integration", "gate verification"],
+         "typicalTools": ["git merge", "gate-check"]},
+        {"id": "documentation-worker", "label": "documentation worker", "writes": True,
+         "disciplines": ["documentation update"],
+         "typicalTools": []},
+        {"id": "recovery-worker", "label": "recovery worker", "writes": True,
+         "promptFile": "l2-repair-prompt.md",
+         "disciplines": ["recovery and replay", "systematic debugging"],
+         "typicalTools": ["git", "go test"]},
+        {"id": "decider", "label": "autonomous decider", "writes": False,
+         "promptFile": "decider-prompt-*.md", "source": "§14",
+         "disciplines": ["recovery-action selection", "escalate / park"],
+         "typicalTools": ["decide.sh"]},
+    ],
+    # §9 recommended bootstrap skills — the shared discipline vocabulary.
+    "disciplines": [
+        "test-first development", "worktree and branch hygiene", "task planning",
+        "scoped implementation", "evidence capture", "diff auditing",
+        "integration review", "recovery and replay", "documentation update",
+        "state packet emission",
+    ],
+}
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def strip_ticks(value: str) -> str:
+    value = value.strip()
+    if value.startswith("`") and value.endswith("`"):
+        return value[1:-1]
+    return value
+
+
+def run_command(repo: Path, cmd: list[str], timeout: int = 12) -> dict[str, Any]:
+    env = os.environ.copy()
+    env["GLUERUN_TARGET_BRANCH"] = TARGET_BRANCH
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return {"ok": False, "exit": 127, "stdout": "", "stderr": str(exc), "cmd": cmd}
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "exit": None,
+            "stdout": exc.stdout or "",
+            "stderr": f"timed out after {timeout}s",
+            "cmd": cmd,
+        }
+    return {
+        "ok": proc.returncode == 0,
+        "exit": proc.returncode,
+        "stdout": proc.stdout.strip(),
+        "stderr": proc.stderr.strip(),
+        "cmd": cmd,
+    }
+
+
+def read_json(path: Path, fallback: Any = None) -> Any:
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return fallback
+
+
+def state_path(repo: Path, *parts: str) -> Path:
+    """Join a path inside the repo's durable state dir (adapter-overridable)."""
+    return repo.joinpath(STATE_DIR_REL, *parts)
+
+
+def tail_lines(path: Path, limit: int, max_bytes: int = 262144) -> list[str]:
+    """Read only the tail of a file. events.ndjson / autonomate.out.log run to
+    multiple MB, so we seek the last ``max_bytes`` rather than loading the whole
+    file into memory on every snapshot."""
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return []
+    try:
+        with path.open("rb") as handle:
+            if size > max_bytes:
+                handle.seek(size - max_bytes)
+                handle.readline()  # drop the partial first line
+            chunk = handle.read()
+    except OSError:
+        return []
+    # Split strictly on \n (str.splitlines() also breaks on U+2028/U+2029/NEL etc.,
+    # which can appear unescaped inside a JSON payload and corrupt one line into many).
+    lines = chunk.decode("utf-8", errors="replace").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines[-limit:]
+
+
+# High-volume, low-signal event types suppressed from the global feed tail.
+NOISE_EVENT_TYPES = {"integration.skipped"}
+
+
+def parse_events(path: Path, limit: int = 40, drop_noise: bool = True) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    # Pull a larger tail then filter, so suppressed noise does not starve signal.
+    for line in tail_lines(path, limit * 12):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            event = {"raw": line}
+        if drop_noise and isinstance(event, dict) and event.get("type") in NOISE_EVENT_TYPES:
+            continue
+        events.append(event)
+    return events[-limit:]
+
+
+# --------------------------------------------------------------------------- #
+# Task markdown parsing                                                        #
+# --------------------------------------------------------------------------- #
+
+HEADER_FIELD_RE = re.compile(r"^([A-Za-z][A-Za-z -]+):\s*(.+)$")
+TASK_HEADING_RE = re.compile(r"#\s+(TASK-\d+):\s*(.+)")
+
+
+def _split_sections(lines: list[str]) -> dict[str, list[str]]:
+    """Group markdown lines under their ``## Section`` heading (lowercased key)."""
+    sections: dict[str, list[str]] = {"_preamble": []}
+    current = "_preamble"
+    for line in lines:
+        heading = re.match(r"^##\s+(.+?)\s*$", line)
+        if heading:
+            current = heading.group(1).strip().lower()
+            sections.setdefault(current, [])
+            continue
+        sections.setdefault(current, []).append(line)
+    return sections
+
+
+def _bullets(lines: list[str]) -> list[str]:
+    items: list[str] = []
+    for line in lines:
+        match = re.match(r"^\s*[-*]\s+(.+?)\s*$", line)
+        if match:
+            items.append(strip_ticks(match.group(1)))
+    return items
+
+
+def _prose(lines: list[str]) -> str:
+    return "\n".join(line.rstrip() for line in lines).strip()
+
+
+def _scope_files(lines: list[str]) -> tuple[list[str], list[str]]:
+    """Parse a ``## Scope`` section into (owned, forbidden) file lists."""
+    owned: list[str] = []
+    forbidden: list[str] = []
+    bucket: list[str] | None = None
+    for line in lines:
+        lowered = line.strip().lower()
+        if lowered.startswith("owned files"):
+            bucket = owned
+            continue
+        if lowered.startswith("forbidden files"):
+            bucket = forbidden
+            continue
+        match = re.match(r"^\s*[-*]\s+(.+?)\s*$", line)
+        if match and bucket is not None:
+            bucket.append(strip_ticks(match.group(1)))
+    return owned, forbidden
+
+
+def _packet_history(lines: list[str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    headers: list[str] = []
+    for line in lines:
+        if "|" not in line:
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if all(set(cell) <= {"-", ":", " "} for cell in cells):
+            continue  # separator row
+        if not headers:
+            headers = [cell.lower() for cell in cells]
+            continue
+        if any(cells):
+            rows.append({headers[i] if i < len(headers) else f"col{i}": cells[i] for i in range(len(cells))})
+    return rows
+
+
+def parse_task(path: Path) -> dict[str, Any]:
+    """Light parse used for list/graph rows (header fields only)."""
+    text = path.read_text(errors="replace")
+    lines = text.splitlines()
+    task_id = path.stem
+    title = task_id
+    fields: dict[str, str] = {}
+    for line in lines[:80]:
+        if line.startswith("# "):
+            match = TASK_HEADING_RE.match(line)
+            if match:
+                task_id = match.group(1)
+                title = match.group(2).strip()
+            continue
+        match = HEADER_FIELD_RE.match(line)
+        if match:
+            key = match.group(1).strip().lower().replace(" ", "_")
+            fields[key] = strip_ticks(match.group(2))
+    raw_depends = fields.get("depends_on", "")
+    depends = [] if raw_depends == "[]" else [item.strip() for item in raw_depends.split(",") if item.strip()]
+    return {
+        "id": task_id,
+        "title": title,
+        "status": fields.get("status", "unknown"),
+        "area": fields.get("area", "unknown"),
+        "targetBranch": fields.get("target_branch", ""),
+        "workerBranch": fields.get("worker_branch", ""),
+        "testPolicy": fields.get("test_policy", ""),
+        "gateCommand": fields.get("gate_command", ""),
+        "dispatchMode": fields.get("dispatch_mode", ""),
+        "dependsOn": depends,
+        "path": str(path),
+    }
+
+
+def parse_task_detail(path: Path) -> dict[str, Any]:
+    """Full parse including objective, scope, criteria, evidence, history."""
+    base = parse_task(path)
+    text = path.read_text(errors="replace")
+    sections = _split_sections(text.splitlines())
+    owned, forbidden = _scope_files(sections.get("scope", []))
+    base.update(
+        {
+            "objective": _prose(sections.get("objective", [])),
+            "ownedFiles": owned,
+            "forbiddenFiles": forbidden,
+            "prerequisites": _bullets(sections.get("prerequisites", [])) or _prose(sections.get("prerequisites", [])),
+            "acceptanceCriteria": _bullets(sections.get("acceptance criteria", [])),
+            "requiredEvidence": _bullets(sections.get("required evidence", [])),
+            "risks": _prose(sections.get("risks", [])),
+            "packetHistory": _packet_history(sections.get("packet history", [])),
+        }
+    )
+    return base
+
+
+def collect_tasks(repo: Path) -> list[dict[str, Any]]:
+    task_dir = repo / TASKS_DIR_REL
+    tasks = []
+    for path in sorted(task_dir.glob("TASK-*.md")):
+        if path.name == "TEMPLATE.md":
+            continue
+        try:
+            tasks.append(parse_task(path))
+        except Exception as exc:  # pragma: no cover - defensive
+            tasks.append({"id": path.stem, "title": path.stem, "status": "parse-error", "error": str(exc)})
+    return tasks
+
+
+def collect_leases(repo: Path) -> list[dict[str, Any]]:
+    leases = []
+    for path in sorted(state_path(repo, "leases").glob("TASK-*.json")):
+        data = read_json(path, {})
+        if not isinstance(data, dict):
+            continue
+        data["path"] = str(path)
+        data["worktreeExists"] = bool(data.get("worktree") and Path(str(data["worktree"])).exists())
+        leases.append(data)
+    return leases
+
+
+# An L1 node lease whose status is in this set is a LIVE planner (a node actively
+# being planned in parallel). released/failed free the slot and are not active.
+# Mirrors the orchestration lib's active set; the gate-result remains the only
+# completion authority — an L1 lease never means "complete".
+L1_ACTIVE_STATUSES = {"proposed", "planning", "active"}
+
+
+def collect_l1_leases(repo: Path) -> list[dict[str, Any]]:
+    """Durable L1 node leases (.gluerun-state/l1-leases/<node>.json), written by the
+    live L1 fanout. Absent when fanout is off. Read-only. The `active` flag is the
+    honest "deployed planner" signal — lease-file existence alone is NOT activity;
+    a released/failed lease is history, not a live agent."""
+    leases = []
+    root = state_path(repo, "l1-leases")
+    if not root.exists():
+        return leases
+    for path in sorted(root.glob("*.json")):
+        data = read_json(path, {})
+        if not isinstance(data, dict) or not data.get("node"):
+            continue
+        data["path"] = str(path)
+        data["active"] = data.get("status") in L1_ACTIVE_STATUSES
+        leases.append(data)
+    return leases
+
+
+def collect_worktrees(repo: Path) -> list[dict[str, Any]]:
+    root = repo / ".worktrees"
+    worktrees = []
+    if not root.exists():
+        return worktrees
+    for path in sorted(root.iterdir()):
+        if path.is_dir():
+            worktrees.append({"name": path.name, "path": str(path)})
+    return worktrees
+
+
+def collect_pid_files(repo: Path) -> list[dict[str, Any]]:
+    results = []
+    state = state_path(repo)
+    if not state.exists():
+        return results
+    # Look only where pid files actually live — never rglob the runs/ archive,
+    # which holds tens of thousands of entries and would dominate snapshot time.
+    candidates: list[Path] = []
+    for pattern in ("*pid*", "*.pid", "locks/*pid*", "locks/*.pid"):
+        candidates.extend(state.glob(pattern))
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen or not path.is_file() or "pid" not in path.name.lower():
+            continue
+        seen.add(path)
+        value = path.read_text(errors="replace").strip()
+        pid_match = re.search(r"\d+", value)
+        pid = int(pid_match.group(0)) if pid_match else None
+        alive = False
+        if pid:
+            try:
+                os.kill(pid, 0)
+                alive = True
+            except OSError:
+                alive = False
+        results.append({"path": str(path), "pid": pid, "alive": alive, "raw": value})
+    return results
+
+
+# How orchestration processes are recognized in `ps` output. Externalizable via
+# the console adapter (processMatchers); these literals remain the built-in
+# fallback. include* substrings match case-insensitively (against the lowered
+# command line); excludeSubstrings matches case-sensitively, mirroring the
+# original inline checks.
+PROCESS_MATCHERS: dict[str, Any] = {
+    "includeSubstrings": ["scripts/orchestration", "autonomate", "l1-drive", "/.worktrees/"],
+    "includeAllOf": [["codex", "gluerun", "exec"]],
+    "excludeSubstrings": ["gluerun_graph_server.py", " rg "],
+    "excludeSubstringsLowered": ["cursor helper"],
+}
+
+
+def collect_processes() -> list[dict[str, Any]]:
+    ps = run_command(Path.cwd(), ["ps", "-axo", "pid,ppid,command"], timeout=5)
+    matchers = PROCESS_MATCHERS
+    rows = []
+    for line in ps.get("stdout", "").splitlines():
+        lowered = line.lower()
+        is_orchestration = (
+            any(s in lowered for s in matchers.get("includeSubstrings") or [])
+            or any(all(t in lowered for t in group) for group in matchers.get("includeAllOf") or [])
+        )
+        if not is_orchestration:
+            continue
+        if (any(s in line for s in matchers.get("excludeSubstrings") or [])
+                or any(s in lowered for s in matchers.get("excludeSubstringsLowered") or [])):
+            continue
+        parts = line.strip().split(None, 2)
+        if len(parts) == 3:
+            rows.append({"pid": parts[0], "ppid": parts[1], "command": parts[2]})
+    return rows
+
+
+def collect_disk(repo: Path) -> dict[str, Any]:
+    df = run_command(repo, ["df", "-h", "."], timeout=5)
+    du = run_command(repo, ["du", "-sh", STATE_DIR_REL, STATE_DIR_REL + "/runs", ".worktrees"], timeout=15)
+    capacity = None
+    free = None
+    lines = df.get("stdout", "").splitlines()
+    if len(lines) >= 2:
+        parts = lines[1].split()
+        if len(parts) >= 5:
+            free = parts[3]
+            try:
+                capacity = int(parts[4].rstrip("%"))
+            except ValueError:
+                capacity = None
+    return {
+        "df": df,
+        "du": du,
+        "capacityPercent": capacity,
+        "free": free,
+        "watch": capacity is not None and capacity >= WATCH_DISK_CAPACITY,
+    }
+
+
+def parse_next_area(stdout: str) -> dict[str, str]:
+    result = {}
+    for line in stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            result[key.strip()] = value.strip()
+    return result
+
+
+def parse_next_areas(stdout: str) -> dict[str, Any]:
+    """Parse `dag.sh next-areas` JSON: {"frontier":[{node,area,stage,layer,...}],
+    "allComplete"?:true}. Returns {"frontier": []} if unparseable."""
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and isinstance(data.get("frontier"), list):
+                return data
+    return {"frontier": []}
+
+
+def task_sort_key(task: dict[str, Any]) -> int:
+    match = re.search(r"(\d+)$", task.get("id", ""))
+    return int(match.group(1)) if match else -1
+
+
+# --------------------------------------------------------------------------- #
+# Durable agent-state derivation                                              #
+# --------------------------------------------------------------------------- #
+
+def process_matches(processes: list[dict[str, Any]], *needles: str) -> bool:
+    """Word/path-boundary match so e.g. TASK-0309 does not match TASK-03091 and a
+    worktree path is matched as a delimited segment, not an incidental substring."""
+    tokens = [n for n in needles if n]
+    if not tokens:
+        return False
+    patterns = [re.compile(r"(?<![\w-])" + re.escape(t) + r"(?![\w-])") for t in tokens]
+    for proc in processes:
+        command = str(proc.get("command", ""))
+        if any(p.search(command) for p in patterns):
+            return True
+    return False
+
+
+def derive_task_state(task: dict[str, Any], lease: dict[str, Any] | None, processes: list[dict[str, Any]]) -> str:
+    """Map durable facts to one of:
+    active, awaiting, blocked, failed, stale, integrated, idle.
+    Only durable signals count; accepted markdown alone never reads as active.
+    """
+    status = str((lease or {}).get("status") or task.get("status") or "").lower()
+    worktree_exists = bool((lease or {}).get("worktreeExists"))
+    # Terminal lease statuses are authoritative: an incidental process-substring
+    # match must never flip a blocked/integrated/awaiting task back to "active".
+    if status in BLOCKED_STATUSES:
+        return "blocked"
+    if status in FAILED_STATUSES:
+        return "failed"
+    if status in AWAITING_STATUSES:
+        return "awaiting"
+    if status in DONE_STATUSES:
+        # Retained worktrees are normal evidence during active overnight runs.
+        # Completion stays integrated; the runtime tab still shows whether the
+        # worktree remains on disk.
+        return "integrated"
+    # Non-terminal / no recorded lease — a live matching process is the strongest signal.
+    worker_branch = task.get("workerBranch") or (lease or {}).get("branch") or ""
+    worktree = (lease or {}).get("worktree") or ""
+    if process_matches(processes, task.get("id", ""), worker_branch, worktree):
+        return "active"
+    if lease and status:
+        # Worker still owns an open lease: live if a worktree backs it, else stale.
+        return "active" if worktree_exists else "stale"
+    if worktree_exists:
+        return "stale"
+    return "idle"
+
+
+def derive_area_state(task_states: list[str]) -> str:
+    """Area liveness, by precedence. Completion is carried in counts, not here,
+    so a fully-integrated-but-quiet area reads ``idle`` rather than celebrating."""
+    present = set(task_states)
+    for state in ("active", "blocked", "failed", "awaiting", "stale"):
+        if state in present:
+            return state
+    return "idle"
+
+
+def derive_l0_state(stop_present: bool, processes: list[dict[str, Any]], active_origin_lock: bool) -> str:
+    if active_origin_lock or processes:
+        return "active"
+    if stop_present:
+        return "stopped"
+    return "idle"
+
+
+STATE_SEVERITY = {"failed": 0, "blocked": 1, "active": 2, "awaiting": 3, "stale": 4, "idle": 5, "integrated": 6}
+
+
+def classify_health(snapshot: dict[str, Any]) -> str:
+    drift = snapshot["git"].get("drift", {})
+    if drift.get("left", 0):
+        return "blocker"
+    if snapshot["locks"].get("activeOriginLock"):
+        return "watch"
+    if snapshot["disk"].get("watch"):
+        return "watch"
+    if snapshot["stop"].get("present") and not snapshot["runtime"].get("processes"):
+        return "watch"
+    return "healthy"
+
+
+def build_l2_tasks(
+    tasks: list[dict[str, Any]],
+    leases: list[dict[str, Any]],
+    processes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    lease_by_task = {lease.get("taskId"): lease for lease in leases}
+    merged = []
+    for task in tasks:
+        item = dict(task)
+        lease = lease_by_task.get(task.get("id"))
+        if lease:
+            item["leaseStatus"] = lease.get("status")
+            item["owner"] = lease.get("owner")
+            item["runId"] = lease.get("runId")
+            item["worktree"] = lease.get("worktree")
+            item["worktreeExists"] = lease.get("worktreeExists")
+            item["updatedAt"] = lease.get("updatedAt")
+            item["retryCount"] = lease.get("retryCount")
+            item["maxRetries"] = lease.get("maxRetries")
+        item["state"] = derive_task_state(task, lease, processes)
+        merged.append(item)
+    return sorted(merged, key=task_sort_key, reverse=True)
+
+
+def build_l1_areas(
+    repo: Path,
+    merged_tasks: list[dict[str, Any]],
+    l1_leases: list[dict[str, Any]] | None = None,
+    frontier_areas: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    l1_leases = l1_leases or []
+    leases_by_area: dict[str, list[dict[str, Any]]] = {}
+    for lease in l1_leases:
+        leases_by_area.setdefault(lease.get("area"), []).append(lease)
+    area_names = {path.parent.name for path in (repo / AREAS_DIR_REL).glob("*/state.md")}
+    area_names.update(task.get("area", "unknown") for task in merged_tasks)
+    # An area with a live L1 planner but no L2 tasks yet must still appear.
+    area_names.update(lease.get("area") for lease in l1_leases if lease.get("area"))
+    # A ready DAG frontier node's area is shown even before any planner/task exists.
+    area_names.update(area for area in (frontier_areas or []) if area)
+    by_area: list[dict[str, Any]] = []
+    for area in sorted(name for name in area_names if name):
+        area_tasks = [task for task in merged_tasks if task.get("area") == area]
+        counts: dict[str, int] = {}
+        state_counts: dict[str, int] = {}
+        for task in area_tasks:
+            counts[task.get("status", "unknown")] = counts.get(task.get("status", "unknown"), 0) + 1
+            state_counts[task["state"]] = state_counts.get(task["state"], 0) + 1
+        recent = sorted(area_tasks, key=task_sort_key, reverse=True)[:8]
+        active = [task for task in area_tasks if task["state"] in ("active", "awaiting", "blocked", "failed", "stale")]
+        area_leases = leases_by_area.get(area, [])
+        # Honest active-planner signal: only a lease in an active status counts.
+        active_lease = next((lease for lease in area_leases if lease.get("active")), None)
+        state = derive_area_state([task["state"] for task in area_tasks])
+        # A live L1 planner makes the area active even before it has spawned tasks.
+        if active_lease and state == "idle":
+            state = "active"
+        by_area.append(
+            {
+                "id": f"L1:{area}",
+                "area": area,
+                "state": state,
+                "taskCount": len(area_tasks),
+                "counts": counts,
+                "stateCounts": state_counts,
+                "activeTasks": active,
+                "recentTasks": recent,
+                "l1Active": bool(active_lease),
+                "l1Lease": active_lease,
+                "l1Leases": area_leases,
+            }
+        )
+    return by_area
+
+
+def build_agents(
+    repo: Path,
+    merged_tasks: list[dict[str, Any]],
+    l1_areas: list[dict[str, Any]],
+    stop_present: bool,
+    processes: list[dict[str, Any]],
+    active_origin_lock: bool,
+    stale_locks: list[str],
+    origin_state: dict[str, Any],
+) -> dict[str, Any]:
+    l0 = {
+        "id": "L0",
+        "label": "origin",
+        "state": derive_l0_state(stop_present, processes, active_origin_lock),
+        "stop": stop_present,
+        "activeOriginLock": active_origin_lock,
+        "staleLocks": stale_locks,
+        "processes": len(processes),
+        "runId": origin_state.get("runId") if isinstance(origin_state, dict) else None,
+        "headSha": origin_state.get("headSha") if isinstance(origin_state, dict) else None,
+        "packets": origin_state.get("packets") if isinstance(origin_state, dict) else None,
+        "activeLeases": origin_state.get("activeLeases") if isinstance(origin_state, dict) else None,
+    }
+    l1 = [
+        {
+            "id": area["id"],
+            "area": area["area"],
+            "state": area["state"],
+            "taskCount": area["taskCount"],
+            "stateCounts": area["stateCounts"],
+            "l1Active": area.get("l1Active", False),
+            "l1Lease": area.get("l1Lease"),
+        }
+        for area in l1_areas
+    ]
+    notable = [
+        {
+            "id": task["id"],
+            "title": task.get("title"),
+            "area": task.get("area"),
+            "state": task["state"],
+            "leaseStatus": task.get("leaseStatus"),
+            "workerBranch": task.get("workerBranch"),
+            "runId": task.get("runId"),
+            "worktreeExists": task.get("worktreeExists"),
+            "retryCount": task.get("retryCount"),
+            "maxRetries": task.get("maxRetries"),
+            "updatedAt": task.get("updatedAt"),
+        }
+        for task in merged_tasks
+        if task["state"] in ("active", "awaiting", "blocked", "failed", "stale")
+    ]
+    notable.sort(key=lambda t: (STATE_SEVERITY.get(t["state"], 9), -task_sort_key(t)))
+    return {"l0": l0, "l1": l1, "l2": notable}
+
+
+# --------------------------------------------------------------------------- #
+# Task detail (read-only, single task)                                        #
+# --------------------------------------------------------------------------- #
+
+def collect_task_events(repo: Path, task_id: str, limit: int = 24) -> list[dict[str, Any]]:
+    path = state_path(repo, EVENTS_LOG_REL)
+    # Bounded tail read: scan only recent history (~1MB) for the task so we never
+    # pull the multi-MB event log into memory. Older integrated tasks may show no
+    # events here — acceptable, since the inspector also surfaces packet/audit refs.
+    lines = tail_lines(path, limit=10_000_000, max_bytes=1_048_576)
+    matches: list[dict[str, Any]] = []
+    for line in lines:
+        if task_id not in line:
+            continue  # cheap pre-filter before parsing
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        data = event.get("data") if isinstance(event, dict) else None
+        if isinstance(data, dict) and data.get("taskId") == task_id:
+            matches.append(event)
+        elif task_id in str(event.get("message", "")):
+            matches.append(event)
+    return matches[-limit:]
+
+
+def find_task_packets(repo: Path, task_id: str, run_id: str | None) -> list[dict[str, Any]]:
+    inbox = state_path(repo, "inbox")
+    found: list[dict[str, Any]] = []
+    if not inbox.exists():
+        return found
+    candidates = list(inbox.glob("*.json")) + list((inbox / "superseded").glob("*.json"))
+    for path in candidates:
+        data = read_json(path, None)
+        if not isinstance(data, dict) or data.get("taskId") != task_id:
+            continue
+        found.append(
+            {
+                "path": str(path),
+                "packetId": data.get("packetId"),
+                "runId": data.get("runId"),
+                "role": data.get("role"),
+                "status": data.get("status"),
+                "headSha": data.get("headSha"),
+                "changedFiles": data.get("changedFiles"),
+                "commands": data.get("commands"),
+                "tests": data.get("tests"),
+                "evidence": data.get("evidence"),
+                "blockers": data.get("blockers"),
+                "nextAction": data.get("nextAction"),
+                "createdAt": data.get("createdAt"),
+                "superseded": "superseded" in path.parts,
+            }
+        )
+    found.sort(key=lambda p: str(p.get("createdAt") or ""), reverse=True)
+    return found
+
+
+def find_integrate_runs(repo: Path, task_id: str) -> list[dict[str, Any]]:
+    runs = state_path(repo, "runs")
+    out: list[dict[str, Any]] = []
+    if not runs.exists():
+        return out
+    for path in sorted(runs.glob(f"*integrate-{task_id}")):
+        gate = read_json(path / "gate-check.json", None)
+        out.append(
+            {
+                "dir": str(path),
+                "exists": True,
+                "gateCheck": gate if isinstance(gate, dict) else None,
+                "hasLog": (path / "gate-check.log").exists(),
+                "logRef": str(path / "gate-check.log") if (path / "gate-check.log").exists() else None,
+            }
+        )
+    return out
+
+
+def find_gate_refs(repo: Path, task_id: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for path in sorted((repo / "docs/orchestration/gates").glob("*.gate-result.json")):
+        data = read_json(path, None)
+        if not isinstance(data, dict):
+            continue
+        evidence = data.get("evidence") or []
+        referenced = any(
+            isinstance(item, dict) and task_id in (item.get("taskIds") or [])
+            for item in evidence
+        )
+        if referenced:
+            out.append(
+                {
+                    "node": data.get("node"),
+                    "status": data.get("status"),
+                    "authoritative": data.get("authoritative"),
+                    "evidenceClass": data.get("evidenceClass"),
+                    "commandLogs": [
+                        {
+                            "ref": item.get("ref"),
+                            "exitCode": item.get("exitCode"),
+                            "logRef": item.get("logRef"),
+                            "skipGuardRed": str(item.get("ref", "")).endswith("-skip-guard-red"),
+                        }
+                        for item in evidence
+                        if isinstance(item, dict) and item.get("kind") == "command-log"
+                    ],
+                    "path": str(path),
+                }
+            )
+    return out
+
+
+def derive_run_roles(repo: Path, run_id: str | None) -> list[dict[str, Any]]:
+    """Infer which worker roles touched a task from the prompt files present in its
+    run directory. Read-only: a single non-recursive listing of one known dir."""
+    if not run_id:
+        return []
+    run_dir = state_path(repo, "runs") / run_id
+    if not run_dir.is_dir():
+        return []
+    roles: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        names = sorted(p.name for p in run_dir.iterdir() if p.is_file())
+    except OSError:
+        return []
+    for name in names:
+        role = ROLE_PROMPT_MAP.get(name)
+        reason = None
+        if role is None and name.startswith("decider-prompt-") and name.endswith(".md"):
+            role = "decider"
+            reason = name[len("decider-prompt-"):-len(".md")] or None
+        if role and role not in seen:
+            seen.add(role)
+            roles.append({"role": role, "promptFile": name, "reason": reason})
+    return roles
+
+
+def derive_tools_used(packets: list[dict[str, Any]], run_dir: Path | None, gate_command: str) -> dict[str, Any]:
+    """Observed commands/tools for a task, from already-loaded packet data plus the
+    run's audit.json and gate-check.json. Read-only; bounded row counts."""
+    cap = 16
+    worker_cmds: list[dict[str, Any]] = []
+    if packets:
+        for entry in (packets[0].get("commands") or [])[:cap]:
+            if isinstance(entry, dict):
+                worker_cmds.append({"cmd": entry.get("cmd"), "exitCode": entry.get("exitCode")})
+            elif isinstance(entry, str):
+                worker_cmds.append({"cmd": entry, "exitCode": None})
+    auditor_cmds: list[str] = []
+    gate_check: dict[str, Any] | None = None
+    if run_dir is not None and run_dir.is_dir():
+        audit = read_json(run_dir / "audit.json", None)
+        if isinstance(audit, dict):
+            ran = audit.get("commandsRun")
+            if isinstance(ran, list):
+                auditor_cmds = [str(c) for c in ran[:cap]]
+        gc = read_json(run_dir / "gate-check.json", None)
+        if isinstance(gc, dict):
+            gate_check = {"cmd": gc.get("cmd"), "exitCode": gc.get("exitCode")}
+    return {
+        "workerCommands": worker_cmds,
+        "auditorCommands": auditor_cmds,
+        "gateCommand": gate_command or None,
+        "gateCheck": gate_check,
+    }
+
+
+def collect_task_detail(repo: Path, task_id: str) -> dict[str, Any] | None:
+    repo = repo.resolve()
+    path = repo / "docs/orchestration/tasks" / f"{task_id}.md"
+    if not path.exists():
+        return None
+    detail = parse_task_detail(path)
+    lease_path = state_path(repo, "leases") / f"{task_id}.json"
+    lease = read_json(lease_path, None)
+    if isinstance(lease, dict):
+        lease = dict(lease)
+        lease["path"] = str(lease_path)
+        lease["worktreeExists"] = bool(lease.get("worktree") and Path(str(lease["worktree"])).exists())
+    else:
+        lease = None
+    processes = collect_processes()
+    detail["lease"] = lease
+    detail["state"] = derive_task_state(detail, lease, processes)
+    detail["worktree"] = {
+        "path": (lease or {}).get("worktree"),
+        "exists": bool((lease or {}).get("worktreeExists")),
+    }
+    run_id = (lease or {}).get("runId")
+    detail["runId"] = run_id
+    detail["packets"] = find_task_packets(repo, task_id, run_id)
+    detail["integrateRuns"] = find_integrate_runs(repo, task_id)
+    detail["gates"] = find_gate_refs(repo, task_id)
+    detail["events"] = collect_task_events(repo, task_id)
+    # Observed-this-run agents + tools (honest proxies; glueRun-go has no skill registry).
+    run_dir = (state_path(repo, "runs") / run_id) if run_id else None
+    detail["agentsInvolved"] = {
+        "owner": (lease or {}).get("owner"),
+        "packetRole": detail["packets"][0].get("role") if detail["packets"] else None,
+        "rolesFromPrompts": derive_run_roles(repo, run_id),
+        "runId": run_id,
+        "source": (
+            "owner/role recorded on lease + packet (uniformly l2-developer); other roles "
+            "inferred from *-prompt.md files in runs/<runId>/"
+        ),
+    }
+    detail["toolsUsed"] = derive_tools_used(detail["packets"], run_dir, detail.get("gateCommand", ""))
+    # Provenance: the causal chain (source doc -> node -> planner -> worker ->
+    # packet -> audit -> integration -> gate). Additive; degrades gracefully when an
+    # input is missing. See the "Provenance (read-only derivation)" section.
+    detail["provenance"] = build_task_provenance(repo, detail, lease)
+    detail["generatedAt"] = utc_now()
+    detail["schema"] = "gluerun.codex.task-detail.v0"
+    return detail
+
+
+# --------------------------------------------------------------------------- #
+# Snapshot                                                                      #
+# --------------------------------------------------------------------------- #
+
+# Read-only orchestration commands the snapshot runs (and the UI surfaces).
+# Externalizable via the console adapter (commands); these `make orch-*`
+# argv lists remain the built-in fallback. "{node}" is substituted by
+# console_command(..., node=...).
+CONSOLE_COMMANDS: dict[str, list[str]] = {
+    "status": ["make", "orch-status"],
+    "validateDag": ["make", "orch-validate-dag"],
+    "areaGate": ["make", "orch-area-gate", "NODE={node}"],
+    "nextArea": ["make", "orch-next-area"],
+    "nextAreas": ["make", "orch-next-areas"],
+}
+
+
+def console_command(name: str, **params: str) -> list[str]:
+    """Resolve one configured command to an argv list, filling {placeholders}."""
+    out: list[str] = []
+    for part in (CONSOLE_COMMANDS.get(name) or []):
+        part = str(part)
+        if params and "{" in part:
+            try:
+                part = part.format(**params)
+            except (KeyError, IndexError, ValueError):
+                pass  # leave the part untouched rather than crash a snapshot
+        out.append(part)
+    return out
+
+
+def collect_snapshot(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    tasks = collect_tasks(repo)
+    leases = collect_leases(repo)
+    l1_leases = collect_l1_leases(repo)
+    processes = collect_processes()
+    origin_state = read_json(state_path(repo, "origin-state.json"), {})
+    status = run_command(repo, console_command("status"))
+    validate_dag = run_command(repo, console_command("validateDag"))
+    gate_d0 = run_command(repo, console_command("areaGate", node="D0.contract"))
+    gate_d1 = run_command(repo, console_command("areaGate", node="D1.contract"))
+    next_area = run_command(repo, console_command("nextArea"))
+    next_areas = run_command(repo, console_command("nextAreas"))
+    next_areas_parsed = parse_next_areas(next_areas.get("stdout", ""))
+    drift_cmd = run_command(
+        repo,
+        ["git", "rev-list", "--left-right", "--count", f"origin/{TARGET_BRANCH}...{TARGET_BRANCH}"],
+    )
+    drift_left = drift_right = 0
+    if drift_cmd["ok"]:
+        parts = drift_cmd["stdout"].split()
+        if len(parts) >= 2:
+            drift_left, drift_right = int(parts[0]), int(parts[1])
+    origin_state_compact = {}
+    if isinstance(origin_state, dict):
+        for key in (
+            "schema", "runId", "generatedAt", "branch", "headSha", "targetBranch",
+            "packets", "activeLeases", "extraWorktrees", "readyTasks",
+        ):
+            if key in origin_state:
+                origin_state_compact[key] = origin_state[key]
+    lock_dir = state_path(repo, "locks")
+    locks = sorted(str(path) for path in lock_dir.glob("*")) if lock_dir.exists() else []
+    stale_locks = [path for path in locks if "stale" in Path(path).name]
+    active_origin_lock = (lock_dir / "origin.lock.json").exists()
+
+    l2_tasks = build_l2_tasks(tasks, leases, processes)
+    frontier_areas = [f.get("area") for f in next_areas_parsed.get("frontier", []) if isinstance(f, dict)]
+    l1_areas = build_l1_areas(repo, l2_tasks, l1_leases, frontier_areas)
+    stop_present = state_path(repo, "STOP").exists()
+    agents = build_agents(
+        repo, l2_tasks, l1_areas, stop_present, processes,
+        active_origin_lock, stale_locks, origin_state if isinstance(origin_state, dict) else {},
+    )
+
+    state_totals: dict[str, int] = {}
+    for task in l2_tasks:
+        state_totals[task["state"]] = state_totals.get(task["state"], 0) + 1
+
+    snapshot: dict[str, Any] = {
+        "schema": "gluerun.codex.orchestration-graph.v1",
+        "generatedAt": utc_now(),
+        "repo": str(repo),
+        "targetBranch": TARGET_BRANCH,
+        "stop": {"present": stop_present},
+        "runtime": {
+            "pidFiles": collect_pid_files(repo),
+            "processes": processes,
+            "worktrees": collect_worktrees(repo),
+        },
+        "locks": {"files": locks, "staleLocks": stale_locks, "activeOriginLock": active_origin_lock},
+        "git": {
+            "status": run_command(repo, ["git", "status", "--short", "--branch"]),
+            "drift": {"left": drift_left, "right": drift_right, "raw": drift_cmd},
+        },
+        "orchestration": {
+            "status": status,
+            "validateDag": validate_dag,
+            "gateD0": gate_d0,
+            "gateD1": gate_d1,
+            "nextArea": parse_next_area(next_area.get("stdout", "")),
+            "nextAreaRaw": next_area,
+            "nextAreas": next_areas_parsed,
+            "nextAreasRaw": next_areas,
+            "originState": origin_state_compact,
+        },
+        "events": parse_events(state_path(repo, EVENTS_LOG_REL), 40),
+        "autonomateTail": tail_lines(state_path(repo, AUTONOMATE_LOG_REL), 80),
+        "disk": collect_disk(repo),
+        "l1Areas": l1_areas,
+        "l1Leases": l1_leases,
+        "l2Tasks": l2_tasks,
+        "agents": agents,
+        "summary": {
+            "tasksTotal": len(tasks),
+            "leasesTotal": len(leases),
+            "packetsInbox": origin_state.get("packets", {}).get("inbox") if isinstance(origin_state, dict) else None,
+            "packetsImported": origin_state.get("packets", {}).get("imported") if isinstance(origin_state, dict) else None,
+            "stateCounts": state_totals,
+            "activeAgents": len(agents["l2"]),
+            "l1PlannersActive": sum(1 for area in l1_areas if area.get("l1Active")),
+            "frontierCount": len(next_areas_parsed.get("frontier", [])),
+        },
+    }
+    snapshot["health"] = classify_health(snapshot)
+    return snapshot
+
+
+# --------------------------------------------------------------------------- #
+# Live session terminal (read-only observer)                                   #
+# --------------------------------------------------------------------------- #
+#
+# The session APIs power the always-on terminal in the console work dock. They
+# are a strict read-only OBSERVER: they tail Codex/orchestration log files and
+# parse durable records. They never write, and — unlike collect_snapshot — they
+# run NO subprocesses (no make/git/ps). Liveness is inferred from lease status
+# plus log-file freshness, so a single /api/sessions call is pure filesystem I/O
+# and stays well under the 2s client poll cadence even with hundreds of run dirs.
+
+SESSIONS_TTL_SECONDS = 2.0
+SESSION_SCAN_LIMIT = 80          # most-recent run dirs classified per discovery
+SESSION_RETURN_LIMIT = 16        # sessions returned to the client (origin always included)
+SESSION_LIVE_WINDOW = 90.0       # log mtime within N s => the stream is "live"
+SESSION_PEEK_BYTES = 16384       # tail bytes read to summarize a session's last line
+SESSION_LOG_MAX_BYTES = 262144   # cap per /api/session read (tail or forward window)
+SESSION_LINE_LIMIT_MAX = 2000
+SESSION_LINE_LIMIT_DEFAULT = 500
+CMD_OUTPUT_CAP = 1400            # chars of a command's output tail retained
+AGENT_MSG_CAP = 6000             # chars of an agent/reasoning message retained
+
+# A session id is either the literal "origin" feed or a run-dir basename. The
+# pattern only guarantees a traversal-safe basename (no '/', no leading dot so
+# '..' is rejected); the real safety guard is the resolved-path containment check
+# in _resolve_session_log (the dir must resolve to a direct child of runs/). This
+# stays decoupled from the orchestrator's run-dir naming (RUN-/ORIGIN- today).
+SESSION_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
+INTEGRATE_RE = re.compile(r"-integrate-(TASK-\d+)$")
+TASK_IN_TEXT_RE = re.compile(r"TASK-\d+")
+# Lease statuses that mean a worker is still mid-flight (vs. terminal/awaiting).
+WORKER_ACTIVE_LEASE = {"running", "dispatched", "active"}
+# Plain (non-Codex) per-run logs worth streaming as secondary panes.
+PLAIN_LOG_NAMES = ("gate-check.log", "scope-check.log", "secret-scan.log")
+# Codex thread logs, in role-priority order (primary stream first).
+CODEX_LOG_NAMES = (("worker-codex.log", "worker"), ("planner-codex.log", "planner"),
+                   ("decider-codex.log", "decider"))
+# "<iso>  LEVEL  message" — the shape Codex emits for its plain stderr lines.
+ISO_LEVEL_LINE_RE = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+([A-Z]+)\s+(.*)$")
+# Codex plugin/skill loader chatter — hundreds of identical WARN lines per run that
+# carry no orchestration signal. Dropped from parsed view; raw view keeps everything.
+LOG_NOISE_RE = re.compile(r"codex_core_(plugins::manifest|skills::loader)")
+# planner-prompt.md header fields we surface as session identity.
+_PLANNER_AREA_RE = re.compile(r"Area Planner for area `([^`]+)`")
+_PLANNER_NODE_RE = re.compile(r"Executable DAG node:\s*`([^`]+)`")
+_PLANNER_STAGE_RE = re.compile(r"^Stage:\s*`([^`]+)`", re.MULTILINE)
+_PLANNER_LAYER_RE = re.compile(r"^Layer:\s*`([^`]+)`", re.MULTILINE)
+
+
+def _safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _iso_from_mtime(ts: float) -> str:
+    if not ts:
+        return ""
+    return dt.datetime.fromtimestamp(ts, dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _read_head(path: Path, max_bytes: int = 4096) -> str:
+    try:
+        with path.open("rb") as fh:
+            return fh.read(max_bytes).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def classify_codex_record(obj: dict[str, Any]) -> dict[str, Any] | None:
+    """Map one Codex thread JSON record (or an orchestration event line) to a
+    compact terminal line. Pure — no I/O, no time. Returns None to drop a record
+    (e.g. an item.started agent_message which has no text yet)."""
+    rtype = obj.get("type")
+    if rtype in ("item.started", "item.completed"):
+        item = obj.get("item") if isinstance(obj.get("item"), dict) else {}
+        itype = item.get("type")
+        done = rtype == "item.completed"
+        if itype == "agent_message":
+            if not done:
+                return None  # the text only arrives on completion
+            text = str(item.get("text") or "").strip()
+            return {"kind": "message", "role": "agent", "id": item.get("id"),
+                    "text": text[:AGENT_MSG_CAP], "truncated": len(text) > AGENT_MSG_CAP}
+        if itype == "command_execution":
+            out = str(item.get("aggregated_output") or "")
+            return {"kind": "command", "id": item.get("id"),
+                    "command": str(item.get("command") or ""),
+                    "status": item.get("status") or ("completed" if done else "in_progress"),
+                    "exitCode": item.get("exit_code"),
+                    "output": out[-CMD_OUTPUT_CAP:], "outputTruncated": len(out) > CMD_OUTPUT_CAP}
+        if itype == "file_change":
+            changes = [{"path": c.get("path"), "kind": c.get("kind")}
+                       for c in (item.get("changes") or []) if isinstance(c, dict)]
+            return {"kind": "file", "id": item.get("id"),
+                    "status": item.get("status") or ("completed" if done else "in_progress"),
+                    "changes": changes}
+        if itype == "reasoning":
+            if not done:
+                return None
+            text = str(item.get("text") or "").strip()
+            return {"kind": "reasoning", "id": item.get("id"), "text": text[:AGENT_MSG_CAP]} if text else None
+        return {"kind": "meta", "text": str(itype or "item")} if done else None
+    if rtype == "turn.completed":
+        usage = obj.get("usage") if isinstance(obj.get("usage"), dict) else {}
+        tok = usage.get("output_tokens")
+        return {"kind": "meta", "text": "turn complete" + (f" · {tok} out tok" if tok is not None else "")}
+    if rtype == "turn.started":
+        return {"kind": "meta", "text": "turn started"}
+    if rtype == "thread.started":
+        return {"kind": "meta", "text": "thread started"}
+    # An orchestration event line (events.ndjson): {ts,type,message,data}.
+    msg = obj.get("message")
+    if rtype and msg is not None:
+        return {"kind": "event", "ts": obj.get("ts"), "eventType": str(rtype), "text": str(msg)}
+    if rtype:
+        return {"kind": "meta", "text": str(rtype)}
+    return None
+
+
+def parse_log_lines(raw_lines: list[str], raw: bool = False) -> list[dict[str, Any]]:
+    """Parse raw log lines into terminal records. JSON Codex/event records become
+    typed rows; everything else is a plain `log` row (ISO/level split when present).
+    With raw=True every line is returned verbatim as a `log` row. Pure."""
+    out: list[dict[str, Any]] = []
+    for line in raw_lines:
+        line = line.rstrip("\r\n")
+        if not line.strip():
+            continue
+        if not raw and line.lstrip()[:1] == "{":
+            try:
+                obj = json.loads(line.lstrip())
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict):
+                rec = classify_codex_record(obj)
+                if rec is not None:
+                    out.append(rec)
+                continue
+        if not raw and LOG_NOISE_RE.search(line):
+            continue  # codex plugin/skill loader chatter — no signal in parsed view
+        m = ISO_LEVEL_LINE_RE.match(line)
+        if m and not raw:
+            out.append({"kind": "log", "ts": m.group(1), "level": m.group(2), "text": m.group(3)})
+        else:
+            out.append({"kind": "log", "text": line})
+    return out
+
+
+def read_log_window(path: Path, cursor: int | None, max_bytes: int = SESSION_LOG_MAX_BYTES) -> dict[str, Any]:
+    """Read a bounded window of a log file for incremental streaming.
+
+    cursor None / out-of-range -> tail the last ``max_bytes`` (initial load / reset).
+    cursor in range            -> forward read of up to ``max_bytes`` new bytes.
+    Only COMPLETE (newline-terminated) lines are consumed; a trailing partial line
+    is left for the next poll. Returns raw line strings plus the next byte cursor.
+    A pathologically long single line is skipped to keep the cursor from stalling."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return {"rawLines": [], "cursor": 0, "size": 0, "reset": cursor not in (None, 0)}
+    reset = False
+    if cursor is None or cursor < 0 or cursor > size:
+        reset = cursor is not None  # an explicit but stale/too-large cursor was reset
+        start = max(0, size - max_bytes)
+        try:
+            with path.open("rb") as fh:
+                fh.seek(start)
+                if start > 0:
+                    start += len(fh.readline())  # drop the partial leading line
+                data = fh.read()
+        except OSError:
+            return {"rawLines": [], "cursor": size, "size": size, "reset": reset}
+    else:
+        start = cursor
+        try:
+            with path.open("rb") as fh:
+                fh.seek(start)
+                data = fh.read(max_bytes)
+        except OSError:
+            return {"rawLines": [], "cursor": start, "size": size, "reset": False}
+    nl = data.rfind(b"\n")
+    if nl == -1:
+        if len(data) >= max_bytes:  # oversized line with no newline: skip past it
+            return {"rawLines": ["[line too long — truncated by console]"],
+                    "cursor": start + len(data), "size": size, "reset": reset}
+        return {"rawLines": [], "cursor": start, "size": size, "reset": reset}
+    # Split strictly on \n — str.splitlines() also breaks on U+2028/U+2029/NEL/FF,
+    # which can appear unescaped inside a Codex JSON payload and split one physical
+    # line (one JSON record) into several bogus fragments. parse_log_lines strips \r.
+    complete = data[:nl + 1].decode("utf-8", errors="replace")
+    return {"rawLines": complete[:-1].split("\n"), "cursor": start + nl + 1, "size": size, "reset": reset}
+
+
+def _session_log_files(run_dir: Path) -> list[dict[str, str]]:
+    """Streamable logs present in a run dir, primary (Codex thread) first."""
+    files: list[dict[str, str]] = []
+    for name, role in CODEX_LOG_NAMES:
+        if (run_dir / name).is_file():
+            files.append({"name": name, "kind": "codex", "role": role})
+    for name in PLAIN_LOG_NAMES:
+        if (run_dir / name).is_file():
+            files.append({"name": name, "kind": "plain"})
+    return files
+
+
+def _parse_planner_prompt(text: str) -> dict[str, str | None]:
+    def grab(rx: re.Pattern[str]) -> str | None:
+        m = rx.search(text)
+        return m.group(1) if m else None
+    return {"area": grab(_PLANNER_AREA_RE), "node": grab(_PLANNER_NODE_RE),
+            "stage": grab(_PLANNER_STAGE_RE), "layer": grab(_PLANNER_LAYER_RE)}
+
+
+def _task_id_from_prompt(run_dir: Path, names: set[str]) -> str | None:
+    for name in ("l2-active-prompt.md", "l2-prompt.md", "l2-repair-prompt.md", "auditor-prompt.md"):
+        if name in names:
+            m = TASK_IN_TEXT_RE.search(_read_head(run_dir / name, 2048))
+            if m:
+                return m.group(0)
+    return None
+
+
+def _worker_state(lease_status: str | None, pkt_status: str | None, fresh: bool, worktree_exists: bool) -> str:
+    """Map durable worker signals to the same state vocabulary the UI already uses.
+    A deployed worker holding a running lease counts as active while a worktree
+    backs it (mirrors derive_task_state) — a long quiet model turn must not read
+    as stale; only a vanished worktree and a silent log do."""
+    s = str(lease_status or "").lower()
+    if s in BLOCKED_STATUSES:
+        return "blocked"
+    if s in FAILED_STATUSES:
+        return "failed"
+    if s in AWAITING_STATUSES:  # 'accepted' — worker done, L1 reviewing
+        return "awaiting"
+    if s in DONE_STATUSES or s == "superseded":  # superseded = replaced run, terminal/historical
+        return "integrated"
+    if s in WORKER_ACTIVE_LEASE:
+        return "active" if (worktree_exists or fresh) else "stale"
+    # No / unknown lease — lean on the packet status and freshness.
+    p = str(pkt_status or "").lower()
+    if p in ("needs-review", "accepted"):
+        return "awaiting"
+    if p == "blocked":
+        return "blocked"
+    if fresh:
+        return "active"
+    return "awaiting" if pkt_status else "stale"
+
+
+def _worker_phase(names: set[str], pkt_status: str | None) -> str:
+    if "gate-check.json" in names:
+        return "gate"
+    if "audit.json" in names:
+        return "audit"
+    if "packet.json" in names or "last-message.json" in names:
+        return "packet"
+    return "working"
+
+
+def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float) -> dict[str, Any] | None:
+    now = time.time()
+    fresh = (now - mtime) < SESSION_LIVE_WINDOW
+    integ = INTEGRATE_RE.search(name)
+    if integ:
+        return _integration_session(path, name, mtime, fresh, integ.group(1))
+    try:
+        names = set(os.listdir(path))
+    except OSError:
+        return None
+    if "worker-codex.log" in names:
+        return _worker_session(repo, path, name, mtime, fresh, names)
+    if "planner-codex.log" in names:
+        return _planner_session(path, name, mtime, fresh, names)
+    if "gate-check.log" in names or "audit.json" in names:
+        return _gate_session(path, name, mtime, fresh, names)
+    return None
+
+
+def _worker_session(repo: Path, path: Path, name: str, mtime: float, fresh: bool, names: set[str]) -> dict[str, Any]:
+    packet = read_json(path / "last-message.json", None)
+    if not isinstance(packet, dict):
+        packet = read_json(path / "packet.json", None)
+    packet = packet if isinstance(packet, dict) else {}
+    task_id = packet.get("taskId") or _task_id_from_prompt(path, names)
+    lease = read_json(state_path(repo, "leases") / f"{task_id}.json", None) if task_id else None
+    lease = lease if isinstance(lease, dict) else {}
+    lease_status = lease.get("status")
+    pkt_status = packet.get("status")
+    worktree = lease.get("worktree")
+    worktree_exists = bool(worktree and Path(str(worktree)).exists())
+    state = _worker_state(lease_status, pkt_status, fresh, worktree_exists)
+    return {
+        "id": name, "kind": "worker", "layer": "L2",
+        "role": lease.get("owner") or packet.get("role") or "l2-developer",
+        "taskId": task_id, "area": lease.get("area") or packet.get("area"),
+        "runId": name, "branch": lease.get("branch") or packet.get("branch"),
+        "state": state,
+        "phase": _worker_phase(names, pkt_status),
+        "leaseStatus": lease_status, "packetStatus": pkt_status,
+        "worktree": worktree, "worktreeExists": worktree_exists,
+        "startedAt": lease.get("createdAt") or packet.get("createdAt"),
+        "updatedAt": lease.get("updatedAt") or _iso_from_mtime(mtime),
+        "logFiles": _session_log_files(path),
+        "live": state == "active",
+        "_mtime": mtime, "_dir": str(path),
+    }
+
+
+def _planner_session(path: Path, name: str, mtime: float, fresh: bool, names: set[str]) -> dict[str, Any]:
+    info = _parse_planner_prompt(_read_head(path / "planner-prompt.md", 4096)) if "planner-prompt.md" in names else {}
+    batch = read_json(path / "planner-batch.json", None) if "planner-batch.json" in names else None
+    n_tasks = len(batch.get("tasks", [])) if isinstance(batch, dict) else None
+    state = "active" if fresh else ("integrated" if n_tasks is not None else "idle")
+    return {
+        "id": name, "kind": "planner", "layer": "L1", "role": "planner",
+        "node": info.get("node"), "area": info.get("area"),
+        "stage": info.get("stage"), "planLayer": info.get("layer"),
+        "runId": name, "taskCount": n_tasks,
+        "state": state, "phase": ("emitted" if n_tasks is not None else "planning"),
+        "startedAt": None, "updatedAt": _iso_from_mtime(mtime),
+        "logFiles": _session_log_files(path),
+        "live": fresh, "_mtime": mtime, "_dir": str(path),
+    }
+
+
+def _integration_session(path: Path, name: str, mtime: float, fresh: bool, task_id: str) -> dict[str, Any]:
+    gate = read_json(path / "gate-check.json", None)
+    exit_code = gate.get("exitCode") if isinstance(gate, dict) else None
+    if gate is None:
+        state, phase = ("active" if fresh else "stale"), "gating"
+    else:
+        state, phase = ("integrated" if exit_code == 0 else "failed"), "gate-done"
+    return {
+        "id": name, "kind": "integration", "layer": "L1", "role": "integration-worker",
+        "taskId": task_id, "area": None, "runId": name,
+        "gateCmd": gate.get("cmd") if isinstance(gate, dict) else None, "gateExit": exit_code,
+        "state": state, "phase": phase,
+        "startedAt": None, "updatedAt": _iso_from_mtime(mtime),
+        "logFiles": _session_log_files(path),
+        "live": fresh and gate is None, "_mtime": mtime, "_dir": str(path),
+    }
+
+
+def _gate_session(path: Path, name: str, mtime: float, fresh: bool, names: set[str]) -> dict[str, Any]:
+    audit = read_json(path / "audit.json", None) if "audit.json" in names else None
+    task_id = audit.get("taskId") if isinstance(audit, dict) else _task_id_from_prompt(path, names)
+    verdict = audit.get("verdict") if isinstance(audit, dict) else None
+    return {
+        "id": name, "kind": "audit", "layer": "L1", "role": "auditor",
+        "taskId": task_id, "area": None, "runId": name, "verdict": verdict,
+        "state": "active" if fresh else "idle", "phase": "audit",
+        "startedAt": None, "updatedAt": _iso_from_mtime(mtime),
+        "logFiles": _session_log_files(path),
+        "live": fresh, "_mtime": mtime, "_dir": str(path),
+    }
+
+
+def _origin_session(repo: Path) -> dict[str, Any]:
+    state_dir = state_path(repo)
+    mtime = max(_safe_mtime(state_dir / AUTONOMATE_LOG_REL), _safe_mtime(state_dir / EVENTS_LOG_REL))
+    fresh = (time.time() - mtime) < SESSION_LIVE_WINDOW
+    stop = (state_dir / "STOP").exists()
+    state = "active" if fresh else ("stopped" if stop else "idle")
+    return {
+        "id": "origin", "kind": "origin", "layer": "L0", "role": "origin",
+        "area": None, "runId": None,
+        "state": state, "phase": ("stop" if stop else "reconcile"),
+        "stop": stop,
+        "updatedAt": _iso_from_mtime(mtime),
+        "logFiles": [{"name": EVENTS_LOG_REL, "kind": "event"},
+                     {"name": AUTONOMATE_LOG_REL, "kind": "plain"}],
+        "live": fresh, "_mtime": mtime,
+    }
+
+
+def _mark_active_planners(repo: Path, sessions: list[dict[str, Any]]) -> None:
+    """Promote planner sessions whose DAG node holds an *active* L1 lease — the
+    honest "deployed planner" signal (a released/failed lease is history)."""
+    leases = collect_l1_leases(repo)
+    by_node = {lease.get("node"): lease for lease in leases}
+    for sess in sessions:
+        if sess.get("kind") != "planner":
+            continue
+        lease = by_node.get(sess.get("node"))
+        if lease and lease.get("active"):
+            sess["state"] = "active"
+            sess["live"] = True
+            sess["leaseStatus"] = lease.get("status")
+
+
+def _attach_summary(repo: Path, sess: dict[str, Any]) -> None:
+    """Peek the tail of a session's primary log for its last message/command —
+    bounded to the returned (visible) set so /api/sessions stays cheap."""
+    files = sess.get("logFiles") or []
+    if not files:
+        return
+    base = Path(sess["_dir"]) if sess.get("_dir") else state_path(repo)
+    recs = parse_log_lines(read_log_window(base / files[0]["name"], None, SESSION_PEEK_BYTES)["rawLines"])
+    last_msg = last_cmd = None
+    for rec in recs:
+        if rec["kind"] in ("message", "event"):
+            last_msg = rec.get("text")
+        elif rec["kind"] == "command":
+            last_cmd = rec.get("command")
+    sess["lastMessage"] = last_msg[:240] if last_msg else None
+    sess["lastCommand"] = last_cmd[:240] if last_cmd else None
+
+
+def discover_sessions(repo: Path) -> list[dict[str, Any]]:
+    repo = repo.resolve()
+    runs_root = state_path(repo, "runs")
+    sessions: list[dict[str, Any]] = []
+    if runs_root.is_dir():
+        try:
+            # follow_symlinks=False: a symlink planted in runs/ pointing outside the
+            # archive must not be discovered (its log tail would leak into /api/sessions).
+            # _resolve_session_log already rejects such ids via resolved-path containment.
+            entries = [e for e in os.scandir(runs_root) if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            entries = []
+
+        def _entry_mtime(e: os.DirEntry[str]) -> float:
+            try:
+                return e.stat(follow_symlinks=False).st_mtime  # cached on the DirEntry
+            except OSError:
+                return 0.0
+        # Stat each entry once (DirEntry.stat is cached) and reuse the value for both
+        # the recency sort and classification — no second round of stat() syscalls.
+        pairs = sorted(((e, _entry_mtime(e)) for e in entries), key=lambda p: p[1], reverse=True)
+        for entry, mtime in pairs[:SESSION_SCAN_LIMIT]:
+            sess = _classify_run_dir(repo, Path(entry.path), entry.name, mtime)
+            if sess:
+                sessions.append(sess)
+    _mark_active_planners(repo, sessions)
+    # Live first, then most-recent. Cap the run-dir set, then always append the
+    # origin feed so the L0 fallback is never trimmed away.
+    sessions.sort(key=lambda s: (0 if s.get("live") else 1, -(s.get("_mtime") or 0.0)))
+    trimmed = sessions[:max(0, SESSION_RETURN_LIMIT - 1)]
+    trimmed.append(_origin_session(repo))
+    for sess in trimmed:
+        _attach_summary(repo, sess)
+        sess.pop("_mtime", None)
+        sess.pop("_dir", None)
+    return trimmed
+
+
+def recommend_auto(sessions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Smart pane recommendation, in the priority the operator expects:
+    live planners → 1-3 live workers → live gate/audit/integration → origin feed.
+    When nothing is actively live, the L0 origin/event feed is the canonical view;
+    recent (idle) sessions stay in the list for manual selection/pinning."""
+    live = [s for s in sessions if s.get("live")]
+    planners = [s for s in live if s["kind"] == "planner"]
+    workers = [s for s in live if s["kind"] == "worker"]
+    gates = [s for s in live if s["kind"] in ("integration", "audit")]
+    if planners:
+        return {"mode": "planner", "sessionIds": [s["id"] for s in planners[:3]]}
+    if workers:
+        return {"mode": "worker", "sessionIds": [s["id"] for s in workers[:3]]}
+    if gates:
+        return {"mode": "gate", "sessionIds": [s["id"] for s in gates[:2]]}
+    return {"mode": "origin", "sessionIds": ["origin"]}
+
+
+def collect_sessions(repo: Path) -> dict[str, Any]:
+    sessions = discover_sessions(repo)
+    return {
+        "schema": "gluerun.codex.sessions.v0",
+        "generatedAt": utc_now(),
+        "repo": str(repo.resolve()),
+        "sessions": sessions,
+        "auto": recommend_auto(sessions),
+    }
+
+
+def _resolve_session_log(repo: Path, session_id: str, file_name: str | None) -> tuple[Path | None, list[dict[str, str]]]:
+    """Resolve (path, logFiles) for a session, validating every component against
+    path traversal. file_name must be one of the session's own logFiles."""
+    if session_id == "origin":
+        files = [{"name": EVENTS_LOG_REL, "kind": "event"},
+                 {"name": AUTONOMATE_LOG_REL, "kind": "plain"}]
+        names = {f["name"] for f in files}
+        chosen = file_name if file_name in names else EVENTS_LOG_REL
+        path = state_path(repo) / chosen
+        return (path if path.is_file() else None, files)
+    if not SESSION_ID_RE.match(session_id):
+        return (None, [])
+    runs_root = state_path(repo, "runs").resolve()
+    run_dir = (runs_root / session_id).resolve()
+    if run_dir.parent != runs_root or not run_dir.is_dir():
+        return (None, [])
+    files = _session_log_files(run_dir)
+    if not files:
+        return (None, [])
+    names = {f["name"] for f in files}
+    chosen = file_name if file_name in names else files[0]["name"]
+    path = run_dir / chosen
+    return (path if path.is_file() else None, files)
+
+
+def read_session(repo: Path, session_id: str, cursor: int | None, limit: int,
+                 file_name: str | None, raw: bool) -> dict[str, Any] | None:
+    repo = repo.resolve()
+    target, log_files = _resolve_session_log(repo, session_id, file_name)
+    if target is None:
+        return None
+    window = read_log_window(target, cursor)
+    raw_lines = window["rawLines"]
+    # An initial/reset read (or an explicit cursor=0 from-start request) returns a
+    # full byte window; bound the work to ~limit displayable rows. Slice the raw
+    # lines BEFORE parsing (headroom for dropped noise/None records), then cap
+    # after — so JSON classification never runs over rows we will not return.
+    initial = window["reset"] or cursor is None or cursor == 0
+    if initial:
+        raw_lines = raw_lines[-(limit * 3):]
+    lines = parse_log_lines(raw_lines, raw=raw)
+    if initial:
+        lines = lines[-limit:]
+    return {
+        "schema": "gluerun.codex.session-lines.v0",
+        "sessionId": session_id,
+        "file": target.name,
+        "logFiles": log_files,
+        "raw": raw,
+        "lines": lines,
+        "cursor": window["cursor"],
+        "size": window["size"],
+        "reset": window["reset"],
+        "generatedAt": utc_now(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Provenance (read-only derivation)                                            #
+# --------------------------------------------------------------------------- #
+#
+# The provenance APIs answer "why does this node/task/gate exist" by tracing the
+# durable causal chain: source-doc Stage Card -> DAG node -> planner run -> task
+# -> worker run -> evidence packet -> audit -> integration commit -> gate result.
+# Like the session terminal this is a STRICT READ-ONLY observer: pure filesystem
+# reads of durable glueRun-go records, NO subprocesses (no make/git/ps), no writes.
+# Heavy inputs (the multi-MB events.ndjson, the DAG, the plan doc) are read behind
+# small single-flight TTL caches so the 2s overlay poll never re-scans them.
+
+EVENTS_INDEX_MAX_BYTES = 4_194_304   # 4 MB tail of events.ndjson behind the shared index
+EVENTS_INDEX_TTL = 3.0               # shared events-index cache window
+DAG_TTL = 30.0                       # DAG + plan-doc caches (mtime/size keyed; edits invalidate)
+PLANNER_RUNS_TTL = 30.0             # planner-run index cache window
+OVERLAY_ROW_LIMIT_MAX = 400
+OVERLAY_ROW_LIMIT_DEFAULT = 120
+# A DAG node id (e.g. "D6.storage_spec", "S0.storage_substrate_base"). Traversal
+# safety is enforced by registry membership in collect_node_detail, not the regex.
+NODE_ID_RE = re.compile(r"^[A-Z][0-9]+\.[A-Za-z0-9_]+$")
+AREA_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+DAG_REL = "docs/orchestration/dag.v0.json"
+STAGE_DOC_REL = "docs/plan-and-dag.md"
+GATES_REL = "docs/orchestration/gates"
+
+# Canonical lifecycle order for stable origin-chain sorting. Many events share a
+# one-second timestamp, so ts alone is not a total order; we break ties by phase.
+CHAIN_ORDER = [
+    "planner.generated", "planner.staged", "origin.dispatch", "l1.dispatch_started",
+    "l1.worktree_created", "l1.worker_completed", "gate_check.completed", "l1.gate_passed",
+    "l1.committed", "l1.audit_completed", "decider.verdict", "recovery.action",
+    "l1.task_failed", "decision.recorded", "packet.imported", "integration.started",
+    "integration.integrated",
+]
+CHAIN_RANK = {t: i for i, t in enumerate(CHAIN_ORDER)}
+
+# event type -> (label template, tone, phase). Tones map onto the UI's six-tone
+# system: cobalt(active) / forest(good) / amber(warn) / red(bad) / violet(integration)
+# / gray(muted). Data-dependent cases (exit codes, verdicts) are refined in
+# project_event(); this table is the default. advancing => the event moved real work
+# forward (feeds the progressing/spinning pulse).
+EVENT_MAP = {
+    "origin.reconcile_started": ("Origin reconcile started", "gray", "control", False),
+    "origin.reconcile_completed": ("Origin reconcile complete", "gray", "control", False),
+    "origin.l1_fanout": ("L1 fanout", "cobalt", "plan", True),
+    "origin.dispatch": ("Origin dispatching", "cobalt", "dispatch", True),
+    "origin.dispatch_failed": ("Dispatch failed", "red", "dispatch", False),
+    "origin.l1_planner_failed": ("L1 planner failed", "red", "plan", False),
+    "origin.l1_import_rejected": ("L1 import rejected", "amber", "dispatch", False),
+    "origin.control_state_committed": ("Control state committed", "gray", "control", False),
+    "l1.dry_run": ("L1 dry run", "gray", "plan", False),
+    "planner.generated": ("Task generated", "cobalt", "plan", True),
+    "planner.staged": ("Task candidate staged", "cobalt", "plan", True),
+    "planner.failed": ("Planner produced no output", "amber", "plan", False),
+    "planner.area_complete": ("Planner: area complete", "forest", "plan", True),
+    "planner.blocked": ("Planner blocked", "amber", "plan", False),
+    "planner.frozen": ("Planner frozen", "amber", "plan", False),
+    "packet.imported": ("Task imported", "forest", "dispatch", True),
+    "packet.accepted_existing": ("Packet accepted (existing)", "forest", "dispatch", True),
+    "packet.import_rejected": ("Import rejected", "amber", "dispatch", False),
+    "packet.import_failed": ("Packet import failed", "red", "dispatch", False),
+    "l1.dispatch_started": ("L1 dispatch started", "cobalt", "dispatch", True),
+    "l1.worktree_created": ("Worker worktree created", "cobalt", "execute", True),
+    "l1.worker_completed": ("Worker completed", "forest", "execute", True),
+    "l1.committed": ("Worker branch committed", "forest", "execute", True),
+    "l1.gate_passed": ("Regression gate passed", "forest", "gate", True),
+    "gate_check.completed": ("Gate check passed", "forest", "gate", True),
+    "l1.audit_completed": ("Audit accepted", "forest", "audit", True),
+    "decider.verdict": ("Decider verdict", "amber", "recover", False),
+    "decider.parked": ("Parked for human review", "red", "recover", False),
+    "decision.recorded": ("Decision recorded", "forest", "audit", True),
+    "l1.task_accepted": ("Task accepted", "forest", "audit", True),
+    "l1.task_failed": ("Task failed", "red", "execute", False),
+    "l1.task_terminal": ("Task ended unaccepted", "red", "recover", False),
+    "recovery.action": ("Recovery action", "amber", "recover", False),
+    "l1.orphan_recovered": ("Orphan lease recovered", "amber", "recover", True),
+    "l1.frozen": ("L1 frozen", "amber", "recover", False),
+    "l1.aborted": ("L1 aborted", "red", "recover", False),
+    "integration.started": ("Integration started", "violet", "integrate", True),
+    "integration.integrated": ("Integrated", "violet", "integrate", True),
+    "integration.completed": ("Integration run done", "violet", "integrate", True),
+    "integration.failed": ("Integration failed", "red", "integrate", False),
+    "gate_promotion.started": ("Gate promotion started", "violet", "gate", True),
+    "gate_promotion.completed": ("Gate promoted", "forest", "gate", True),
+    "gate_promotion.blocked": ("Gate promotion blocked", "red", "gate", False),
+    "push.ok": ("Pushed control state", "forest", "push", True),
+    "push.failed": ("Push failed", "red", "push", False),
+    "push.blocked": ("Secret-scan blocked push", "red", "push", False),
+    "autonomate.started": ("Autonomous loop started", "cobalt", "control", False),
+    "autonomate.stopped": ("Stopped by STOP sentinel", "amber", "control", False),
+    "autonomate.exited": ("Autonomous loop exited", "gray", "control", False),
+}
+_FAILURE_TYPES = {
+    "origin.dispatch_failed", "origin.l1_planner_failed", "planner.failed", "l1.task_failed",
+    "l1.task_terminal", "l1.aborted", "packet.import_failed", "packet.import_rejected",
+    "integration.failed", "push.failed", "push.blocked", "decider.parked", "gate_promotion.blocked",
+}
+
+
+def _ev_data(ev: dict[str, Any]) -> dict[str, Any]:
+    data = ev.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def project_event(ev: dict[str, Any]) -> dict[str, Any]:
+    """Project one events.ndjson record to a typed overlay/chain row. Pure — no I/O.
+    Refines the static EVENT_MAP for data-dependent cases (exit codes, verdicts) and
+    extracts a plain-language failure ``reason`` when the row is a failure."""
+    etype = str(ev.get("type") or "")
+    data = _ev_data(ev)
+    label, tone, phase, advancing = EVENT_MAP.get(etype, (str(ev.get("message") or etype) or etype, "gray", "control", False))
+    exit_code = data.get("exitCode")
+    verdict = data.get("verdict")
+    # Data-dependent refinements.
+    if etype == "l1.worker_completed" and isinstance(exit_code, int) and exit_code != 0:
+        label, tone, advancing = f"Worker exited {exit_code}", "red", False
+    elif etype == "gate_check.completed" and isinstance(exit_code, int) and exit_code != 0:
+        label, tone, advancing = f"Gate check failed · exit {exit_code}", "red", False
+    elif etype == "l1.audit_completed" and verdict and verdict != "accepted":
+        label, tone, advancing = f"Audit · {verdict}", "amber", False
+    elif etype == "decision.recorded":
+        decision = data.get("decision")
+        if decision and decision != "accept":
+            label, tone, advancing = f"Decision · {decision}", "amber", False
+    node = data.get("node")
+    task_id = data.get("taskId")
+    suffix = node or task_id
+    if suffix and etype in ("planner.generated", "planner.staged", "l1.dispatch_started",
+                            "origin.dispatch", "integration.started", "gate_promotion.started",
+                            "gate_promotion.completed", "gate_promotion.blocked"):
+        label = f"{label} · {suffix}"
+    if etype == "integration.integrated" and data.get("mergeCommit"):
+        label = f"Integrated · merge {str(data['mergeCommit'])[:7]}"
+    if etype == "l1.committed" and data.get("headSha"):
+        label = f"Committed · {str(data['headSha'])[:7]}"
+    reason = None
+    if etype in _FAILURE_TYPES or (isinstance(exit_code, int) and exit_code != 0) or tone == "red":
+        reason = (data.get("failure") or data.get("reason") or data.get("lastFailure")
+                  or data.get("failureClass") or (f"exit {exit_code}" if isinstance(exit_code, int) and exit_code != 0 else None))
+        if reason is not None:
+            reason = str(reason)[:200]
+    return {
+        "ts": ev.get("ts"),
+        "type": etype,
+        "label": label,
+        "tone": tone,
+        "phase": phase,
+        "advancing": bool(advancing),
+        "taskId": task_id,
+        "nodeId": node,
+        "runId": data.get("runId"),
+        "branch": data.get("branch"),
+        "reason": reason,
+    }
+
+
+def build_events_index(lines: list[str]) -> dict[str, Any]:
+    """Parse a tail of events.ndjson once into reusable buckets. Pure (operates on
+    already-read lines). Drops NOISE_EVENT_TYPES (integration.skipped dominates the
+    file). Returns by_task / by_branch / by_node buckets plus projected tail rows."""
+    by_task: dict[str, list[dict[str, Any]]] = {}
+    by_branch: dict[str, list[dict[str, Any]]] = {}
+    by_node: dict[str, list[dict[str, Any]]] = {}
+    tail_rows: list[dict[str, Any]] = []
+    for line in lines:
+        line = line.strip()
+        if not line or line[:1] != "{":
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        etype = ev.get("type")
+        if etype in NOISE_EVENT_TYPES:
+            continue
+        data = _ev_data(ev)
+        tid = data.get("taskId")
+        branch = data.get("branch")
+        node = data.get("node")
+        if tid:
+            by_task.setdefault(tid, []).append(ev)
+        if branch:
+            by_branch.setdefault(branch, []).append(ev)
+        if node:
+            by_node.setdefault(node, []).append(ev)
+        tail_rows.append(project_event(ev))
+    return {"by_task": by_task, "by_branch": by_branch, "by_node": by_node, "tail_rows": tail_rows}
+
+
+def _chain_sort_key(ev: dict[str, Any]) -> tuple[str, int]:
+    return (str(ev.get("ts") or ""), CHAIN_RANK.get(str(ev.get("type") or ""), 50))
+
+
+def build_origin_chain(task_events: list[dict[str, Any]],
+                       branch_events: list[dict[str, Any]] | None = None,
+                       branch: str | None = None) -> list[dict[str, Any]]:
+    """Build the ordered, deduped lifecycle trace for one task. Pure. Folds in
+    branch-keyed integration.* events (which carry no taskId) only for the matching
+    branch, and orders by (ts, lifecycle-phase) so same-second events read correctly."""
+    pool: list[dict[str, Any]] = list(task_events or [])
+    if branch and branch_events:
+        for ev in branch_events:
+            etype = ev.get("type")
+            if etype in ("integration.started", "integration.integrated", "integration.failed"):
+                pool.append(ev)
+    seen: set[tuple] = set()
+    rows: list[dict[str, Any]] = []
+    for ev in sorted(pool, key=_chain_sort_key):
+        data = _ev_data(ev)
+        key = (str(ev.get("ts") or ""), str(ev.get("type") or ""), str(data.get("runId") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        row = project_event(ev)
+        extra = {k: data[k] for k in ("headSha", "mergeCommit", "verdict", "exitCode", "batchId", "node")
+                 if data.get(k) is not None}
+        rows.append({"ts": row["ts"], "type": row["type"], "label": row["label"],
+                     "tone": row["tone"], "phase": row["phase"], "runId": row["runId"], "extra": extra})
+    return rows
+
+
+def resolve_task_provenance_link(task_events: list[dict[str, Any]], lease: dict[str, Any] | None) -> dict[str, Any]:
+    """Derive the planner/worker/node link for a task from its events + lease.
+    The durable chain is taskId -> events(planner.generated.node, origin.dispatch.runId,
+    l1.dispatch_started.runId/branch); lease.batchId/runId is the cross-check fallback."""
+    lease = lease or {}
+    node = plannerRunId = workerRunId = branch = None
+    batchId = lease.get("batchId")
+    for ev in task_events or []:
+        etype = ev.get("type")
+        data = _ev_data(ev)
+        if etype in ("planner.generated", "planner.staged") and data.get("node") and not node:
+            node = data.get("node")
+            plannerRunId = plannerRunId or data.get("runId")
+        elif etype == "origin.dispatch":
+            plannerRunId = plannerRunId or data.get("runId")
+            batchId = batchId or data.get("batchId")
+        elif etype == "l1.dispatch_started":
+            workerRunId = workerRunId or data.get("runId")
+            branch = branch or data.get("branch")
+            batchId = batchId or data.get("batchId")
+    workerRunId = workerRunId or lease.get("runId")
+    branch = branch or lease.get("branch")
+    if node:
+        confidence = "events"
+    elif batchId or workerRunId:
+        confidence = "lease"
+    else:
+        confidence = "none"
+    stage = node.split(".")[0] if node and "." in node else None
+    return {"parentNode": node, "stage": stage, "plannerRunId": plannerRunId,
+            "workerRunId": workerRunId, "batchId": batchId, "branch": branch,
+            "linkConfidence": confidence}
+
+
+def _task_title_norm(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+
+
+def parse_planner_batch(data: dict[str, Any], canonical_title: str | None) -> dict[str, Any] | None:
+    """Best-effort: find the staged candidate in a planner-batch.json whose markdown
+    title matches the canonical task title. Batch ids are sequence-local (TASK-0001),
+    so we match on title, not id. Pure. Returns None when no confident match."""
+    if not isinstance(data, dict):
+        return None
+    tasks = data.get("tasks")
+    if not isinstance(tasks, list):
+        return None
+    want = _task_title_norm(canonical_title or "")
+    for entry in tasks:
+        if not isinstance(entry, dict):
+            continue
+        md = str(entry.get("markdown") or "")
+        m = TASK_HEADING_RE.match(md.splitlines()[0]) if md else None
+        cand_title = m.group(2).strip() if m else ""
+        if want and _task_title_norm(cand_title) == want:
+            return {"localId": entry.get("taskId"), "title": cand_title, "candidateCount": len(tasks)}
+    return {"localId": None, "title": None, "candidateCount": len(tasks)}
+
+
+def parse_dag(data: dict[str, Any]) -> dict[str, Any]:
+    """Index the DAG (docs/orchestration/dag.v0.json) by id / area / stage. Pure."""
+    by_id: dict[str, dict[str, Any]] = {}
+    by_area: dict[str, list[dict[str, Any]]] = {}
+    by_stage: dict[str, list[dict[str, Any]]] = {}
+    nodes = data.get("nodes") if isinstance(data, dict) else None
+    for node in (nodes or []):
+        if not isinstance(node, dict) or not node.get("id"):
+            continue
+        nid = str(node["id"])
+        by_id[nid] = node
+        if node.get("area"):
+            by_area.setdefault(str(node["area"]), []).append(node)
+        if node.get("stage"):
+            by_stage.setdefault(str(node["stage"]), []).append(node)
+    return {"by_id": by_id, "by_area": by_area, "by_stage": by_stage}
+
+
+def node_id_valid(node_id: str, registry: dict[str, Any]) -> bool:
+    return bool(NODE_ID_RE.match(node_id)) and node_id in (registry.get("by_id") or {})
+
+
+def find_stage_card(doc_lines: list[str], stage: str) -> dict[str, Any] | None:
+    """Locate the '### {stage}:' Stage Card in plan-and-dag.md and capture its body
+    up to the next '### '/'## ' heading. Pure. Returns None when there is no card
+    (e.g. S0 has no Stage Card)."""
+    if not stage:
+        return None
+    head_re = re.compile(r"^###\s+" + re.escape(stage) + r"\b")
+    start = None
+    for i, line in enumerate(doc_lines):
+        if head_re.match(line):
+            start = i
+            break
+    if start is None:
+        return None
+    end = len(doc_lines)
+    for j in range(start + 1, len(doc_lines)):
+        if doc_lines[j].startswith("### ") or doc_lines[j].startswith("## "):
+            end = j
+            break
+    section_text = "\n".join(doc_lines[start:end]).strip()
+    heading = doc_lines[start].lstrip("# ").strip()
+    body = "\n".join(doc_lines[start + 1:end]).strip()
+    return {"section": heading, "lineStart": start + 1, "lineEnd": end,
+            "excerpt": body[:320], "text": section_text}
+
+
+def stage_section_hash(section_text: str) -> str:
+    return "sha256:" + hashlib.sha256((section_text or "").encode("utf-8")).hexdigest()
+
+
+def build_source_refs(node: dict[str, Any], doc_lines: list[str]) -> list[dict[str, Any]]:
+    """Stage-level source references for a node: link node.stage -> Stage Card with a
+    content hash for drift stability. Per-node precise refs are a future glueRun-go
+    enhancement; the 'why' sentence comes from node.description + requiredCompletion."""
+    stage = str(node.get("stage") or "")
+    reason = str(node.get("description") or "").strip()
+    rc = node.get("requiredCompletion")
+    if rc:
+        reason = (reason + " " if reason else "") + f"Required completion: {rc}."
+    card = find_stage_card(doc_lines, stage)
+    if not card:
+        return []
+    return [{
+        "document": STAGE_DOC_REL,
+        "section": card["section"],
+        "lineStart": card["lineStart"],
+        "lineEnd": card["lineEnd"],
+        "contentHash": stage_section_hash(card["text"]),
+        "excerpt": card["excerpt"],
+        "reason": reason,
+    }]
+
+
+def synthesize_gate_blocking(gate: dict[str, Any] | None, integrated_ids: set[str],
+                             upstream_status: dict[str, str] | None = None) -> dict[str, Any]:
+    """Plain-language pass/block explanation for a gate. Pure. Splits the gate's
+    evidence task-set into accepted (integrated) vs missing, and names upstream gates
+    that are not passed. Defensive: all live gates are 'passed' today, so blocked /
+    absent / stale / invalid are exercised by unit fixtures."""
+    upstream_status = upstream_status or {}
+    if not isinstance(gate, dict):
+        return {"reason": "No gate result recorded for this node yet.",
+                "acceptedTaskIds": [], "missingTaskIds": [], "upstreamBlockers": []}
+    status = str(gate.get("status") or "absent")
+    evidence = gate.get("evidence") or []
+    task_ids: list[str] = []
+    for item in evidence:
+        if isinstance(item, dict) and item.get("kind") == "task-set":
+            task_ids.extend([t for t in (item.get("taskIds") or []) if isinstance(t, str)])
+    accepted = [t for t in task_ids if t in integrated_ids]
+    missing = [t for t in task_ids if t not in integrated_ids]
+    upstream = gate.get("upstreamGates") or []
+    upstream_blockers = [u for u in upstream if upstream_status.get(u, "passed") != "passed"]
+    rationale = str(gate.get("rationale") or "").strip()
+    if status == "passed":
+        reason = ""
+    elif status == "blocked":
+        bits = ["Gate is blocked."]
+        if upstream_blockers:
+            bits.append("Upstream gates not passed: " + ", ".join(upstream_blockers) + ".")
+        if missing:
+            bits.append("Evidence tasks not yet integrated: " + ", ".join(missing[:8]) + ".")
+        if rationale:
+            bits.append(rationale)
+        reason = " ".join(bits)
+    elif status == "absent":
+        reason = "No promotion rule has produced a gate result for this node yet."
+    elif status == "stale":
+        reason = "Gate result is stale relative to current evidence; re-promotion is required."
+    elif status == "invalid":
+        reason = "Gate result is invalid or contradictory and cannot be trusted."
+    else:
+        reason = rationale or f"Gate status: {status}."
+    return {"reason": reason, "acceptedTaskIds": accepted, "missingTaskIds": missing,
+            "upstreamBlockers": upstream_blockers}
+
+
+def detect_duplicate_tasks(leases: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Advisory duplicate/supersession detection. Clusters leases by identical owned
+    files within the same area; the integrated/accepted (or newest) member is
+    canonical, the rest are flagged duplicateOf it. Pure. NEVER asserted as fact —
+    two legitimately different tasks can edit the same file."""
+    clusters: dict[tuple, list[dict[str, Any]]] = {}
+    for lease in leases:
+        owned = lease.get("ownedFiles")
+        tid = lease.get("taskId")
+        if not tid or not owned or not isinstance(owned, list):
+            continue
+        key = (str(lease.get("area") or ""), frozenset(owned))
+        clusters.setdefault(key, []).append(lease)
+    out: dict[str, dict[str, Any]] = {}
+    for members in clusters.values():
+        if len(members) < 2:
+            continue
+
+        def _rank(m: dict[str, Any]) -> tuple:
+            done = str(m.get("status") or "") in DONE_STATUSES
+            awaiting = str(m.get("status") or "") in AWAITING_STATUSES
+            return (done, awaiting, str(m.get("updatedAt") or ""))
+
+        ordered = sorted(members, key=_rank, reverse=True)
+        canonical = ordered[0]
+        any_superseded = any(str(m.get("status") or "") == "superseded" for m in members)
+        for m in ordered[1:]:
+            tid = m.get("taskId")
+            superseded = str(m.get("status") or "") == "superseded"
+            out[tid] = {
+                "duplicateOf": canonical.get("taskId"),
+                "supersededBy": canonical.get("taskId") if superseded else None,
+                "confidence": "high" if any_superseded else "medium",
+                "advisory": True,
+                "basis": "identical owned files in the same area",
+            }
+    return out
+
+
+# --- cached read-only loaders ------------------------------------------------ #
+
+class _ComputeCache:
+    """Generic single-flight TTL cache keyed by an arbitrary string. Mirrors
+    SnapshotCache/SessionsCache: one thread computes, others reuse. Read-only."""
+
+    def __init__(self, compute, ttl: float) -> None:
+        self._compute_fn = compute
+        self.ttl = ttl
+        self._lock = threading.Lock()
+        self._gate = threading.Lock()
+        self._value: Any = None
+        self._stamp: float = 0.0
+        self._key: str = ""
+
+    def _fresh(self, key: str) -> Any:
+        with self._lock:
+            if self._value is not None and self._key == key and (time.monotonic() - self._stamp) < self.ttl:
+                return self._value
+        return None
+
+    def get(self, key: str, compute_arg) -> Any:
+        cached = self._fresh(key)
+        if cached is not None:
+            return cached
+        with self._gate:
+            cached = self._fresh(key)
+            if cached is not None:
+                return cached
+            value = self._compute_fn(compute_arg)
+            with self._lock:
+                self._value = value
+                self._stamp = time.monotonic()
+                self._key = key
+            return value
+
+
+def _events_path(repo: Path) -> Path:
+    return state_path(repo, EVENTS_LOG_REL)
+
+
+_EVENTS_INDEX_CACHE = _ComputeCache(
+    lambda repo: build_events_index(
+        read_log_window(_events_path(repo), None, EVENTS_INDEX_MAX_BYTES)["rawLines"]),
+    EVENTS_INDEX_TTL)
+
+
+def load_events_index(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    return _EVENTS_INDEX_CACHE.get(str(repo), repo)
+
+
+def _stat_key(path: Path) -> str:
+    try:
+        st = path.stat()
+        return f"{path}:{int(st.st_mtime)}:{st.st_size}"
+    except OSError:
+        return f"{path}:missing"
+
+
+_DAG_CACHE = _ComputeCache(lambda repo: parse_dag(read_json(repo / DAG_REL, {}) or {}), DAG_TTL)
+
+
+def load_dag_registry(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    return _DAG_CACHE.get(_stat_key(repo / DAG_REL), repo)
+
+
+def _read_doc_lines(repo: Path) -> list[str]:
+    try:
+        return (repo / STAGE_DOC_REL).read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+
+
+_DOC_CACHE = _ComputeCache(_read_doc_lines, DAG_TTL)
+
+
+def load_stage_doc(repo: Path) -> list[str]:
+    repo = repo.resolve()
+    return _DOC_CACHE.get(_stat_key(repo / STAGE_DOC_REL), repo)
+
+
+def _scan_planner_runs(repo: Path) -> list[dict[str, Any]]:
+    """Index L1 planner invocation run dirs (runs/RUN-*/planner-prompt.md). Read-only;
+    bounded — only dirs that actually hold a planner prompt are parsed."""
+    runs_root = state_path(repo, "runs")
+    out: list[dict[str, Any]] = []
+    if not runs_root.exists():
+        return out
+    try:
+        entries = list(os.scandir(runs_root))
+    except OSError:
+        return out
+    for entry in entries:
+        try:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        prompt = Path(entry.path) / "planner-prompt.md"
+        if not prompt.is_file():
+            continue
+        info = _parse_planner_prompt(_read_head(prompt, 4096))
+        batch = Path(entry.path) / "planner-batch.json"
+        out.append({
+            "runId": entry.name,
+            "dir": entry.path,
+            "node": info.get("node"),
+            "area": info.get("area"),
+            "stage": info.get("stage"),
+            "promptRef": str(prompt),
+            "batchRef": str(batch) if batch.is_file() else None,
+            "mtime": _safe_mtime(prompt),
+        })
+    out.sort(key=lambda r: r["mtime"])
+    return out
+
+
+_PLANNER_RUNS_CACHE = _ComputeCache(_scan_planner_runs, PLANNER_RUNS_TTL)
+
+
+def load_planner_runs(repo: Path) -> list[dict[str, Any]]:
+    repo = repo.resolve()
+    return _PLANNER_RUNS_CACHE.get(str(repo), repo)
+
+
+def _match_planner_run(planner_runs: list[dict[str, Any]], node: str | None,
+                       before_ts: float) -> dict[str, Any] | None:
+    """Pick the planner run for a node nearest at-or-before the task's first event."""
+    if not node:
+        return None
+    best = None
+    for run in planner_runs:
+        if run.get("node") != node:
+            continue
+        if before_ts and run["mtime"] > before_ts + 120:  # allow small clock slack
+            continue
+        if best is None or run["mtime"] > best["mtime"]:
+            best = run
+    return best
+
+
+def _iso_to_epoch(ts: str | None) -> float:
+    if not ts:
+        return 0.0
+    try:
+        return dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+# --- duplicate map (cached; needs all leases) -------------------------------- #
+
+_DUP_CACHE = _ComputeCache(lambda repo: detect_duplicate_tasks(collect_leases(repo)), DAG_TTL)
+
+
+def load_duplicate_map(repo: Path) -> dict[str, dict[str, Any]]:
+    repo = repo.resolve()
+    return _DUP_CACHE.get(str(repo), repo)
+
+
+def build_task_provenance(repo: Path, detail: dict[str, Any], lease: dict[str, Any] | None) -> dict[str, Any]:
+    """Assemble the provenance block for a task detail. Read-only; reuses the shared
+    events index, DAG registry, plan doc, planner-run index, and duplicate map (all
+    cached). The events index is a 4 MB tail, so very old tasks may have a partial
+    origin chain — recent/active tasks (the ones inspected live) are always in-window."""
+    repo = repo.resolve()
+    task_id = detail.get("id")
+    index = load_events_index(repo)
+    registry = load_dag_registry(repo)
+    task_events = index["by_task"].get(task_id, [])
+    link = resolve_task_provenance_link(task_events, lease)
+    branch = link.get("branch")
+    branch_events = index["by_branch"].get(branch, []) if branch else []
+    chain = build_origin_chain(task_events, branch_events, branch)
+    # integration commit: last branch-matched integration.integrated mergeCommit
+    integration_commit = None
+    for ev in chain:
+        if ev["type"] == "integration.integrated" and ev["extra"].get("mergeCommit"):
+            integration_commit = ev["extra"]["mergeCommit"]
+    node = link.get("parentNode")
+    node_def = (registry.get("by_id") or {}).get(node) if node else None
+    source_refs = build_source_refs(node_def, load_stage_doc(repo)) if node_def else []
+    why = ""
+    if node_def:
+        why = str(node_def.get("description") or "").strip()
+        rc = node_def.get("requiredCompletion")
+        if rc:
+            why = (why + " " if why else "") + f"It serves node {node} toward {rc}."
+    # best-effort planner prompt / batch / staged candidate
+    planner_prompt_ref = planner_batch_ref = staged_candidate = None
+    first_ts = _iso_to_epoch(task_events[0].get("ts")) if task_events else 0.0
+    match = _match_planner_run(load_planner_runs(repo), node, first_ts)
+    if match:
+        planner_prompt_ref = match.get("promptRef")
+        planner_batch_ref = match.get("batchRef")
+        if planner_batch_ref:
+            staged_candidate = parse_planner_batch(read_json(Path(planner_batch_ref), {}) or {}, detail.get("title"))
+    dup = load_duplicate_map(repo).get(task_id, {})
+    return {
+        "taskId": task_id,
+        "parentNode": node,
+        "stage": link.get("stage"),
+        "area": detail.get("area"),
+        "batchId": link.get("batchId"),
+        "plannerRunId": link.get("plannerRunId"),
+        "workerRunId": link.get("workerRunId"),
+        "plannerPromptRef": planner_prompt_ref,
+        "plannerBatchRef": planner_batch_ref,
+        "stagedCandidate": staged_candidate,
+        "linkConfidence": link.get("linkConfidence"),
+        "whyTaskExists": why,
+        "originChain": chain,
+        "integrationCommit": integration_commit,
+        "duplicateOf": dup.get("duplicateOf"),
+        "supersededBy": dup.get("supersededBy"),
+        "duplicateAdvisory": dup or None,
+        "sourceRefs": source_refs,
+    }
+
+
+# --- node / area / overlay collectors ---------------------------------------- #
+
+def _integrated_task_ids(repo: Path) -> set[str]:
+    out: set[str] = set()
+    for lease in collect_leases(repo):
+        if str(lease.get("status") or "") in DONE_STATUSES and lease.get("taskId"):
+            out.add(str(lease["taskId"]))
+    return out
+
+
+def _load_gate_for_node(repo: Path, node_id: str) -> dict[str, Any] | None:
+    path = (repo / GATES_REL / f"{node_id}.gate-result.json").resolve()
+    gates_root = (repo / GATES_REL).resolve()
+    if gates_root not in path.parents:  # containment guard
+        return None
+    data = read_json(path, None)
+    return data if isinstance(data, dict) else None
+
+
+def collect_node_detail(repo: Path, node_id: str) -> dict[str, Any] | None:
+    repo = repo.resolve()
+    registry = load_dag_registry(repo)
+    if not node_id_valid(node_id, registry):
+        return None
+    node_def = registry["by_id"][node_id]
+    gate = _load_gate_for_node(repo, node_id)
+    integrated = _integrated_task_ids(repo)
+    # upstream gate statuses (cheap: a few files)
+    upstream_status: dict[str, str] = {}
+    for up in (node_def.get("dependsOn") or []):
+        ug = _load_gate_for_node(repo, up)
+        upstream_status[up] = str((ug or {}).get("status") or "absent")
+    blocking = synthesize_gate_blocking(gate, integrated, upstream_status)
+    # tasks that serve this node: events by_node + gate evidence task-set
+    index = load_events_index(repo)
+    task_ids: set[str] = set()
+    for ev in index["by_node"].get(node_id, []):
+        tid = _ev_data(ev).get("taskId")
+        if tid:
+            task_ids.add(tid)
+    if gate:
+        for item in (gate.get("evidence") or []):
+            if isinstance(item, dict) and item.get("kind") == "task-set":
+                task_ids.update([t for t in (item.get("taskIds") or []) if isinstance(t, str)])
+    lease_by_task = {l.get("taskId"): l for l in collect_leases(repo)}
+    tasks_generated = []
+    for tid in sorted(task_ids):
+        l = lease_by_task.get(tid) or {}
+        tasks_generated.append({"taskId": tid, "status": l.get("status"),
+                                "runId": l.get("runId"), "batchId": l.get("batchId")})
+    planner_runs = [r for r in load_planner_runs(repo) if r.get("node") == node_id]
+    l1_leases = [l for l in collect_l1_leases(repo) if l.get("node") == node_id]
+    is_frontier = any(l.get("active") for l in l1_leases) or (gate or {}).get("status") in (None, "absent", "blocked", "stale")
+    why_frontier = blocking["reason"] or (
+        f"{node_def.get('description','')} Required completion: {node_def.get('requiredCompletion')}." )
+    source_refs = build_source_refs(node_def, load_stage_doc(repo))
+    return {
+        "schema": "gluerun.codex.node-detail.v0",
+        "generatedAt": utc_now(),
+        "nodeId": node_id,
+        "definition": node_def,
+        "gate": {
+            "status": (gate or {}).get("status", "absent"),
+            "authoritative": (gate or {}).get("authoritative"),
+            "evidenceClass": (gate or {}).get("evidenceClass"),
+            "predicate": node_def.get("requiredCompletion"),
+            "upstreamGates": node_def.get("dependsOn") or [],
+            "upstreamStatus": upstream_status,
+            "rationale": (gate or {}).get("rationale"),
+            "recordedAt": (gate or {}).get("recordedAt"),
+            "decidedBy": (gate or {}).get("decidedBy"),
+            "blocking": blocking,
+            "commandLogs": [
+                {"ref": i.get("ref"), "command": i.get("command"), "exitCode": i.get("exitCode"),
+                 "logRef": i.get("logRef")}
+                for i in ((gate or {}).get("evidence") or [])
+                if isinstance(i, dict) and i.get("kind") == "command-log"
+            ],
+            "path": str((repo / GATES_REL / f"{node_id}.gate-result.json")) if gate else None,
+        },
+        "tasksGenerated": tasks_generated,
+        "plannerRuns": [{"runId": r["runId"], "promptRef": r["promptRef"], "batchRef": r["batchRef"]}
+                        for r in planner_runs] + [
+            {"runId": l.get("runId"), "status": l.get("status"), "startedAt": l.get("startedAt"),
+             "updatedAt": l.get("updatedAt"), "active": l.get("active")} for l in l1_leases],
+        "frontier": {"isFrontier": bool(is_frontier), "why": why_frontier.strip()},
+        "sourceRefs": source_refs,
+    }
+
+
+def collect_area_nodes(repo: Path, area: str) -> dict[str, Any] | None:
+    repo = repo.resolve()
+    registry = load_dag_registry(repo)
+    nodes = (registry.get("by_area") or {}).get(area)
+    if not nodes:
+        return None
+    integrated = _integrated_task_ids(repo)
+    leases = collect_leases(repo)
+    l1_leases = collect_l1_leases(repo)
+    active_nodes = {l.get("node") for l in l1_leases if l.get("active")}
+    index = load_events_index(repo)
+    out_nodes = []
+    for node in sorted(nodes, key=lambda n: str(n.get("id"))):
+        nid = str(node["id"])
+        gate = _load_gate_for_node(repo, nid)
+        task_ids: set[str] = set()
+        for ev in index["by_node"].get(nid, []):
+            tid = _ev_data(ev).get("taskId")
+            if tid:
+                task_ids.add(tid)
+        if gate:
+            for item in (gate.get("evidence") or []):
+                if isinstance(item, dict) and item.get("kind") == "task-set":
+                    task_ids.update([t for t in (item.get("taskIds") or []) if isinstance(t, str)])
+        total = len(task_ids)
+        integ = len([t for t in task_ids if t in integrated])
+        gate_status = (gate or {}).get("status", "absent")
+        is_frontier = nid in active_nodes or gate_status in ("absent", "blocked", "stale")
+        out_nodes.append({
+            "nodeId": nid,
+            "stage": node.get("stage"),
+            "layer": node.get("layer"),
+            "kind": node.get("kind"),
+            "dependsOn": node.get("dependsOn") or [],
+            "gateStatus": gate_status,
+            "predicate": node.get("requiredCompletion"),
+            "taskCounts": {"total": total, "integrated": integ, "open": total - integ},
+            "frontier": bool(is_frontier),
+        })
+    return {"schema": "gluerun.codex.area-nodes.v0", "generatedAt": utc_now(),
+            "area": area, "nodes": out_nodes}
+
+
+def collect_events_overlay(repo: Path, cursor: int | None, limit: int,
+                           types: set[str] | None) -> dict[str, Any]:
+    """Byte-cursor typed projection of events.ndjson for the live overlay. Reuses the
+    same read_log_window byte mechanics as the session terminal; cheap and read-only."""
+    repo = repo.resolve()
+    window = read_log_window(_events_path(repo), cursor, EVENTS_INDEX_MAX_BYTES)
+    rows: list[dict[str, Any]] = []
+    registry = load_dag_registry(repo)
+    node_area = {nid: n.get("area") for nid, n in (registry.get("by_id") or {}).items()}
+    for line in window["rawLines"]:
+        line = line.strip()
+        if not line or line[:1] != "{":
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict) or ev.get("type") in NOISE_EVENT_TYPES:
+            continue
+        if types and ev.get("type") not in types:
+            continue
+        row = project_event(ev)
+        if row.get("nodeId"):
+            row["areaId"] = node_area.get(row["nodeId"])
+        rows.append(row)
+    rows = rows[-limit:]
+    return {"schema": "gluerun.codex.events-overlay.v0", "generatedAt": utc_now(),
+            "rows": rows, "cursor": window["cursor"], "size": window["size"], "reset": window["reset"]}
+
+
+# --------------------------------------------------------------------------- #
+# Plan overview (read-only mission control)                                    #
+# --------------------------------------------------------------------------- #
+#
+# Answers the operator-orientation questions the per-entity views don't: what
+# feeds L0/L1, what the settings are, which phases are done, and overall %.
+# Strict read-only: parses the DAG, gate-results, STATUS.md and the orchestration
+# shell config (for env-overridable DEFAULTS — there is no single runtime config
+# file). No subprocesses.
+
+STATUS_REL = ".gluerun-state/STATUS.md"
+CIRCUIT_REL = ".gluerun-state/circuit.json"
+STOP_REL = ".gluerun-state/STOP"
+ORCH_SCRIPTS_REL = "scripts/orchestration"
+PLATFORM_VISION_REL = "docs/core/platform-vision.md"
+
+# Settings surfaced to the operator. Values are env-overridable DEFAULTS parsed
+# from scripts/orchestration/*.sh (KEY="${KEY:-DEFAULT}"); fallback is the known
+# default if parsing misses. Each spec row carries STATIC display metadata so the
+# frontend can render by type:
+#   (envKey, label, fallback, kind, unit, meaning)
+#   kind   -> model | reasoning | enum | count | duration | bytes | bool | derived | identifier
+#   unit   -> "" | s | min | h | GB   (split OUT of the label — never baked into parens)
+#   meaning-> one-line plain-language help ("" when obvious)
+# A group is (title, layout, items); layout "matrix" renders the models group as a
+# role x {model,reasoning} ladder. kind/unit/meaning/layout are metadata only — NOT
+# a new data source; collect_settings still derives every value from the SAME shell
+# defaults via parse_shell_default.
+SETTINGS_SPEC = [
+    ("Models & reasoning · role matrix", "matrix", [
+        ("GLUERUN_CODEX_MODEL", "model", "gpt-5.5", "model", "",
+         "Codex model all three roles run on"),
+        ("GLUERUN_CODEX_SERVICE_TIER", "service tier", "default", "enum", "",
+         "API service tier (default = standard queue)"),
+        ("GLUERUN_CODEX_PLANNER_REASONING_EFFORT", "planner reasoning", "xhigh", "reasoning", "",
+         "effort the L1 area planner spends — plan quality gates everything downstream"),
+        ("GLUERUN_CODEX_L2_REASONING_EFFORT", "worker reasoning", "medium", "reasoning", "",
+         "effort each L2 developer worker spends on a task slice"),
+        ("GLUERUN_CODEX_AUDITOR_REASONING_EFFORT", "auditor reasoning", "high", "reasoning", "",
+         "effort the diff auditor spends reviewing a packet before the gate"),
+    ]),
+    ("Throughput · work flowing per cycle", "list", [
+        ("GLUERUN_MAX_CONCURRENT", "max concurrent workers", "1", "count", "",
+         "L2 workers running at the same time"),
+        ("GLUERUN_MAX_DISPATCH", "max dispatch / cycle", "follows max concurrent", "derived", "",
+         "tasks dispatched per cycle; unset, so it follows max concurrent workers"),
+        ("GLUERUN_MAX_L1_CONCURRENT", "max parallel L1 planners", "3", "count", "",
+         "area planners that may plan at once — only when parallel planning is on (below)"),
+        ("GLUERUN_ENABLE_L1_PARALLEL", "L1 parallel planning", "0", "bool", "",
+         "off = plan one area at a time; gates the parallel-planner limit above"),
+        ("GLUERUN_L1_TASKS_PER_NODE", "tasks per planner node", "1", "count", "",
+         "tasks an L1 planner emits per DAG node"),
+        ("GLUERUN_L2_SLICE_BUDGET", "L2 slice budget", "1", "count", "",
+         "starting work-slices granted to a worker per task"),
+        ("GLUERUN_L2_SLICE_BUDGET_MAX", "L2 slice budget cap", "3", "count", "",
+         "hard ceiling the slice budget can grow to"),
+    ]),
+    ("Safety limits", "list", [
+        ("GLUERUN_MAX_RETRIES", "max task retries", "3", "count", "",
+         "attempts on a failing task before it is parked as a blocked escalation"),
+        ("GLUERUN_MAX_CONSEC_FAILS", "circuit-breaker threshold", "5", "count", "",
+         "consecutive failures that trip the breaker and halt the loop"),
+        ("GLUERUN_MAX_HOURS", "loop budget", "20", "duration", "h",
+         "wall-clock hours before the loop voluntarily exits"),
+        ("GLUERUN_MIN_DISK_GB", "min free disk", "2", "bytes", "GB",
+         "loop refuses to start a cycle below this free-space floor"),
+        ("GLUERUN_L1_STALE_MINUTES", "L1 stale timeout", "60", "duration", "min",
+         "an L1 planner lease idle this long is reclaimed as stale"),
+        ("GLUERUN_PLANNER_BACKOFF_SECONDS", "planner backoff", "900", "duration", "s",
+         "wait after a planner error before re-planning"),
+        ("GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS", "planner quota backoff", "1800", "duration", "s",
+         "longer wait after a planner quota / rate-limit rejection"),
+    ]),
+    ("Loop behavior", "list", [
+        ("GLUERUN_AUTO_INTEGRATE", "auto-integrate", "1", "bool", "",
+         "on = merge passing worker branches into the target automatically"),
+        ("GLUERUN_PUSH", "push to remote", "1", "bool", "",
+         "on = push the target branch to origin after integrating"),
+        ("GLUERUN_GENERATE", "task generation", "1", "bool", "",
+         "on = let planners generate new tasks; off = drain the existing queue only"),
+        ("GLUERUN_SLEEP", "cycle sleep", "20", "duration", "s",
+         "pause between loop cycles"),
+        ("GLUERUN_TARGET_BRANCH", "target branch", "codex/gluerun-bootstrap-target", "identifier", "",
+         "branch the loop integrates and pushes to"),
+    ]),
+]
+
+_BOOL_TRUE = {"1", "on", "true", "yes"}
+
+# Where the env-overridable shell DEFAULTS live. SETTINGS_SOURCE is an adapter
+# template ("{engineHome}" / "{repo}" placeholders); None means "no adapter
+# source configured" and the resolver falls back to $GLUERUN_ENGINE_HOME/engine,
+# then to the legacy in-repo scripts/orchestration layout (exact old behavior).
+SETTINGS_SOURCE: str | None = None
+SETTINGS_FILE_NAMES = ("lib.sh", "codex-run.sh", "reconcile.sh", "autonomate.sh")
+
+
+def resolve_settings_dir(repo: Path) -> Path:
+    """Resolve the directory holding the orchestration shell defaults.
+
+    Precedence: adapter ``settingsSource`` template -> ``$GLUERUN_ENGINE_HOME/engine``
+    -> legacy ``<repo>/scripts/orchestration``. A template that needs {engineHome}
+    while the env var is unset cannot resolve and falls through."""
+    engine_home = os.environ.get("GLUERUN_ENGINE_HOME") or ""
+    template = SETTINGS_SOURCE
+    if template and not ("{engineHome}" in template and not engine_home):
+        return Path(template.replace("{engineHome}", engine_home).replace("{repo}", str(repo)))
+    if engine_home:
+        return Path(engine_home) / "engine"
+    return repo / ORCH_SCRIPTS_REL
+
+
+def parse_shell_default(text: str, key: str) -> str | None:
+    """Extract DEFAULT from a `KEY="${KEY:-DEFAULT}"` shell assignment. Pure."""
+    m = re.search(r"\b" + re.escape(key) + r'\s*=\s*"?\$\{' + re.escape(key) + r":-([^}]*)\}", text)
+    return m.group(1).strip() if m else None
+
+
+def parse_env_overrides(repo: Path, keys: set[str]) -> dict[str, str]:
+    """Read `.gluerun-state/.env` and return {KEY: value} for the given config keys ONLY.
+
+    Whitelisted to `keys` (the SETTINGS_SPEC knobs), so secrets in .env — DATABASE_URL,
+    POSTGRES_*, PG*, passwords — are never parsed or surfaced to the dashboard. Read-only.
+    """
+    out: dict[str, str] = {}
+    try:
+        raw = state_path(repo, ".env").read_text(errors="replace")
+    except OSError:
+        return out
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key not in keys:  # whitelist — non-config (secret) lines are never read
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
+def collect_settings(repo: Path) -> list[dict[str, Any]]:
+    """Parse env-overridable DEFAULTS into typed, grouped display rows. Read-only.
+
+    Output: [{title, category(alias), layout, items:[{envKey,key,label,value,default,
+    source,overridden,kind,unit,meaning,boolValue?}]}]. `value` is the EFFECTIVE config:
+    the `.gluerun-state/.env` override if set, else the shell default. `source` is "env" or
+    "default" and `default` carries the shell default for reference. Secrets in .env are
+    never read (parse_env_overrides is whitelisted to the settings keys). Read-only.
+    """
+    text = ""
+    settings_dir = resolve_settings_dir(repo)
+    for name in SETTINGS_FILE_NAMES:
+        try:
+            text += "\n" + (settings_dir / name).read_text(errors="replace")
+        except OSError:
+            pass
+    # Live override layer: the values the loop actually sources from .env at launch.
+    # Whitelisted to the settings keys so DB credentials in .env are never read.
+    spec_keys = {it[0] for _t, _l, group_items in SETTINGS_SPEC for it in group_items}
+    overrides = parse_env_overrides(repo, spec_keys)
+    groups = []
+    for title, layout, items in SETTINGS_SPEC:
+        rows = []
+        for key, label, fallback, kind, unit, meaning in items:
+            default_val = parse_shell_default(text, key) or fallback
+            # Derived knobs (e.g. GLUERUN_MAX_DISPATCH -> $max_concurrent): the shell default
+            # is unresolved, but an explicit .env override IS the real, resolved value.
+            if default_val.startswith("$"):
+                default_val = "follows max concurrent"
+            if key == "GLUERUN_CODEX_SERVICE_TIER" and default_val in ("", "default"):
+                default_val = "default"
+            override = overrides.get(key)
+            if override not in (None, ""):
+                val, source = override, "env"
+            else:
+                val, source = default_val, "default"
+            row = {"key": key, "envKey": key, "label": label, "value": val,
+                   "default": default_val, "source": source, "overridden": source == "env",
+                   "kind": kind, "unit": unit, "meaning": meaning}
+            if kind == "bool":
+                row["boolValue"] = val.strip().lower() in _BOOL_TRUE
+            rows.append(row)
+        # `category` kept as an alias of `title` for backward compatibility.
+        groups.append({"title": title, "category": title, "layout": layout, "items": rows})
+    return groups
+
+
+def _all_gate_statuses(repo: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    root = repo / GATES_REL
+    if not root.exists():
+        return out
+    for path in root.glob("*.gate-result.json"):
+        data = read_json(path, None)
+        if isinstance(data, dict) and data.get("node"):
+            out[str(data["node"])] = str(data.get("status") or "absent")
+    return out
+
+
+def _stage_sort_key(stage: str) -> tuple[int, int]:
+    return (0 if stage[:1] == "D" else 1, int(re.sub(r"\D", "", stage) or 0))
+
+
+def compute_plan_progress(registry: dict[str, Any], gate_status: dict[str, str]) -> tuple:
+    """Per-stage + overall plan completion from the DAG + gate statuses. Pure."""
+    by_stage = registry.get("by_stage") or {}
+    stages = []
+    total = passed = 0
+    for s in sorted(by_stage, key=_stage_sort_key):
+        nodes = []
+        p = 0
+        for n in sorted(by_stage[s], key=lambda x: str(x.get("id"))):
+            st = gate_status.get(str(n.get("id")), "absent")
+            if st == "passed":
+                p += 1
+            nodes.append({"id": n.get("id"), "status": st, "layer": n.get("layer")})
+        t = len(by_stage[s])
+        total += t
+        passed += p
+        stages.append({"stage": s, "total": t, "passed": p,
+                       "status": "complete" if p == t else ("active" if p > 0 else "pending"),
+                       "nodes": nodes})
+    pct = round(100 * passed / total) if total else 0
+    frontier = []
+    for stg in stages:
+        if stg["status"] == "complete":
+            continue
+        for n in stg["nodes"]:
+            if n["status"] in ("absent", "blocked", "stale"):
+                frontier.append({"nodeId": n["id"], "stage": stg["stage"], "status": n["status"]})
+    return {"passedNodes": passed, "totalNodes": total, "pct": pct}, stages, frontier[:10]
+
+
+def parse_status_md(text: str) -> dict[str, Any]:
+    """Parse the operator-facing .gluerun-state/STATUS.md. Pure."""
+    def grab(rx, cast=str):
+        m = re.search(rx, text)
+        if not m:
+            return None
+        try:
+            return cast(m.group(1).strip())
+        except (ValueError, TypeError):
+            return None
+    return {
+        "iteration": grab(r"Iteration:\s*(\d+)", int),
+        "note": grab(r"Note:\s*(.+)"),
+        "stopRequested": bool(re.search(r"STOP requested:\s*yes", text)),
+        "readyTasks": grab(r"ready tasks:\s*(\d+)", int),
+        "activeLeases": grab(r"active leases:\s*(\d+)", int),
+        "importedPackets": grab(r"imported packets:\s*(\d+)", int),
+        "integrationsLifetime": grab(r"integrations \(lifetime\):\s*(\d+)", int),
+        "parkedLifetime": grab(r"parked escalations \(lifetime\):\s*(\d+)", int),
+        "breaker": grab(r"consecutive failures:\s*([\d\s/]+)"),
+        "branch": grab(r"branch:\s*`([^`]+)`"),
+        "headSha": grab(r"@\s*`([^`]+)`"),
+        "updatedAt": grab(r"Updated:\s*(\S+)"),
+    }
+
+
+# A coarse 34-node % stays flat for hours while many L2 tasks integrate toward one
+# node's gate — so an operator can't tell "grinding the frontier" from "stuck". The
+# pulse derives a genuinely-live signal from the SAME cached events tail (no extra
+# reads): loop heartbeat (last integration / activity) + per-area frontier throughput,
+# joining each task to its area via the planner.generated event that carries `area`.
+PULSE_WINDOW_SECONDS = 3600  # "recent" throughput window (1h)
+_ADVANCE_TYPES = ("integration.integrated", "l1.committed")
+
+
+def compute_loop_pulse(index: dict[str, Any], registry: dict[str, Any],
+                       gate_status: dict[str, str], now_epoch: float) -> tuple[dict, list]:
+    """Live heartbeat + per-area frontier throughput from the events index. Pure.
+
+    Returns (pulse, frontierActivity). frontierActivity groups the not-yet-passed
+    nodes by area and attributes recent integrations to the area feeding them.
+    """
+    by_task = index.get("by_task") or {}
+    tail = index.get("tail_rows") or []
+
+    # task -> area, and the freshest planner.generated (what's being planned now).
+    task_area: dict[str, str] = {}
+    latest_plan_epoch, latest_plan_area = 0.0, None
+    for tid, evs in by_task.items():
+        for ev in evs:
+            if ev.get("type") == "planner.generated":
+                area = _ev_data(ev).get("area")
+                if area:
+                    task_area[tid] = str(area)
+                    e = _iso_to_epoch(ev.get("ts"))
+                    if e > latest_plan_epoch:
+                        latest_plan_epoch, latest_plan_area = e, str(area)
+                break
+
+    last_integration = last_activity = 0.0
+    integrated_tasks: set[str] = set()                 # distinct integrated taskIds in window
+    area_recent: dict[str, dict[str, float]] = {}      # area -> {count, lastEpoch}
+    latest_advance_epoch, latest_advance_area = 0.0, None
+    for r in tail:
+        e = _iso_to_epoch(r.get("ts"))
+        if e > last_activity:
+            last_activity = e
+        t = r.get("type")
+        if t == "integration.integrated" and e > last_integration:
+            last_integration = e
+        if t in _ADVANCE_TYPES:
+            tid = r.get("taskId")
+            area = task_area.get(tid)
+            # activeArea tracks the freshest work signal (commit OR integration); the
+            # throughput COUNT tracks only true integrations so it reconciles with the
+            # global integ/hr and the "integrated" label.
+            if e > latest_advance_epoch:
+                latest_advance_epoch, latest_advance_area = e, area
+            if t == "integration.integrated":
+                in_window = (now_epoch - e) <= PULSE_WINDOW_SECONDS
+                if tid and in_window:
+                    integrated_tasks.add(tid)
+                if area:
+                    slot = area_recent.setdefault(area, {"count": 0.0, "lastEpoch": 0.0})
+                    if in_window:
+                        slot["count"] += 1
+                    if e > slot["lastEpoch"]:
+                        slot["lastEpoch"] = e
+
+    active_area = latest_advance_area or latest_plan_area
+
+    # Not-yet-passed nodes grouped by the area whose tasks feed them.
+    frontier_by_area: dict[str, list[dict[str, Any]]] = {}
+    for nid, node in (registry.get("by_id") or {}).items():
+        if gate_status.get(nid, "absent") != "passed":
+            frontier_by_area.setdefault(str(node.get("area") or "—"), []).append(
+                {"id": nid, "status": gate_status.get(nid, "absent"), "stage": node.get("stage")})
+    activity = []
+    for area, nodes in frontier_by_area.items():
+        slot = area_recent.get(area, {"count": 0.0, "lastEpoch": 0.0})
+        activity.append({
+            "area": area,
+            "nodes": sorted(nodes, key=lambda n: str(n["id"])),
+            "recentIntegrations": int(slot["count"]),
+            "lastAt": _iso_from_mtime(slot["lastEpoch"]) if slot["lastEpoch"] else None,
+            "active": area == active_area,
+        })
+    activity.sort(key=lambda a: (a["active"], a["recentIntegrations"], a["lastAt"] or ""), reverse=True)
+
+    pulse = {
+        "lastIntegrationAt": _iso_from_mtime(last_integration) if last_integration else None,
+        "lastActivityAt": _iso_from_mtime(last_activity) if last_activity else None,
+        "activityAgeSeconds": int(now_epoch - last_activity) if last_activity else None,
+        "recentIntegrations": len(integrated_tasks),
+        "windowSeconds": PULSE_WINDOW_SECONDS,
+        "activeArea": active_area,
+    }
+    return pulse, activity
+
+
+def collect_overview(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    registry = load_dag_registry(repo)
+    gate_status = _all_gate_statuses(repo)
+    progress, stages, frontier = compute_plan_progress(registry, gate_status)
+    status_path = repo / STATUS_REL
+    loop = parse_status_md(status_path.read_text(errors="replace") if status_path.exists() else "")
+    loop["stopPresent"] = (repo / STOP_REL).exists()
+    circuit = read_json(repo / CIRCUIT_REL, {}) or {}
+    loop["consecFails"] = circuit.get("consecFails")
+    pulse, frontier_activity = compute_loop_pulse(
+        load_events_index(repo), registry, gate_status, _iso_to_epoch(utc_now()))
+    pulse["running"] = (not loop.get("stopPresent")) and not re.search(
+        r"stop|halt", str(loop.get("note") or ""), re.I)
+    pulse["iteration"] = loop.get("iteration")
+    pulse["integrationsLifetime"] = loop.get("integrationsLifetime")
+    pulse["parkedLifetime"] = loop.get("parkedLifetime")
+    tasks_dir = repo / TASKS_DIR_REL
+    tasks_count = sum(1 for _ in tasks_dir.glob("TASK-*.md")) if tasks_dir.exists() else 0
+    inputs = {
+        "runtime": [
+            {"path": DAG_REL, "role": "frontier structure",
+             "note": "the executable DAG — read every cycle to pick the next node"},
+            {"path": GATES_REL + "/", "role": "completion authority", "count": len(gate_status),
+             "note": "gate-result files; a passed gate marks a node complete"},
+            {"path": TASKS_DIR_REL + "/", "role": "ready queue", "count": tasks_count,
+             "note": "TASK-*.md; only Status: ready slices are dispatched"},
+        ],
+        "authoring": [
+            {"path": STAGE_DOC_REL,
+             "note": "the source the DAG was distilled from — NOT read at runtime"},
+            {"path": PLATFORM_VISION_REL,
+             "note": "product vision behind the plan — NOT read at runtime"},
+        ],
+        "plannerPrompt": {
+            "note": "each L1 planner prompt is assembled per run from a template + the DAG "
+                    "node's fields + the existing-task list; the assembled prompt is saved at",
+            "ref": ".gluerun-state/runs/<id>/planner-prompt.md",
+        },
+    }
+    return {
+        "schema": "gluerun.codex.plan-overview.v0",
+        "generatedAt": utc_now(),
+        "progress": progress,
+        "stages": stages,
+        "frontier": frontier,
+        "pulse": pulse,
+        "frontierActivity": frontier_activity,
+        "inputs": inputs,
+        "settings": collect_settings(repo),
+        "loop": loop,
+    }
+
+
+_OVERVIEW_CACHE = _ComputeCache(collect_overview, 6.0)
+
+
+def load_overview(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    return _OVERVIEW_CACHE.get(str(repo), repo)
+
+
+# --------------------------------------------------------------------------- #
+# Console adapter (gluerun.console-adapter.v0)                                     #
+# --------------------------------------------------------------------------- #
+#
+# Everything project-shaped in this console (role catalog, event map, id
+# patterns, paths, commands, process matchers, log maps, settings spec/source)
+# can be externalized into a versioned adapter document. Resolution happens
+# ONCE at startup (mirroring load_repo_target_branch + its call in main()),
+# with per-KEY precedence:
+#
+#   (a) repo override   — gluerun.config.json "console" block (inline object),
+#                         then docs/orchestration/console-adapter.json
+#   (b) engine-shipped  — $GLUERUN_ENGINE_HOME/plugin/adapters/
+#                         console-adapter.<schemaVersion>.json
+#   (c) built-in        — the module constants above (exact legacy behavior)
+#
+# With no adapter resolvable the constants are untouched and every endpoint
+# behaves byte-identically to the pre-adapter console. A malformed adapter
+# layer (or one malformed key) warns to stderr and falls through — the console
+# never crashes over adapter content.
+
+CONSOLE_ADAPTER_SCHEMA = "gluerun.console-adapter.v0"
+
+
+def _build_builtin_console_adapter() -> dict[str, Any]:
+    """Snapshot the built-in constants in adapter (JSON-shaped) form."""
+    return {
+        "schema": CONSOLE_ADAPTER_SCHEMA,
+        "roleCatalog": ROLE_CATALOG,
+        "rolePromptMap": dict(ROLE_PROMPT_MAP),
+        "eventMap": {k: list(v) for k, v in EVENT_MAP.items()},
+        "noiseEventTypes": sorted(NOISE_EVENT_TYPES),
+        "idPatterns": {
+            "task": TASK_ID_RE.pattern,
+            "node": NODE_ID_RE.pattern,
+            "area": AREA_ID_RE.pattern,
+        },
+        # Inline (?m) carries the re.MULTILINE flag through the JSON round trip.
+        "plannerPromptPatterns": {
+            "area": _PLANNER_AREA_RE.pattern,
+            "node": _PLANNER_NODE_RE.pattern,
+            "stage": "(?m)" + _PLANNER_STAGE_RE.pattern,
+            "layer": "(?m)" + _PLANNER_LAYER_RE.pattern,
+        },
+        "settingsSpec": [
+            {"title": title, "layout": layout,
+             "items": [{"envKey": key, "label": label, "default": fallback,
+                        "kind": kind, "unit": unit, "meaning": meaning}
+                       for key, label, fallback, kind, unit, meaning in items]}
+            for title, layout, items in SETTINGS_SPEC
+        ],
+        "paths": {
+            "dagFile": DAG_REL,
+            "stageDoc": STAGE_DOC_REL,
+            "gatesDir": GATES_REL,
+            "tasksDir": TASKS_DIR_REL,
+            "areasDir": AREAS_DIR_REL,
+            "stateDir": STATE_DIR_REL,
+            "eventsLog": EVENTS_LOG_REL,
+            "autonomateLog": AUTONOMATE_LOG_REL,
+            "statusFile": STATUS_REL,
+            "circuitFile": CIRCUIT_REL,
+            "stopFile": STOP_REL,
+            "orchScriptsDir": ORCH_SCRIPTS_REL,
+            "platformVision": PLATFORM_VISION_REL,
+        },
+        "commands": {k: list(v) for k, v in CONSOLE_COMMANDS.items()},
+        "processMatchers": {k: list(v) for k, v in PROCESS_MATCHERS.items()},
+        "logFileMaps": {
+            "codexLogs": [[name, role] for name, role in CODEX_LOG_NAMES],
+            "plainLogs": list(PLAIN_LOG_NAMES),
+        },
+        "settingsSource": SETTINGS_SOURCE,
+    }
+
+
+# Primed at import time, before any adapter can mutate the globals, so the (c)
+# fallback layer always reflects the pristine built-ins.
+_BUILTIN_CONSOLE_ADAPTER = _build_builtin_console_adapter()
+
+
+def builtin_console_adapter() -> dict[str, Any]:
+    return _BUILTIN_CONSOLE_ADAPTER
+
+
+def _adapter_warn(msg: str) -> None:
+    print(f"gluerun console adapter: {msg}", file=sys.stderr)
+
+
+def _read_adapter_layer(path: Path, origin: str) -> dict[str, Any] | None:
+    """Read one adapter JSON layer. Missing file -> None (silent). Malformed
+    JSON / non-object -> warn to stderr and return None (fall through)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        _adapter_warn(f"ignoring malformed {origin} ({path}): {exc}")
+        return None
+    if not isinstance(data, dict):
+        _adapter_warn(f"ignoring {origin} ({path}): top level must be an object")
+        return None
+    return data
+
+
+def load_console_adapter(repo, engine_home: str | None = None,
+                         schema_version: str | None = None) -> dict[str, Any]:
+    """Resolve the effective console adapter for ``repo`` with per-KEY precedence
+    repo override > engine-shipped > built-in. Never raises on adapter content."""
+    repo = Path(repo)
+    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    if schema_version is None:
+        sv = cfg.get("schemaVersion")
+        schema_version = sv if isinstance(sv, str) and sv else "v0"
+    merged = dict(builtin_console_adapter())
+
+    def overlay(layer: dict[str, Any] | None) -> None:
+        if not layer:
+            return
+        merged.update({k: v for k, v in layer.items() if k != "schema"})
+
+    if engine_home:
+        overlay(_read_adapter_layer(
+            Path(engine_home) / "plugin" / "adapters" / f"console-adapter.{schema_version}.json",
+            "engine adapter"))
+    overlay(_read_adapter_layer(repo / "docs/orchestration/console-adapter.json", "repo adapter"))
+    inline = cfg.get("console")
+    if isinstance(inline, dict):
+        overlay(inline)
+    elif inline is not None:
+        _adapter_warn("ignoring gluerun.config.json 'console': must be an object")
+    return merged
+
+
+# The resolved adapter document (None until apply_console_adapter runs).
+CONSOLE_ADAPTER: dict[str, Any] | None = None
+
+
+def apply_console_adapter(adapter: dict[str, Any]) -> None:
+    """Install a resolved adapter into the module globals every collector reads.
+    Each key is applied independently; an invalid value warns and keeps the
+    built-in for that key only, so bad adapter content can never take the
+    console down."""
+    builtin = builtin_console_adapter()
+    g = globals()
+
+    def value(key: str, deep_merge: bool = False) -> Any:
+        raw = adapter.get(key)
+        if raw is None:
+            return builtin[key]
+        if deep_merge and isinstance(raw, dict) and isinstance(builtin[key], dict):
+            return {**builtin[key], **raw}
+        return raw
+
+    def apply(key: str, fn) -> None:
+        try:
+            g.update(fn())
+        except Exception as exc:  # defensive: one bad key never kills startup
+            _adapter_warn(f"key '{key}' invalid, keeping built-in: {exc}")
+
+    apply("roleCatalog", lambda: {"ROLE_CATALOG": value("roleCatalog")})
+    apply("rolePromptMap", lambda: {"ROLE_PROMPT_MAP": dict(value("rolePromptMap", True))})
+    apply("eventMap", lambda: {"EVENT_MAP": {
+        str(k): (str(v[0]), str(v[1]), str(v[2]), bool(v[3]))
+        for k, v in value("eventMap", True).items()}})
+    apply("noiseEventTypes", lambda: {"NOISE_EVENT_TYPES": {str(t) for t in value("noiseEventTypes")}})
+
+    def _id_patterns() -> dict[str, Any]:
+        pats = value("idPatterns", True)
+        return {"TASK_ID_RE": re.compile(pats["task"]),
+                "NODE_ID_RE": re.compile(pats["node"]),
+                "AREA_ID_RE": re.compile(pats["area"])}
+    apply("idPatterns", _id_patterns)
+
+    def _planner_patterns() -> dict[str, Any]:
+        pats = {**builtin["plannerPromptPatterns"], **(adapter.get("plannerPromptPatterns") or {})}
+        return {"_PLANNER_AREA_RE": re.compile(pats["area"]),
+                "_PLANNER_NODE_RE": re.compile(pats["node"]),
+                "_PLANNER_STAGE_RE": re.compile(pats["stage"]),
+                "_PLANNER_LAYER_RE": re.compile(pats["layer"])}
+    apply("plannerPromptPatterns", _planner_patterns)
+
+    def _settings_spec() -> dict[str, Any]:
+        spec = []
+        for group in value("settingsSpec"):
+            items = [(it["envKey"], it["label"], it["default"],
+                      it.get("kind", ""), it.get("unit", ""), it.get("meaning", ""))
+                     for it in group["items"]]
+            spec.append((group["title"], group.get("layout", "list"), items))
+        return {"SETTINGS_SPEC": spec}
+    apply("settingsSpec", _settings_spec)
+
+    def _paths() -> dict[str, Any]:
+        paths = value("paths", True)
+        return {"DAG_REL": str(paths["dagFile"]),
+                "STAGE_DOC_REL": str(paths["stageDoc"]),
+                "GATES_REL": str(paths["gatesDir"]),
+                "TASKS_DIR_REL": str(paths["tasksDir"]),
+                "AREAS_DIR_REL": str(paths["areasDir"]),
+                "STATE_DIR_REL": str(paths["stateDir"]),
+                "EVENTS_LOG_REL": str(paths["eventsLog"]),
+                "AUTONOMATE_LOG_REL": str(paths["autonomateLog"]),
+                "STATUS_REL": str(paths["statusFile"]),
+                "CIRCUIT_REL": str(paths["circuitFile"]),
+                "STOP_REL": str(paths["stopFile"]),
+                "ORCH_SCRIPTS_REL": str(paths["orchScriptsDir"]),
+                "PLATFORM_VISION_REL": str(paths["platformVision"])}
+    apply("paths", _paths)
+
+    apply("commands", lambda: {"CONSOLE_COMMANDS": {
+        str(k): [str(p) for p in v] for k, v in value("commands", True).items()}})
+    apply("processMatchers", lambda: {"PROCESS_MATCHERS": dict(value("processMatchers", True))})
+
+    def _log_file_maps() -> dict[str, Any]:
+        maps = value("logFileMaps", True)
+        return {"CODEX_LOG_NAMES": tuple((str(n), str(r)) for n, r in maps["codexLogs"]),
+                "PLAIN_LOG_NAMES": tuple(str(n) for n in maps["plainLogs"])}
+    apply("logFileMaps", _log_file_maps)
+
+    src = adapter.get("settingsSource", builtin["settingsSource"])
+    g["SETTINGS_SOURCE"] = str(src) if src else None
+    g["CONSOLE_ADAPTER"] = adapter
+
+
+# --------------------------------------------------------------------------- #
+# HTTP server                                                                   #
+# --------------------------------------------------------------------------- #
+
+class SnapshotCache:
+    """Tiny TTL cache so multiple panels / fast polls do not re-run make targets."""
+
+    def __init__(self, ttl: float = SNAPSHOT_TTL_SECONDS) -> None:
+        self.ttl = ttl
+        self._lock = threading.Lock()
+        self._compute = threading.Lock()  # single-flight guard around collect_snapshot
+        self._value: dict[str, Any] | None = None
+        self._stamp: float = 0.0
+        self._key: str = ""
+
+    def _fresh_enough(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            if self._value is not None and self._key == key and (time.monotonic() - self._stamp) < self.ttl:
+                return self._value
+        return None
+
+    def get(self, repo: Path, fresh: bool = False) -> dict[str, Any]:
+        key = str(repo.resolve())
+        if not fresh:
+            cached = self._fresh_enough(key)
+            if cached is not None:
+                return cached
+        # Single-flight: only one thread computes a given snapshot; others wait and
+        # then reuse the just-computed value instead of stampeding the make/git fan-out.
+        with self._compute:
+            if not fresh:
+                cached = self._fresh_enough(key)
+                if cached is not None:
+                    return cached
+            snapshot = collect_snapshot(repo)
+            with self._lock:
+                self._value = snapshot
+                self._stamp = time.monotonic()
+                self._key = key
+            return snapshot
+
+
+SNAPSHOT_CACHE = SnapshotCache()
+
+
+class SessionsCache:
+    """Independent 2s TTL cache for the session list. Decoupled from the snapshot
+    cache so the terminal can poll at 2s without dragging in the slower make/git
+    snapshot fan-out — collect_sessions is pure filesystem reads."""
+
+    def __init__(self, ttl: float = SESSIONS_TTL_SECONDS) -> None:
+        self.ttl = ttl
+        self._lock = threading.Lock()
+        self._compute = threading.Lock()
+        self._value: dict[str, Any] | None = None
+        self._stamp: float = 0.0
+        self._key: str = ""
+
+    def _fresh_enough(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            if self._value is not None and self._key == key and (time.monotonic() - self._stamp) < self.ttl:
+                return self._value
+        return None
+
+    def get(self, repo: Path) -> dict[str, Any]:
+        key = str(repo.resolve())
+        cached = self._fresh_enough(key)
+        if cached is not None:
+            return cached
+        with self._compute:
+            cached = self._fresh_enough(key)
+            if cached is not None:
+                return cached
+            value = collect_sessions(repo)
+            with self._lock:
+                self._value = value
+                self._stamp = time.monotonic()
+                self._key = key
+            return value
+
+
+SESSIONS_CACHE = SessionsCache()
+
+
+class Handler(BaseHTTPRequestHandler):
+    repo: Path = Path(DEFAULT_REPO)
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
+
+    def _no_cache_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+
+    def send_json(self, data: Any, status: int = 200, cache: str | None = None) -> None:
+        body = json.dumps(data, indent=2).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        if cache:
+            self.send_header("Cache-Control", cache)
+        else:
+            self._no_cache_headers()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_asset(self, filename: str, content_type: str) -> None:
+        path = ASSETS_DIR / filename
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            self.send_json({"error": f"asset not found: {filename}", "assetsDir": str(ASSETS_DIR)}, 500)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self._no_cache_headers()
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        route = parsed.path
+        if route == "/":
+            self.send_asset("index.html", "text/html; charset=utf-8")
+            return
+        if route.startswith("/assets/"):
+            name = route[len("/assets/"):]
+            content_type = ASSET_CONTENT_TYPES.get(name)
+            if content_type is None:
+                self.send_json({"error": "not found"}, 404)
+                return
+            self.send_asset(name, content_type)
+            return
+        if route == "/api/state":
+            query = parse_qs(parsed.query)
+            # Always use the operator-configured repo; never run subprocesses in a
+            # caller-supplied cwd (the ?repo= param is intentionally ignored).
+            fresh = query.get("fresh", ["0"])[0] not in ("0", "", "false")
+            self.send_json(SNAPSHOT_CACHE.get(self.repo, fresh=fresh))
+            return
+        if route.startswith("/api/task/"):
+            task_id = unquote(route[len("/api/task/"):]).strip("/")
+            if not TASK_ID_RE.match(task_id):
+                self.send_json({"error": "invalid task id"}, 400)
+                return
+            detail = collect_task_detail(self.repo, task_id)
+            if detail is None:
+                self.send_json({"error": f"task not found: {task_id}"}, 404)
+                return
+            self.send_json(detail)
+            return
+        if route == "/api/sessions":
+            self.send_json(SESSIONS_CACHE.get(self.repo))
+            return
+        if route.startswith("/api/session/"):
+            session_id = unquote(route[len("/api/session/"):]).strip("/")
+            query = parse_qs(parsed.query)
+
+            def _int(name: str) -> int | None:
+                raw = query.get(name, [None])[0]
+                if raw is None or raw == "":
+                    return None
+                try:
+                    return int(raw)
+                except ValueError:
+                    return None
+
+            cursor = _int("cursor")
+            limit = _int("limit") or SESSION_LINE_LIMIT_DEFAULT
+            limit = max(1, min(SESSION_LINE_LIMIT_MAX, limit))
+            file_name = query.get("file", [None])[0] or None
+            raw = query.get("raw", ["0"])[0] not in ("0", "", "false")
+            data = read_session(self.repo, session_id, cursor, limit, file_name, raw)
+            if data is None:
+                self.send_json({"error": f"session not found: {session_id}"}, 404)
+                return
+            self.send_json(data)
+            return
+        if route.startswith("/api/node/"):
+            node_id = unquote(route[len("/api/node/"):]).strip("/")
+            if not NODE_ID_RE.match(node_id):
+                self.send_json({"error": "invalid node id"}, 400)
+                return
+            detail = collect_node_detail(self.repo, node_id)
+            if detail is None:
+                self.send_json({"error": f"node not found: {node_id}"}, 404)
+                return
+            self.send_json(detail)
+            return
+        if route.startswith("/api/area/") and route.endswith("/nodes"):
+            area = unquote(route[len("/api/area/"):-len("/nodes")]).strip("/")
+            if not AREA_ID_RE.match(area):
+                self.send_json({"error": "invalid area"}, 400)
+                return
+            detail = collect_area_nodes(self.repo, area)
+            if detail is None:
+                self.send_json({"error": f"area not found: {area}"}, 404)
+                return
+            self.send_json(detail)
+            return
+        if route == "/api/overview":
+            self.send_json(load_overview(self.repo))
+            return
+        if route == "/api/events":
+            query = parse_qs(parsed.query)
+            raw_cursor = query.get("cursor", [None])[0]
+            try:
+                cursor = int(raw_cursor) if raw_cursor not in (None, "") else None
+            except ValueError:
+                cursor = None
+            try:
+                limit = int(query.get("limit", [OVERLAY_ROW_LIMIT_DEFAULT])[0])
+            except ValueError:
+                limit = OVERLAY_ROW_LIMIT_DEFAULT
+            limit = max(1, min(OVERLAY_ROW_LIMIT_MAX, limit))
+            type_csv = query.get("types", [None])[0]
+            types = {t for t in type_csv.split(",") if t} if type_csv else None
+            self.send_json(collect_events_overlay(self.repo, cursor, limit, types))
+            return
+        if route == "/api/roles":
+            # Static declared reference data — safe to cache hard.
+            self.send_json(ROLE_CATALOG, cache="public, max-age=86400, immutable")
+            return
+        if route == "/api/health":
+            self.send_json({"ok": True, "generatedAt": utc_now(), "repo": str(self.repo)})
+            return
+        self.send_json({"error": "not found"}, 404)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Serve a read-only gluerun orchestration console for a target repo.")
+    parser.add_argument("--repo", default=os.environ.get("GLUERUN_REPO", DEFAULT_REPO), help="target repo path (defaults to GLUERUN_REPO or cwd)")
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host")
+    parser.add_argument("--port", type=int, default=8765, help="Bind port")
+    parser.add_argument("--snapshot", action="store_true", help="Print one JSON snapshot and exit")
+    parser.add_argument("--task", help="Print one task detail JSON (e.g. TASK-0309) and exit")
+    parser.add_argument("--sessions", action="store_true", help="Print the live session list JSON and exit")
+    parser.add_argument("--session", help="Print one session's terminal lines JSON and exit (run id or 'origin')")
+    parser.add_argument("--node", help="Print one DAG node's provenance JSON (e.g. D1.contract) and exit")
+    parser.add_argument("--area", help="Print one area's nodes JSON (e.g. artifact) and exit")
+    parser.add_argument("--events", action="store_true", help="Print the live event overlay JSON and exit")
+    parser.add_argument("--overview", action="store_true", help="Print the plan overview JSON and exit")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+    repo = Path(args.repo).expanduser()
+    if not repo.exists():
+        print(f"repo not found: {repo}", file=sys.stderr)
+        return 2
+    global TARGET_BRANCH
+    TARGET_BRANCH = load_repo_target_branch(repo)
+    # Resolve the console adapter once at startup (repo > engine-shipped >
+    # built-in, per key). With no adapter resolvable this is a no-op and the
+    # console behaves exactly as before.
+    apply_console_adapter(load_console_adapter(repo, os.environ.get("GLUERUN_ENGINE_HOME")))
+    if args.task:
+        detail = collect_task_detail(repo, args.task)
+        if detail is None:
+            print(f"task not found: {args.task}", file=sys.stderr)
+            return 3
+        print(json.dumps(detail, indent=2))
+        return 0
+    if args.snapshot:
+        print(json.dumps(collect_snapshot(repo), indent=2))
+        return 0
+    if args.sessions:
+        print(json.dumps(collect_sessions(repo), indent=2))
+        return 0
+    if args.session:
+        data = read_session(repo, args.session.strip("/"), None, SESSION_LINE_LIMIT_DEFAULT, None, False)
+        if data is None:
+            print(f"session not found: {args.session}", file=sys.stderr)
+            return 3
+        print(json.dumps(data, indent=2))
+        return 0
+    if args.node:
+        detail = collect_node_detail(repo, args.node.strip("/"))
+        if detail is None:
+            print(f"node not found: {args.node}", file=sys.stderr)
+            return 3
+        print(json.dumps(detail, indent=2))
+        return 0
+    if args.area:
+        detail = collect_area_nodes(repo, args.area.strip("/"))
+        if detail is None:
+            print(f"area not found: {args.area}", file=sys.stderr)
+            return 3
+        print(json.dumps(detail, indent=2))
+        return 0
+    if args.events:
+        print(json.dumps(collect_events_overlay(repo, None, OVERLAY_ROW_LIMIT_DEFAULT, None), indent=2))
+        return 0
+    if args.overview:
+        print(json.dumps(collect_overview(repo), indent=2))
+        return 0
+    Handler.repo = repo
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    url = f"http://{args.host}:{args.port}"
+    print(f"gluerun orchestration console serving {repo} at {url}", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

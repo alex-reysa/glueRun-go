@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gluerun orchestration console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <!-- Custom geometric icon set — 16x16, 1.6px stroke, round caps, never filled -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-hub" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="8" cy="8" r="2.2"/><circle cx="8" cy="2.6" r="1.1"/><circle cx="3.2" cy="12" r="1.1"/><circle cx="12.8" cy="12" r="1.1"/>
+        <line x1="8" y1="5.8" x2="8" y2="3.7"/><line x1="6.3" y1="9.4" x2="4.1" y2="11"/><line x1="9.7" y1="9.4" x2="11.9" y2="11"/>
+      </symbol>
+      <symbol id="i-layers" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2.4 13.6 5.3 8 8.2 2.4 5.3Z"/><path d="M2.4 8.4 8 11.3 13.6 8.4"/>
+      </symbol>
+      <symbol id="i-box" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="10" height="10" rx="2.4"/>
+      </symbol>
+      <symbol id="i-branch" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="4.6" cy="4" r="1.5"/><circle cx="4.6" cy="12" r="1.5"/><circle cx="11.4" cy="5" r="1.5"/>
+        <line x1="4.6" y1="5.5" x2="4.6" y2="10.5"/><path d="M11.4 6.5c0 3-2.6 3.6-4.4 4"/>
+      </symbol>
+      <symbol id="i-file" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 2.6h5l3 3v7.8H4Z"/><path d="M9 2.6v3h3"/>
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2.3 13 4v4c0 3.2-2.2 5-5 5.8C5.2 13 3 11.2 3 8V4Z"/><path d="M5.9 8 7.4 9.5 10.3 6.4"/>
+      </symbol>
+      <symbol id="i-clock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="8" cy="8" r="5.3"/><path d="M8 5v3l2 1.4"/>
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="7" cy="7" r="3.8"/><line x1="9.8" y1="9.8" x2="13" y2="13"/>
+      </symbol>
+      <symbol id="i-pin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 2.6h4l-.7 3 2.1 2.6H4.6L6.7 5.6Z"/><line x1="8" y1="8.2" x2="8" y2="13.4"/>
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12.4 6.6A4.7 4.7 0 1 0 13 9.4"/><polyline points="9.2 6.6 12.6 6.6 12.6 3.2"/>
+      </symbol>
+      <symbol id="i-chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 4 10 8 6 12"/>
+      </symbol>
+      <symbol id="i-diamond" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2.5 13.5 8 8 13.5 2.5 8Z"/>
+      </symbol>
+      <symbol id="i-disk" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.5" y="3" width="11" height="10" rx="2"/><circle cx="8" cy="8" r="2.4"/><circle cx="8" cy="8" r="0.3"/>
+      </symbol>
+      <symbol id="i-alert" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2.7 14 13H2Z"/><line x1="8" y1="6.4" x2="8" y2="9.4"/><circle cx="8" cy="11.2" r="0.35"/>
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="3.6 8.4 6.5 11.4 12.4 4.9"/>
+      </symbol>
+      <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5.6" y="5.6" width="7" height="7" rx="1.6"/><path d="M3.4 10.4V3.9a.9.9 0 0 1 .9-.9h6.1"/>
+      </symbol>
+      <symbol id="i-expand" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="9.4 3 13 3 13 6.6"/><polyline points="6.6 13 3 13 3 9.4"/><line x1="13" y1="3" x2="9.2" y2="6.8"/><line x1="3" y1="13" x2="6.8" y2="9.2"/>
+      </symbol>
+      <symbol id="i-stop" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5.7 2.8h4.6l3.1 3.1v4.6l-3.1 3.1H5.7L2.6 10.5V5.9Z"/>
+      </symbol>
+      <symbol id="i-grid" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.6" y="2.6" width="4.2" height="4.2" rx="1"/><rect x="9.2" y="2.6" width="4.2" height="4.2" rx="1"/>
+        <rect x="2.6" y="9.2" width="4.2" height="4.2" rx="1"/><rect x="9.2" y="9.2" width="4.2" height="4.2" rx="1"/>
+      </symbol>
+      <symbol id="i-cpu" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="8" height="8" rx="1.6"/><rect x="6.2" y="6.2" width="3.6" height="3.6" rx="0.6"/>
+        <line x1="6.2" y1="2.6" x2="6.2" y2="4"/><line x1="9.8" y1="2.6" x2="9.8" y2="4"/><line x1="6.2" y1="12" x2="6.2" y2="13.4"/><line x1="9.8" y1="12" x2="9.8" y2="13.4"/>
+        <line x1="2.6" y1="6.2" x2="4" y2="6.2"/><line x1="2.6" y1="9.8" x2="4" y2="9.8"/><line x1="12" y1="6.2" x2="13.4" y2="6.2"/><line x1="12" y1="9.8" x2="13.4" y2="9.8"/>
+      </symbol>
+      <symbol id="i-list" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="4.5" x2="13" y2="4.5"/><line x1="3" y1="8" x2="13" y2="8"/><line x1="3" y1="11.5" x2="13" y2="11.5"/>
+      </symbol>
+      <symbol id="i-graph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="4" cy="4.2" r="1.6"/><circle cx="12" cy="6" r="1.6"/><circle cx="6" cy="12" r="1.6"/>
+        <line x1="5.4" y1="4.7" x2="10.5" y2="5.6"/><line x1="4.5" y1="5.6" x2="5.6" y2="10.5"/>
+      </symbol>
+      <symbol id="i-terminal" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.4" y="3" width="11.2" height="10" rx="2"/><polyline points="5 7 7 9 5 11"/><line x1="8.6" y1="11" x2="11" y2="11"/>
+      </symbol>
+      <symbol id="i-arrowdown" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="8" y1="3" x2="8" y2="11.6"/><polyline points="4.6 8.4 8 11.8 11.4 8.4"/>
+      </symbol>
+      <symbol id="i-cols" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2.6" y="3" width="10.8" height="10" rx="1.8"/><line x1="8" y1="3.2" x2="8" y2="12.8"/>
+      </symbol>
+      <symbol id="i-bolt" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 2.3 4.4 9.1H7.3L6.9 13.7 11.6 6.7H8.7Z"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <main id="app">
+    <!-- TOP STATUS / CONTROL BAR — single row -->
+    <header id="top-bar" class="glass">
+      <div class="brand">
+        <span class="glyph"><svg class="icon"><use href="#i-grid"/></svg></span>
+        <span>gluerun</span>
+      </div>
+      <span id="health-flag" class="health-flag" data-tone="idle"><span class="tone-dot"></span><span id="health-text">loading</span></span>
+      <span id="stop-chip" class="status-chip" data-tone="idle" data-present="false"><svg class="icon" style="width:13px;height:13px"><use href="#i-stop"/></svg><span id="stop-text">stop —</span></span>
+      <div class="stat-strip" id="stat-strip">
+        <div class="stat-pill" data-stat="drift" title="git drift (behind · ahead)"><span class="stat-label">drift</span><span class="stat-value" id="stat-drift">—</span></div>
+        <div class="stat-pill frontier" data-stat="frontier" role="button" tabindex="0" title="Focus frontier area"><span class="stat-label">frontier</span><span class="stat-value" id="stat-frontier"><span class="tone-dot" data-tone="integration"></span>—</span></div>
+        <div class="stat-pill" data-stat="active" role="button" tabindex="0" title="Filter: active"><span class="stat-label">active</span><span class="stat-value" id="stat-active">—</span></div>
+        <div class="stat-pill" data-stat="awaiting" role="button" tabindex="0" title="Filter: awaiting release"><span class="stat-label">await</span><span class="stat-value" id="stat-awaiting">—</span></div>
+        <div class="stat-pill" data-stat="blocked" role="button" tabindex="0" title="Filter: blocked"><span class="stat-label">blocked</span><span class="stat-value" id="stat-blocked">—</span></div>
+        <div class="stat-pill" data-stat="disk" title="disk capacity · free"><span class="stat-label">disk</span><span class="stat-value" id="stat-disk">—</span></div>
+        <div class="stat-pill" data-stat="gates" title="area gates · dag validation"><span class="stat-label">gates</span><span class="stat-value gate-row" id="stat-gates">—</span></div>
+      </div>
+      <button id="plan-pill" title="Plan overview — progress, inputs, settings, status">
+        <span class="pp-label">plan</span>
+        <span class="pp-bar"><span class="pp-fill" id="plan-fill"></span></span>
+        <span class="pp-pct" id="plan-pct">—</span>
+        <svg class="icon"><use href="#i-chev"/></svg>
+      </button>
+      <span class="top-spacer"></span>
+      <span class="conn"><span id="conn-dot" data-state="down"></span><span>updated</span><span id="refresh-age">—</span></span>
+      <button id="btn-refresh" class="btn primary" title="Reload snapshot"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button>
+    </header>
+
+    <!-- MAIN VIEWPORT — graph canvas + retractable task-list drawer -->
+    <section id="graph-viewport" class="glass">
+      <div id="graph-toolbar">
+        <label class="search-wrap"><svg class="icon"><use href="#i-search"/></svg>
+          <input id="search-input" type="search" placeholder="search id · title · branch" autocomplete="off" spellcheck="false">
+        </label>
+        <span class="select-wrap">
+          <select id="filter-area" class="filter" aria-label="Filter by area"><option value="">all areas</option></select>
+          <span class="chev"><svg class="icon" style="width:13px;height:13px"><use href="#i-chev"/></svg></span>
+        </span>
+        <span class="select-wrap">
+          <select id="filter-status" class="filter" aria-label="Filter by status">
+            <option value="">all states</option>
+            <option value="active">active</option>
+            <option value="awaiting">awaiting release</option>
+            <option value="blocked">blocked</option>
+            <option value="failed">failed</option>
+            <option value="stale">stale</option>
+            <option value="integrated">integrated</option>
+            <option value="idle">idle</option>
+          </select>
+          <span class="chev"><svg class="icon" style="width:13px;height:13px"><use href="#i-chev"/></svg></span>
+        </span>
+        <span id="showing-count"></span>
+      </div>
+      <div id="graph-body">
+        <div class="view-scroll" id="view-scroll">
+          <div id="view-graph" class="graph-pad" aria-label="graph view"></div>
+        </div>
+        <!-- LIST DRAWER — expand/retract a task table without leaving the graph -->
+        <div id="list-drawer" data-open="false">
+          <div id="list-resize" title="Drag to resize"></div>
+          <button id="list-toggle" aria-expanded="false" aria-controls="list-body" title="Show / hide task list">
+            <svg class="icon ld-chev"><use href="#i-chev"/></svg>
+            <span class="ld-title"><svg class="icon"><use href="#i-list"/></svg>task list</span>
+            <span class="ld-count" id="list-count"></span>
+          </button>
+          <div id="list-body">
+            <div id="view-list" class="list-pad" role="region" aria-label="task list"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- BOTTOM DOCK — unified live-activity zone: semantic event feed (left sidebar)
+         + raw session terminal (right). -->
+    <section id="dock" class="glass" data-size="half">
+      <div id="dock-resize-handle" title="Drag to resize"></div>
+      <div class="dock-body">
+        <!-- Live event feed — system-wide semantic activity (distinct from the raw tails). -->
+        <aside id="event-overlay" data-collapsed="false" aria-label="Live event feed">
+          <div class="ov-head">
+            <span class="ov-pulse" id="ov-pulse" data-state="idle"><span class="tone-dot" data-tone="idle"></span><span id="ov-pulse-text">—</span></span>
+            <span class="ov-rate" id="ov-rate"></span>
+            <span class="ov-head-spacer"></span>
+            <button class="ov-ctl" id="ov-collapse" title="Collapse / expand event feed"><svg class="icon"><use href="#i-cols"/></svg></button>
+          </div>
+          <div class="ov-feed" id="overlay-feed" role="log" aria-live="polite" aria-label="Live orchestration events"></div>
+          <div class="ov-spine" id="ov-spine" title="Expand event feed"><span class="tone-dot" id="ov-spine-dot" data-tone="idle"></span><span class="ov-unread" id="ov-unread"></span></div>
+        </aside>
+        <!-- Raw session terminal -->
+        <div id="session-terminal" data-empty="true">
+          <div class="term-bar">
+            <span class="term-brand"><svg class="icon"><use href="#i-terminal"/></svg><span>sessions</span></span>
+            <span class="term-mode" id="term-mode" title="auto pane mode">—</span>
+            <span class="term-bar-spacer"></span>
+            <div class="term-controls" id="term-controls">
+              <button class="term-ctl" data-ctl="auto" aria-pressed="true" title="Auto — follow smart pane selection"><svg class="icon"><use href="#i-bolt"/></svg>Auto</button>
+              <button class="term-ctl" data-ctl="pin" aria-pressed="false" title="Pin — lock the current panes"><svg class="icon"><use href="#i-pin"/></svg>Pin</button>
+              <button class="term-ctl" data-ctl="follow" aria-pressed="true" title="Follow — auto-scroll to newest output"><svg class="icon"><use href="#i-arrowdown"/></svg>Follow</button>
+              <button class="term-ctl" data-ctl="raw" aria-pressed="false" title="Raw — show underlying log lines"><svg class="icon"><use href="#i-file"/></svg>Raw</button>
+              <button class="term-ctl" data-ctl="solo" aria-pressed="false" title="Solo — show a single pane"><svg class="icon"><use href="#i-cols"/></svg>Solo</button>
+            </div>
+          </div>
+          <div class="term-chips" id="term-chips" aria-label="Available sessions"></div>
+          <div class="term-panes" id="term-panes"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- NODE INSPECTOR — bottom-sheet modal (slides up over everything, scrim to dismiss) -->
+  <div id="inspector-scrim" data-open="false"></div>
+  <aside id="inspector" class="glass" data-subject-kind="none" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Node inspector">
+    <button id="inspector-grip" title="Dismiss" aria-label="Dismiss inspector"></button>
+    <div id="inspector-title">
+      <span class="bezel" id="insp-bezel" data-tone="idle"><svg class="icon"><use href="#i-box"/></svg></span>
+      <div class="insp-head-main">
+        <div class="insp-head-top">
+          <span class="insp-id mono" id="insp-id"></span>
+          <span class="insp-title" id="insp-title">select a node to inspect</span>
+        </div>
+        <div class="insp-sub" id="insp-sub"></div>
+      </div>
+      <div class="insp-head-actions">
+        <span class="status-chip" id="insp-chip" data-tone="idle" hidden><span class="tone-dot"></span><span></span></span>
+        <button class="icon-btn" id="insp-pin" aria-pressed="false" title="Pin node"><svg class="icon"><use href="#i-pin"/></svg></button>
+        <button class="icon-btn" id="insp-close" title="Close inspector (Esc)"><svg class="icon"><use href="#i-stop"/></svg></button>
+      </div>
+    </div>
+    <div id="inspector-tabs" role="tablist"></div>
+    <div id="inspector-body">
+      <div class="insp-state" id="inspector-skeleton">
+        <div class="skeleton-bar" style="width:40%"></div>
+        <div class="skeleton-bar" style="width:80%"></div>
+        <div class="skeleton-bar" style="width:60%"></div>
+      </div>
+      <div class="insp-state" id="inspector-error">
+        <svg class="icon"><use href="#i-alert"/></svg>
+        <div class="hint" id="inspector-error-text">could not load task detail</div>
+      </div>
+      <div id="inspector-panels"></div>
+    </div>
+  </aside>
+
+  <div id="toast"></div>
+  <div id="sr-status" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap"></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

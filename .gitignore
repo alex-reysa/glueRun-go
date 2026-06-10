@@ -1,0 +1,11 @@
+# Runtime state (Bundle C) — never committed, created per consumer repo
+.gluerun-state/
+.worktrees/
+
+# Local scratch
+*.log
+.DS_Store
+
+# Python bytecode (never track compiled artifacts)
+__pycache__/
+*.pyc

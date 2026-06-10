@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "v0",
+  "engineVersion": "0.3.0",
+  "targetBranch": "agent/integration",
+  "gateCommand": "false  # TODO set your gate, e.g. npm test && npm run build",
+  "runner": "claude-run.sh",
+  "areaPrefix": "src/",
+  "areas": {
+    "core": "src/core/",
+    "api": [
+      "src/api/",
+      "src/api-types/"
+    ]
+  },
+  "proofLayers": [],
+  "proofGrandfather": [],
+  "prewarm": "",
+  "identity": {
+    "l0": {
+      "name": "myproj L0",
+      "email": "l0@myproj.local"
+    },
+    "l1": {
+      "name": "myproj L1",
+      "email": "l1@myproj.local"
+    }
+  },
+  "env": {}
+}

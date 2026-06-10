@@ -1,0 +1,836 @@
+{
+  "schema": "gluerun.console-adapter.v0",
+  "roleCatalog": {
+    "schema": "gluerun.codex.role-catalog.v0",
+    "source": "operating-model-selfdevelop.md \u00a74.3 worker types \u00b7 \u00a78 test-first \u00b7 \u00a79 skills \u00b7 \u00a714 decider",
+    "note": "Declared roles and disciplines from the operating model. This is a reference catalog, not a live registry \u2014 glueRun-go records no per-agent skill list. Owner/role is recorded on leases and packets (uniformly l2-developer today); other roles are inferred from which prompt files exist in a task's run directory.",
+    "layers": [
+      {
+        "id": "L0",
+        "label": "orchestration origin",
+        "writes": false,
+        "summary": "Highest reconciler. Reconstructs state, supervises L1, enforces policy. Does not implement code.",
+        "disciplines": [
+          "state reconciliation",
+          "drift detection",
+          "policy enforcement",
+          "decision logging"
+        ]
+      },
+      {
+        "id": "L1",
+        "label": "area orchestrator",
+        "writes": false,
+        "summary": "Manages one bounded area. Decomposes work, imports packets, requires evidence. Does not implement code.",
+        "disciplines": [
+          "task decomposition",
+          "packet import",
+          "evidence gating",
+          "integration readiness"
+        ]
+      }
+    ],
+    "workers": [
+      {
+        "id": "developer",
+        "label": "developer",
+        "recordedAs": "l2-developer",
+        "writes": true,
+        "promptFile": "l2-prompt.md",
+        "disciplines": [
+          "strict test-first development",
+          "scoped implementation",
+          "state packet emission"
+        ],
+        "typicalTools": [
+          "go test",
+          "go vet",
+          "go build",
+          "git diff"
+        ]
+      },
+      {
+        "id": "planner",
+        "label": "planner",
+        "writes": false,
+        "promptFile": "planner-prompt.md",
+        "disciplines": [
+          "task planning",
+          "batch decomposition"
+        ],
+        "typicalTools": [
+          "planner batch json"
+        ]
+      },
+      {
+        "id": "test-engineer",
+        "label": "test engineer",
+        "writes": true,
+        "disciplines": [
+          "test-first development",
+          "characterization tests"
+        ],
+        "typicalTools": [
+          "go test"
+        ]
+      },
+      {
+        "id": "auditor",
+        "label": "auditor",
+        "writes": false,
+        "promptFile": "auditor-prompt.md",
+        "disciplines": [
+          "diff auditing",
+          "scope-compliance check",
+          "evidence verification"
+        ],
+        "typicalTools": [
+          "git diff",
+          "jq",
+          "rg",
+          "scope-check"
+        ]
+      },
+      {
+        "id": "reviewer",
+        "label": "reviewer",
+        "writes": false,
+        "disciplines": [
+          "integration review",
+          "cross-task consistency",
+          "review hygiene"
+        ],
+        "typicalTools": [
+          "git diff"
+        ]
+      },
+      {
+        "id": "integration-worker",
+        "label": "integration worker",
+        "writes": true,
+        "disciplines": [
+          "branch integration",
+          "gate verification"
+        ],
+        "typicalTools": [
+          "git merge",
+          "gate-check"
+        ]
+      },
+      {
+        "id": "documentation-worker",
+        "label": "documentation worker",
+        "writes": true,
+        "disciplines": [
+          "documentation update"
+        ],
+        "typicalTools": []
+      },
+      {
+        "id": "recovery-worker",
+        "label": "recovery worker",
+        "writes": true,
+        "promptFile": "l2-repair-prompt.md",
+        "disciplines": [
+          "recovery and replay",
+          "systematic debugging"
+        ],
+        "typicalTools": [
+          "git",
+          "go test"
+        ]
+      },
+      {
+        "id": "decider",
+        "label": "autonomous decider",
+        "writes": false,
+        "promptFile": "decider-prompt-*.md",
+        "source": "\u00a714",
+        "disciplines": [
+          "recovery-action selection",
+          "escalate / park"
+        ],
+        "typicalTools": [
+          "decide.sh"
+        ]
+      }
+    ],
+    "disciplines": [
+      "test-first development",
+      "worktree and branch hygiene",
+      "task planning",
+      "scoped implementation",
+      "evidence capture",
+      "diff auditing",
+      "integration review",
+      "recovery and replay",
+      "documentation update",
+      "state packet emission"
+    ]
+  },
+  "rolePromptMap": {
+    "l2-prompt.md": "developer",
+    "l2-active-prompt.md": "developer",
+    "l2-repair-prompt.md": "recovery-worker",
+    "auditor-prompt.md": "auditor",
+    "planner-prompt.md": "planner"
+  },
+  "eventMap": {
+    "origin.reconcile_started": [
+      "Origin reconcile started",
+      "gray",
+      "control",
+      false
+    ],
+    "origin.reconcile_completed": [
+      "Origin reconcile complete",
+      "gray",
+      "control",
+      false
+    ],
+    "origin.l1_fanout": [
+      "L1 fanout",
+      "cobalt",
+      "plan",
+      true
+    ],
+    "origin.dispatch": [
+      "Origin dispatching",
+      "cobalt",
+      "dispatch",
+      true
+    ],
+    "origin.dispatch_failed": [
+      "Dispatch failed",
+      "red",
+      "dispatch",
+      false
+    ],
+    "origin.l1_planner_failed": [
+      "L1 planner failed",
+      "red",
+      "plan",
+      false
+    ],
+    "origin.l1_import_rejected": [
+      "L1 import rejected",
+      "amber",
+      "dispatch",
+      false
+    ],
+    "origin.control_state_committed": [
+      "Control state committed",
+      "gray",
+      "control",
+      false
+    ],
+    "l1.dry_run": [
+      "L1 dry run",
+      "gray",
+      "plan",
+      false
+    ],
+    "planner.generated": [
+      "Task generated",
+      "cobalt",
+      "plan",
+      true
+    ],
+    "planner.staged": [
+      "Task candidate staged",
+      "cobalt",
+      "plan",
+      true
+    ],
+    "planner.failed": [
+      "Planner produced no output",
+      "amber",
+      "plan",
+      false
+    ],
+    "planner.area_complete": [
+      "Planner: area complete",
+      "forest",
+      "plan",
+      true
+    ],
+    "planner.blocked": [
+      "Planner blocked",
+      "amber",
+      "plan",
+      false
+    ],
+    "planner.frozen": [
+      "Planner frozen",
+      "amber",
+      "plan",
+      false
+    ],
+    "packet.imported": [
+      "Task imported",
+      "forest",
+      "dispatch",
+      true
+    ],
+    "packet.accepted_existing": [
+      "Packet accepted (existing)",
+      "forest",
+      "dispatch",
+      true
+    ],
+    "packet.import_rejected": [
+      "Import rejected",
+      "amber",
+      "dispatch",
+      false
+    ],
+    "packet.import_failed": [
+      "Packet import failed",
+      "red",
+      "dispatch",
+      false
+    ],
+    "l1.dispatch_started": [
+      "L1 dispatch started",
+      "cobalt",
+      "dispatch",
+      true
+    ],
+    "l1.worktree_created": [
+      "Worker worktree created",
+      "cobalt",
+      "execute",
+      true
+    ],
+    "l1.worker_completed": [
+      "Worker completed",
+      "forest",
+      "execute",
+      true
+    ],
+    "l1.committed": [
+      "Worker branch committed",
+      "forest",
+      "execute",
+      true
+    ],
+    "l1.gate_passed": [
+      "Regression gate passed",
+      "forest",
+      "gate",
+      true
+    ],
+    "gate_check.completed": [
+      "Gate check passed",
+      "forest",
+      "gate",
+      true
+    ],
+    "l1.audit_completed": [
+      "Audit accepted",
+      "forest",
+      "audit",
+      true
+    ],
+    "decider.verdict": [
+      "Decider verdict",
+      "amber",
+      "recover",
+      false
+    ],
+    "decider.parked": [
+      "Parked for human review",
+      "red",
+      "recover",
+      false
+    ],
+    "decision.recorded": [
+      "Decision recorded",
+      "forest",
+      "audit",
+      true
+    ],
+    "l1.task_accepted": [
+      "Task accepted",
+      "forest",
+      "audit",
+      true
+    ],
+    "l1.task_failed": [
+      "Task failed",
+      "red",
+      "execute",
+      false
+    ],
+    "l1.task_terminal": [
+      "Task ended unaccepted",
+      "red",
+      "recover",
+      false
+    ],
+    "recovery.action": [
+      "Recovery action",
+      "amber",
+      "recover",
+      false
+    ],
+    "l1.orphan_recovered": [
+      "Orphan lease recovered",
+      "amber",
+      "recover",
+      true
+    ],
+    "l1.frozen": [
+      "L1 frozen",
+      "amber",
+      "recover",
+      false
+    ],
+    "l1.aborted": [
+      "L1 aborted",
+      "red",
+      "recover",
+      false
+    ],
+    "integration.started": [
+      "Integration started",
+      "violet",
+      "integrate",
+      true
+    ],
+    "integration.integrated": [
+      "Integrated",
+      "violet",
+      "integrate",
+      true
+    ],
+    "integration.completed": [
+      "Integration run done",
+      "violet",
+      "integrate",
+      true
+    ],
+    "integration.failed": [
+      "Integration failed",
+      "red",
+      "integrate",
+      false
+    ],
+    "gate_promotion.started": [
+      "Gate promotion started",
+      "violet",
+      "gate",
+      true
+    ],
+    "gate_promotion.completed": [
+      "Gate promoted",
+      "forest",
+      "gate",
+      true
+    ],
+    "gate_promotion.blocked": [
+      "Gate promotion blocked",
+      "red",
+      "gate",
+      false
+    ],
+    "push.ok": [
+      "Pushed control state",
+      "forest",
+      "push",
+      true
+    ],
+    "push.failed": [
+      "Push failed",
+      "red",
+      "push",
+      false
+    ],
+    "push.blocked": [
+      "Secret-scan blocked push",
+      "red",
+      "push",
+      false
+    ],
+    "autonomate.started": [
+      "Autonomous loop started",
+      "cobalt",
+      "control",
+      false
+    ],
+    "autonomate.stopped": [
+      "Stopped by STOP sentinel",
+      "amber",
+      "control",
+      false
+    ],
+    "autonomate.exited": [
+      "Autonomous loop exited",
+      "gray",
+      "control",
+      false
+    ],
+    "context.strategy_selected": [
+      "Context strategy selected",
+      "cobalt",
+      "dispatch",
+      false
+    ],
+    "context.resume_failed": [
+      "Context resume failed",
+      "amber",
+      "dispatch",
+      false
+    ],
+    "findings.ledger_updated": [
+      "Findings ledger updated",
+      "forest",
+      "audit",
+      true
+    ],
+    "l1.attempt_archived": [
+      "Attempt archived",
+      "gray",
+      "recover",
+      false
+    ],
+    "audit.infra_retry": [
+      "Audit infra retry",
+      "amber",
+      "audit",
+      false
+    ],
+    "worker.infra_retry": [
+      "Worker infra retry",
+      "amber",
+      "execute",
+      false
+    ],
+    "decider.fast_path": [
+      "Decider fast path",
+      "amber",
+      "recover",
+      false
+    ],
+    "l1.preflight_failed": [
+      "L1 preflight failed",
+      "red",
+      "execute",
+      false
+    ]
+  },
+  "noiseEventTypes": [
+    "integration.skipped"
+  ],
+  "idPatterns": {
+    "task": "^TASK-\\d+$",
+    "node": "^[A-Z][0-9]+\\.[A-Za-z0-9_]+$",
+    "area": "^[a-z][a-z0-9_]*$"
+  },
+  "plannerPromptPatterns": {
+    "area": "Area Planner for area `([^`]+)`",
+    "node": "Executable DAG node:\\s*`([^`]+)`",
+    "stage": "(?m)^Stage:\\s*`([^`]+)`",
+    "layer": "(?m)^Layer:\\s*`([^`]+)`"
+  },
+  "settingsSpec": [
+    {
+      "title": "Models & reasoning \u00b7 role matrix",
+      "layout": "matrix",
+      "items": [
+        {
+          "envKey": "GLUERUN_CODEX_MODEL",
+          "label": "model",
+          "default": "gpt-5.5",
+          "kind": "model",
+          "unit": "",
+          "meaning": "Codex model all three roles run on"
+        },
+        {
+          "envKey": "GLUERUN_CODEX_SERVICE_TIER",
+          "label": "service tier",
+          "default": "default",
+          "kind": "enum",
+          "unit": "",
+          "meaning": "API service tier (default = standard queue)"
+        },
+        {
+          "envKey": "GLUERUN_CODEX_PLANNER_REASONING_EFFORT",
+          "label": "planner reasoning",
+          "default": "xhigh",
+          "kind": "reasoning",
+          "unit": "",
+          "meaning": "effort the L1 area planner spends \u2014 plan quality gates everything downstream"
+        },
+        {
+          "envKey": "GLUERUN_CODEX_L2_REASONING_EFFORT",
+          "label": "worker reasoning",
+          "default": "medium",
+          "kind": "reasoning",
+          "unit": "",
+          "meaning": "effort each L2 developer worker spends on a task slice"
+        },
+        {
+          "envKey": "GLUERUN_CODEX_AUDITOR_REASONING_EFFORT",
+          "label": "auditor reasoning",
+          "default": "high",
+          "kind": "reasoning",
+          "unit": "",
+          "meaning": "effort the diff auditor spends reviewing a packet before the gate"
+        }
+      ]
+    },
+    {
+      "title": "Throughput \u00b7 work flowing per cycle",
+      "layout": "list",
+      "items": [
+        {
+          "envKey": "GLUERUN_MAX_CONCURRENT",
+          "label": "max concurrent workers",
+          "default": "1",
+          "kind": "count",
+          "unit": "",
+          "meaning": "L2 workers running at the same time"
+        },
+        {
+          "envKey": "GLUERUN_MAX_DISPATCH",
+          "label": "max dispatch / cycle",
+          "default": "follows max concurrent",
+          "kind": "derived",
+          "unit": "",
+          "meaning": "tasks dispatched per cycle; unset, so it follows max concurrent workers"
+        },
+        {
+          "envKey": "GLUERUN_MAX_L1_CONCURRENT",
+          "label": "max parallel L1 planners",
+          "default": "3",
+          "kind": "count",
+          "unit": "",
+          "meaning": "area planners that may plan at once \u2014 only when parallel planning is on (below)"
+        },
+        {
+          "envKey": "GLUERUN_ENABLE_L1_PARALLEL",
+          "label": "L1 parallel planning",
+          "default": "0",
+          "kind": "bool",
+          "unit": "",
+          "meaning": "off = plan one area at a time; gates the parallel-planner limit above"
+        },
+        {
+          "envKey": "GLUERUN_L1_TASKS_PER_NODE",
+          "label": "tasks per planner node",
+          "default": "1",
+          "kind": "count",
+          "unit": "",
+          "meaning": "tasks an L1 planner emits per DAG node"
+        },
+        {
+          "envKey": "GLUERUN_L2_SLICE_BUDGET",
+          "label": "L2 slice budget",
+          "default": "1",
+          "kind": "count",
+          "unit": "",
+          "meaning": "starting work-slices granted to a worker per task"
+        },
+        {
+          "envKey": "GLUERUN_L2_SLICE_BUDGET_MAX",
+          "label": "L2 slice budget cap",
+          "default": "3",
+          "kind": "count",
+          "unit": "",
+          "meaning": "hard ceiling the slice budget can grow to"
+        }
+      ]
+    },
+    {
+      "title": "Safety limits",
+      "layout": "list",
+      "items": [
+        {
+          "envKey": "GLUERUN_MAX_RETRIES",
+          "label": "max task retries",
+          "default": "3",
+          "kind": "count",
+          "unit": "",
+          "meaning": "attempts on a failing task before it is parked as a blocked escalation"
+        },
+        {
+          "envKey": "GLUERUN_MAX_CONSEC_FAILS",
+          "label": "circuit-breaker threshold",
+          "default": "5",
+          "kind": "count",
+          "unit": "",
+          "meaning": "consecutive failures that trip the breaker and halt the loop"
+        },
+        {
+          "envKey": "GLUERUN_MAX_HOURS",
+          "label": "loop budget",
+          "default": "20",
+          "kind": "duration",
+          "unit": "h",
+          "meaning": "wall-clock hours before the loop voluntarily exits"
+        },
+        {
+          "envKey": "GLUERUN_MIN_DISK_GB",
+          "label": "min free disk",
+          "default": "2",
+          "kind": "bytes",
+          "unit": "GB",
+          "meaning": "loop refuses to start a cycle below this free-space floor"
+        },
+        {
+          "envKey": "GLUERUN_L1_STALE_MINUTES",
+          "label": "L1 stale timeout",
+          "default": "60",
+          "kind": "duration",
+          "unit": "min",
+          "meaning": "an L1 planner lease idle this long is reclaimed as stale"
+        },
+        {
+          "envKey": "GLUERUN_PLANNER_BACKOFF_SECONDS",
+          "label": "planner backoff",
+          "default": "900",
+          "kind": "duration",
+          "unit": "s",
+          "meaning": "wait after a planner error before re-planning"
+        },
+        {
+          "envKey": "GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS",
+          "label": "planner quota backoff",
+          "default": "1800",
+          "kind": "duration",
+          "unit": "s",
+          "meaning": "longer wait after a planner quota / rate-limit rejection"
+        }
+      ]
+    },
+    {
+      "title": "Loop behavior",
+      "layout": "list",
+      "items": [
+        {
+          "envKey": "GLUERUN_AUTO_INTEGRATE",
+          "label": "auto-integrate",
+          "default": "1",
+          "kind": "bool",
+          "unit": "",
+          "meaning": "on = merge passing worker branches into the target automatically"
+        },
+        {
+          "envKey": "GLUERUN_PUSH",
+          "label": "push to remote",
+          "default": "1",
+          "kind": "bool",
+          "unit": "",
+          "meaning": "on = push the target branch to origin after integrating"
+        },
+        {
+          "envKey": "GLUERUN_GENERATE",
+          "label": "task generation",
+          "default": "1",
+          "kind": "bool",
+          "unit": "",
+          "meaning": "on = let planners generate new tasks; off = drain the existing queue only"
+        },
+        {
+          "envKey": "GLUERUN_SLEEP",
+          "label": "cycle sleep",
+          "default": "20",
+          "kind": "duration",
+          "unit": "s",
+          "meaning": "pause between loop cycles"
+        },
+        {
+          "envKey": "GLUERUN_TARGET_BRANCH",
+          "label": "target branch",
+          "default": "codex/gluerun-bootstrap-target",
+          "kind": "identifier",
+          "unit": "",
+          "meaning": "branch the loop integrates and pushes to"
+        }
+      ]
+    }
+  ],
+  "paths": {
+    "dagFile": "docs/orchestration/dag.v0.json",
+    "stageDoc": "docs/plan-and-dag.md",
+    "gatesDir": "docs/orchestration/gates",
+    "tasksDir": "docs/orchestration/tasks",
+    "areasDir": "docs/orchestration/areas",
+    "stateDir": ".gluerun-state",
+    "eventsLog": "events.ndjson",
+    "autonomateLog": "autonomate.out.log",
+    "statusFile": ".gluerun-state/STATUS.md",
+    "circuitFile": ".gluerun-state/circuit.json",
+    "stopFile": ".gluerun-state/STOP",
+    "orchScriptsDir": "scripts/orchestration",
+    "platformVision": "docs/core/platform-vision.md"
+  },
+  "commands": {
+    "status": [
+      "gluerun",
+      "status"
+    ],
+    "validateDag": [
+      "gluerun",
+      "validate-dag"
+    ],
+    "areaGate": [
+      "gluerun",
+      "area-gate",
+      "{node}"
+    ],
+    "nextArea": [
+      "gluerun",
+      "next-area"
+    ],
+    "nextAreas": [
+      "gluerun",
+      "next-areas"
+    ]
+  },
+  "processMatchers": {
+    "includeSubstrings": [
+      "scripts/orchestration",
+      "autonomate",
+      "l1-drive",
+      "/.worktrees/"
+    ],
+    "includeAllOf": [
+      [
+        "codex",
+        "gluerun",
+        "exec"
+      ]
+    ],
+    "excludeSubstrings": [
+      "gluerun_graph_server.py",
+      " rg "
+    ],
+    "excludeSubstringsLowered": [
+      "cursor helper"
+    ]
+  },
+  "logFileMaps": {
+    "codexLogs": [
+      [
+        "worker-codex.log",
+        "worker"
+      ],
+      [
+        "planner-codex.log",
+        "planner"
+      ],
+      [
+        "decider-codex.log",
+        "decider"
+      ]
+    ],
+    "plainLogs": [
+      "gate-check.log",
+      "scope-check.log",
+      "secret-scan.log"
+    ]
+  },
+  "settingsSource": "{engineHome}/engine"
+}

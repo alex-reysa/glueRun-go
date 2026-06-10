@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+# gluerun — machine-level launcher for the orchestration engine.
+#
+# Resolves the engine version pinned by the current repo, points the engine at
+# the current repo (GLUERUN_ROOT), loads that repo's config, and execs the engine
+# entrypoint. Same command works in every repo; improvements propagate by
+# bumping the pinned version (`gluerun update`).
+set -euo pipefail
+
+GLUERUN_CLI_VERSION="0.1.0"
+
+die() { echo "gluerun: $*" >&2; exit 1; }
+
+# Real directory of this script, following symlinks (for the installed launcher).
+self_dir() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [[ -h "$src" ]]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ "$src" != /* ]] && src="$dir/$src"
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+
+repo_root() { git rev-parse --show-toplevel 2>/dev/null || true; }
+
+# engineVersion from gluerun.config.json (fallback pin; empty if absent).
+config_engine_version() {
+  local root="$1"
+  [[ -n "$root" && -f "$root/gluerun.config.json" ]] || return 0
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("engineVersion","") or "")' "$root/gluerun.config.json" 2>/dev/null || true
+}
+
+# schemaVersion from a repo's gluerun.config.json (empty if absent).
+repo_schema_version() {
+  local root="$1"
+  [[ -n "$root" && -f "$root/gluerun.config.json" ]] || return 0
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schemaVersion","") or "")' "$root/gluerun.config.json" 2>/dev/null || true
+}
+
+# The engine's schema contract version (empty if SCHEMA_VERSION is absent,
+# e.g. an engine predating the file).
+engine_schema_version() {
+  local home="$1"
+  [[ -n "$home" && -f "$home/SCHEMA_VERSION" ]] || return 0
+  tr -d '[:space:]' < "$home/SCHEMA_VERSION"
+}
+
+# Rewrite schemaVersion in a repo's gluerun.config.json (migrate bookkeeping).
+set_repo_schema_version() {
+  python3 - "$1/gluerun.config.json" "$2" <<'PY'
+import json, sys
+path, ver = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    cfg = json.load(f)
+cfg["schemaVersion"] = ver
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+}
+
+# Per-repo engine version pin: .gluerun-version file (authoritative), else
+# engineVersion in gluerun.config.json. When both exist and disagree, warn —
+# .gluerun-version still wins; resolution behavior is unchanged.
+repo_pin() {
+  local root="$1" pin="" cfg=""
+  [[ -n "$root" ]] || return 0
+  if [[ -f "$root/.gluerun-version" ]]; then
+    pin="$(tr -d '[:space:]' < "$root/.gluerun-version")"
+  fi
+  cfg="$(config_engine_version "$root")"
+  if [[ -n "$pin" && -n "$cfg" && "$pin" != "$cfg" ]]; then
+    echo "gluerun: warning: .gluerun-version ($pin) and gluerun.config.json engineVersion ($cfg) disagree; using .gluerun-version" >&2
+  fi
+  [[ -n "$pin" ]] || pin="$cfg"
+  printf '%s' "$pin"
+}
+
+# Resolve the engine install dir. Precedence:
+#   1. $GLUERUN_ENGINE_HOME    (explicit override)
+#   2. per-repo pin -> ~/.gluerun/versions/<pin>
+#   3. ~/.gluerun/current      (default installed version)
+#   4. dev fallback: this script's own ../  (running from a cloned engine repo)
+resolve_engine_home() {
+  if [[ -n "${GLUERUN_ENGINE_HOME:-}" ]]; then
+    [[ -f "$GLUERUN_ENGINE_HOME/engine/lib.sh" ]] || die "GLUERUN_ENGINE_HOME has no engine/lib.sh: $GLUERUN_ENGINE_HOME"
+    printf '%s' "$GLUERUN_ENGINE_HOME"; return
+  fi
+  local root pin; root="$(repo_root)"; pin="$(repo_pin "$root")"
+  if [[ -n "$pin" ]]; then
+    [[ -d "$HOME/.gluerun/versions/$pin" ]] || die "repo pins engine $pin but it is not installed (~/.gluerun/versions/$pin). Run: gluerun update $pin"
+    printf '%s' "$HOME/.gluerun/versions/$pin"; return
+  fi
+  if [[ -d "$HOME/.gluerun/current" ]]; then printf '%s' "$HOME/.gluerun/current"; return; fi
+  local sd; sd="$(self_dir)"
+  if [[ -f "$sd/../engine/lib.sh" ]]; then (cd "$sd/.." && pwd); return; fi
+  die "no engine found. Install with install.sh or set GLUERUN_ENGINE_HOME."
+}
+
+require_repo() {
+  local root; root="$(repo_root)"
+  [[ -n "$root" ]] || die "not inside a git repository (cd into your project first)"
+  printf '%s' "$root"
+}
+
+# Exec an engine script with GLUERUN_ROOT bound to the current repo.
+run_engine() {
+  local script="$1"; shift
+  local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
+  [[ -f "$home/engine/$script" ]] || die "engine $home has no engine/$script"
+  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" exec bash "$home/engine/$script" "$@"
+}
+
+cmd_version() {
+  # NB: $( ... || true ) does NOT catch `die`'s exit under set -e; capture explicitly.
+  local home; home="$(resolve_engine_home 2>/dev/null)" || home=""
+  echo "gluerun CLI    $GLUERUN_CLI_VERSION"
+  if [[ -n "$home" && -f "$home/VERSION" ]]; then
+    echo "engine      $(cat "$home/VERSION")  ($home)"
+  else
+    echo "engine      (not resolved)"
+  fi
+  local root; root="$(repo_root)"
+  [[ -n "$root" ]] && echo "repo        $root"
+}
+
+cmd_doctor() {
+  local ok=0
+  check() { # label  test-cmd...
+    local label="$1"; shift
+    if "$@" >/dev/null 2>&1; then printf "  ok    %s\n" "$label"
+    else printf "  FAIL  %s\n" "$label"; ok=1; fi
+  }
+  echo "gluerun doctor"
+  # bash >= 4
+  if [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]; then printf "  ok    bash >= 4 (%s)\n" "${BASH_VERSION%%(*}"
+  else printf "  FAIL  bash >= 4 (found %s; brew install bash)\n" "${BASH_VERSION%%(*}"; ok=1; fi
+  check "python3" python3 --version
+  check "git" git --version
+  local home="" esv=""
+  if home="$(resolve_engine_home 2>/dev/null)"; then
+    printf "  ok    engine resolved (%s, v%s)\n" "$home" "$(cat "$home/VERSION" 2>/dev/null || echo '?')"
+    printf "  ok    versions: cli %s / engine %s (info only)\n" "$GLUERUN_CLI_VERSION" "$(cat "$home/VERSION" 2>/dev/null || echo '?')"
+    esv="$(engine_schema_version "$home")"
+    if [[ -n "$esv" ]]; then printf "  ok    engine schema: %s\n" "$esv"
+    else printf "  warn  engine has no SCHEMA_VERSION file\n"; fi
+    [[ -f "$home/schemas/gate-result.v0.schema.json" ]] \
+      && printf "  ok    schemas present\n" || { printf "  FAIL  schemas missing in engine\n"; ok=1; }
+  else printf "  FAIL  engine not resolved (run install.sh or set GLUERUN_ENGINE_HOME)\n"; ok=1; fi
+  local root; root="$(repo_root)"
+  if [[ -n "$root" ]]; then
+    printf "  ok    repo: %s\n" "$root"
+    [[ -f "$root/gluerun.config.json" || -f "$root/gluerun.config.sh" ]] \
+      && printf "  ok    repo config present\n" \
+      || printf "  warn  no gluerun.config.json (run: gluerun init)\n"
+    # schemaVersion: repo config vs engine SCHEMA_VERSION.
+    if [[ -f "$root/gluerun.config.json" ]]; then
+      local rsv; rsv="$(repo_schema_version "$root")"
+      if [[ -z "$rsv" ]]; then
+        printf "  warn  gluerun.config.json has no schemaVersion key (engine schema: %s)\n" "${esv:-?}"
+      elif [[ -n "$esv" && "$rsv" != "$esv" ]]; then
+        printf "  FAIL  schemaVersion mismatch: repo %s vs engine %s (run: gluerun migrate)\n" "$rsv" "$esv"; ok=1
+      else
+        printf "  ok    repo schema: %s\n" "$rsv"
+      fi
+    fi
+    # Engine pin sources should agree (.gluerun-version is authoritative).
+    local pinfile="" cfgpin=""
+    [[ -f "$root/.gluerun-version" ]] && pinfile="$(tr -d '[:space:]' < "$root/.gluerun-version")"
+    cfgpin="$(config_engine_version "$root")"
+    if [[ -n "$pinfile" && -n "$cfgpin" && "$pinfile" != "$cfgpin" ]]; then
+      printf "  warn  .gluerun-version (%s) and gluerun.config.json engineVersion (%s) disagree; .gluerun-version wins\n" "$pinfile" "$cfgpin"
+    fi
+  else printf "  warn  not in a git repo\n"; fi
+  # runner CLI (best-effort)
+  command -v claude >/dev/null 2>&1 && printf "  ok    claude CLI on PATH\n" || printf "  warn  claude CLI not on PATH\n"
+  command -v codex  >/dev/null 2>&1 && printf "  ok    codex CLI on PATH\n"  || printf "  warn  codex CLI not on PATH\n"
+  return "$ok"
+}
+
+cmd_init() {
+  local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
+  echo "gluerun init -> $root"
+  # config
+  if [[ -f "$root/gluerun.config.json" ]]; then
+    echo "  skip  gluerun.config.json (exists)"
+  else
+    cp "$home/templates/gluerun.config.json" "$root/gluerun.config.json"
+    echo "  new   gluerun.config.json (edit: targetBranch, gateCommand, areas)"
+  fi
+  # orchestration skeleton
+  mkdir -p "$root/docs/orchestration/"{prompts,tasks,areas,gates}
+  if [[ -d "$home/templates/prompts" ]]; then
+    cp -n "$home/templates/prompts/"*.md "$root/docs/orchestration/prompts/" 2>/dev/null || true
+    echo "  new   docs/orchestration/prompts/ (skeletons — rewrite for your stack)"
+  fi
+  if [[ ! -f "$root/docs/orchestration/dag.v0.json" ]]; then
+    cat > "$root/docs/orchestration/dag.v0.json" <<'EOF'
+{
+  "schema": "gluerun.orchestration.dag.v0",
+  "layers": ["scaffold", "domain", "api"],
+  "kinds": ["build", "test"],
+  "nodes": [
+    {"id": "M0.scaffold", "stage": "M0", "area": "core", "layer": "scaffold", "kind": "build", "dependsOn": [], "requiredCompletion": "scaffold_complete"}
+  ]
+}
+EOF
+    echo "  new   docs/orchestration/dag.v0.json (1 starter node — define your graph)"
+  fi
+  # version pin
+  if [[ ! -f "$root/.gluerun-version" ]]; then
+    cp "$home/VERSION" "$root/.gluerun-version"; echo "  new   .gluerun-version ($(cat "$home/VERSION"))"
+  fi
+  # gitignore
+  local gi="$root/.gitignore"
+  for entry in ".gluerun-state/" ".worktrees/"; do
+    if [[ ! -f "$gi" ]] || ! grep -qxF "$entry" "$gi"; then echo "$entry" >> "$gi"; fi
+  done
+  echo "  ok    .gitignore (.gluerun-state/, .worktrees/)"
+  echo ""
+  echo "Next: edit gluerun.config.json + docs/orchestration/dag.v0.json, then: gluerun doctor"
+}
+
+cmd_update() {
+  local want="${1:-}" root; root="$(require_repo)"
+  if [[ -z "$want" ]]; then
+    [[ -L "$HOME/.gluerun/current" || -d "$HOME/.gluerun/current" ]] || die "no ~/.gluerun/current; pass a version: gluerun update <version>"
+    want="$(cat "$HOME/.gluerun/current/VERSION" 2>/dev/null || true)"
+    [[ -n "$want" ]] || die "could not read ~/.gluerun/current/VERSION"
+  fi
+  [[ -d "$HOME/.gluerun/versions/$want" || -n "${GLUERUN_ENGINE_HOME:-}" ]] \
+    || echo "gluerun: warning: engine $want is not installed yet (~/.gluerun/versions/$want)" >&2
+  echo "$want" > "$root/.gluerun-version"
+  echo "gluerun: pinned $root to engine $want (.gluerun-version)"
+  # Schema drift check against the newly pinned engine (when resolvable).
+  local ehome="${GLUERUN_ENGINE_HOME:-$HOME/.gluerun/versions/$want}"
+  local esv rsv
+  esv="$(engine_schema_version "$ehome")"
+  rsv="$(repo_schema_version "$root")"
+  if [[ -n "$esv" && -n "$rsv" && "$rsv" != "$esv" ]]; then
+    echo "gluerun: warning: repo schema $rsv differs from engine schema $esv — run: gluerun migrate" >&2
+  fi
+}
+
+# Bring the repo's schemaVersion up to the engine's SCHEMA_VERSION by running
+# the migrations/<from>-to-<to>.sh chain (see migrations/README.md).
+cmd_migrate() {
+  local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
+  local esv rsv
+  esv="$(engine_schema_version "$home")"
+  [[ -n "$esv" ]] || die "engine $home has no SCHEMA_VERSION file (engine predates schema migrations)"
+  [[ -f "$root/gluerun.config.json" ]] || die "no gluerun.config.json in $root (run: gluerun init)"
+  rsv="$(repo_schema_version "$root")"
+  [[ -n "$rsv" ]] || die "gluerun.config.json has no schemaVersion key; add \"schemaVersion\": \"$esv\" if this repo already matches the engine schema"
+  if [[ "$rsv" == "$esv" ]]; then
+    echo "gluerun migrate: repo schema $rsv matches engine schema — up to date, nothing to do"
+    return 0
+  fi
+  echo "gluerun migrate: repo schema $rsv -> engine schema $esv"
+  local steps=0 script next
+  while [[ "$rsv" != "$esv" ]]; do
+    script="$(ls "$home/migrations/$rsv-to-"*.sh 2>/dev/null | sort | head -n1 || true)"
+    [[ -n "$script" && -f "$script" ]] \
+      || die "no migration found for $rsv -> $esv (looked for $home/migrations/$rsv-to-*.sh); see CHANGELOG.md"
+    next="$(basename "$script" .sh)"; next="${next#*-to-}"
+    echo "  run   $(basename "$script") ($rsv -> $next)"
+    bash "$script" "$root" || die "migration $(basename "$script") failed (repo left at schema $rsv)"
+    set_repo_schema_version "$root" "$next" || die "migration ran but schemaVersion could not be updated in gluerun.config.json"
+    rsv="$next"
+    steps=$((steps + 1))
+    [[ "$steps" -le 64 ]] || die "migration chain exceeded 64 steps without reaching $esv (cycle in migrations/?)"
+  done
+  echo "gluerun migrate: repo is now at schema $rsv"
+}
+
+cmd_promote_gate() {
+  local home root promoter; home="$(resolve_engine_home)"; root="$(require_repo)"
+  promoter="${GLUERUN_PROMOTER:-$home/gluerun-ext/promote-gate.sh}"
+  [[ -f "$promoter" ]] || die "no gate promoter found ($promoter); set GLUERUN_PROMOTER or enable a project promoter"
+  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" exec bash "$promoter" "$@"
+}
+
+cmd_console() {
+  local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
+  local server="$home/plugin/scripts/gluerun_graph_server.py"
+  [[ -f "$server" ]] || die "console plugin not present in engine $home (plugin/ not vendored yet)"
+  local port="${GLUERUN_CONSOLE_PORT:-0}"
+  if [[ "$port" == "0" ]]; then
+    port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+  fi
+  echo "gluerun console -> http://127.0.0.1:$port  (repo: $root)"
+  GLUERUN_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" --host 127.0.0.1 --port "$port" "$@"
+}
+
+usage() {
+  cat <<'EOF'
+gluerun — orchestration engine launcher
+
+Usage: gluerun <command> [args]
+
+Run anywhere (operate on the current repo):
+  reconcile [--dry-run|--apply|--actuate|--status]   L0 reconciler
+  auto [--once]                                       self-driving loop
+  drive TASK-XXXX [--dry-run ...]                     one task through L1->L2->audit
+  integrate [--task TASK-XXXX] [--dry-run]            merge accepted branches
+  status                                              orchestration status
+  recover [--scan|--prune]                            stale leases / orphans
+  validate-dag | next-area | next-areas | area-gate NODE
+  promote-gate NODE                                   gate promotion (project promoter)
+  console                                             launch the visualization plugin
+
+Setup / lifecycle:
+  init                 scaffold gluerun.config.json + docs/orchestration in this repo
+  doctor               check deps, engine resolution, repo config
+  update [VERSION]     pin this repo to an engine version (.gluerun-version)
+  migrate              bring this repo's schemaVersion up to the engine's
+  version              print CLI + resolved engine version
+EOF
+}
+
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    reconcile)     run_engine reconcile.sh "$@" ;;
+    auto)          run_engine autonomate.sh "$@" ;;
+    drive)         run_engine l1-drive.sh "$@" ;;
+    integrate)     run_engine integrate.sh "$@" ;;
+    status)        run_engine reconcile.sh --status "$@" ;;
+    recover)       run_engine recover.sh "$@" ;;
+    validate-dag)  run_engine dag.sh validate-dag "$@" ;;
+    next-area)     run_engine dag.sh next-area "$@" ;;
+    next-areas)    run_engine dag.sh next-areas "$@" ;;
+    area-gate)     run_engine dag.sh area-gate "$@" ;;
+    promote-gate)  cmd_promote_gate "$@" ;;
+    console)       cmd_console "$@" ;;
+    init)          cmd_init "$@" ;;
+    doctor)        cmd_doctor "$@" ;;
+    update)        cmd_update "$@" ;;
+    migrate)       cmd_migrate "$@" ;;
+    version|--version|-v) cmd_version ;;
+    help|--help|-h|"") usage ;;
+    *) die "unknown command: $cmd (try: gluerun help)" ;;
+  esac
+}
+
+main "$@"
