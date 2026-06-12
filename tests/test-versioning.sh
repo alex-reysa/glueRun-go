@@ -49,8 +49,8 @@ make_repo "$tmp/repo-a" v9
 out="$(cd "$tmp/repo-a" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" doctor 2>&1)"
 rc=$?
 [[ "$rc" -ne 0 ]] || fail "doctor should exit nonzero on schemaVersion mismatch"
-assert_contains "$out" "FAIL  schemaVersion mismatch: repo v9 vs engine v0" "doctor mismatch FAIL line"
-assert_contains "$out" "engine schema: v0" "doctor reports engine SCHEMA_VERSION"
+assert_contains "$out" "FAIL  schemaVersion mismatch: repo v9 vs engine v1" "doctor mismatch FAIL line"
+assert_contains "$out" "engine schema: v1" "doctor reports engine SCHEMA_VERSION"
 assert_contains "$out" "versions: cli " "doctor reports cli/engine versions"
 
 # --- (b) pin disagreement: WARN, .gluerun-version stays authoritative ------------
@@ -70,7 +70,7 @@ rc=$?
 assert_contains "$err" "gluerun: warning: .gluerun-version (9.9.9) and gluerun.config.json engineVersion (1.2.3) disagree; using .gluerun-version" "repo_pin stderr warning"
 
 # --- (c) migrate no-ops cleanly when schema versions match --------------------
-make_repo "$tmp/repo-c" v0
+make_repo "$tmp/repo-c" v1
 out="$(cd "$tmp/repo-c" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate 2>&1)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "migrate should exit 0 when up to date (rc=$rc, out=$out)"

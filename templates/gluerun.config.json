@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "v0",
+  "schemaVersion": "v1",
   "engineVersion": "0.3.0",
   "targetBranch": "agent/integration",
   "gateCommand": "false  # TODO set your gate, e.g. npm test && npm run build",

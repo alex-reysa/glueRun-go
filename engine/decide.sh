@@ -92,6 +92,7 @@ with open(out_path, "w", encoding="utf-8") as f:
 PY
 
 verdict="$run_dir/decision-$failure_class.json"
+invalid_verdict="$run_dir/decision-$failure_class.invalid.json"
 action="escalate-parked"
 rationale="decider unavailable; parked by fallback"
 timed_out="no"
@@ -119,6 +120,18 @@ gluerun_decider_timeout_action() {
   fi
 }
 
+decider_event_data() {
+  python3 - "$task_id" "$run_id" "$failure_class" "$action" "${1:-}" <<'PY'
+import json
+import sys
+task_id, run_id, failure_class, action, reason = sys.argv[1:6]
+data = {"taskId": task_id, "runId": run_id, "failureClass": failure_class, "action": action}
+if reason:
+    data["reason"] = reason[:500]
+print(json.dumps(data, separators=(",", ":")))
+PY
+}
+
 run_ec=0
 (
   "$GLUERUN_RUNNER_BIN" --level readonly -C "$worktree" \
@@ -144,19 +157,39 @@ fi
 
 if [[ "$timed_out" == "yes" ]]; then
   gluerun_decider_timeout_action
+  owner="human"; [[ "$action" == "retry" ]] && owner="l1"
+  gluerun_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "$owner"
   gluerun_append_event "decider.timeout" "readonly decider timed out" \
-    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"failureClass\":\"$failure_class\",\"timeoutSec\":$decider_timeout_sec,\"action\":\"$action\"}"
+    "$(python3 - "$task_id" "$run_id" "$failure_class" "$action" "$decider_timeout_sec" <<'PY'
+import json, sys
+task_id, run_id, failure_class, action, timeout_sec = sys.argv[1:6]
+print(json.dumps({"taskId": task_id, "runId": run_id, "failureClass": failure_class, "timeoutSec": int(timeout_sec), "action": action}, separators=(",", ":")))
+PY
+)"
 elif [[ -f "$verdict" ]] && gluerun_extract_json "$verdict" "$verdict" 2>/dev/null; then
-  a="$(gluerun_json_field "$verdict" action 2>/dev/null || echo "")"
-  r="$(gluerun_json_field "$verdict" rationale 2>/dev/null || echo "")"
-  if [[ -n "$a" ]]; then action="$a"; fi
-  if [[ -n "$r" ]]; then rationale="$r"; fi
+  validation_log="$run_dir/decision-$failure_class.validation.log"
+  if gluerun_validate_decider_verdict "$verdict" "$failure_class" "$task_id" >"$validation_log" 2>&1; then
+    a="$(gluerun_json_field "$verdict" action 2>/dev/null || echo "")"
+    r="$(gluerun_json_field "$verdict" rationale 2>/dev/null || echo "")"
+    if [[ -n "$a" ]]; then action="$a"; fi
+    if [[ -n "$r" ]]; then rationale="$r"; fi
+  else
+    cp "$verdict" "$invalid_verdict" 2>/dev/null || true
+    invalid_reason="$(cat "$validation_log" 2>/dev/null || echo "schema validation failed")"
+    action="escalate-parked"
+    rationale="invalid decider verdict; parked by fallback: $invalid_reason"
+    gluerun_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "human"
+    gluerun_append_event "decider.invalid_verdict" "decider verdict failed validation; using fallback" \
+      "$(decider_event_data "$invalid_reason")"
+  fi
 else
   # Decider produced no parseable JSON action (prose-only, refusal, or truncated).
   # Falls back to the escalate-parked default, but record WHY so a prose stall is
   # visible rather than indistinguishable from a deliberate human-park decision.
+  [[ -f "$verdict" ]] && cp "$verdict" "$invalid_verdict" 2>/dev/null || true
+  gluerun_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "human"
   gluerun_append_event "decider.unparseable" "decider produced no parseable JSON action; using fallback" \
-    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"failureClass\":\"$failure_class\",\"action\":\"$action\"}"
+    "$(decider_event_data "unparseable")"
 fi
 
 # Record the decision durably.
@@ -166,10 +199,10 @@ fi
 
 if [[ "$action" == "escalate-parked" ]]; then
   gluerun_append_event "decider.parked" "decision parked for human review" \
-    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"failureClass\":\"$failure_class\",\"rationale\":\"$(printf '%s' "$rationale" | head -c 200)\"}"
+    "$(decider_event_data "$rationale")"
 else
   gluerun_append_event "decider.verdict" "decider chose an action" \
-    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"failureClass\":\"$failure_class\",\"action\":\"$action\"}"
+    "$(decider_event_data)"
 fi
 
 echo "verdict=$verdict"

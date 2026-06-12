@@ -40,6 +40,7 @@ do_import="no"
 [[ "$mode" == "apply" || "$mode" == "actuate" ]] && do_import="yes"
 
 gluerun_ensure_state_dirs
+gluerun_ensure_repo_scaffold
 
 if [[ "$mode" == "status" ]]; then
   echo "gluerun orchestration status"
@@ -51,8 +52,8 @@ if [[ "$mode" == "status" ]]; then
   else
     echo "lock: none"
   fi
-  inbox_count="$(find "$GLUERUN_STATE_DIR/inbox" -maxdepth 1 -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' ')"
-  imported_count="$(find "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json' -type f 2>/dev/null | wc -l | tr -d ' ')"
+  inbox_count="$(gluerun_count_files "$GLUERUN_STATE_DIR/inbox" -maxdepth 1 -name '*.json')"
+  imported_count="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
   echo "packets_inbox: $inbox_count"
   echo "packets_imported: $imported_count"
   echo "recent_events:"
@@ -110,8 +111,8 @@ current_branch="$(gluerun_current_branch)"
 head_sha="$(git -C "$GLUERUN_ROOT" rev-parse --short HEAD)"
 dirty_count="$(git -C "$GLUERUN_ROOT" status --short | wc -l | tr -d ' ')"
 worktree_count="$(git -C "$GLUERUN_ROOT" worktree list --porcelain | awk '/^worktree / {count++} END {print count+0}')"
-inbox_count="$(find "$GLUERUN_STATE_DIR/inbox" -maxdepth 1 -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' ')"
-imported_count="$(find "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' ')"
+inbox_count="$(gluerun_count_files "$GLUERUN_STATE_DIR/inbox" -maxdepth 1 -name '*.json')"
+imported_count="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json')"
 valid_inbox_count=0
 invalid_inbox_count=0
 imported_this_run=0
@@ -161,7 +162,7 @@ if [[ "$do_import" == "yes" && ${#inbox_packets[@]} -gt 0 ]]; then
         "{\"runId\":\"$run_id\",\"packet\":\"$(basename "$packet")\"}"
     fi
   done
-  imported_count="$(find "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json' -type f 2>/dev/null | wc -l | tr -d ' ')"
+  imported_count="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
 fi
 
 gluerun_append_event "origin.reconcile_started" "origin reconcile started" "{\"runId\":\"$run_id\",\"mode\":\"$mode\"}"
@@ -206,7 +207,7 @@ if [[ "$mode" == "actuate" ]]; then
   # Integrate accepted work FIRST so a newly dispatched task branches from a
   # target that already includes prior accepted slices (avoids a stale-base
   # build break). Packets dispatched this cycle integrate on the next cycle.
-  if [[ "${GLUERUN_AUTO_INTEGRATE:-0}" == "1" ]]; then
+  if [[ "${GLUERUN_AUTO_INTEGRATE:-1}" == "1" ]]; then
     echo "actuation: auto-integration (pre-dispatch)"
     integ_out="$("$SCRIPT_DIR/integrate.sh" --from-reconcile --run-id "$run_id" 2>&1)" || true
     printf '%s\n' "$integ_out" | sed 's/^/  integ: /'
@@ -442,7 +443,7 @@ if [[ "$mode" == "actuate" ]]; then
   echo "reaped_ok=$reaped_ok"
   echo "reaped_failures=$reaped_failures"
   echo "workers_running=$workers_running"
-  echo "auto_integrate=${GLUERUN_AUTO_INTEGRATE:-0}"
+  echo "auto_integrate=${GLUERUN_AUTO_INTEGRATE:-1}"
   echo "integrated_this_run=$integrations_this_run"
   echo "failed_integrations=$integration_failures"
   echo "planner_failures_this_run=$planner_failures_this_run"
