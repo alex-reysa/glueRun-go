@@ -90,6 +90,34 @@ run_decider_timeout() {
       --worktree "$GLUERUN_ROOT"
 }
 
+make_payload_runner() {
+  local stub="$GLUERUN_STATE_DIR/payload-runner.sh"
+  cat >"$stub" <<'SH'
+#!/usr/bin/env bash
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-last-message) out="$2"; shift 2 ;;
+    --level|--worktree|-C|--run-id|--prompt-file|--session-meta|--resume-session) shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\n' "$MOCK_DECIDER_PAYLOAD" >"$out"
+SH
+  chmod +x "$stub"
+  export GLUERUN_RUNNER="$stub"
+}
+
+run_decider_payload() {
+  local payload="$1" failure_class="${2:-gate-red}"
+  MOCK_DECIDER_PAYLOAD="$payload" GLUERUN_DECIDER_TIMEOUT_SEC=30 \
+    "$SCRIPT_DIR/decide.sh" --task TASK-0001 \
+      --failure-class "$failure_class" \
+      --branch agent/artifact/TASK-0001-schema \
+      --run RUN-SCHEMA \
+      --worktree "$GLUERUN_ROOT"
+}
+
 assert_no_gate_results() {
   local count
   count="$(find "$GLUERUN_ORCH_DIR/gates" -type f 2>/dev/null | wc -l | tr -d ' ')"
@@ -137,8 +165,42 @@ test_decider_timeout_parks_nonbuildable_failure_class() {
   assert_no_gate_results "non-buildable decider timeout must not write gate results"
 }
 
+assert_invalid_decider_payload_parks() {
+  local payload="$1" msg="$2" out
+  with_fixture
+  write_lease 0 3
+  make_payload_runner
+
+  out="$(run_decider_payload "$payload" gate-red)"
+
+  assert_contains "$out" "action=escalate-parked" "$msg parks"
+  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" '"type":"decider.invalid_verdict"' "$msg invalid event emitted"
+  assert_contains "$(cat "$GLUERUN_ORCH_DIR/decisions.md")" "decide:escalate-parked" "$msg park decision recorded"
+  assert_eq "gluerun.orchestration.decider-verdict.v0" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "$GLUERUN_RUNS_DIR/RUN-SCHEMA/decision-gate-red.json")" \
+    "$msg fallback verdict schema"
+  [[ -f "$GLUERUN_RUNS_DIR/RUN-SCHEMA/decision-gate-red.invalid.json" ]] \
+    || fail "$msg invalid verdict should be preserved"
+}
+
+test_decider_rejects_bad_schema_missing_fields_unknown_action_and_mismatched_failure_class() {
+  assert_invalid_decider_payload_parks \
+    '{"schema":"pmgo.orchestration.decider-verdict.v0","failureClass":"gate-red","taskId":"TASK-0001","action":"retry","rationale":"bad namespace","nextOwner":"l1"}' \
+    "bad schema"
+  assert_invalid_decider_payload_parks \
+    '{"schema":"gluerun.orchestration.decider-verdict.v0","action":"retry","rationale":"missing fields"}' \
+    "missing required fields"
+  assert_invalid_decider_payload_parks \
+    '{"schema":"gluerun.orchestration.decider-verdict.v0","failureClass":"gate-red","taskId":"TASK-0001","action":"invent-action","rationale":"bad action","nextOwner":"l1"}' \
+    "unknown action"
+  assert_invalid_decider_payload_parks \
+    '{"schema":"gluerun.orchestration.decider-verdict.v0","failureClass":"scope-violation","taskId":"TASK-0001","action":"retry","rationale":"wrong failure class","nextOwner":"l1"}' \
+    "mismatched failure class"
+}
+
 test_decider_timeout_retries_buildable_audit_with_budget
 test_decider_timeout_parks_exhausted_audit_retry_budget
 test_decider_timeout_parks_nonbuildable_failure_class
+test_decider_rejects_bad_schema_missing_fields_unknown_action_and_mismatched_failure_class
 
 echo "decider tests passed"

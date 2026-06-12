@@ -208,16 +208,13 @@ cmd_init() {
 EOF
     echo "  new   docs/orchestration/dag.v0.json (1 starter node — define your graph)"
   fi
+  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" bash "$home/engine/scaffold.sh"
+  echo "  ok    docs/orchestration scaffold + schema mirrors"
   # version pin
   if [[ ! -f "$root/.gluerun-version" ]]; then
     cp "$home/VERSION" "$root/.gluerun-version"; echo "  new   .gluerun-version ($(cat "$home/VERSION"))"
   fi
-  # gitignore
-  local gi="$root/.gitignore"
-  for entry in ".gluerun-state/" ".worktrees/"; do
-    if [[ ! -f "$gi" ]] || ! grep -qxF "$entry" "$gi"; then echo "$entry" >> "$gi"; fi
-  done
-  echo "  ok    .gitignore (.gluerun-state/, .worktrees/)"
+  echo "  ok    .gitignore (.gluerun-state/, .worktrees/, .gluerun-evidence/, .gluerun-cache/)"
   echo ""
   echo "Next: edit gluerun.config.json + docs/orchestration/dag.v0.json, then: gluerun doctor"
 }

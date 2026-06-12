@@ -1,5 +1,14 @@
 # glueRun-go
 
+```text
+        _            ____
+   __ _| |_   _  ___|  _ \ _   _ _ __         __ _  ___
+  / _` | | | | |/ _ \ |_) | | | | '_ \ _____ / _` |/ _ \
+ | (_| | | |_| |  __/  _ <| |_| | | | |_____| (_| | (_) |
+  \__, |_|\__,_|\___|_| \_\\__,_|_| |_|      \__, |\___/
+  |___/                                      |___/
+```
+
 **Autonomous multi-agent orchestration for software repos. One engine, many consumers.**
 
 glueRun-go is a bash + Python orchestration engine that drives autonomous AI coding agents
@@ -105,9 +114,17 @@ gluerun reconcile --drain
 All per-repo variation lives in the consumer repo, never in engine files:
 
 - **`gluerun.config.json`** — declarative: `targetBranch`, `gateCommand`, `runner`,
-  `areas{}`, `areaPrefix`, `prewarm`, `modules[]`, `identity{}`, `env{}`.
+  `areas{}`, `areaPrefix`, `prewarm`, `modules[]`, `identity{}`, `env{}`,
+  `provisionFiles[]`, `envAllowlist[]`.
 - **`gluerun.config.sh`** — optional shell extras (computed values, functions).
 - **`.gluerun-state/config.local.sh`** — gitignored operator overrides and secrets.
+
+`provisionFiles` entries copy repo-local, gitignored files into each worker
+worktree after `git worktree add`: `{ "source": ".env.local", "target":
+".env.local", "required": true }`. The source and target must both be ignored
+or provisioning fails closed. `envAllowlist` accepts exact env names or prefix
+patterns ending in `*`; allowed values are written to
+`worktree/.gluerun-state/worktree-env.sh` and sourced for prewarm/gate phases.
 
 ### Operator env knobs
 
@@ -116,8 +133,8 @@ All per-repo variation lives in the consumer repo, never in engine files:
 | `GLUERUN_MAX_CONCURRENT` | `5` | Maximum L2 workers running concurrently. |
 | `GLUERUN_MAX_DISPATCH` | `5` | Maximum tasks dispatched per reconcile cycle. |
 | `GLUERUN_DETACHED_DISPATCH` | `1` | **Default ON.** Reconcile spawns workers in their own session and returns in seconds; the reaper attributes outcomes on later cycles. Set `0` for the legacy synchronous batch wait. |
-| `GLUERUN_AUTO_INTEGRATE` | `1` | Automatically integrate (merge) completed worker branches. |
-| `GLUERUN_PUSH` | `1` | Push integrated branches to the remote. |
+| `GLUERUN_AUTO_INTEGRATE` | `1` | Automatically integrate (merge) completed worker branches in direct `reconcile --actuate`, `gluerun auto`, launchd, and console-driven cycles. |
+| `GLUERUN_PUSH` | `0` direct / `1` auto | Push integrated branches to the remote. Direct engine commands default local-only; `gluerun auto`/launchd set `1` unless overridden. |
 | `GLUERUN_MAX_HOURS` | `12` | Wall-clock budget for the autonomy loop (`gluerun auto`). |
 | `GLUERUN_MAX_RETRIES` | `3` | Per-task worker retries before the decider escalates. |
 | `GLUERUN_STALE_MINUTES` | `60` | Lease age (minutes) before a task without a live dispatch pid is reclaimed by the reaper. |
@@ -178,7 +195,7 @@ Two versions move independently:
 - **Engine pin** — `.gluerun-version` is the canonical per-repo pin (overrides
   `gluerun.config.json` `engineVersion`; if they disagree `.gluerun-version` wins and
   `gluerun doctor` warns). `gluerun update <ver>` rewrites it.
-- **Schema** — `SCHEMA_VERSION` (repo root) holds the data-contract version (`v0` today).
+- **Schema** — `SCHEMA_VERSION` (repo root) holds the data-contract version (`v1` today).
   A repo records the schema it was scaffolded against in `gluerun.config.json` →
   `schemaVersion`. `gluerun doctor` fails on a schema mismatch; `gluerun migrate` runs
   the shipped `migrations/<from>-to-<to>.sh` chain and rewrites `schemaVersion`.

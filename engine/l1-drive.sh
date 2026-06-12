@@ -299,8 +299,34 @@ if [[ "$git_ec" -ne 0 ]]; then
 fi
 gluerun_append_event "l1.worktree_created" "worker worktree created" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"worktree\":\"$worktree\"}"
+provision_log="$run_dir/worktree-provision.log"
+if ! gluerun_worktree_provision "$worktree" "$run_dir" >"$provision_log" 2>&1; then
+  provision_out="$(cat "$provision_log" 2>/dev/null || true)"
+  _l1_outcome="terminal"
+  gluerun_lease_set_status "$task_id" "blocked" 2>/dev/null || true
+  gluerun_task_set_status "$task_file" "blocked" || true
+  "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "escalate-parked" \
+    --rationale "worktree provisioning failed before runner invocation; see $provision_log" \
+    --run "$run_id" --branch "$worker_branch" --authority l1 >/dev/null 2>&1 || true
+  gluerun_append_event "l1.provision_failed" "worktree provisioning failed" \
+    "$(python3 - "$task_id" "$run_id" "$provision_log" "$provision_out" <<'PY'
+import json, sys
+task_id, run_id, log, reason = sys.argv[1:5]
+print(json.dumps({"taskId": task_id, "runId": run_id, "log": log, "reason": reason[:500]}, separators=(",", ":")))
+PY
+)"
+  echo "worktree provisioning failed for $task_id (see $provision_log)" >&2
+  exit 3
+fi
+gluerun_append_event "l1.provisioned" "worktree provisioning completed" \
+  "$(python3 - "$task_id" "$run_id" "${GLUERUN_WORKTREE_ENV_FILE:-}" <<'PY'
+import json, sys
+task_id, run_id, env_file = sys.argv[1:4]
+print(json.dumps({"taskId": task_id, "runId": run_id, "envFile": env_file}, separators=(",", ":")))
+PY
+)"
 if [[ -n "${GLUERUN_PREWARM_CMD:-}" ]]; then
-  ( cd "$worktree" && eval "$GLUERUN_PREWARM_CMD" ) >"$run_dir/prewarm.log" 2>&1 \
+  gluerun_run_in_worktree_env "$worktree" bash -c "$GLUERUN_PREWARM_CMD" >"$run_dir/prewarm.log" 2>&1 \
     || echo "  warning: prewarm command failed (exit $?); continuing" >&2
 fi
 
@@ -521,8 +547,7 @@ run_worker_phase() {
 
   # Regression gate.
   local gate_exit=0
-  ( cd "$worktree" && GLUERUN_ROOT="$GLUERUN_ROOT" GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" \
-      "$SCRIPT_DIR/gate-check.sh" "$run_id" -- bash -c "$gate_cmd" ) || gate_exit=$?
+  gluerun_run_in_worktree_env "$worktree" "$SCRIPT_DIR/gate-check.sh" "$run_id" -- bash -c "$gate_cmd" || gate_exit=$?
   if [[ "$gate_exit" -ne 0 ]]; then
     attempt_failure="gate-red"; attempt_ctx="$run_dir/gate-check.log"; return 1
   fi

@@ -195,9 +195,11 @@ cdir="${MOCK_COUNTER_DIR:-/tmp}"; mkdir -p "$cdir"
 # Decider call (decide.sh dispatches the decider prompt at --level readonly). Emit
 # a decider-verdict action so the fast-disabled path actually advances.
 if [[ "$prompt" == *decider-prompt-* ]]; then
-  python3 - "$out" "${MOCK_DECIDER_ACTION:-retry}" <<'PY'
+  fc="${prompt##*decider-prompt-}"
+  fc="${fc%.md}"
+  python3 - "$out" "${MOCK_DECIDER_ACTION:-retry}" "$fc" <<'PY'
 import json, sys
-json.dump({"schema":"gluerun.orchestration.decider-verdict.v0","action":sys.argv[2],"rationale":"mock decider"}, open(sys.argv[1],"w"))
+json.dump({"schema":"gluerun.orchestration.decider-verdict.v0","failureClass":sys.argv[3],"taskId":"TASK-0001","action":sys.argv[2],"rationale":"mock decider","nextOwner":"l1"}, open(sys.argv[1],"w"))
 PY
   exit 0
 fi

@@ -157,7 +157,7 @@ for d in "${dirs[@]}"; do
   # runs; the merge-base guard below remains the correctness safety net.
   if [[ -z "$task_filter" ]]; then
     case "$(gluerun_lease_status "$task_id" 2>/dev/null || true)" in
-      integrated) skipped=$((skipped + 1)); continue ;;
+      integrated|blocked|cancelled|superseded|stale) skipped=$((skipped + 1)); continue ;;
     esac
   fi
   # newest accepted packet for this task (exclude audit sidecars)
@@ -184,6 +184,23 @@ for d in "${dirs[@]}"; do
   # Branch must exist.
   if ! git -C "$GLUERUN_ROOT" rev-parse --verify --quiet "$branch^{commit}" >/dev/null; then
     echo "skip $task_id: branch missing ($branch)"
+    if [[ "$dry_run" != "yes" ]]; then
+      gluerun_record_recovery "integration branch missing for accepted packet" \
+        "$task_id" "$branch" "escalate-parked" "origin" "restore branch or supersede accepted packet" "human"
+      "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "decide:escalate-parked" \
+        --rationale "integration branch missing: $branch; restore the branch or supersede the imported packet" \
+        --run "$run_id" --branch "$branch" --authority origin >/dev/null 2>&1 || true
+      gluerun_lease_set_status "$task_id" "blocked" 2>/dev/null || true
+      task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+      [[ -f "$task_file" ]] && gluerun_task_set_status "$task_file" "blocked" || true
+      gluerun_append_event "integration.parked" "accepted packet has no integration branch" \
+        "$(python3 - "$run_id" "$task_id" "$branch" <<'PY'
+import json, sys
+run_id, task_id, branch = sys.argv[1:4]
+print(json.dumps({"runId": run_id, "taskId": task_id, "branch": branch, "reason": "branch-missing", "action": "escalate-parked"}, separators=(",", ":")))
+PY
+)"
+    fi
     skipped=$((skipped + 1))
     continue
   fi

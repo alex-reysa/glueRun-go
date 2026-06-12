@@ -60,6 +60,10 @@ mods = cfg.get("modules")
 if isinstance(mods, list): setv("GLUERUN_MODULES", " ".join(mods))
 ssl = cfg.get("singleSliceLayers")
 if isinstance(ssl, list): setv("GLUERUN_SINGLE_SLICE_LAYERS", ",".join(ssl))
+pf = cfg.get("provisionFiles")
+if isinstance(pf, list): setv("GLUERUN_PROVISION_FILES_JSON", json.dumps(pf, separators=(",", ":")))
+ea = cfg.get("envAllowlist")
+if isinstance(ea, list): setv("GLUERUN_ENV_ALLOWLIST_JSON", json.dumps(ea, separators=(",", ":")))
 setv("GLUERUN_PROMOTER", cfg.get("promoter"))
 ident = cfg.get("identity") or {}
 l0 = ident.get("l0") or {}; l1 = ident.get("l1") or {}
@@ -132,6 +136,7 @@ fi
 
 # Autonomy controls.
 GLUERUN_MAX_RETRIES="${GLUERUN_MAX_RETRIES:-3}"            # per-task worker retries before the decider escalates
+GLUERUN_AUTO_INTEGRATE="${GLUERUN_AUTO_INTEGRATE:-1}"      # direct reconcile/auto/launchd all integrate accepted work by default
 # Decider fast-path (T-F1): when 1 (default), gluerun_decider_fast_action resolves
 # clear-cut failure classes by policy without paying a model decider round-trip;
 # set 0 to force every failure through decide.sh (the historical behavior).
@@ -194,6 +199,105 @@ gluerun_ensure_state_dirs() {
   # only by the L1 lease write path (gluerun_l1_lease_write), so ordinary commands
   # stay fully dormant w.r.t. the (deferred) L1-parallel machinery.
   mkdir -p "$GLUERUN_STATE_DIR/locks" "$GLUERUN_STATE_DIR/runs" "$GLUERUN_STATE_DIR/inbox"
+}
+
+gluerun_count_files() {
+  local dir="$1"
+  shift || true
+  [[ -d "$dir" ]] || { echo 0; return 0; }
+  find "$dir" "$@" -type f 2>/dev/null | wc -l | tr -d ' '
+}
+
+gluerun_ensure_gitignore_entries() {
+  local gi="$GLUERUN_ROOT/.gitignore" entry
+  mkdir -p "$(dirname "$gi")"
+  touch "$gi"
+  for entry in "$@"; do
+    [[ -n "$entry" ]] || continue
+    grep -qxF "$entry" "$gi" 2>/dev/null || printf '%s\n' "$entry" >>"$gi"
+  done
+}
+
+gluerun_ensure_repo_scaffold() {
+  mkdir -p \
+    "$GLUERUN_ORCH_DIR/prompts" \
+    "$GLUERUN_ORCH_DIR/tasks" \
+    "$GLUERUN_ORCH_DIR/areas/core" \
+    "$GLUERUN_ORCH_DIR/gates" \
+    "$GLUERUN_ORCH_DIR/packets/imported" \
+    "$GLUERUN_ROOT/schemas/orchestration"
+
+  if [[ ! -f "$GLUERUN_ORCH_DIR/decisions.md" ]]; then
+    cat >"$GLUERUN_ORCH_DIR/decisions.md" <<'EOF'
+# Decisions
+
+## Decision Log
+EOF
+  fi
+  if [[ ! -f "$GLUERUN_ORCH_DIR/project-state.md" ]]; then
+    cat >"$GLUERUN_ORCH_DIR/project-state.md" <<'EOF'
+# Project State
+
+Initial gluerun scaffold. Reconcile snapshots will be maintained below.
+EOF
+  fi
+  if [[ ! -f "$GLUERUN_ORCH_DIR/tasks/TEMPLATE.md" ]]; then
+    cat >"$GLUERUN_ORCH_DIR/tasks/TEMPLATE.md" <<'EOF'
+# TASK-XXXX: <title>
+
+Status: ready
+Area: core
+Target branch: `agent/integration`
+Worker branch: `agent/core/TASK-XXXX-<slug>`
+Test policy: `strict_test_first`
+Gate command: `true`
+Dispatch mode: canonical
+Depends on: []
+
+## Objective
+
+Describe the smallest independently verifiable change.
+
+## Scope
+
+Owned files:
+
+- `path/to/file`
+
+Forbidden files:
+
+- Any file outside the owned scope.
+
+## Acceptance Criteria
+
+- The gate command passes.
+EOF
+  fi
+  if [[ ! -f "$GLUERUN_ORCH_DIR/planner-contract.md" ]]; then
+    cat >"$GLUERUN_ORCH_DIR/planner-contract.md" <<'EOF'
+# Planner Contract
+
+Create small, canonical tasks that can be validated by their gate command. Keep
+owned files narrow, declare dependencies explicitly, and do not broaden scope
+without a recorded decision.
+EOF
+  fi
+  if [[ ! -f "$GLUERUN_ORCH_DIR/areas/core/state.md" ]]; then
+    cat >"$GLUERUN_ORCH_DIR/areas/core/state.md" <<'EOF'
+# Core Area State
+
+Status: starter
+EOF
+  fi
+  if [[ -d "$GLUERUN_SCHEMA_DIR" ]]; then
+    local schema base
+    while IFS= read -r schema; do
+      [[ -n "$schema" ]] || continue
+      base="$(basename "$schema")"
+      [[ -f "$GLUERUN_ROOT/schemas/orchestration/$base" ]] || cp "$schema" "$GLUERUN_ROOT/schemas/orchestration/$base"
+    done < <(find "$GLUERUN_SCHEMA_DIR" -maxdepth 1 -name '*.schema.json' -type f 2>/dev/null | sort)
+  fi
+  gluerun_ensure_gitignore_entries ".gluerun-state/" ".worktrees/" ".gluerun-evidence/" ".gluerun-cache/"
 }
 
 gluerun_json_escape() {
@@ -566,12 +670,17 @@ gluerun_update_project_snapshot() {
   local snapshot="$1"
   python3 - "$snapshot_file" "$snapshot" <<'PY'
 import sys
+from pathlib import Path
 
 path, snapshot = sys.argv[1], sys.argv[2]
 start = "<!-- gluerun:reconcile-snapshot:start -->"
 end = "<!-- gluerun:reconcile-snapshot:end -->"
-with open(path, "r", encoding="utf-8") as f:
-    text = f.read()
+p = Path(path)
+p.parent.mkdir(parents=True, exist_ok=True)
+if p.exists():
+    text = p.read_text(encoding="utf-8")
+else:
+    text = "# Project State\n"
 replacement = f"{start}\n{snapshot.rstrip()}\n{end}"
 if start not in text or end not in text:
     text = text.rstrip() + "\n\n## Latest Reconcile Snapshot\n\n" + replacement + "\n"
@@ -579,8 +688,7 @@ else:
     prefix, rest = text.split(start, 1)
     _, suffix = rest.split(end, 1)
     text = prefix + replacement + suffix
-with open(path, "w", encoding="utf-8") as f:
-    f.write(text)
+p.write_text(text, encoding="utf-8")
 PY
 }
 
@@ -1304,7 +1412,7 @@ gluerun_select_dispatch_frontier() {
   task_json_lines="$(
     while IFS= read -r f; do
       [[ -n "$f" ]] || continue
-      case "$(basename "$f")" in TEMPLATE.md) continue ;; esac
+      [[ "$(basename "$f")" == "TEMPLATE.md" ]] && continue
       printf '%s\t%s\n' "$f" "$(gluerun_task_json "$f")"
     done < <(find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
   )"
@@ -1877,6 +1985,67 @@ def check(val, spec, where):
 
 
 check(data, schema, root)
+PY
+}
+
+gluerun_validate_decider_verdict() {
+  local verdict="$1" failure_class="$2" task_id="${3:-}"
+  local data
+  data="$(python3 - "$verdict" <<'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    print(json.dumps(json.load(f), separators=(",", ":")))
+PY
+)" || return $?
+  gluerun_json_schema_check "$data" "$GLUERUN_DECIDER_SCHEMA" "decider verdict" || return $?
+  python3 - "$verdict" "$failure_class" "$task_id" <<'PY'
+import json
+import sys
+
+path, failure_class, task_id = sys.argv[1:4]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+if data.get("failureClass") != failure_class:
+    print(
+        "decider verdict failureClass mismatch: expected %r, got %r"
+        % (failure_class, data.get("failureClass")),
+        file=sys.stderr,
+    )
+    sys.exit(2)
+verdict_task = data.get("taskId")
+if task_id and verdict_task and verdict_task != task_id:
+    print(
+        "decider verdict taskId mismatch: expected %r, got %r"
+        % (task_id, verdict_task),
+        file=sys.stderr,
+    )
+    sys.exit(2)
+PY
+}
+
+gluerun_write_decider_verdict() {
+  local out="$1" task_id="$2" failure_class="$3" action="$4" rationale="$5" next_owner="$6"
+  mkdir -p "$(dirname "$out")"
+  python3 - "$out" "$task_id" "$failure_class" "$action" "$rationale" "$next_owner" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+out, task_id, failure_class, action, rationale, next_owner = sys.argv[1:7]
+data = {
+    "schema": "gluerun.orchestration.decider-verdict.v0",
+    "failureClass": failure_class,
+    "action": action,
+    "rationale": rationale,
+    "nextOwner": next_owner,
+    "params": {"fallbackGeneratedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")},
+}
+if task_id:
+    data["taskId"] = task_id
+with open(out, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
 PY
 }
 
@@ -3319,7 +3488,7 @@ gluerun_write_status() {
   head="$(git -C "$GLUERUN_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
   ready="$(gluerun_list_ready_tasks 2>/dev/null | wc -l | tr -d ' ')"
   active="$(gluerun_active_lease_count 2>/dev/null || echo 0)"
-  imported="$(find "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json' -type f 2>/dev/null | wc -l | tr -d ' ')"
+  imported="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
   integrated="$(grep -c '"integration.integrated"' "$GLUERUN_EVENTS_FILE" 2>/dev/null || echo 0)"
   parked="$(grep -c '"escalate-parked"\|"decider.parked"' "$GLUERUN_EVENTS_FILE" 2>/dev/null || echo 0)"
   breaker="$(gluerun_breaker_count)"
@@ -3435,6 +3604,161 @@ gluerun_worktree_registered() {
     | awk -v p="$path" '/^worktree / {if (substr($0,10) == p) found=1} END {exit found?0:1}'
 }
 
+gluerun_worktree_provision() {
+  local worktree="$1" run_dir="${2:-}"
+  local specs="${GLUERUN_PROVISION_FILES_JSON:-[]}"
+  local allow="${GLUERUN_ENV_ALLOWLIST_JSON:-[]}"
+  python3 - "$GLUERUN_ROOT" "$worktree" "$run_dir" "$specs" "$allow" <<'PY'
+import json
+import os
+import pathlib
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+worktree = pathlib.Path(sys.argv[2]).resolve()
+run_dir = pathlib.Path(sys.argv[3]).resolve() if sys.argv[3] else None
+specs_raw, allow_raw = sys.argv[4], sys.argv[5]
+
+def fail(message):
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
+
+def load_list(raw, label):
+    try:
+        value = json.loads(raw or "[]")
+    except Exception as exc:
+        fail(f"{label} must be JSON: {exc}")
+    if not isinstance(value, list):
+        fail(f"{label} must be an array")
+    return value
+
+def clean_rel(value, label):
+    if not isinstance(value, str) or not value.strip():
+        fail(f"{label} must be a non-empty relative path")
+    p = pathlib.PurePosixPath(value)
+    if p.is_absolute() or any(part in ("", ".", "..") for part in p.parts):
+        fail(f"{label} must be a clean relative path: {value!r}")
+    return value
+
+def under(base, path):
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+def git_ignored(cwd, rel):
+    return subprocess.run(
+        ["git", "-C", str(cwd), "check-ignore", "-q", "--", rel],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+
+specs = load_list(specs_raw, "provisionFiles")
+allowlist = load_list(allow_raw, "envAllowlist")
+copied = []
+for idx, item in enumerate(specs):
+    if not isinstance(item, dict):
+        fail(f"provisionFiles[{idx}] must be an object")
+    source = clean_rel(item.get("source"), f"provisionFiles[{idx}].source")
+    target = clean_rel(item.get("target"), f"provisionFiles[{idx}].target")
+    required = bool(item.get("required", False))
+    src = root / source
+    dst = worktree / target
+    if not src.exists():
+        if required:
+            fail(f"required provision file missing: {source}")
+        continue
+    resolved = src.resolve()
+    if not under(root, resolved):
+        fail(f"provision source escapes repo: {source}")
+    if not src.is_file():
+        fail(f"provision source is not a file: {source}")
+    if not git_ignored(root, source):
+        fail(f"provision source is not gitignored: {source}")
+    if not git_ignored(worktree, target):
+        fail(f"provision target is not gitignored in worktree: {target}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    copied.append({"source": source, "target": target})
+
+env_written = ""
+if allowlist:
+    name_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    exact = set()
+    prefixes = []
+    for idx, pattern in enumerate(allowlist):
+        if not isinstance(pattern, str) or not pattern:
+            fail(f"envAllowlist[{idx}] must be a non-empty string")
+        if pattern.endswith("*"):
+            prefix = pattern[:-1]
+            if not prefix or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", prefix):
+                fail(f"envAllowlist[{idx}] has invalid prefix pattern: {pattern!r}")
+            prefixes.append(prefix)
+        else:
+            if not name_re.match(pattern):
+                fail(f"envAllowlist[{idx}] has invalid env name: {pattern!r}")
+            exact.add(pattern)
+    env_rel = ".gluerun-state/worktree-env.sh"
+    if not git_ignored(worktree, env_rel):
+        fail(f"worktree env file target is not gitignored: {env_rel}")
+    env_path = worktree / env_rel
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    names = []
+    for name in sorted(os.environ):
+        if name in exact or any(name.startswith(prefix) for prefix in prefixes):
+            if name_re.match(name):
+                names.append(name)
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write("# generated by gluerun; sourced only for worktree prewarm/gate phases\n")
+        for name in names:
+            f.write(f"export {name}={shlex.quote(os.environ[name])}\n")
+    env_written = str(env_path)
+
+if run_dir:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with open(run_dir / "worktree-provision.json", "w", encoding="utf-8") as f:
+        json.dump({"copied": copied, "envFile": env_written}, f, indent=2)
+        f.write("\n")
+print(json.dumps({"copied": copied, "envFile": env_written}, separators=(",", ":")))
+PY
+  local env_file="$worktree/.gluerun-state/worktree-env.sh"
+  if [[ -f "$env_file" ]]; then
+    export GLUERUN_WORKTREE_ENV_FILE="$env_file"
+  fi
+}
+
+gluerun_worktree_env_configured() {
+  [[ -n "${GLUERUN_ENV_ALLOWLIST_JSON:-}" && "${GLUERUN_ENV_ALLOWLIST_JSON:-[]}" != "[]" ]]
+}
+
+gluerun_run_in_worktree_env() {
+  local worktree="$1"
+  shift
+  if gluerun_worktree_env_configured && [[ -n "${GLUERUN_WORKTREE_ENV_FILE:-}" && -f "$GLUERUN_WORKTREE_ENV_FILE" ]]; then
+    (
+      cd "$worktree"
+      env -i \
+        HOME="${HOME:-}" \
+        PATH="${PATH:-/usr/bin:/bin}" \
+        TMPDIR="${TMPDIR:-/tmp}" \
+        SHELL="${SHELL:-/bin/sh}" \
+        GLUERUN_ROOT="$GLUERUN_ROOT" \
+        GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" \
+        GLUERUN_ENGINE_HOME="$GLUERUN_ENGINE_HOME" \
+        GLUERUN_WORKTREE_ENV_FILE="$GLUERUN_WORKTREE_ENV_FILE" \
+        bash -c 'set -a; . "$GLUERUN_WORKTREE_ENV_FILE"; set +a; exec "$@"' bash "$@"
+    )
+  else
+    ( cd "$worktree" && GLUERUN_ROOT="$GLUERUN_ROOT" GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" "$@" )
+  fi
+}
+
 # Append a recovery event with the fields required by operating-model section 13.
 gluerun_record_recovery() {
   # args: failure taskId branch strategy authority expectedEvidence nextOwner
@@ -3459,8 +3783,8 @@ gluerun_write_origin_state() {
   branch="$(gluerun_current_branch)"
   head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
   target="${GLUERUN_TARGET_BRANCH:-}"
-  inbox="$(find "$GLUERUN_INBOX_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' ')"
-  imported="$(find "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json' -type f 2>/dev/null | wc -l | tr -d ' ')"
+  inbox="$(gluerun_count_files "$GLUERUN_INBOX_DIR" -maxdepth 1 -name '*.json')"
+  imported="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
   active="$(gluerun_active_lease_count)"
   worktrees="$(gluerun_extra_worktree_count)"
 
