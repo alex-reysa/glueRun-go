@@ -2,7 +2,7 @@
   "schemaVersion": "v1",
   "engineVersion": "0.3.0",
   "targetBranch": "agent/integration",
-  "gateCommand": "false  # TODO set your gate, e.g. npm test && npm run build",
+  "gateCommand": "false # replace with your real gate, e.g. npm test && npm run build",
   "runner": "claude-run.sh",
   "areaPrefix": "src/",
   "areas": {

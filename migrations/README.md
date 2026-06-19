@@ -1,7 +1,7 @@
 # Schema migrations
 
 The engine's data contract version lives in the root `SCHEMA_VERSION` file
-(currently `v0`). Each consumer repo declares the schema it was scaffolded
+(currently `v1`). Each consumer repo declares the schema it was scaffolded
 against in `gluerun.config.json` → `schemaVersion`. When an engine release bumps
 `SCHEMA_VERSION`, it must ship migration scripts here so existing repos can
 catch up via `gluerun migrate`.
@@ -60,5 +60,6 @@ is a release bug. `gluerun doctor` reports the same mismatch as a FAIL, and
 `gluerun update` warns and points at `gluerun migrate` when the freshly pinned
 engine's schema differs from the repo's.
 
-`v0` → `v0` today means the mechanism ships with zero actual migrations; the
-first real script lands together with the first `SCHEMA_VERSION` bump.
+The current public contract is `v1`; `migrations/v0-to-v1.sh` backfills the
+current scaffold and rewrites legacy `pmgo.orchestration.*` namespace references
+to `gluerun.orchestration.*`.

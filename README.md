@@ -70,6 +70,14 @@ Set `GLUERUN_DETACHED_DISPATCH=0` to restore the legacy synchronous batch path, 
 
 ## Install
 
+Prerequisites:
+
+- Bash >= 4, `python3`, and `git`.
+- At least one supported runner CLI on `PATH` (`claude`, `codex`, or another
+  configured runner).
+- macOS users may need `brew install bash` and a `PATH` entry that resolves
+  `bash` to the Homebrew version before `/bin/bash`.
+
 ```bash
 # Clone and install the engine to ~/.gluerun
 git clone https://github.com/alex-reysa/glueRun-go /path/to/glueRun-go
@@ -117,6 +125,10 @@ All per-repo variation lives in the consumer repo, never in engine files:
   `provisionFiles[]`, `envAllowlist[]`.
 - **`gluerun.config.sh`** — optional shell extras (computed values, functions).
 - **`.gluerun-state/config.local.sh`** — gitignored operator overrides and secrets.
+
+The starter config deliberately sets `gateCommand` to `false` so a newly
+scaffolded repo fails closed until you replace it with the command that proves
+the repo is healthy.
 
 `provisionFiles` entries copy repo-local, gitignored files into each worker
 worktree after `git worktree add`: `{ "source": ".env.local", "target":
@@ -203,11 +215,27 @@ Two versions move independently:
 ## Development and tests
 
 ```bash
-bash tests/run.sh    # 22 generic engine regression tests
+bash tests/run.sh    # 23 regression tests
 ```
 
 The test suite uses no live state — all fixtures use a generic layer vocabulary. The
 `tests/test-engine-clean.sh` gate enforces the abstraction contract on `engine/`.
+
+## Contributing
+
+Run `bash tests/run.sh` before opening a PR. Keep `engine/` generic: project-specific
+rules belong in opt-in modules under `gluerun-ext/` or in a consumer repo's config.
+Do not commit `.gluerun-state/`, `.worktrees/`, `.gluerun-evidence/`, local env
+files, or generated run artifacts.
+
+## Security
+
+glueRun-go executes repo-configured shell commands and launches local coding
+agents in git worktrees. Review `gluerun.config.json`, `gluerun.config.sh`, and
+task files before running it in an untrusted repo. Report vulnerabilities through
+GitHub's private vulnerability reporting for this repository; if that is
+unavailable, open a minimal public issue asking for a private channel and do not
+include exploit details.
 
 ## License
 

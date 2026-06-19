@@ -97,11 +97,13 @@ cycles via dispatch records + exit files.
 
 ### Versioning
 
-- Root `SCHEMA_VERSION` file as the data-contract version; `.gluerun-version` is
-  the canonical engine pin.
+- Root `SCHEMA_VERSION` file as the data-contract version (`v1` for this
+  release); `.gluerun-version` is the canonical engine pin.
 - `gluerun doctor` gains schema-mismatch (FAIL) and pin-disagreement (warn) checks;
   `gluerun migrate` + the `migrations/<from>-to-<to>.sh` contract bring a repo's
   `schemaVersion` forward (see `migrations/README.md`).
+- Ships the `v0-to-v1` migration that backfills the current scaffold and rewrites
+  legacy `pmgo.orchestration.*` namespace references.
 
 ### Console
 
@@ -117,7 +119,7 @@ cycles via dispatch records + exit files.
   opt-in defaults; `findingsStatus` is additive (never required) on the audit
   verdict.
 
-schemaVersion: v0
+schemaVersion: v1
 
 ---
 
