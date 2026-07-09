@@ -8,6 +8,12 @@ set -euo pipefail
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
+# Hermetic guard: this checkout may itself be docked as a gluerun consumer
+# (gluerun.config.json at the repo root). Source lib.sh against a pristine
+# empty root so no consumer config (runner, areaPrefix, env{}) leaks into
+# test sandboxes; each test exports its own GLUERUN_ROOT afterwards.
+export GLUERUN_ROOT="$(mktemp -d)"
+
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 
