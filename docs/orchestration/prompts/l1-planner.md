@@ -62,3 +62,44 @@ Required completion: `[REQUIRED-COMPLETION]`
   node's `requiredCompletion` and the stage file's exit gate.
 - Every task must respect the planner contract's binding rules (feature-flag
   discipline, additive schemas, advocate/skeptic line, evidence invariance).
+- Do NOT duplicate an already-integrated slice. Advance the stage.
+- Task objective and acceptance criteria must name the executable DAG node
+  `[NODE]` and layer `[LAYER]` when relevant.
+- You may propose a gate candidate inside a task's acceptance criteria, but you
+  may not declare an area or node complete.
+
+## Output
+
+Do not output `AREA-COMPLETE`. Completion is not planner authority.
+
+Read `docs/orchestration/gates/[NODE].gate-result.json` before planning:
+
+- If it does not exist, plan the next bounded strict-test-first task that
+  advances `[NODE]` toward its `requiredCompletion` behavior, building on
+  already-integrated work and applying the folding rule above.
+- If it exists with `status: "blocked"`, the gate's `rationale` names the exact
+  unmet predicate. Emit exactly ONE task that directly implements that
+  predicate. Do NOT emit gate-result descriptor, readiness, evidence-task-set,
+  gate-candidate, or other meta-validator tasks — those restate evidence
+  requirements but cannot satisfy a behavioral predicate.
+- If it exists with `status: "passed"`, `[NODE]` is complete; do not re-plan it.
+
+A `blocked` gate is authoritative routing state, not completion: it does not
+make dependents eligible. Never declare an area or node complete.
+
+Output ONLY a JSON object matching
+`schemas/orchestration/task-batch.v0.schema.json`:
+
+```json
+{
+  "schema": "gluerun.orchestration.task-batch.v0",
+  "tasks": [
+    {
+      "taskId": "TASK-XXXX",
+      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nTarget branch: `[TARGET]`\nWorker branch: `agent/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `bash tests/run.sh`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
+    }
+  ]
+}
+```
+
+No code fences, no commentary before or after.
