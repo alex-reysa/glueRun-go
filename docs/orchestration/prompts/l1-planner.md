@@ -58,6 +58,13 @@ Required completion: `[REQUIRED-COMPLETION]`
   named by the stage file) plus its `tests/test-ctx-*.sh` (1–2 files per
   slice). For `contract` layers always emit a single slice. Never own
   `engine/lib.sh` unless the node is `ctx-loader`. Keep each slice tight.
+- FORMAT (parsed literally by the host): every bullet under `Owned files:` and
+  `Forbidden files:` must be a bare backticked path and NOTHING else — one
+  path per bullet, no prose, no `—` annotations (the parser treats the whole
+  bullet as the path, so an annotated bullet breaks scope enforcement). Put
+  any explanation in the Objective, a non-bullet prose paragraph, or Notes.
+  The generic "Any file outside the owned scope." forbidden bullet is the one
+  allowed exception.
 - Acceptance criteria: behavior-level and checkable by tests, mirroring the
   node's `requiredCompletion` and the stage file's exit gate.
 - Every task must respect the planner contract's binding rules (feature-flag
