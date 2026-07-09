@@ -9,3 +9,5 @@
 # Python bytecode (never track compiled artifacts)
 __pycache__/
 *.pyc
+.gluerun-evidence/
+.gluerun-cache/
