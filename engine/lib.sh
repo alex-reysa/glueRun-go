@@ -3846,3 +3846,18 @@ if [[ -n "${GLUERUN_MODULES:-}" ]]; then
   done
   unset _gluerun_mod
 fi
+
+# ---- Context-evolution loader (structural hook) -----------------------------
+# Source every engine/ctx-*.sh once, in sorted order, AFTER all generic engine
+# functions and modules are defined so context-evolution slices get the last
+# word. This block is the ONLY place ctx-*.sh files load: later stages ship
+# context logic as new engine/ctx-*.sh files, never by editing lib.sh again. A
+# ctx file that fails to source is FATAL (fail closed) — never silently skipped.
+# With zero ctx-*.sh present the loop is a no-op (byte-identical prior behavior).
+for _gluerun_ctx in "$GLUERUN_ENGINE_DIR"/ctx-*.sh; do
+  [[ -e "$_gluerun_ctx" ]] || continue
+  # shellcheck disable=SC1090
+  source "$_gluerun_ctx" \
+    || { echo "gluerun: failed to source context file: $_gluerun_ctx" >&2; exit 2; }
+done
+unset _gluerun_ctx
