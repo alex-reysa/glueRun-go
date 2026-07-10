@@ -51,8 +51,12 @@ Required completion: `[REQUIRED-COMPLETION]`
   agent/[AREA]/<task-id>-<kebab-slug>`. `Test policy: strict_test_first`.
   `Gate command: bash tests/run.sh`.
 - `Dispatch mode: canonical`.
-- `Depends on: []` when there are no task dependencies, otherwise a comma
-  separated list of already-integrated `TASK-XXXX` ids only.
+- `Depends on: []` — ALWAYS empty in this dock. Anything your task builds on
+  is already integrated into the target branch your worker branches from, so
+  listing it is redundant — and in staged planning the host validator uses
+  node-local temp ids that collide with real integrated ids, so a listed
+  integrated id is misread as an illegal same-batch dependency and fails the
+  whole batch. Cross-node ordering lives in the DAG's `dependsOn`, not here.
 - Owned files: up to `[SLICE-BUDGET]` mutually-independent slices, each slice
   typically one new `engine/ctx-*.sh` (or the single sanctioned hook site
   named by the stage file) plus its `tests/test-ctx-*.sh` (1–2 files per
