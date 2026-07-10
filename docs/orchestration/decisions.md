@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-10T22:56:00Z — TASK-0001 — accept
+
+- Run: `RUN-20260710T224233Z-95503`
+- Branch: `agent/foundation/TASK-0001-ctx-loader`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-10T22:29:49Z — TASK-0001 — decide:retry
 
 - Run: `RUN-20260710T215122Z-1960`
