@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-10T23:04:27Z — TASK-0001 — integrate
+
+- Run: `ORIGIN-20260710T230049Z-13462`
+- Branch: `agent/foundation/TASK-0001-ctx-loader`
+- Authority: origin
+- Rationale: merged agent/foundation/TASK-0001-ctx-loader (efae80eb1daed91b699e79567f1b000975f8e318) into agent/integration as f4fe5f2120505653801e9ae1c71e9e6c57f20f50; gate green; acceptance=accepted
+
 ### 2026-07-10T22:56:00Z — TASK-0001 — accept
 
 - Run: `RUN-20260710T224233Z-95503`
