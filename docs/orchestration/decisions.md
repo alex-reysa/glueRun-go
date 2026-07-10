@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-10T23:40:19Z — TASK-0002 — accept
+
+- Run: `RUN-20260710T231904Z-27968`
+- Branch: `agent/foundation/TASK-0002-ctx-metrics-extractor`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-10T23:04:27Z — TASK-0001 — integrate
 
 - Run: `ORIGIN-20260710T230049Z-13462`
