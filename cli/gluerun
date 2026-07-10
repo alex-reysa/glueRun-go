@@ -278,6 +278,29 @@ cmd_promote_gate() {
   GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" exec bash "$promoter" "$@"
 }
 
+# Read-only metrics: delegate into the integrated engine/ctx-metrics.sh
+# extractor (gluerun_ctx_metrics_json). Adds no metric logic of its own —
+# it only resolves the engine, sources the extractor, and forwards the runs
+# dir + events file (flags override the GLUERUN_RUNS_DIR/GLUERUN_EVENTS_FILE
+# env defaults). Fixture-scoped and side-effect free: missing/empty inputs
+# fail safe to a zeroed metrics object; no repo or .gluerun-state is required.
+cmd_metrics() {
+  local runs_dir="${GLUERUN_RUNS_DIR:-}" events_file="${GLUERUN_EVENTS_FILE:-}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)        shift ;;  # JSON is the only output; accepted for clarity
+      --runs-dir)    runs_dir="${2:-}"; shift 2 ;;
+      --events-file) events_file="${2:-}"; shift 2 ;;
+      *) die "metrics: unknown argument: $1 (usage: gluerun metrics [--json] [--runs-dir DIR] [--events-file FILE])" ;;
+    esac
+  done
+  local home; home="$(resolve_engine_home)"
+  [[ -f "$home/engine/ctx-metrics.sh" ]] || die "engine $home has no engine/ctx-metrics.sh"
+  # shellcheck disable=SC1090
+  source "$home/engine/ctx-metrics.sh"
+  gluerun_ctx_metrics_json "$runs_dir" "$events_file"
+}
+
 cmd_console() {
   local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
   local server="$home/plugin/scripts/gluerun_graph_server.py"
@@ -305,6 +328,7 @@ Run anywhere (operate on the current repo):
   recover [--scan|--prune]                            stale leases / orphans
   validate-dag | next-area | next-areas | area-gate NODE
   promote-gate NODE                                   gate promotion (project promoter)
+  metrics [--json] [--runs-dir DIR] [--events-file FILE]   read-only ctx metrics
   console                                             launch the visualization plugin
 
 Setup / lifecycle:
@@ -330,6 +354,7 @@ main() {
     next-areas)    run_engine dag.sh next-areas "$@" ;;
     area-gate)     run_engine dag.sh area-gate "$@" ;;
     promote-gate)  cmd_promote_gate "$@" ;;
+    metrics)       cmd_metrics "$@" ;;
     console)       cmd_console "$@" ;;
     init)          cmd_init "$@" ;;
     doctor)        cmd_doctor "$@" ;;
