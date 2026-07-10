@@ -2,6 +2,27 @@
 
 ## Decision Log
 
+### 2026-07-10T22:29:49Z — TASK-0001 — decide:retry
+
+- Run: `RUN-20260710T215122Z-1960`
+- Branch: `agent/foundation/TASK-0001-ctx-loader`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
+### 2026-07-10T22:07:06Z — TASK-0001 — decide:retry
+
+- Run: `RUN-20260710T215122Z-1960`
+- Branch: `agent/foundation/TASK-0001-ctx-loader`
+- Authority: decider
+- Rationale: worker-no-packet -> retry: The L2 worker ended its turn with 'Suite is running. Waiting for completion notification from the monitor' — it kicked off the ctx-loader shell suite but returned before the monitor reported results, so no packet was emitted. This is a procedural stall (result subtype success, no error, no permission denials), not a real gate failure and not a missing external proof environment (the suite is pure bash: engine/lib.sh + tests/test-ctx-loader.sh, no DB). One retry remains (2 of 3 used), so re-run the worker and require it to block until the monitor delivers completion, then emit the packet honestly — do not weaken or skip the suite.
+
+### 2026-07-10T22:02:35Z — TASK-0001 — decide:retry
+
+- Run: `RUN-20260710T215122Z-1960`
+- Branch: `agent/foundation/TASK-0001-ctx-loader`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
 ### 2026-07-09T20:15:36Z — TASK-0001 — decide:retry
 
 - Run: `RUN-20260709T200707Z-7121`
@@ -18,3 +39,15 @@
   GLUERUN_GATE_TIMEOUT_SEC analog to the worker's 1200s runner timeout, so a
   hung gate stalls a drive forever. Candidate: small engine_runtime task after
   S0 (not hand-patched now; engine/ changes go through the task pipeline).
+
+- 2026-07-11 (operator): TASK-0001 drive #3 diagnosis. (a) worker-no-packet
+  x2: the L2 model backgrounds the ~4.5min gate and ends its turn "waiting
+  for the monitor" — fatal in one-shot claude -p. Fixed with an explicit
+  single-turn/no-background hard rule in the docked L2 prompt. (b) gate-red:
+  the drive exports consumer config into env; lib.sh ${VAR:-default}
+  fallbacks keep leaked values inside sandboxed gate tests (env channel of
+  the earlier config-file leak; leaked GLUERUN_RUNNER even replaced test
+  stubs with the real CLI). Fixed fail-closed in tests/run.sh (scrub
+  GLUERUN_* before running tests). Engine hardening candidates recorded:
+  gate timeout + env-scrubbed gate invocation (future task with the
+  gate-timeout item).

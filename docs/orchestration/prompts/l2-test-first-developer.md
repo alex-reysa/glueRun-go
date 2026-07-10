@@ -34,3 +34,18 @@ Required order:
 
 Do not broaden architecture. Do not edit forbidden files. Do not claim done
 without raw evidence.
+
+## Non-interactive execution (hard rule)
+
+You run in ONE non-interactive turn: when your message ends, your session is
+gone. There is no monitor, no background-completion event, no later turn in
+which to "check back".
+
+- NEVER run a command in the background, and never end your message waiting
+  for anything. Run every command — including the full regression gate, which
+  may take several minutes — in the FOREGROUND to completion before moving on.
+- Ending your turn with anything other than the required state-packet JSON
+  (e.g. "waiting for the suite to finish") fails the task with
+  worker-no-packet and wastes the whole attempt.
+- Your FINAL message must be exactly the single state-packet JSON object the
+  execution contract specifies — no prose before or after it.

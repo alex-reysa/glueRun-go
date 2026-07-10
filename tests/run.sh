@@ -7,6 +7,16 @@ pass=0
 fail=0
 failed=""
 
+# Hermetic guard: scrub inherited GLUERUN_* env. When this suite runs as the
+# regression gate under l1-drive, the drive has already exported the consumer
+# repo's config into the environment (GLUERUN_RUNNER, GLUERUN_AREA_PREFIX,
+# GLUERUN_TARGET_BRANCH, ...) and lib.sh's ${VAR:-default} fallbacks keep the
+# leaked values, so sandboxed tests see the consumer's config instead of
+# pristine defaults (and a leaked GLUERUN_RUNNER replaces test runner stubs
+# with a real CLI). Tests set every GLUERUN_* var they need internally.
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+unset _v
+
 # Generic engine suite + the gluerun-ext (opt-in module) suite, if present.
 EXT_DIR="$(cd "$TESTS_DIR/../gluerun-ext/tests" 2>/dev/null && pwd || true)"
 for t in "$TESTS_DIR"/test-*.sh ${EXT_DIR:+"$EXT_DIR"/test-*.sh}; do
