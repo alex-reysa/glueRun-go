@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-10T23:44:21Z — TASK-0002 — integrate
+
+- Run: `ORIGIN-20260710T234103Z-93793`
+- Branch: `agent/foundation/TASK-0002-ctx-metrics-extractor`
+- Authority: origin
+- Rationale: merged agent/foundation/TASK-0002-ctx-metrics-extractor (83183ca8cbdb6afe208a16d1ec3658b79b0b19e9) into agent/integration as 416e0d5dd91b2bafdd59ba2cd257392b29e1e167; gate green; acceptance=accepted
+
 ### 2026-07-10T23:40:19Z — TASK-0002 — accept
 
 - Run: `RUN-20260710T231904Z-27968`
