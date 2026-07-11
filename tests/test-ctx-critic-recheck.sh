@@ -40,10 +40,6 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ "$(type -t gluerun_ctx_critic_recheck_should_sample)" == "function" ]] \
   || fail "gluerun_ctx_critic_recheck_should_sample not defined (auto-source failed?)"
 
-# This brick is sampling-ONLY: it must NOT ship a side-effecting recorder entry.
-[[ "$(type -t gluerun_ctx_critic_recheck_record)" != "function" ]] \
-  || fail "recorder is OUT OF SCOPE for this brick but is defined"
-
 # Pin an isolated events log so we can prove the gate never appends an event.
 export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
 : > "$GLUERUN_EVENTS_FILE"

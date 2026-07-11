@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T12:00:50Z — TASK-0028 — decide:amend-scope
+
+- Run: `ORIGIN-20260711T115350Z-36100`
+- Branch: `agent/plancritic/TASK-0028-critic-recheck-classify`
+- Authority: decider
+- Rationale: integration-gate-red -> amend-scope: TASK-0028 correctly adds the sanctioned recorder in its own file engine/ctx-critic-recheck-classify.sh (its own test passes); the red is a stale cross-brick contract: lib.sh's ctx-loader auto-sources every engine/ctx-*.sh, so the older sibling test tests/test-ctx-critic-recheck.sh now sees gluerun_ctx_critic_recheck_record defined and trips its over-broad global 'recorder must not exist' negative assertion — the very follow-up slice its own header declared OUT OF SCOPE 'here'. Minimally expand TASK-0028's owned files to include that sibling test and narrow assertion (a) to source engine/ctx-critic-recheck.sh in isolation, then re-verify; this weakens no real guarantee and retries remain (0/3).
+
 ### 2026-07-11T11:53:24Z — TASK-0028 — accept
 
 - Run: `RUN-20260711T114814Z-17145`
@@ -542,3 +549,13 @@
   unrelated test — caught at integrate as gate-red, rare because scope
   enforcement confines edits to owned files. Expected saving: ~6 min per
   attempt + stops the suite-growth compounding (~30-40% cycle time).
+
+- 2026-07-11 (operator/CTO): scoped-gate trade-off fired on its FIRST
+  scoped task and the net held: TASK-0028's recorder broke TASK-0027's
+  temporal negative assertion ("recorder out of scope so must not be
+  defined"); scoped gate blind to it, integrate full-suite gate caught
+  it (48/49). Operator fix on agent/integration removed the temporal
+  assertion (behavioral no-events guarantee remains pinned); planner
+  contract rule 9 added banning temporal negative assertions. Pattern
+  now twice-seen (TASK-0024, TASK-0028) — candidate check for the plan
+  critic when GLUERUN_PLAN_CRITIQUE flips on.
