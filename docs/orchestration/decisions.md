@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T02:21:59Z — TASK-0008 — integrate
+
+- Run: `ORIGIN-20260711T021828Z-46642`
+- Branch: `agent/session/TASK-0008-planner-session-hook`
+- Authority: origin
+- Rationale: merged agent/session/TASK-0008-planner-session-hook (7cb32aa83c67a710e26d8ef3d97315ae3a20331a) into agent/integration as 3b5c7d4633152b4eb59ca7d7a66e24bf3f213b8f; gate green; acceptance=accepted
+
 ### 2026-07-11T02:16:47Z — TASK-0008 — accept
 
 - Run: `RUN-20260711T015656Z-51163`
@@ -188,3 +195,14 @@
   a behaviorally-complete node, correctly refused to invent make-work and
   routed completion to gate authority — the batch-validation failure IS
   the designed operator signal in this engine version.
+
+- 2026-07-11 (operator): TASK-0008 review caught a cross-slice semantic
+  drift BEFORE it bit: finalize stores rendered-prompt sha, resume spec
+  compares template sha — would have silently neutered planner resume
+  (permanent fresh). Stage-1 file amended with a binding SHA-ALIGNMENT
+  requirement + round-trip test for the planner-resume-gates slice.
+  Escape-class note for S7: cross-slice contract drift is invisible to
+  per-slice workers AND per-slice auditors; only reviewers holding both
+  slices' context catch it. (Direct evidence for the context-continuity
+  hypothesis — this catch required remembered context from TASK-0007's
+  review plus the stage spec.)

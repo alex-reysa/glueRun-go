@@ -41,6 +41,18 @@ finalized meta; `planner-failed` yields none.
     (`planner` only — advocate/skeptic line), runner-changed,
     prompt-template-changed (sha of the planner TEMPLATE, not the rendered
     prompt — the rendering varies per frontier by design), max-age, cwd.
+  - SHA ALIGNMENT (binding, added after TASK-0008 review): the integrated
+    finalize hook in `generate-tasks.sh` currently stores the RENDERED
+    prompt's sha in `promptSha256`. Comparing template-vs-rendered would
+    permanently force `fresh prompt-template-changed` and silently neuter
+    planner resume. This slice must align BOTH sides on the TEMPLATE sha
+    (`docs/orchestration/prompts/l1-planner.md`): change the finalize call
+    site (re-own `engine/generate-tasks.sh`) or normalize inside
+    `gluerun_ctx_planner_session_finalize` (re-own
+    `engine/ctx-planner-session.sh`), and treat a meta whose stored sha
+    matches neither convention as `fresh no-session`. Add a test proving
+    finalize→decide round-trips to `resume` across two frontiers with
+    different rendered prompts but the same template.
   - ADD: **session lease** — `.gluerun-state/sessions/planner/<node>.lease`
     acquired before resume, released after; a held lease → `fresh leased`
     (parallel L1 fanout must never resume one session concurrently).
