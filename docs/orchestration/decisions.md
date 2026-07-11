@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T05:34:21Z — TASK-0015 — integrate
+
+- Run: `ORIGIN-20260711T053029Z-43979`
+- Branch: `agent/plancritic/TASK-0015-critique-import-gate`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0015-critique-import-gate (7cfa585638ee0be265785bc940c9d7ba67062daf) into agent/integration as dd7deabd6e535dc17ec3423b16d026debc33e872; gate green; acceptance=accepted
+
 ### 2026-07-11T05:29:56Z — TASK-0015 — accept
 
 - Run: `RUN-20260711T051343Z-57027`
