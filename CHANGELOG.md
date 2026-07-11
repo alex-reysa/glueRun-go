@@ -7,6 +7,35 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.4.0-m1] — 2026-07-11 — Context-evolution M0–M3 (self-hosted, unreleased dev pin)
+
+Built by the engine itself under `docs/context-build-plan/` (self-docked, all
+tasks worker-implemented, independently audited, and gate-promoted with hashed
+evidence). Everything below is additive and default-OFF unless noted.
+
+- **Self-measurement**: `gluerun metrics --json` over the attempts index +
+  event log; deterministic per-task A/B arms (`GLUERUN_CTX_AB`); sampled
+  post-acceptance paired fresh audits (`GLUERUN_PAIRED_AUDIT_PCT`).
+- **Planner session persistence and resume** (`GLUERUN_PLANNER_SESSION`):
+  per-node session meta, node-lineage + template-sha gates, session leases,
+  rc-86 fresh fallback, reason-coded `context.strategy_selected` events.
+- **Plan critique** (`GLUERUN_PLAN_CRITIQUE`): `plan-critique.v0` schema,
+  fresh read-only skeptic critic over staged batches, critique-aware L0
+  import (approve/revise/park, fail-closed on missing record, fail-open on
+  critic infra).
+- **Plan revision loop** (`GLUERUN_PLAN_REVISE_MAX`): bounded
+  revise → (resume|fresh) → re-critique with per-finding dispositions and
+  `plan.revised` provenance events; critic re-critique may resume the
+  critic's own session (skeptic-only).
+- **Invariant redefined**: the old "resume is a token-cost optimization that
+  never changes a task outcome" is replaced by **evidence invariance** —
+  routing never changes what counts as evidence; outcomes may improve with
+  continuity and the improvement is measured. Advocate/skeptic line documented.
+- Hermeticity hardening from self-docking: suite scrubs inherited GLUERUN_*
+  env and runs tests with stdin from /dev/null.
+
+---
+
 ## [0.3.0] — 2026-06-10 — Initial public release of glueRun-go
 
 This is the first public release of glueRun-go. It ships detached dispatch **ON by

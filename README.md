@@ -174,14 +174,50 @@ re-deriving it from a log tail:
 - **Attempt archive** — each attempt's artifacts are copied (never moved) under
   `runs/<id>/attempts/<n>/` with an `attempts/index.json`.
 
-### Session affinity
+### Session affinity and routing
 
-Optional role-keyed runtime session resume (`codex exec resume`, `claude -r`) behind
-10 staleness gates, defaulting ON (`GLUERUN_SESSION_AFFINITY=1`). Any gate failure or
-runner that refuses the resume degrades silently to a fresh run within the same attempt.
+Role-keyed runtime session resume (`codex exec resume`, `claude -r`) behind ordered
+fail-closed staleness gates, for three roles:
 
-> **Invariant:** session resume is a token-cost optimization that never changes a task
-> outcome.
+- **Implementer/reviewer** (within one drive): defaulting ON
+  (`GLUERUN_SESSION_AFFINITY=1`); any gate failure or runner refusal degrades
+  silently to a fresh run within the same attempt.
+- **Planner** (across planning runs, per DAG node): behind
+  `GLUERUN_PLANNER_SESSION` — persisted per-node session meta, node-lineage and
+  template-sha gates, session leases against concurrent resume, rc-86 fresh
+  fallback. A planner session can decompose a multi-slice node across
+  consecutive resumes.
+- **Plan critic** (re-critique of a revised batch): the skeptic may be offered
+  its own prior session — never an advocate's.
+
+Every routing decision is reason-coded as a `context.strategy_selected` event
+(`strategy` + the exact gate reason) and countable via `gluerun metrics`.
+
+> **Invariant (evidence invariance):** routing never changes what counts as
+> evidence. Gates, red/green proofs, scope checks, and the fresh implementation
+> auditor are identical under every strategy — `fresh` or `resume`. Outcomes MAY
+> improve with continuity (that is the point), and the improvement is measured,
+> not assumed: per-strategy outcomes flow into the attempts index and
+> `gluerun metrics`.
+
+> **Advocate/skeptic line:** a session never crosses between advocate roles
+> (planner, implementer) and skeptic roles (plan critic, auditor), in either
+> direction. Per-role session-meta files make violations structural, not merely
+> checked. Resumed or rehydrated sessions never satisfy an independence-required
+> step.
+
+### Plan critique and revision
+
+Behind `GLUERUN_PLAN_CRITIQUE` (default OFF; flip only with the revision loop in
+service): staged planner batches are reviewed by a fresh, read-only plan critic
+on the default runner before L0 import. Verdicts follow `plan-critique.v0`:
+`approve` → import; `revise` → the node's planner session is resumed with the
+critic's structured findings (bounded by `GLUERUN_PLAN_REVISE_MAX`), records
+per-finding dispositions (accepted/rejected-observation; silent drops are
+recorded as unaddressed), and re-enters the critic; `park` / budget exhaustion →
+candidates never reach import (fail closed). Critic infrastructure failure fails
+OPEN with an event — the critic is an added safety layer; the un-bypassable
+implementation auditor remains the floor.
 
 ## Modules
 
