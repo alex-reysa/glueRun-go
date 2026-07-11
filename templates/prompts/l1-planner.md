@@ -58,6 +58,17 @@ Required completion: `[REQUIRED-COMPLETION]`
   a single slice. Keep each slice tight; do not modify `doc.go` or files outside
   the area.
 - Acceptance criteria: behavior-level and checkable by tests.
+- OPTIONAL context packet: when a task's reasoning residue would help the
+  implementer, add an additive `## Context packet` block to the task markdown
+  with any of the subsections `Decisions`, `Assumptions`, `Rejected
+  alternatives`, `Inspected symbols` — keep it capped and concrete: decisions
+  with their why, rejected alternatives with their why-not, and assumptions the
+  implementer must not silently violate, each written in the assumption
+  grammar `[open|validated|violated] <claim> — <basis>`. Standing rule:
+  never restate what the repo can answer —
+  no symbol inventories, only symbols whose ROLE in the plan is non-obvious.
+  The block is OPTIONAL; omit it (or any subsection) freely — absent packets
+  remain valid.
 - Do NOT duplicate an already-integrated slice. Advance the stage.
 - Task objective, prerequisites, risks, and acceptance criteria must name the
   executable DAG node `[NODE]` and layer `[LAYER]` when relevant.
