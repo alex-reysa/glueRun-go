@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-11T09:25:28Z — TASK-0023 — accept
+
+- Run: `RUN-20260711T084946Z-31359`
+- Branch: `agent/plancritic/TASK-0023-plan-revise-loop`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-11T09:01:26Z — TASK-0023 — decide:retry
+
+- Run: `RUN-20260711T084946Z-31359`
+- Branch: `agent/plancritic/TASK-0023-plan-revise-loop`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
 ### 2026-07-11T08:47:12Z — TASK-0022 — integrate
 
 - Run: `ORIGIN-20260711T084257Z-79237`
