@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-11T16:27:54Z — TASK-0034 — integrate
+
+- Run: `ORIGIN-20260711T162253Z-14754`
+- Branch: `agent/packets/TASK-0034-context-packet-contract`
+- Authority: origin
+- Rationale: merged agent/packets/TASK-0034-context-packet-contract (7e493fa6692b0d6d5d56059f3209f6b90d94fb46) into agent/integration as 534ee490d8be71564e844e7854f195a5eeda5923; gate green; acceptance=accepted
+
+### 2026-07-11T16:22:52Z — TASK-0034 — accept
+
+- Run: `RUN-20260711T160150Z-56844`
+- Branch: `agent/packets/TASK-0034-context-packet-contract`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T15:49:11Z — TASK-0033 — integrate
 
 - Run: `ORIGIN-20260711T154423Z-43106`
