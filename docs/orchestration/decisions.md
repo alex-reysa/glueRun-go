@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-11T23:21:03Z — TASK-0042 — integrate
+
+- Run: `ORIGIN-20260711T231526Z-15285`
+- Branch: `agent/packets/TASK-0042-artifact-quarantine-and-exclude`
+- Authority: origin
+- Rationale: merged agent/packets/TASK-0042-artifact-quarantine-and-exclude (143129bf31f9ee65e9351c3afbcde2c5307a50d0) into agent/integration as f0a074e757cfe8760d4086b307bdfd4fc4bed9e3; gate green; acceptance=accepted
+
+### 2026-07-11T23:15:17Z — TASK-0042 — accept
+
+- Run: `RUN-20260711T230620Z-89311`
+- Branch: `agent/packets/TASK-0042-artifact-quarantine-and-exclude`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T22:35:46Z — TASK-0041 — integrate
 
 - Run: `ORIGIN-20260711T223032Z-19098`
