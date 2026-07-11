@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T21:08:20Z — TASK-0040 — integrate
+
+- Run: `ORIGIN-20260711T210248Z-17550`
+- Branch: `agent/packets/TASK-0040-assumption-ledger-drive-wirein`
+- Authority: origin
+- Rationale: merged agent/packets/TASK-0040-assumption-ledger-drive-wirein (750ca967fd28a9d6e0e74a17b24b29389ea3af9d) into agent/integration as dcf49e3dfdd19ddfc78c5b57ab85d8a3fc0a9669; gate green; acceptance=accepted
+
 ### 2026-07-11T20:24:41Z — TASK-0040 — accept
 
 - Run: `RUN-20260711T194943Z-32792`
@@ -754,3 +761,14 @@
   master-loop entirely (built-in L0/L-1 end-to-end). Also note: second
   orphaned prompt found — templates/prompts/l0-origin.md is unwired
   (decide at polish: wire or remove).
+
+- 2026-07-11 (Codex takeover, audit escape): TASK-0040's sampled fresh
+  paired auditor returned an accepted verdict and 61/61 green evidence,
+  but prefixed the JSON object with one prose sentence. The paired-audit
+  recorder only accepts whole-file JSON, so it recorded `verdict=unknown`
+  and a false disagreement despite runner exit 0. This is observability-
+  only and did not alter the accepted primary skeptic verdict, packet,
+  task outcome, or integration authority. Preserve for S7 metrics as an
+  audit-parser escape; polish candidate is schema-aware extraction of the
+  final JSON object (with a regression fixture for prose-prefixed output),
+  without weakening the advocate/skeptic boundary.
