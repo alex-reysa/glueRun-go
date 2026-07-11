@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T01:27:55Z — TASK-0006 — accept
+
+- Run: `RUN-20260711T011009Z-85006`
+- Branch: `agent/foundation/TASK-0006-l1-drive-paired-audit-hook`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T01:07:08Z — TASK-0005 — integrate
 
 - Run: `ORIGIN-20260711T010344Z-50649`
