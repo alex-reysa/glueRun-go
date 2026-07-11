@@ -817,3 +817,16 @@
   session meta records model gpt-5.6-sol, effort high, exit 0. Preserve the
   failed negotiation log as infrastructure evidence; no task retry budget
   or acceptance authority was consumed.
+
+- 2026-07-12 (CTO ops): runner switched BACK to claude-run.sh /
+  claude-opus-4-8 — codex quota exhausted in turn (engine recorded
+  planner-backoff failureClass=quota at 22:36Z on assumption-ledger,
+  master loop exited PLANNER-FAIL-X2). Cleared the codex-scoped
+  planner-backoff.json (its premise died with the runner switch; it
+  would have idled the claude planner until 00:07Z for a codex quota).
+  GLUERUN_CODEX_* env knobs remain in config, inert. Session-affinity
+  gate (runner-changed) degrades any persisted codex session metas to
+  fresh claude runs — designed behavior, no action needed. Note: during
+  the codex window the loop + operator completed TASK-0040/0041,
+  promoted assumption-ledger; artifact-secret-scan gate not yet
+  promoted — next loop cycles handle it via node-complete signals.

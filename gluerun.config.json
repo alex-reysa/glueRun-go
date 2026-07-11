@@ -3,7 +3,7 @@
   "engineVersion": "0.4.0-m1",
   "targetBranch": "agent/integration",
   "gateCommand": "bash tests/run.sh",
-  "runner": "codex-run.sh",
+  "runner": "claude-run.sh",
   "areaPrefix": "engine/",
   "areas": {
     "foundation": [
