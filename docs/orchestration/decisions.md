@@ -307,3 +307,13 @@
   session_id e729900d (one-off; the 04:46 run's meta persisted its sid
   correctly). If empty-sid recurs, suspect an envelope-parse race in
   claude-run's meta write; watch strategy reasons via gluerun metrics.
+
+- 2026-07-11 05:02Z (operator): FIRST LIVE IN-PIPELINE PLANNER RESUME —
+  context.strategy_selected role=planner strategy=resume sessionId=a6098c4a
+  (node plan-critic-driver). In the same cycle, the RESUMED planner
+  re-emitted a near-duplicate of integrated TASK-0013 and the duplicate-
+  signature guard rejected it: the inherited-assumptions risk of
+  continuity manifesting on first live use, caught by the durable layer.
+  Core S7 evidence: both halves of the hybrid thesis (continuity value +
+  independence guards) demonstrated in one reconcile cycle. Duplicate
+  rejection doubles as the node-complete signal → gate promoted.
