@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T00:34:25Z — TASK-0004 — integrate
+
+- Run: `ORIGIN-20260711T003109Z-57904`
+- Branch: `agent/foundation/TASK-0004-ctx-ab-arm-assign`
+- Authority: origin
+- Rationale: merged agent/foundation/TASK-0004-ctx-ab-arm-assign (8881207c2a9b2d0fd1e6082fbd9020b066c055e7) into agent/integration as 4938204e561797828742de0c5864ae0ea0d376b2; gate green; acceptance=accepted
+
 ### 2026-07-11T00:26:56Z — TASK-0003 — integrate
 
 - Run: `ORIGIN-20260711T002339Z-82854`
