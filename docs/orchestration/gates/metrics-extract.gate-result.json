@@ -12,11 +12,11 @@
       "command": "bash tests/run.sh",
       "exitCode": 0,
       "logRef": "docs/orchestration/gates/logs/metrics-extract-gate.log",
-      "sha256": "840a53ad0efd1204c67f560ed4151b9cdaa2ba38027353b1efc68c44281a653f",
-      "headSha": "91d51e43f733f95530c85d645328fab585137ce3"
+      "sha256": "f57200c3832882eebc44a495a12f23d38ce3cefa1db9b60642e38a551d2a7953",
+      "headSha": "5193434e14da1b56204433d700f991fa3daa1709"
     }
   ],
   "decidedBy": "operator:tools/promote-gate.sh",
-  "rationale": "stage-file exit gate verified for metrics-extract; evidence command exited 0 at head 91d51e43f733",
-  "recordedAt": "2026-07-11T00:08:07Z"
+  "rationale": "stage-file exit gate verified for metrics-extract; evidence command exited 0 at head 5193434e14da",
+  "recordedAt": "2026-07-11T00:30:52Z"
 }

@@ -8,7 +8,7 @@
   "status": "accepted",
   "baseRef": "416e0d5dd91b2bafdd59ba2cd257392b29e1e167",
   "branch": "agent/foundation/TASK-0003-gluerun-metrics-cli",
-  "headSha": "188b135a383c88e6a215cc2f05bbc6703bfcfa92",
+  "headSha": "3e13d6e81ed99a6313394b1b0d3583d035771c6d",
   "workspace": "/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.worktrees/TASK-0003",
   "ownedFiles": [
     "cli/gluerun",
@@ -75,9 +75,13 @@
     {
       "kind": "audit",
       "ref": "runs/RUN-20260710T234736Z-29359/audit.json"
+    },
+    {
+      "kind": "audit",
+      "ref": "runs/RUN-20260710T234736Z-29359/reaudit.json"
     }
   ],
   "blockers": [],
-  "nextAction": "import into control state and reconcile",
+  "nextAction": "re-audited operator-amended head 3e13d6e (test hermeticity fixup); integrate",
   "createdAt": "2026-07-11T00:00:00Z"
 }

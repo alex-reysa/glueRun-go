@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-11T00:26:56Z — TASK-0003 — integrate
+
+- Run: `ORIGIN-20260711T002339Z-82854`
+- Branch: `agent/foundation/TASK-0003-gluerun-metrics-cli`
+- Authority: origin
+- Rationale: merged agent/foundation/TASK-0003-gluerun-metrics-cli (3e13d6e81ed99a6313394b1b0d3583d035771c6d) into agent/integration as 5193434e14da1b56204433d700f991fa3daa1709; gate green; acceptance=accepted
+
+### 2026-07-11T00:26:15Z — TASK-0004 — accept
+
+- Run: `RUN-20260711T001014Z-75963`
+- Branch: `agent/foundation/TASK-0004-ctx-ab-arm-assign`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T00:04:53Z — TASK-0003 — decide:retry
 
 - Run: `ORIGIN-20260711T000113Z-13926`
@@ -93,3 +107,19 @@
   GLUERUN_* before running tests). Engine hardening candidates recorded:
   gate timeout + env-scrubbed gate invocation (future task with the
   gate-timeout item).
+
+- 2026-07-11 (operator): FIRST AUDIT ESCAPE (S0 evidence). TASK-0003's CLI
+  test asserted `! -e $ENGINE_HOME/.gluerun-state` — vacuously true in the
+  pristine worker worktree, always false in the ops tree. Worker gate AND
+  fresh auditor both passed it (both ran in the pristine environment);
+  the integrate gate on the merged tree caught it red. Operator fixup
+  3e13d6e (hermetic engine-home skeleton). Escape class: environment-
+  dependent test assertions — invisible to any reviewer sharing the
+  author's environment; exactly what paired audits in a DIFFERENT context
+  are for (stage-0/7 metrics should count integrate-gate reds as escapes).
+  Secondary operator error, also recorded: the completion chain piped
+  engine commands through grep/tail (exit codes swallowed) and promoted
+  the metrics-extract gate before verifying integration — gate was
+  falsely green for ~20 min until re-promotion below. Chains must check
+  integrated_this_run/exit codes; promotion only after verified merge +
+  smoke test.
