@@ -594,3 +594,16 @@
   contract rule 9 added banning temporal negative assertions. Pattern
   now twice-seen (TASK-0024, TASK-0028) — candidate check for the plan
   critic when GLUERUN_PLAN_CRITIQUE flips on.
+
+- 2026-07-11 (CEO/CTO): singular-brain integration doc VERIFIED (0.2.0 @
+  e05f259 confirmed, 98/98 tests re-run green live, zero-dep Node engine,
+  SidecarMissingError guard present, PMGO-launch drift to 0.1.0 confirmed)
+  and steering decision made: STEER MINIMALLY NOW — stage-5 gains the
+  optional additive contextManifest ingestion slice (fixture-tested JSON
+  contract, no runtime dependency, GLUERUN_CTX_MANIFEST default 0);
+  stage-7 records the manifest A/B arm as a consumer-side (PMGO-launch)
+  follow-on. DEFER to post-plan: vendoring/bundling into ~/.gluerun,
+  gluerun manifest passthrough, doctor Node check, PMGO-launch resync,
+  dock prompt injection. One doctrinal nuance added: manifest content is
+  authored-knowledge class — never `authoritative` evidence, never
+  tainted-model class; a third trust category the S6 graph must respect.
