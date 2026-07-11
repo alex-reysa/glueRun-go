@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T03:14:08Z — TASK-0010 — integrate
+
+- Run: `ORIGIN-20260711T031034Z-33366`
+- Branch: `agent/session/TASK-0010-planner-resume-sha-align`
+- Authority: origin
+- Rationale: merged agent/session/TASK-0010-planner-resume-sha-align (11605e70d7ef17eac07b330037301e0023357377) into agent/integration as 660f9c62473f2942953aa4b7175ea766ea30baa0; gate green; acceptance=accepted
+
 ### 2026-07-11T03:09:56Z — TASK-0010 — accept
 
 - Run: `RUN-20260711T025538Z-46499`
