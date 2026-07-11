@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T00:04:53Z — TASK-0003 — decide:retry
+
+- Run: `ORIGIN-20260711T000113Z-13926`
+- Branch: `agent/foundation/TASK-0003-gluerun-metrics-cli`
+- Authority: decider
+- Rationale: integration-gate-red -> retry: Single deterministic failure (test-ctx-metrics-cli.sh): the metrics CLI writes a real .gluerun-state artifact, violating its no-side-effect contract — an in-scope, worker-fixable defect, not a transient flake or missing proof environment. Retries remain (0/3), so send it back to the worker to make the CLI honor the contract (no real state write) and re-run the gate.
+
 ### 2026-07-11T00:00:32Z — TASK-0003 — accept
 
 - Run: `RUN-20260710T234736Z-29359`

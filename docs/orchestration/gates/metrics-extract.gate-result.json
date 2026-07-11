@@ -1,0 +1,22 @@
+{
+  "schema": "gluerun.orchestration.gate-result.v0",
+  "node": "metrics-extract",
+  "status": "passed",
+  "authoritative": true,
+  "evidenceClass": "deterministic-proof",
+  "evidence": [
+    {
+      "kind": "command-log",
+      "ref": "metrics-extract-gate",
+      "description": "node exit-gate evidence run at the integrated head",
+      "command": "bash tests/run.sh",
+      "exitCode": 0,
+      "logRef": "docs/orchestration/gates/logs/metrics-extract-gate.log",
+      "sha256": "840a53ad0efd1204c67f560ed4151b9cdaa2ba38027353b1efc68c44281a653f",
+      "headSha": "91d51e43f733f95530c85d645328fab585137ce3"
+    }
+  ],
+  "decidedBy": "operator:tools/promote-gate.sh",
+  "rationale": "stage-file exit gate verified for metrics-extract; evidence command exited 0 at head 91d51e43f733",
+  "recordedAt": "2026-07-11T00:08:07Z"
+}
