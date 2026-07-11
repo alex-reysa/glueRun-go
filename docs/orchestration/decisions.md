@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T04:09:54Z — TASK-0012 — integrate
+
+- Run: `ORIGIN-20260711T040605Z-28021`
+- Branch: `agent/plancritic/TASK-0012-plan-critique-contract`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0012-plan-critique-contract (f4fbc7f70e00e9de9f0de095a723e8147558822b) into agent/integration as bd346c2d41d255c5387bbcf0461a34edf68ff7aa; gate green; acceptance=accepted
+
 ### 2026-07-11T04:04:55Z — TASK-0012 — accept
 
 - Run: `RUN-20260711T035214Z-48465`
