@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T02:16:47Z — TASK-0008 — accept
+
+- Run: `RUN-20260711T015656Z-51163`
+- Branch: `agent/session/TASK-0008-planner-session-hook`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T01:52:51Z — TASK-0007 — integrate
 
 - Run: `ORIGIN-20260711T014923Z-13946`
