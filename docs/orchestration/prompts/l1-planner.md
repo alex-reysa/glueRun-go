@@ -49,7 +49,17 @@ Required completion: `[REQUIRED-COMPLETION]`
   depend on another task in the same batch, and owned files must not overlap.
 - `Status: ready`. `Area: [AREA]`. `Worker branch:
   agent/[AREA]/<task-id>-<kebab-slug>`. `Test policy: strict_test_first`.
-  `Gate command: bash tests/run.sh`.
+- Gate command — SCOPED by ownership (wall-clock optimization; the full suite
+  still runs structurally at every integrate and node-gate promotion, so
+  nothing merges without a complete green run):
+  - Task owns ONLY new files (new `engine/ctx-*.sh` / new `schemas/` /
+    new `templates/prompts/` files plus their own new `tests/test-*.sh`):
+    `Gate command: bash tests/<its-own-test>.sh && bash tests/test-engine-clean.sh`
+  - Task owns ANY existing file (driver hooks: `l1-drive.sh`,
+    `generate-tasks.sh`, `l1-plan-node.sh`, `reconcile.sh`, `cli/gluerun`,
+    `secret-scan.sh`, or any other pre-existing engine/test file):
+    `Gate command: bash tests/run.sh` (full suite — these are the tasks that
+    can break unrelated behavior).
 - `Dispatch mode: canonical`.
 - `Depends on: []` — ALWAYS empty in this dock. Anything your task builds on
   is already integrated into the target branch your worker branches from, so

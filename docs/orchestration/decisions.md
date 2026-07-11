@@ -510,3 +510,14 @@
   to TASK-0024). Scope-respecting but leaves that assertion stale; tech
   debt for polish-release: drop or rewrite the uncalled-grep in
   test-ctx-plan-revise-loop.sh.
+
+- 2026-07-11 (operator/CTO): SCOPED-GATE OPTIMIZATION applied (plan
+  checklist item 6, deferred until measured need). New-module tasks
+  (new ctx-*.sh/schema/prompt files + own test) gate on their own test +
+  test-engine-clean only; any task owning a pre-existing file keeps the
+  full suite at drive time. Full suite remains STRUCTURAL at integrate
+  (config gateCommand) and node promotion, so merge safety is unchanged;
+  the failure mode moved later is a scoped-gate task breaking an
+  unrelated test — caught at integrate as gate-red, rare because scope
+  enforcement confines edits to owned files. Expected saving: ~6 min per
+  attempt + stops the suite-growth compounding (~30-40% cycle time).
