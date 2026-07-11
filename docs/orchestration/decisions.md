@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T06:44:25Z — TASK-0017 — integrate
+
+- Run: `ORIGIN-20260711T064022Z-74789`
+- Branch: `agent/plancritic/TASK-0017-critique-aware-l1-import-fanout`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0017-critique-aware-l1-import-fanout (eb17a826f3635d34b8935fd0e20f387a2396ef0e) into agent/integration as 4d8a051947db9e1950e7c07b832c0d2c3aa269c8; gate green; acceptance=accepted
+
 ### 2026-07-11T06:39:25Z — TASK-0017 — accept
 
 - Run: `RUN-20260711T061234Z-31920`
