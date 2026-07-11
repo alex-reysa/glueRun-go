@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T04:41:59Z — TASK-0013 — integrate
+
+- Run: `ORIGIN-20260711T043810Z-54458`
+- Branch: `agent/plancritic/TASK-0013-plan-critic-driver`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0013-plan-critic-driver (c9e39de7dc24a6a9c742ddb46a90367ea9a3082a) into agent/integration as 853a10a10edf0f1fc5e04342295562a8bc9cc90a; gate green; acceptance=accepted
+
 ### 2026-07-11T04:37:02Z — TASK-0013 — accept
 
 - Run: `RUN-20260711T041539Z-2237`
