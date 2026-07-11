@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# Covers the sampled post-acceptance paired-audit slice engine/ctx-paired-audit.sh:
+# a default-OFF GLUERUN_PAIRED_AUDIT_PCT knob gates a deterministic content-hash
+# sampling decision; when sampled, the recorder runs exactly ONE fresh, read-only
+# auditor pass via a stubbable GLUERUN_RUNNER and records the paired verdict +
+# findings as one ctx.paired_audit event (via gluerun_append_event) plus one
+# paired-audit.json in the run dir — never changing any task outcome. Asserts:
+#   (a) OFF (GLUERUN_PAIRED_AUDIT_PCT unset AND =0) -> no ctx.paired_audit event,
+#       no paired-audit.json, and an otherwise untouched events log + run dir;
+#   (b) PCT=100 + stub returning accepted/findings-empty -> exactly one
+#       ctx.paired_audit event and one paired-audit.json flagged agreement, with
+#       no write to any packet/lease/inbox/primary-audit path;
+#   (c) PCT=100 + stub returning a disagreeing verdict (verdict != accepted OR
+#       non-empty findings) -> disagreement flagged in BOTH event and record;
+#   (d) sampling determinism -> same id reproducible across repeated calls and
+#       separate bash processes; PCT=0 never samples a fixture set, PCT=100 always;
+#   (e) freshness -> the stub records it was invoked FRESH (no resume/session
+#       reuse) and read-only, using the base auditor prompt.
+# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and a temp run dir
+# so the suite never mutates real run state.
+set -uo pipefail
+
+ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB="$ENGINE_HOME/engine/lib.sh"
+CTX_PA="$ENGINE_HOME/engine/ctx-paired-audit.sh"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# --- Isolated state: never touch the real repo or its events log -------------
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/state" "$tmp/orch/prompts" "$tmp/run" "$tmp/worktree"
+# Base auditor prompt the recorder must pass to the runner.
+printf '# Auditor Prompt\n' > "$tmp/orch/prompts/auditor.md"
+
+export GLUERUN_ROOT="$tmp"
+export GLUERUN_STATE_DIR="$tmp/state"
+export GLUERUN_ORCH_DIR="$tmp/orch"
+# shellcheck disable=SC1090
+source "$LIB" || fail "sourcing lib.sh failed"
+
+# The engine file must exist and define the paired-audit functions (RED before
+# it is written). lib.sh auto-sources it; source again defensively.
+[[ -f "$CTX_PA" ]] || fail "engine not present yet: $CTX_PA"
+# shellcheck disable=SC1090
+source "$CTX_PA" || fail "sourcing $CTX_PA failed"
+[[ "$(type -t gluerun_ctx_paired_audit_should_sample)" == "function" ]] \
+  || fail "gluerun_ctx_paired_audit_should_sample not defined by $CTX_PA"
+[[ "$(type -t gluerun_ctx_paired_audit_record)" == "function" ]] \
+  || fail "gluerun_ctx_paired_audit_record not defined by $CTX_PA"
+
+# Point the events log at an isolated temp file (lib.sh sets it at source time).
+export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
+
+# --- Stub runner: records its argv, writes the configured verdict JSON --------
+STUB="$tmp/stub-runner.sh"
+cat > "$STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+# Fresh/read-only auditor stub. Records argv for freshness assertions and writes
+# the configured verdict to the --output-last-message target.
+set -uo pipefail
+: > "$STUB_ARGV_FILE"
+printf '%s\n' "$@" >> "$STUB_ARGV_FILE"
+out=""
+args=("$@")
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  if [[ "${args[$i]}" == "--output-last-message" ]]; then
+    out="${args[$((i + 1))]}"
+  fi
+  i=$((i + 1))
+done
+if [[ -n "$out" ]]; then
+  printf '{"verdict":"%s","findings":%s}\n' \
+    "${STUB_VERDICT:-accepted}" "${STUB_FINDINGS:-[]}" > "$out"
+fi
+exit 0
+STUBEOF
+chmod +x "$STUB"
+export GLUERUN_RUNNER="$STUB"
+export STUB_ARGV_FILE="$tmp/stub-argv.txt"
+
+count_pa_events() {
+  [[ -f "$GLUERUN_EVENTS_FILE" ]] || { echo 0; return 0; }
+  local c
+  c="$(grep -c '"type":"ctx.paired_audit"' "$GLUERUN_EVENTS_FILE" 2>/dev/null)" || true
+  echo "${c:-0}"
+}
+
+RUN_DIR="$tmp/run/RUN-1"
+mkdir -p "$RUN_DIR"
+
+# ---------------------------------------------------------------------------
+# (a) OFF -> no fresh audit, no event, no paired-audit.json, untouched log/dir.
+# ---------------------------------------------------------------------------
+unset GLUERUN_PAIRED_AUDIT_PCT
+: > "$GLUERUN_EVENTS_FILE"
+: > "$STUB_ARGV_FILE"
+before_ev="$(shasum "$GLUERUN_EVENTS_FILE" | awk '{print $1}')"
+before_dir="$(ls -1a "$RUN_DIR" | sort | shasum | awk '{print $1}')"
+gluerun_ctx_paired_audit_record "RUN-1" "TASK-0005" "$RUN_DIR" "$tmp/worktree" \
+  || fail "OFF (unset): recorder crashed"
+[[ "$(count_pa_events)" -eq 0 ]] || fail "OFF (unset): ctx.paired_audit event emitted"
+[[ ! -e "$RUN_DIR/paired-audit.json" ]] || fail "OFF (unset): paired-audit.json written"
+[[ ! -s "$STUB_ARGV_FILE" ]] || fail "OFF (unset): runner was invoked"
+after_ev="$(shasum "$GLUERUN_EVENTS_FILE" | awk '{print $1}')"
+after_dir="$(ls -1a "$RUN_DIR" | sort | shasum | awk '{print $1}')"
+[[ "$before_ev" == "$after_ev" ]] || fail "OFF (unset): events log mutated"
+[[ "$before_dir" == "$after_dir" ]] || fail "OFF (unset): run dir mutated"
+
+# Knob explicitly 0.
+export GLUERUN_PAIRED_AUDIT_PCT=0
+: > "$STUB_ARGV_FILE"
+before_ev="$(shasum "$GLUERUN_EVENTS_FILE" | awk '{print $1}')"
+gluerun_ctx_paired_audit_record "RUN-1" "TASK-0005" "$RUN_DIR" "$tmp/worktree" \
+  || fail "OFF (=0): recorder crashed"
+[[ "$(count_pa_events)" -eq 0 ]] || fail "OFF (=0): ctx.paired_audit event emitted"
+[[ ! -e "$RUN_DIR/paired-audit.json" ]] || fail "OFF (=0): paired-audit.json written"
+[[ ! -s "$STUB_ARGV_FILE" ]] || fail "OFF (=0): runner was invoked"
+after_ev="$(shasum "$GLUERUN_EVENTS_FILE" | awk '{print $1}')"
+[[ "$before_ev" == "$after_ev" ]] || fail "OFF (=0): events log mutated"
+
+# ---------------------------------------------------------------------------
+# (b) PCT=100 agreement: exactly one event + one paired-audit.json, agreement
+#     flagged; no write to sibling packet/lease/inbox/primary-audit paths; and
+#     (e) the auditor pass is FRESH + read-only with the base auditor prompt.
+# ---------------------------------------------------------------------------
+export GLUERUN_PAIRED_AUDIT_PCT=100
+: > "$GLUERUN_EVENTS_FILE"
+: > "$STUB_ARGV_FILE"
+# Sentinel sibling artifacts the recorder must NOT create/move/mutate.
+printf 'PACKET-ORIG' > "$RUN_DIR/state-packet.json"
+printf 'AUDIT-ORIG'  > "$RUN_DIR/audit-record.json"
+printf 'LEASE-ORIG'  > "$tmp/lease.json"
+printf 'INBOX-ORIG'  > "$tmp/inbox.txt"
+sib_before="$(cat "$RUN_DIR/state-packet.json" "$RUN_DIR/audit-record.json" \
+  "$tmp/lease.json" "$tmp/inbox.txt" | shasum | awk '{print $1}')"
+export STUB_VERDICT="accepted"
+export STUB_FINDINGS="[]"
+gluerun_ctx_paired_audit_record "RUN-1" "TASK-0005" "$RUN_DIR" "$tmp/worktree" \
+  || fail "agreement: recorder crashed"
+
+[[ "$(count_pa_events)" -eq 1 ]] \
+  || fail "agreement: expected exactly one ctx.paired_audit event, got $(count_pa_events)"
+[[ -f "$RUN_DIR/paired-audit.json" ]] || fail "agreement: paired-audit.json not written"
+
+# (e) freshness + read-only + base prompt, from the recorded stub argv.
+grep -q -- '--level' "$STUB_ARGV_FILE" && grep -q -- 'readonly' "$STUB_ARGV_FILE" \
+  || fail "freshness: auditor not invoked read-only (--level readonly missing)"
+grep -q -- '--resume-session' "$STUB_ARGV_FILE" \
+  && fail "freshness: auditor invoked with --resume-session (not fresh)"
+grep -q -- '--resume' "$STUB_ARGV_FILE" \
+  && fail "freshness: auditor invoked with a resume flag (not fresh)"
+grep -q 'prompts/auditor.md' "$STUB_ARGV_FILE" \
+  || fail "freshness: base auditor prompt not passed to the runner"
+
+# Sibling artifacts untouched (no outcome change).
+sib_after="$(cat "$RUN_DIR/state-packet.json" "$RUN_DIR/audit-record.json" \
+  "$tmp/lease.json" "$tmp/inbox.txt" | shasum | awk '{print $1}')"
+[[ "$sib_before" == "$sib_after" ]] \
+  || fail "agreement: recorder mutated a packet/lease/inbox/primary-audit path"
+
+# Agreement flagged in both the record and the event.
+python3 - "$RUN_DIR/paired-audit.json" "$GLUERUN_EVENTS_FILE" <<'PY' \
+  || fail "agreement: record/event not flagged as agreement"
+import json, sys
+rec = json.load(open(sys.argv[1]))
+assert rec.get("verdict") == "accepted", rec
+assert rec.get("disagreement") is False, rec
+assert rec.get("agreement") is True, rec
+assert int(rec.get("findingsCount", -1)) == 0, rec
+evs = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
+pa = [e for e in evs if e.get("type") == "ctx.paired_audit"]
+assert len(pa) == 1, pa
+d = pa[0].get("data", {})
+assert d.get("verdict") == "accepted", d
+assert d.get("disagreement") is False, d
+assert d.get("taskId") == "TASK-0005" and d.get("runId") == "RUN-1", d
+print("agreement-ok")
+PY
+
+# ---------------------------------------------------------------------------
+# (c) PCT=100 disagreement: verdict != accepted OR non-empty findings ->
+#     disagreement flagged in BOTH event and record. Two sub-cases.
+# ---------------------------------------------------------------------------
+disagree_case() {
+  local label="$1" verdict="$2" findings="$3"
+  local run_dir="$tmp/run/$label"
+  mkdir -p "$run_dir"
+  : > "$GLUERUN_EVENTS_FILE"
+  export STUB_VERDICT="$verdict"
+  export STUB_FINDINGS="$findings"
+  gluerun_ctx_paired_audit_record "RUN-$label" "TASK-$label" "$run_dir" "$tmp/worktree" \
+    || fail "disagreement[$label]: recorder crashed"
+  [[ "$(count_pa_events)" -eq 1 ]] \
+    || fail "disagreement[$label]: expected one event, got $(count_pa_events)"
+  [[ -f "$run_dir/paired-audit.json" ]] || fail "disagreement[$label]: no record"
+  python3 - "$run_dir/paired-audit.json" "$GLUERUN_EVENTS_FILE" <<'PY' \
+    || fail "disagreement[$label]: not flagged as disagreement in both"
+import json, sys
+rec = json.load(open(sys.argv[1]))
+assert rec.get("disagreement") is True, rec
+assert rec.get("agreement") is False, rec
+evs = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
+pa = [e for e in evs if e.get("type") == "ctx.paired_audit"]
+assert len(pa) == 1, pa
+assert pa[0].get("data", {}).get("disagreement") is True, pa[0]
+print("disagreement-ok")
+PY
+}
+# Verdict != accepted, findings empty.
+disagree_case "REJECT" "needs-fix" "[]"
+# Verdict accepted, but non-empty findings.
+disagree_case "FINDINGS" "accepted" '["scope drift in engine/x"]'
+
+# ---------------------------------------------------------------------------
+# (d) Sampling determinism / knob honoring. PCT=0 never samples; PCT=100 always;
+#     the decision is reproducible for the same id across repeated calls and
+#     across separate bash processes.
+# ---------------------------------------------------------------------------
+fixture=(RUN-1:TASK-0001 RUN-1:TASK-0002 RUN-2:TASK-0003 RUN-3:TASK-0004 \
+         RUN-4:TASK-0005 RUN-5:TASK-0006 RUN-6:TASK-0007 RUN-7:TASK-0008)
+
+# PCT=0: never samples any id.
+export GLUERUN_PAIRED_AUDIT_PCT=0
+for id in "${fixture[@]}"; do
+  if gluerun_ctx_paired_audit_should_sample "$id"; then
+    fail "determinism: PCT=0 sampled id $id"
+  fi
+done
+
+# PCT=100: always samples any id.
+export GLUERUN_PAIRED_AUDIT_PCT=100
+for id in "${fixture[@]}"; do
+  gluerun_ctx_paired_audit_should_sample "$id" \
+    || fail "determinism: PCT=100 did not sample id $id"
+done
+
+# Mid value: the per-id decision is reproducible across repeated calls and a
+# separate bash process (machine-independent content-hash gate).
+export GLUERUN_PAIRED_AUDIT_PCT=50
+for id in "${fixture[@]}"; do
+  d1=0; gluerun_ctx_paired_audit_should_sample "$id" && d1=1
+  d2=0; gluerun_ctx_paired_audit_should_sample "$id" && d2=1
+  [[ "$d1" == "$d2" ]] || fail "determinism: repeated calls differ for $id ($d1 vs $d2)"
+  d3="$(GLUERUN_PAIRED_AUDIT_PCT=50 bash -c \
+    'source "'"$CTX_PA"'"; if gluerun_ctx_paired_audit_should_sample "'"$id"'"; then echo 1; else echo 0; fi')" \
+    || fail "determinism: subprocess invocation failed for $id"
+  [[ "$d1" == "$d3" ]] || fail "determinism: cross-process decision differs for $id ($d1 vs $d3)"
+done
+
+echo "ctx-paired-audit tests passed"
