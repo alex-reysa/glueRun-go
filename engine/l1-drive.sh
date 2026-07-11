@@ -1088,6 +1088,51 @@ _l1_outcome="accepted"
 gluerun_append_event "l1.task_accepted" "l1 task accepted" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$worker_branch\",\"headSha\":\"$head_sha\",\"waiver\":\"$waiver\"}"
 
+# ---- Artifact secret-scan finalize hook (DAG node artifact-secret-scan, layer
+# engine_runtime; behind the default-OFF GLUERUN_CTX_ARTIFACT_SCAN knob) --------
+# Strictly AFTER acceptance is finalized above and placed BEFORE the
+# post-acceptance paired-audit fresh-audit prompt is assembled from durable
+# artifacts (the gluerun_ctx_paired_audit_record hook below), beside the paired-
+# audit / critic-recheck hooks. When the knob is unset or "0" this whole block is
+# a no-op: no scan, no rename, no ctx.artifact_secret event, no manifest — so the
+# accepted flow is byte-identical to pre-hook behavior. When ON it delegates into
+# the integrated, already-tested containment bricks (ctx-artifact-quarantine.sh,
+# ctx-artifact-exclude.sh, ctx-artifact-scan.sh) and adds no scan/exclude logic
+# of its own:
+#   1. gluerun_ctx_artifact_quarantine "$run_dir" renames any durable context
+#      artifact whose content matches a secret pattern to `<path>.quarantined`
+#      (evidence-preserving; content never deleted), records exactly one
+#      ctx.artifact_secret event per hit, and leaves the accept/reject outcome
+#      untouched. The rename already removes the artifact from its canonical path.
+#   2. As belt-and-suspenders beyond the rename, enumerate the durable artifacts
+#      (gluerun_ctx_artifact_scan_paths) and apply gluerun_ctx_artifact_exclude so
+#      any quarantined artifact is dropped from the durable-artifact set that
+#      feeds downstream rendered prompt assembly; the surviving safe set is staged
+#      to $run_dir/durable-artifacts.manifest.
+# Non-fatal (same pattern as the capsule-write-failed / paired-audit hooks): on
+# any quarantine error it logs an l1.artifact_scan_failed event and NEVER aborts
+# the drive. The quarantine/exclude result NEVER feeds back into the accept
+# decision or the exit status.
+if [[ -n "${GLUERUN_CTX_ARTIFACT_SCAN:-}" && "${GLUERUN_CTX_ARTIFACT_SCAN}" != "0" ]]; then
+  # The shared secret patterns (gluerun_secret_scan_patterns) live in
+  # secret-scan.sh — a self-executing script that lib.sh does NOT source — so the
+  # containment bricks would otherwise find the patterns helper unavailable. Load
+  # ONLY its function definition (single source of truth), scoped to this ON
+  # branch so the OFF path stays byte-identical and pays no cost.
+  if [[ "$(type -t gluerun_secret_scan_patterns)" != "function" ]]; then
+    eval "$(sed -n '/^gluerun_secret_scan_patterns()/,/^}/p' "$SCRIPT_DIR/secret-scan.sh")" 2>/dev/null || true
+  fi
+  if ! gluerun_ctx_artifact_quarantine "$run_dir" >/dev/null 2>&1; then
+    gluerun_append_event "l1.artifact_scan_failed" "artifact secret-scan quarantine failed (non-fatal)" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}" || true
+  fi
+  # Belt-and-suspenders: the durable-artifact set that feeds downstream prompt
+  # assembly, with every quarantined artifact excluded. Non-fatal.
+  gluerun_ctx_artifact_scan_paths "$run_dir" 2>/dev/null \
+    | gluerun_ctx_artifact_exclude > "$run_dir/durable-artifacts.manifest" 2>/dev/null \
+    || true
+fi
+
 # Post-acceptance paired audit (observability only). Strictly AFTER acceptance is
 # finalized above; self-guards on the default-OFF GLUERUN_PAIRED_AUDIT_PCT knob
 # (unset/0 -> no fresh audit, no event, no file) so the accepted flow is
