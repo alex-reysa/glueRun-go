@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T03:45:45Z — TASK-0011 — integrate
+
+- Run: `ORIGIN-20260711T034157Z-73632`
+- Branch: `agent/session/TASK-0011-planner-resume-consult-hook`
+- Authority: origin
+- Rationale: merged agent/session/TASK-0011-planner-resume-consult-hook (90e577971ca75daa0d8c01e9fe8011e988aa31ee) into agent/integration as 1414f39973eb760dca93b1c35805e547a6347c56; gate green; acceptance=accepted
+
 ### 2026-07-11T03:40:12Z — TASK-0011 — accept
 
 - Run: `RUN-20260711T031933Z-73164`
@@ -241,3 +248,11 @@
   slices' context catch it. (Direct evidence for the context-continuity
   hypothesis — this catch required remembered context from TASK-0007's
   review plus the stage spec.)
+
+- 2026-07-11 (operator): MILESTONE M1 complete — planner-resume-gates
+  gated (TASK-0009/0010/0011: decider, sha alignment, consult hook with
+  lease + rc-86 fallback + strategy events). GLUERUN_PLANNER_SESSION=1
+  enabled in this repo's config: the self-hosting loop now dogfoods
+  planner session persistence/resume (arm-B behavior); resume events
+  observable via context.strategy_selected role=planner and gluerun
+  metrics. First live resume expected on the next multi-slice node.

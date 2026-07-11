@@ -6,20 +6,55 @@
   "runner": "claude-run.sh",
   "areaPrefix": "engine/",
   "areas": {
-    "foundation": ["engine/", "tests/", "cli/"],
-    "session": ["engine/", "tests/"],
-    "plancritic": ["engine/", "tests/", "schemas/", "templates/prompts/"],
-    "packets": ["engine/", "tests/", "schemas/", "templates/prompts/"],
-    "routing": ["engine/", "tests/"],
-    "graph": ["engine/", "tests/", "schemas/", "cli/"],
-    "eval": ["docs/", "README.md", "CHANGELOG.md"]
+    "foundation": [
+      "engine/",
+      "tests/",
+      "cli/"
+    ],
+    "session": [
+      "engine/",
+      "tests/"
+    ],
+    "plancritic": [
+      "engine/",
+      "tests/",
+      "schemas/",
+      "templates/prompts/"
+    ],
+    "packets": [
+      "engine/",
+      "tests/",
+      "schemas/",
+      "templates/prompts/"
+    ],
+    "routing": [
+      "engine/",
+      "tests/"
+    ],
+    "graph": [
+      "engine/",
+      "tests/",
+      "schemas/",
+      "cli/"
+    ],
+    "eval": [
+      "docs/",
+      "README.md",
+      "CHANGELOG.md"
+    ]
   },
   "proofLayers": [],
   "proofGrandfather": [],
   "prewarm": "",
   "identity": {
-    "l0": { "name": "gluerun L0", "email": "l0@gluerun.local" },
-    "l1": { "name": "gluerun L1", "email": "l1@gluerun.local" }
+    "l0": {
+      "name": "gluerun L0",
+      "email": "l0@gluerun.local"
+    },
+    "l1": {
+      "name": "gluerun L1",
+      "email": "l1@gluerun.local"
+    }
   },
   "env": {
     "GLUERUN_MAX_CONCURRENT": "3",
@@ -30,6 +65,7 @@
     "GLUERUN_CLAUDE_L1_MODEL": "claude-opus-4-8",
     "GLUERUN_CLAUDE_PLANNER_MODEL": "claude-opus-4-8",
     "GLUERUN_CLAUDE_AUDITOR_MODEL": "claude-opus-4-8",
-    "GLUERUN_CLAUDE_DECIDER_MODEL": "claude-opus-4-8"
+    "GLUERUN_CLAUDE_DECIDER_MODEL": "claude-opus-4-8",
+    "GLUERUN_PLANNER_SESSION": "1"
   }
 }
