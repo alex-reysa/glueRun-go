@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T07:06:39Z — TASK-0018 — integrate
+
+- Run: `ORIGIN-20260711T070237Z-14597`
+- Branch: `agent/plancritic/TASK-0018-reconcile-critique-import-hook`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0018-reconcile-critique-import-hook (754585523dea1806a2e18d04945d808d2a9351c1) into agent/integration as 3aa881d8a4135b8244c20dc8159de92f6df0e18f; gate green; acceptance=accepted
+
 ### 2026-07-11T07:01:43Z — TASK-0018 — accept
 
 - Run: `RUN-20260711T064825Z-20868`
@@ -366,3 +373,14 @@
   Core S7 evidence: both halves of the hybrid thesis (continuity value +
   independence guards) demonstrated in one reconcile cycle. Duplicate
   rejection doubles as the node-complete signal → gate promoted.
+
+- 2026-07-11 (operator): MILESTONE M2 complete — critique-import-gate
+  gated (TASK-0015/16/17/18: decision fn, disposition, fanout
+  orchestrator, reconcile.sh single-branch hook). Session c12a21fc
+  planned all four slices across three consecutive live resumes,
+  converging on the driver wire-in (over-decomposition suspicion raised
+  at slice 3, resolved by convergence at slice 4 — heuristic candidate
+  for the automated critic). GLUERUN_PLAN_CRITIQUE stays 0 until S3
+  ships the revise-verdict consumer; note: implemented knob is
+  all-or-nothing (ON = critic + enforcement) — the stage file's
+  observe-only intermediate mode was not built; acceptable, recorded.
