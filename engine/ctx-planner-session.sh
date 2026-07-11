@@ -65,10 +65,25 @@ gluerun_ctx_planner_session_finalize() {
   [[ -n "$meta_path" ]] || return 0
   mkdir -p "$(dirname "$meta_path")"
 
+  # SHA-alignment: the call site passes the sha of the RENDERED per-frontier
+  # planner prompt ($run_dir/planner-prompt.md), but the decider's gate 8 keys on
+  # the sha of the planner TEMPLATE (docs/orchestration/prompts/l1-planner.md),
+  # which is stable across frontiers by design. Store the TEMPLATE sha so both
+  # sides agree; the rendered-prompt sha the caller passes is intentionally
+  # dropped. Resolve the template with the SAME canonical convention the decider
+  # keys on (gluerun_planner_resume_template_path honors GLUERUN_PLANNER_TEMPLATE
+  # and defaults under GLUERUN_ROOT). Evidence invariance: an unreadable/absent
+  # template resolves fail-closed to an empty sha, so a later decide returns
+  # `fresh prompt-template-changed` and never a spurious `resume`.
+  local tpl_path template_sha
+  tpl_path="$(gluerun_planner_resume_template_path)"
+  template_sha="$(gluerun_sha256_file "$tpl_path" 2>/dev/null || printf '%s' "")"
+
   # Reuse the existing host-side finalize to merge the session-meta.v0 shape with
   # the planner role and lineage anchor (headShaAtCreate = planning-time head).
+  # promptSha256 is the normalized TEMPLATE sha, NOT the rendered prompt_sha.
   gluerun_session_meta_finalize "$meta_path" planner "$task_id" "$run_id" \
-    "$runner" "$prompt_sha" "$head_sha" "$attempt"
+    "$runner" "$template_sha" "$head_sha" "$attempt"
 
   # Add the additive optional `node` field. It does not alter the shape when
   # absent; here we set it to the target node. Never fatal.
