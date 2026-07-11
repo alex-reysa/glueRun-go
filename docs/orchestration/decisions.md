@@ -130,3 +130,12 @@
   falsely green for ~20 min until re-promotion below. Chains must check
   integrated_this_run/exit codes; promotion only after verified merge +
   smoke test.
+
+- 2026-07-11 (operator): ab-harness gated on its requiredCompletion as
+  written (deterministic arm fn behind GLUERUN_CTX_AB, events when ON,
+  silent OFF, tests green). The dispatch-call-site wiring rides with
+  paired-audit's l1-drive hook wave (paired-audit dependsOn ab-harness —
+  ordering already correct in the DAG). Note: the planner, asked to plan
+  a behaviorally-complete node, correctly refused to invent make-work and
+  routed completion to gate authority — the batch-validation failure IS
+  the designed operator signal in this engine version.
