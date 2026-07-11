@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T04:58:08Z — TASK-0014 — accept
+
+- Run: `RUN-20260711T044604Z-95859`
+- Branch: `agent/plancritic/TASK-0014-plan-critic-context`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T04:41:59Z — TASK-0013 — integrate
 
 - Run: `ORIGIN-20260711T043810Z-54458`
@@ -284,3 +291,12 @@
   planner session persistence/resume (arm-B behavior); resume events
   observable via context.strategy_selected role=planner and gluerun
   metrics. First live resume expected on the next multi-slice node.
+
+- 2026-07-11 (operator): LIVE RESUME-DECIDE PROVEN. Direct probe of
+  gluerun_planner_resume_decide against the live plan-critic-driver meta
+  returned `resume a6098c4a-…` — all 10 gates passed including the
+  template-sha alignment. One anomaly logged: the 04:13 planning run's
+  meta carried an empty sessionId despite its envelope holding
+  session_id e729900d (one-off; the 04:46 run's meta persisted its sid
+  correctly). If empty-sid recurs, suspect an envelope-parse race in
+  claude-run's meta write; watch strategy reasons via gluerun metrics.
