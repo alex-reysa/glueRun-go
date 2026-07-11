@@ -955,6 +955,13 @@ _l1_outcome="accepted"
 gluerun_append_event "l1.task_accepted" "l1 task accepted" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$worker_branch\",\"headSha\":\"$head_sha\",\"waiver\":\"$waiver\"}"
 
+# Post-acceptance paired audit (observability only). Strictly AFTER acceptance is
+# finalized above; self-guards on the default-OFF GLUERUN_PAIRED_AUDIT_PCT knob
+# (unset/0 -> no fresh audit, no event, no file) so the accepted flow is
+# byte-identical when disabled. The paired verdict NEVER feeds back into the
+# accept decision or the exit status; a recorder/runner failure is non-fatal.
+gluerun_ctx_paired_audit_record "$run_id" "$task_id" "$run_dir" "$worktree" || true
+
 echo ""
 echo "ACCEPTED: $task_id @ $head_sha (waiver=$waiver)"
 echo "  packet: $inbox_packet  audit: $audit_record (verdict: $verdict)"
