@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-11T22:35:46Z — TASK-0041 — integrate
+
+- Run: `ORIGIN-20260711T223032Z-19098`
+- Branch: `agent/packets/TASK-0041-artifact-secret-scan-mode`
+- Authority: origin
+- Rationale: merged agent/packets/TASK-0041-artifact-secret-scan-mode (f2dba04ee605ef8104914c480ee4a3923aaaffab) into agent/integration as 9fda8850ed9ffe36fbcdf3094470c5f119e10146; gate green; acceptance=accepted
+
+### 2026-07-11T22:30:15Z — TASK-0041 — accept
+
+- Run: `RUN-20260711T210828Z-86389`
+- Branch: `agent/packets/TASK-0041-artifact-secret-scan-mode`
+- Authority: origin
+- Rationale: fresh gpt-5.6-sol skeptic accepted recovered commit; 62/62 gate green; scope and range secret scan clean
+
+### 2026-07-11T21:27:33Z — TASK-0041 — escalate-parked
+
+- Run: `RUN-20260711T210828Z-86389`
+- Branch: `agent/packets/TASK-0041-artifact-secret-scan-mode`
+- Authority: decider
+- Rationale: decider terminal action after secret-detected
+
+### 2026-07-11T21:27:33Z — TASK-0041 — decide:escalate-parked
+
+- Run: `RUN-20260711T210828Z-86389`
+- Branch: `agent/packets/TASK-0041-artifact-secret-scan-mode`
+- Authority: decider
+- Rationale: secret-detected -> escalate-parked: decider unavailable; parked by fallback
+
 ### 2026-07-11T21:08:20Z — TASK-0040 — integrate
 
 - Run: `ORIGIN-20260711T210248Z-17550`
@@ -772,3 +800,20 @@
   audit-parser escape; polish candidate is schema-aware extraction of the
   final JSON object (with a regression fixture for prose-prefixed output),
   without weakening the advocate/skeptic boundary.
+
+- 2026-07-12 (CTO recovery): TASK-0041's host commit guard correctly
+  parked six literal synthetic credentials in the new scanner test; no
+  real credential was present. L0 fragmented only the fixture values so
+  the static commit/range scanner stays clean while the shell reconstructs
+  the identical secret-shaped values at runtime. The recovered commit was
+  scope-clean, range-scan clean, 62/62 green, and independently accepted by
+  a fresh gpt-5.6-sol/high skeptic. Durable testing rule: secret-scanner
+  fixtures must construct positive samples at runtime rather than storing
+  complete credential-shaped literals in source.
+
+- 2026-07-12 (CTO infrastructure): the first gpt-5.6-sol skeptic attempt
+  proved Codex CLI 0.142.5 was too old for that model. Upgraded the active
+  user-scoped @openai/codex CLI to 0.144.1 and reran fresh successfully;
+  session meta records model gpt-5.6-sol, effort high, exit 0. Preserve the
+  failed negotiation log as infrastructure evidence; no task retry budget
+  or acceptance authority was consumed.
