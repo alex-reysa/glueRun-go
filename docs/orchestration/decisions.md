@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T14:34:59Z — TASK-0029 — integrate
+
+- Run: `ORIGIN-20260711T143012Z-22253`
+- Branch: `agent/plancritic/TASK-0029-critic-recheck-resume`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0029-critic-recheck-resume (b7bfada7f75ae7d0024df6e2f5ecf5dd7d6b642d) into agent/integration as db225f2303b93154723e6b55da80e4ee239d6d73; gate green; acceptance=accepted
+
 ### 2026-07-11T12:54:27Z — TASK-0030 — accept
 
 - Run: `RUN-20260711T124712Z-79857`
