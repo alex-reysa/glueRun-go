@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T01:52:51Z — TASK-0007 — integrate
+
+- Run: `ORIGIN-20260711T014923Z-13946`
+- Branch: `agent/session/TASK-0007-planner-session-meta`
+- Authority: origin
+- Rationale: merged agent/session/TASK-0007-planner-session-meta (2d24f1afaf899deea0eee8ee42b67bd031dc6d9b) into agent/integration as 94098466975c0f114c42111cad23d31a2fa50bc3; gate green; acceptance=accepted
+
 ### 2026-07-11T01:49:00Z — TASK-0007 — accept
 
 - Run: `RUN-20260711T013743Z-44010`
