@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T01:07:08Z — TASK-0005 — integrate
+
+- Run: `ORIGIN-20260711T010344Z-50649`
+- Branch: `agent/foundation/TASK-0005-ctx-paired-audit`
+- Authority: origin
+- Rationale: merged agent/foundation/TASK-0005-ctx-paired-audit (d03b912ae26ca041d3d721267e382c3b83bd8a10) into agent/integration as e71414d06176881ebca776f846dc0b7d83d56f9e; gate green; acceptance=accepted
+
 ### 2026-07-11T01:02:46Z — TASK-0005 — accept
 
 - Run: `RUN-20260711T004446Z-27330`
