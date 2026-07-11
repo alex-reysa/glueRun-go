@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T05:02:20Z — TASK-0014 — integrate
+
+- Run: `ORIGIN-20260711T045830Z-74290`
+- Branch: `agent/plancritic/TASK-0014-plan-critic-context`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0014-plan-critic-context (89d390041992470bc1e1abbf3ac8873bb5db4f5d) into agent/integration as a605924530508974433229e0852c03293863b494; gate green; acceptance=accepted
+
 ### 2026-07-11T04:58:08Z — TASK-0014 — accept
 
 - Run: `RUN-20260711T044604Z-95859`
