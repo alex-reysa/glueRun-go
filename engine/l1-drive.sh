@@ -609,6 +609,11 @@ PY
     || gluerun_append_event "l1.capsule_write_failed" "implementer capsule write failed (non-fatal)" \
          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n}" || true
 
+  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): record this
+  # attempt's ledger (assumption statuses) alongside the implementer capsule write,
+  # additively and non-fatally. No-op when OFF.
+  assumptions_record_capsule "$n" || true
+
   # Session affinity (T-E5): merge host-authority fields into the runner-written
   # implementer meta so the NEXT attempt can resume it. headShaAtCreate = the
   # committed head (the lineage anchor the resume decider checks). Never fatal.
@@ -639,6 +644,12 @@ run_audit_phase() {
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
     cp "$audit_prompt" "$active_audit_prompt" 2>/dev/null || active_audit_prompt="$audit_prompt"
   fi
+
+  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): inject the
+  # assembled auditSection (staged at attempt-open) into the per-attempt auditor prompt
+  # so the auditor verifies the assumptions and flags violations citing the assumption
+  # id. No-op when OFF (byte-identical) and never aborts the drive.
+  assumptions_inject_audit "$active_audit_prompt" || true
 
   # ---- Auditor runner with bounded infra-retry (T-E6) -----------------------
   # An auditor "infra failure" is the runner itself timing out (rc 124) / refusing
@@ -753,6 +764,12 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
       # (the audited head). Never fatal.
       gluerun_session_meta_finalize "$session_meta_reviewer" reviewer "$task_id" "$run_id" \
         "$audit_runner_basename" "$reviewer_prompt_sha" "$head_sha" "$n" >/dev/null 2>&1 || true
+      # Assumption ledger attempt-close (node assumption-ledger; behind
+      # GLUERUN_CTX_PACKET): fold the auditor findings (which cite assumption ids) into
+      # this attempt's input ledger via the integrated host-derived transition and
+      # persist the updated ledger to the run_dir sidecar, so the NEXT attempt's
+      # assemble carries sticky `violated` statuses. No-op when OFF; never fatal.
+      assumptions_attempt_close "$audit_record" || true
     }
   else
     # Auditor infra failure persisted across GLUERUN_AUDIT_INFRA_MAX fresh re-runs:
@@ -795,6 +812,116 @@ archive_attempt() {
            "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"n\":$1}" 2>/dev/null || true; }
 }
 
+# ---- Assumption ledger wire-in (node assumption-ledger; behind GLUERUN_CTX_PACKET) --
+# Terminal driver wire-in for the S4-context-packets assumption-ledger node. Every
+# site below is a no-op unless GLUERUN_CTX_PACKET is set to a non-zero value (default
+# 0), so with the flag unset/0 l1-drive.sh renders byte-identical prompts, writes no
+# ledger sidecar / section files, and emits no assumptions events. Each site delegates
+# into the integrated PURE bricks (gluerun_ctx_assumptions_assemble at attempt-open,
+# gluerun_ctx_assumptions_transition at attempt-close) and adds no rendering of its
+# own. Fail-closed: on any error the attempt proceeds WITHOUT injection (non-fatal),
+# preserving the run. These sites are additive and disjoint from the post-acceptance
+# paired-audit (TASK-0006) and critic-recheck (TASK-0033) hooks, so this node's
+# l1-drive.sh ownership does not collide with theirs.
+assumptions_ctx_enabled() { [[ -n "${GLUERUN_CTX_PACKET:-}" && "${GLUERUN_CTX_PACKET}" != "0" ]]; }
+assumptions_ledger_sidecar="$run_dir/assumptions-ledger.json"
+assumptions_fix_section_file="$run_dir/assumptions-fix-section.md"
+assumptions_audit_section_file="$run_dir/assumptions-audit-section.md"
+assumptions_attempt_ledger_file="$run_dir/assumptions-attempt-ledger.json"
+
+# Attempt-open: assemble the per-run ledger as carry(prior, seed(task)) from the task
+# packet and the per-run prior sidecar (empty on attempt 1) and stage this attempt's
+# fixSection/auditSection + input-ledger snapshot to run_dir files. Non-fatal; on any
+# error nothing is staged (fail-closed) and the attempt proceeds without injection.
+assumptions_attempt_open() {
+  assumptions_ctx_enabled || return 0
+  rm -f "$assumptions_fix_section_file" "$assumptions_audit_section_file" \
+    "$assumptions_attempt_ledger_file" 2>/dev/null || true
+  local prior='' envelope
+  [[ -f "$assumptions_ledger_sidecar" ]] && prior="$(cat "$assumptions_ledger_sidecar" 2>/dev/null || true)"
+  envelope="$(gluerun_ctx_assumptions_assemble "$task_file" "$prior" 2>/dev/null)" || return 0
+  [[ -n "$envelope" ]] || return 0
+  python3 - "$envelope" "$assumptions_fix_section_file" "$assumptions_audit_section_file" \
+    "$assumptions_attempt_ledger_file" <<'PY' 2>/dev/null || return 0
+import json, sys
+env = json.loads(sys.argv[1])
+fix = env.get("fixSection") or ""
+aud = env.get("auditSection") or ""
+led = env.get("ledger") or {}
+if fix:
+    open(sys.argv[2], "w", encoding="utf-8").write(fix)
+if aud:
+    open(sys.argv[3], "w", encoding="utf-8").write(aud)
+open(sys.argv[4], "w", encoding="utf-8").write(json.dumps(led, sort_keys=True))
+PY
+  return 0
+}
+
+# Inject the staged fixSection into the implementer's already-rendered active/fix
+# prompt (the file the worker runner reads). Called AFTER prepare_worker_prompt so it
+# applies uniformly across the attempt-1 copy and the retry fix-prompt render. No-op
+# when OFF or when the section is empty (a zero-assumption task).
+assumptions_inject_fix() {
+  assumptions_ctx_enabled || return 0
+  [[ -s "$assumptions_fix_section_file" ]] || return 0
+  { echo ""; echo "---"; echo ""; cat "$assumptions_fix_section_file"; } \
+    >> "$run_dir/l2-active-prompt.md" 2>/dev/null || true
+  return 0
+}
+
+# Inject the staged auditSection into the per-attempt auditor prompt (the file the
+# auditor runner reads), around the re-audit render site and before the runner reads
+# it. No-op when OFF or when the section is empty.
+assumptions_inject_audit() {
+  local active_audit_prompt="$1"
+  assumptions_ctx_enabled || return 0
+  [[ -s "$assumptions_audit_section_file" ]] || return 0
+  { echo ""; echo "---"; echo ""; cat "$assumptions_audit_section_file"; } \
+    >> "$active_audit_prompt" 2>/dev/null || true
+  return 0
+}
+
+# Record the per-attempt ledger (assumption statuses) alongside the implementer
+# capsule write — additive and non-fatal: a failure logs an event and never aborts
+# the attempt. No-op when OFF.
+assumptions_record_capsule() {
+  local n="$1"
+  assumptions_ctx_enabled || return 0
+  [[ -f "$assumptions_attempt_ledger_file" ]] || return 0
+  cp "$assumptions_attempt_ledger_file" "$run_dir/assumptions-attempt-$n.json" 2>/dev/null \
+    || gluerun_append_event "l1.assumptions_record_failed" "per-attempt assumption ledger record failed (non-fatal)" \
+         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
+  return 0
+}
+
+# Attempt-close: after a parseable auditor verdict, fold the auditor findings (which
+# the injected auditSection instructs the auditor to cite by assumption id) into this
+# attempt's input ledger via the integrated host-derived transition, then persist the
+# updated ledger to the run_dir sidecar so the NEXT attempt's assemble carries sticky
+# `violated` statuses. Non-fatal; fail-closed leaves the prior sidecar untouched.
+assumptions_attempt_close() {
+  local audit_record="$1"
+  assumptions_ctx_enabled || return 0
+  [[ -f "$assumptions_attempt_ledger_file" && -f "$audit_record" ]] || return 0
+  local ledger findings updated
+  ledger="$(cat "$assumptions_attempt_ledger_file" 2>/dev/null || true)"
+  [[ -n "$ledger" ]] || return 0
+  findings="$(python3 - "$audit_record" <<'PY' 2>/dev/null)" || return 0
+import json, sys
+try:
+    r = json.load(open(sys.argv[1]))
+except Exception:
+    r = {}
+f = r.get("findings") if isinstance(r, dict) else None
+sys.stdout.write(json.dumps(f if isinstance(f, list) else []))
+PY
+  updated="$(gluerun_ctx_assumptions_transition "$ledger" "$findings" 2>/dev/null)" || return 0
+  [[ -n "$updated" ]] || return 0
+  printf '%s\n' "$updated" > "$assumptions_ledger_sidecar.tmp" 2>/dev/null \
+    && mv "$assumptions_ledger_sidecar.tmp" "$assumptions_ledger_sidecar" 2>/dev/null || true
+  return 0
+}
+
 # ---- Decider-driven retry loop ----
 # prev_failure_class/prev_attempt_ctx carry the PRIOR attempt's failure into the
 # next prepare_worker_prompt (the per-iteration reset clears attempt_failure
@@ -810,7 +937,13 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
   attempt_failure=""; attempt_ctx=""
   verdict="unknown"; head_sha=""
   attempt_ok="no"
+  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): assemble
+  # this attempt's ledger from the task packet + per-run prior sidecar BEFORE the
+  # prompt is rendered, then inject the assembled fixSection into the already-rendered
+  # active/fix prompt. Both no-op when OFF (byte-identical) and never abort the drive.
+  assumptions_attempt_open "$n" || true
   prepare_worker_prompt "$n"
+  assumptions_inject_fix || true
   if run_worker_phase "$n"; then
     if run_audit_phase "$n"; then attempt_ok="yes"; fi
   fi
