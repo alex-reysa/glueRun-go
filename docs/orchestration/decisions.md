@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-11T20:24:41Z — TASK-0040 — accept
+
+- Run: `RUN-20260711T194943Z-32792`
+- Branch: `agent/packets/TASK-0040-assumption-ledger-drive-wirein`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-11T20:08:56Z — TASK-0040 — decide:retry
+
+- Run: `RUN-20260711T194943Z-32792`
+- Branch: `agent/packets/TASK-0040-assumption-ledger-drive-wirein`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
 ### 2026-07-11T19:46:11Z — TASK-0039 — integrate
 
 - Run: `ORIGIN-20260711T194041Z-72856`
@@ -733,3 +747,10 @@
   dock prompt injection. One doctrinal nuance added: manifest content is
   authored-knowledge class — never `authoritative` evidence, never
   tainted-model class; a third trust category the S6 graph must respect.
+
+- 2026-07-11 (CTO, polish backlog): teach tools/promote-gate.sh the
+  --from-reconcile --frontier interface so GLUERUN_AUTO_PROMOTE_GATES=1
+  + `gluerun auto` + the shipped launchd watchdog replace the session
+  master-loop entirely (built-in L0/L-1 end-to-end). Also note: second
+  orphaned prompt found — templates/prompts/l0-origin.md is unwired
+  (decide at polish: wire or remove).
