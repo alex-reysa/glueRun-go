@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T12:10:18Z — TASK-0028 — integrate
+
+- Run: `ORIGIN-20260711T120507Z-22981`
+- Branch: `agent/plancritic/TASK-0028-critic-recheck-classify`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0028-critic-recheck-classify (5386e041df4a0d7ba1932549a195d991ed2addf0) into agent/integration as 3b078af451e6bb68d1bf19dff92e79dfe0061ac9; gate green; acceptance=accepted
+
 ### 2026-07-11T12:00:50Z — TASK-0028 — decide:amend-scope
 
 - Run: `ORIGIN-20260711T115350Z-36100`
