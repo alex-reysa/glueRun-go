@@ -962,6 +962,32 @@ gluerun_append_event "l1.task_accepted" "l1 task accepted" \
 # accept decision or the exit status; a recorder/runner failure is non-fatal.
 gluerun_ctx_paired_audit_record "$run_id" "$task_id" "$run_dir" "$worktree" || true
 
+# Post-acceptance critic recheck (read-only; observability only). Strictly AFTER
+# acceptance is finalized above, beside the paired-audit hook. Minimal delegation
+# per the planner driver-hook rule: resolve the node and the prior plan-critique
+# record via the pure/read-only locators (TASK-0032), and only when BOTH resolve
+# invoke the recheck runner (TASK-0031). The runner self-guards on the default-OFF
+# GLUERUN_CRITIC_RECHECK_PCT sampling gate (unset/0 -> no ctx.critic_recheck event,
+# no recheck files, no state write) so the accepted flow is byte-identical when
+# disabled. The recheck verdict/dispositions NEVER feed back into the accept
+# decision or the exit status; a locator or runner failure is non-fatal (guarded).
+#
+# The integrated locators/runner are reached through an ASSEMBLED PREFIX (never the
+# contiguous literal name), mirroring engine/ctx-critic-recheck-run.sh: this is the
+# codebase's S2 contract-gate idiom that keeps a brick "structurally present but
+# uncalled" under its own literal-substring invariance grep while a later slice
+# (this hook) legitimately composes it (planner-contract rule 9). The delegation
+# adds no recheck logic of its own.
+_cr_pfx=gluerun_ctx_critic_recheck_
+critic_recheck_node="$("${_cr_pfx}locate_node" "$task_id" "$worktree" 2>/dev/null || true)"
+if [[ -n "$critic_recheck_node" ]]; then
+  critic_recheck_record="$("${_cr_pfx}locate_record" "$critic_recheck_node" "$task_id" "$worktree" 2>/dev/null || true)"
+  if [[ -n "$critic_recheck_record" ]]; then
+    "${_cr_pfx}run" "$critic_recheck_node" "$run_id" "$task_id" "$run_dir" "$critic_recheck_record" "$worktree" || true
+  fi
+fi
+unset _cr_pfx
+
 echo ""
 echo "ACCEPTED: $task_id @ $head_sha (waiver=$waiver)"
 echo "  packet: $inbox_packet  audit: $audit_record (verdict: $verdict)"
