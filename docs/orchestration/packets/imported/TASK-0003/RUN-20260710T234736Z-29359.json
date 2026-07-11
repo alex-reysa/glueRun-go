@@ -1,0 +1,83 @@
+{
+  "schema": "gluerun.orchestration.state-packet.v0",
+  "packetId": "PKT-TASK-0003-RUN-20260710T234736Z-29359",
+  "runId": "RUN-20260710T234736Z-29359",
+  "taskId": "TASK-0003",
+  "area": "foundation",
+  "role": "l2-developer",
+  "status": "accepted",
+  "baseRef": "416e0d5dd91b2bafdd59ba2cd257392b29e1e167",
+  "branch": "agent/foundation/TASK-0003-gluerun-metrics-cli",
+  "headSha": "188b135a383c88e6a215cc2f05bbc6703bfcfa92",
+  "workspace": "/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.worktrees/TASK-0003",
+  "ownedFiles": [
+    "cli/gluerun",
+    "tests/test-ctx-metrics-cli.sh"
+  ],
+  "changedFiles": [
+    "cli/gluerun",
+    "tests/test-ctx-metrics-cli.sh"
+  ],
+  "commands": [
+    {
+      "cmd": "bash tests/test-ctx-metrics-cli.sh",
+      "exitCode": 1,
+      "logRef": ".gluerun-evidence/red.log"
+    },
+    {
+      "cmd": "bash tests/test-ctx-metrics-cli.sh",
+      "exitCode": 0,
+      "logRef": ".gluerun-evidence/green.log"
+    },
+    {
+      "cmd": "bash tests/run.sh",
+      "exitCode": 0,
+      "logRef": ".gluerun-evidence/regression.log"
+    }
+  ],
+  "tests": [
+    {
+      "name": "test-ctx-metrics-cli.sh",
+      "phase": "red",
+      "status": "fail",
+      "logRef": ".gluerun-evidence/red.log"
+    },
+    {
+      "name": "test-ctx-metrics-cli.sh",
+      "phase": "green",
+      "status": "pass",
+      "logRef": ".gluerun-evidence/green.log"
+    },
+    {
+      "name": "tests/run.sh (regression: 26 passed, 0 failed)",
+      "phase": "green",
+      "status": "pass",
+      "logRef": ".gluerun-evidence/regression.log"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "red-log",
+      "ref": ".gluerun-evidence/red.log"
+    },
+    {
+      "kind": "green-log",
+      "ref": ".gluerun-evidence/green.log"
+    },
+    {
+      "kind": "regression-log",
+      "ref": ".gluerun-evidence/regression.log"
+    },
+    {
+      "kind": "gate-check",
+      "ref": "runs/RUN-20260710T234736Z-29359/gate-check.json"
+    },
+    {
+      "kind": "audit",
+      "ref": "runs/RUN-20260710T234736Z-29359/audit.json"
+    }
+  ],
+  "blockers": [],
+  "nextAction": "import into control state and reconcile",
+  "createdAt": "2026-07-11T00:00:00Z"
+}

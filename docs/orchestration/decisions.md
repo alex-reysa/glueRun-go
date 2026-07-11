@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T00:00:32Z — TASK-0003 — accept
+
+- Run: `RUN-20260710T234736Z-29359`
+- Branch: `agent/foundation/TASK-0003-gluerun-metrics-cli`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-10T23:44:21Z — TASK-0002 — integrate
 
 - Run: `ORIGIN-20260710T234103Z-93793`
