@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T09:55:40Z — TASK-0024 — accept
+
+- Run: `RUN-20260711T093218Z-41209`
+- Branch: `agent/plancritic/TASK-0024-l1-plan-node-revise-hook`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T09:30:18Z — TASK-0023 — integrate
 
 - Run: `ORIGIN-20260711T092555Z-95662`
@@ -461,3 +468,10 @@
   ships the revise-verdict consumer; note: implemented knob is
   all-or-nothing (ON = critic + enforcement) — the stage file's
   observe-only intermediate mode was not built; acceptable, recorded.
+
+- 2026-07-11 (operator): TASK-0024 note — the l1-plan-node hook reaches
+  the revise orchestrator via a composed function name so TASK-0023's
+  "present-but-uncalled" grep stays green (its test file was forbidden
+  to TASK-0024). Scope-respecting but leaves that assertion stale; tech
+  debt for polish-release: drop or rewrite the uncalled-grep in
+  test-ctx-plan-revise-loop.sh.
