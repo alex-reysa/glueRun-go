@@ -3,7 +3,7 @@
   "engineVersion": "0.4.0-m1",
   "targetBranch": "agent/integration",
   "gateCommand": "bash tests/run.sh",
-  "runner": "claude-run.sh",
+  "runner": "codex-run.sh",
   "areaPrefix": "engine/",
   "areas": {
     "foundation": [
@@ -69,6 +69,7 @@
     "GLUERUN_PLANNER_SESSION": "1",
     "GLUERUN_PLAN_CRITIQUE": "1",
     "GLUERUN_PAIRED_AUDIT_PCT": "25",
-    "GLUERUN_L2_SLICE_BUDGET": "2"
+    "GLUERUN_L2_SLICE_BUDGET": "2",
+    "GLUERUN_CODEX_MODEL": "gpt-5.5"
   }
 }
