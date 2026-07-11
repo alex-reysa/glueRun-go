@@ -222,4 +222,319 @@ rc=0
 out="$(GLUERUN_PLANNER_SESSION=0 gluerun_planner_resume_decide "$m" "$NODE" codex-run.sh "$wt" "$HEAD2")" || rc=$?
 assert_eq "$rc" "0" "decider exit code is 0 on fresh"
 
+# ============================================================================
+# Consult-hook coverage: engine/generate-tasks.sh wiring of the decider.
+#
+# The decider tests above prove the verdict in isolation; these prove the single
+# sanctioned generate-tasks.sh call site consults it correctly under
+# GLUERUN_PLANNER_SESSION=1: resume adds --resume-session and acquires the
+# planner session-lease; every gate reason is event-visible via
+# context.strategy_selected (role "planner"); rc-86 falls back to a fresh run in
+# the SAME run via context.resume_failed; the lease is released after the run;
+# and with the knob off nothing is consulted/emitted/leased.
+# ============================================================================
+GT="$ENGINE_HOME/engine/generate-tasks.sh"
+CH_NODE="planner-resume-gates"
+
+assert_contains() { # <haystack> <needle> <label>
+  [[ "$1" == *"$2"* ]] || fail "$3: [$1] does not contain [$2]"
+}
+
+# --- Isolated repo fixture (own tmp; never the real repo) ---------------------
+ch_make_repo() {
+  local root="$1"
+  mkdir -p "$root/docs/orchestration/prompts" "$root/docs/orchestration/tasks" \
+    "$root/schemas/orchestration" "$root/.gluerun-state"
+  git -C "$root" init -q
+  git -C "$root" checkout -q -b target
+  cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$root/docs/orchestration/prompts/l1-planner.md"
+  cp "$ENGINE_HOME/schemas/task-batch.v0.schema.json" "$root/schemas/orchestration/task-batch.v0.schema.json"
+  cp "$ENGINE_HOME/schemas/dag.v0.schema.json" "$root/schemas/orchestration/dag.v0.schema.json"
+  cat >"$root/docs/orchestration/dag.v0.json" <<EOF
+{
+  "schema": "gluerun.orchestration.dag.v0",
+  "layers": ["engine_runtime"],
+  "kinds": ["runtime"],
+  "nodes": [
+    {
+      "id": "$CH_NODE",
+      "stage": "S1-planner-persistence",
+      "area": "session",
+      "layer": "engine_runtime",
+      "kind": "runtime",
+      "dependsOn": [],
+      "requiredCompletion": "Planner consults the resume decider per node."
+    }
+  ]
+}
+EOF
+  git -C "$root" add .
+  git -C "$root" -c user.name=test -c user.email=test@example.local commit -q -m init
+}
+
+ch_with_fixture() {
+  CH_TMP="$(mktemp -d)"
+  ch_make_repo "$CH_TMP/repo"
+  export GLUERUN_ROOT="$CH_TMP/repo"
+  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
+  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
+  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
+  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
+  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
+  export GLUERUN_TARGET_BRANCH="target"
+  CH_STUB="$GLUERUN_ROOT/runner.sh"        # basename runner.sh (used in forged meta)
+  CH_ARGS="$GLUERUN_ROOT/stub-args.txt"
+  CH_EVENTS="$GLUERUN_STATE_DIR/events.ndjson"
+  CH_META="$GLUERUN_STATE_DIR/sessions/planner/$CH_NODE.json"
+  CH_LEASE="$GLUERUN_STATE_DIR/sessions/planner/$CH_NODE.lease"
+  export STUB_ARGS_FILE="$CH_ARGS"
+  CH_HEAD="$(git -C "$GLUERUN_ROOT" rev-parse target)"
+  CH_TPL_SHA="$(gluerun_sha256_file "$GLUERUN_ROOT/docs/orchestration/prompts/l1-planner.md")"
+  rm -f "$CH_ARGS"
+  ch_make_stub "$CH_STUB"
+}
+ch_cleanup() { [[ -n "${CH_TMP:-}" ]] && rm -rf "$CH_TMP"; }
+
+# Stub runner: records each invocation's args; on a --resume-session invocation
+# with STUB_RESUME_RC86=1 exits 86 (resume-refused); otherwise writes a
+# runner-authored session-meta (so the NEXT decide can resume) and emits a valid
+# canonical `session`-area task batch. Records lease presence at invocation time.
+ch_make_stub() {
+  local stub="$1"
+  cat >"$stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+{ printf 'INVOCATION\n'; printf '%s\n' "$@"; } >>"${STUB_ARGS_FILE:?}"
+out=""; smeta=""; resume=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-last-message|-o) out="$2"; shift 2 ;;
+    --session-meta) smeta="$2"; shift 2 ;;
+    --resume-session) resume="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -n "${STUB_LEASE_SEEN:-}" && -n "${STUB_LEASE_PATH:-}" ]]; then
+  if [[ -f "$STUB_LEASE_PATH" ]]; then echo "present" >>"$STUB_LEASE_SEEN"
+  else echo "absent" >>"$STUB_LEASE_SEEN"; fi
+fi
+if [[ -n "$resume" && "${STUB_RESUME_RC86:-0}" == "1" ]]; then
+  exit 86
+fi
+if [[ -n "$smeta" ]]; then
+  mkdir -p "$(dirname "$smeta")"
+  python3 - "$smeta" "${GLUERUN_ROOT:?}" "${STUB_NOW:?}" <<'PY'
+import json, sys
+path, cwd, now = sys.argv[1:4]
+try:
+    doc = json.load(open(path))
+    if not isinstance(doc, dict): doc = {}
+except Exception:
+    doc = {}
+doc.update({
+    "schema": "gluerun.orchestration.session-meta.v0",
+    "provider": "codex", "sessionId": "SID-PLANNER",
+    "model": "m", "effort": "e",
+    "cwd": cwd, "exitCode": 0, "createdAt": now,
+})
+json.dump(doc, open(path, "w"), indent=2)
+PY
+fi
+[[ -n "$out" ]] || exit 2
+python3 - "$out" <<'PY'
+import json, sys
+md = (
+    "# TASK-0001: planner resume consult hook slice\n\n"
+    "Status: ready\n"
+    "Area: session\n"
+    "Target branch: `target`\n"
+    "Worker branch: `agent/session/TASK-0001-hook`\n"
+    "Test policy: `strict_test_first`\n"
+    "Gate command: `bash tests/run.sh`\n"
+    "Dispatch mode: canonical\n"
+    "Depends on: []\n\n"
+    "## Objective\n\nConsult the planner resume decider.\n\n"
+    "## Scope\n\nOwned files:\n\n"
+    "- `engine/generate-tasks.sh`\n"
+    "- `tests/test-ctx-planner-resume.sh`\n\n"
+    "Forbidden files:\n\n- `engine/lib.sh`\n\n"
+    "## Acceptance Criteria\n\n- Tests first.\n"
+)
+batch = {"schema": "gluerun.orchestration.task-batch.v0",
+         "tasks": [{"taskId": "TASK-0001", "markdown": md}]}
+json.dump(batch, open(sys.argv[1], "w"))
+PY
+EOF
+  chmod +x "$stub"
+}
+
+ch_run() { # runs generate-tasks (knob ON) against the fixture stub
+  GLUERUN_PLANNER_SESSION=1 GLUERUN_RUNNER="$CH_STUB" STUB_NOW="$NOW" \
+    "$GT" --node "$CH_NODE" --count 1 2>&1 || true
+}
+ch_stub_has_resume() { grep -qx -- '--resume-session' "$CH_ARGS"; }
+ch_last_event_data() { # <type> -> JSON data of last matching event ("" if none)
+  python3 - "$CH_EVENTS" "$1" <<'PY'
+import json, sys
+path, typ = sys.argv[1:3]
+last = None
+try:
+    for line in open(path):
+        line = line.strip()
+        if not line:
+            continue
+        e = json.loads(line)
+        if e.get("type") == typ:
+            last = e
+except FileNotFoundError:
+    pass
+print("" if last is None else json.dumps(last.get("data", {})))
+PY
+}
+ch_ev_count() { # <type>
+  [[ -f "$CH_EVENTS" ]] || { echo 0; return; }
+  local n; n="$(grep -c "\"type\":\"$1\"" "$CH_EVENTS" 2>/dev/null || true)"
+  echo "${n:-0}"
+}
+ch_field() { python3 -c 'import json,sys; print(json.loads(sys.argv[1] or "{}").get(sys.argv[2],""))' "$1" "$2"; }
+
+# Forge a base-good planner meta at the canonical path, then apply k=v overrides
+# so exactly one gate trips (all other gates pass -> the override names the reason).
+ch_forge_meta() { # [k=v ...]
+  mkdir -p "$(dirname "$CH_META")"
+  python3 - "$CH_META" "$GLUERUN_ROOT" "$NOW" "$CH_NODE" "$CH_TPL_SHA" "$CH_HEAD" "$@" <<'PY'
+import json, sys
+path, cwd, now, node, tpl, head = sys.argv[1:7]
+doc = {
+    "schema": "gluerun.orchestration.session-meta.v0",
+    "provider": "codex", "sessionId": "SID-PLANNER", "model": "m", "effort": "e",
+    "cwd": cwd, "exitCode": 0, "createdAt": now,
+    "role": "planner", "node": node, "runner": "runner.sh",
+    "promptSha256": tpl, "headShaAtCreate": head, "lastUsedAttempt": 1,
+}
+for kv in sys.argv[7:]:
+    k, v = kv.split("=", 1)
+    doc[k] = v
+json.dump(doc, open(path, "w"), indent=2)
+PY
+}
+
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# --- Feature-flag discipline: knob OFF consults/emits/leases nothing ----------
+ch_with_fixture
+out="$(GLUERUN_RUNNER="$CH_STUB" STUB_NOW="$NOW" "$GT" --node "$CH_NODE" --count 1 2>&1 || true)"
+assert_contains "$out" "generated:" "OFF: batch accepted"
+[[ "$(ch_ev_count context.strategy_selected)" == "0" ]] || fail "OFF: strategy_selected emitted while knob off"
+! ch_stub_has_resume || fail "OFF: --resume-session added while knob off"
+[[ ! -e "$CH_LEASE" ]] || fail "OFF: planner session-lease acquired while knob off"
+ch_cleanup
+pass "consult: knob OFF consults no decider, adds no --resume-session, emits no strategy event, acquires no lease"
+
+# --- Fresh path: every gate reason reachable with the knob ON is event-visible
+# via context.strategy_selected(role=planner, strategy=fresh) and adds no resume.
+ch_with_fixture
+run_fresh_reason() { # <expected-reason> ; canonical meta already forged (or absent)
+  rm -f "$CH_ARGS"
+  # Each iteration emits an identical batch; clear prior generated tasks so the
+  # planner's duplicate-signature guard does not reject the run (unrelated to the
+  # consult hook under test).
+  rm -f "$GLUERUN_TASKS_DIR"/*.md 2>/dev/null || true
+  out="$(ch_run)"
+  assert_contains "$out" "generated:" "fresh/$1: batch accepted (fresh run proceeds)"
+  ! ch_stub_has_resume || fail "fresh/$1: --resume-session added on a fresh decision"
+  data="$(ch_last_event_data context.strategy_selected)"
+  [[ -n "$data" ]] || fail "fresh/$1: no context.strategy_selected event"
+  assert_eq "$(ch_field "$data" role)" "planner" "fresh/$1: role"
+  assert_eq "$(ch_field "$data" strategy)" "fresh" "fresh/$1: strategy"
+  assert_eq "$(ch_field "$data" node)" "$CH_NODE" "fresh/$1: node"
+  assert_eq "$(ch_field "$data" reason)" "$1" "fresh/$1: reason"
+}
+# no-session: no meta present.
+rm -f "$CH_META"; run_fresh_reason "no-session"
+# no-session-id: empty sessionId.
+ch_forge_meta "sessionId="; run_fresh_reason "no-session-id"
+# role-mismatch: a non-planner (task/advocate/skeptic) session is never resumed.
+ch_forge_meta "role=advocate"; run_fresh_reason "role-mismatch"
+# node-mismatch: node-lineage replaces runId equality.
+ch_forge_meta "node=some-other-node"; run_fresh_reason "node-mismatch"
+# head-rewritten: stored head not an ancestor of the lineage head.
+ch_forge_meta "headShaAtCreate=0000000000000000000000000000000000000000"; run_fresh_reason "head-rewritten"
+# runner-changed.
+ch_forge_meta "runner=claude-run.sh"; run_fresh_reason "runner-changed"
+# prompt-template-changed (keyed on the TEMPLATE sha).
+ch_forge_meta "promptSha256=deadbeef"; run_fresh_reason "prompt-template-changed"
+# expired.
+ch_forge_meta "createdAt=2000-01-01T00:00:00Z"; run_fresh_reason "expired"
+# worktree-moved.
+ch_forge_meta "cwd=/some/other/place"; run_fresh_reason "worktree-moved"
+# leased: a live lease at the canonical planner lease path -> fresh leased, and
+# the hook acquires no lease of its own (the pre-existing one is left untouched).
+ch_forge_meta
+mkdir -p "$(dirname "$CH_LEASE")"; printf '{"pid": %s}\n' "$$" > "$CH_LEASE"
+run_fresh_reason "leased"
+grep -q "\"pid\": $$" "$CH_LEASE" || fail "leased: hook disturbed the pre-existing live lease"
+rm -f "$CH_LEASE"
+ch_cleanup
+pass "consult: knob ON — every gate reason (no-session..leased) is event-visible as a fresh strategy event; no resume on any fresh"
+
+# --- Resume path: a finalized meta that decides resume adds --resume-session,
+# emits exactly one resume strategy event, and acquires+releases the lease. ----
+ch_with_fixture
+# Run 1 (no meta yet) finalizes a good, resumable planner meta.
+ch_run >/dev/null
+[[ -f "$CH_META" ]] || fail "resume: run 1 did not finalize a planner meta"
+# Run 2 should decide resume.
+rm -f "$CH_ARGS"
+rm -f "$GLUERUN_TASKS_DIR"/*.md 2>/dev/null || true   # avoid the unrelated duplicate guard
+before_resume="$(ch_ev_count context.strategy_selected)"
+export STUB_LEASE_PATH="$CH_LEASE" STUB_LEASE_SEEN="$GLUERUN_ROOT/lease-seen.txt"
+rm -f "$STUB_LEASE_SEEN"
+out="$(ch_run)"
+assert_contains "$out" "generated:" "resume: batch accepted"
+ch_stub_has_resume || fail "resume: runner NOT invoked with --resume-session"
+grep -qx -- 'SID-PLANNER' "$CH_ARGS" || fail "resume: --resume-session value != SID-PLANNER"
+[[ "$(ch_ev_count context.strategy_selected)" == "$((before_resume + 1))" ]] \
+  || fail "resume: expected exactly one new strategy_selected event"
+data="$(ch_last_event_data context.strategy_selected)"
+assert_eq "$(ch_field "$data" role)" "planner" "resume: role"
+assert_eq "$(ch_field "$data" strategy)" "resume" "resume: strategy"
+assert_eq "$(ch_field "$data" reason)" "resume" "resume: reason"
+assert_eq "$(ch_field "$data" sessionId)" "SID-PLANNER" "resume: sessionId"
+assert_eq "$(ch_field "$data" node)" "$CH_NODE" "resume: node"
+# Lease lifecycle: held during the resume run, released after it returns.
+grep -qx present "$STUB_LEASE_SEEN" || fail "resume: lease NOT held during the resume run"
+[[ ! -e "$CH_LEASE" ]] || fail "resume: lease NOT released after the run returned"
+unset STUB_LEASE_PATH STUB_LEASE_SEEN
+ch_cleanup
+pass "consult: resume decision adds --resume-session, emits one resume strategy event, acquires+releases the planner session-lease"
+
+# --- rc-86 in-run fresh fallback: resume-refused re-runs fresh in the SAME run
+ch_with_fixture
+ch_run >/dev/null                     # finalize a resumable meta
+[[ -f "$CH_META" ]] || fail "rc86: setup did not finalize a meta"
+rm -f "$CH_ARGS"
+rm -f "$GLUERUN_TASKS_DIR"/*.md 2>/dev/null || true   # avoid the unrelated duplicate guard
+before_rf="$(ch_ev_count context.resume_failed)"
+out="$(GLUERUN_PLANNER_SESSION=1 GLUERUN_RUNNER="$CH_STUB" STUB_NOW="$NOW" STUB_RESUME_RC86=1 \
+  "$GT" --node "$CH_NODE" --count 1 2>&1 || true)"
+assert_contains "$out" "generated:" "rc86: planning completes as fresh"
+# Two invocations: the first (resume) with --resume-session, the second fresh.
+inv="$(grep -c '^INVOCATION$' "$CH_ARGS" || echo 0)"
+assert_eq "$inv" "2" "rc86: expected exactly two runner invocations (resume then fresh)"
+first_block="$(awk '/^INVOCATION$/{n++} n==1' "$CH_ARGS")"
+second_block="$(awk '/^INVOCATION$/{n++} n==2' "$CH_ARGS")"
+printf '%s\n' "$first_block" | grep -qx -- '--resume-session' \
+  || fail "rc86: first (resume) invocation lacked --resume-session"
+printf '%s\n' "$second_block" | grep -qx -- '--resume-session' \
+  && fail "rc86: fresh re-run still carried --resume-session"
+[[ "$(ch_ev_count context.resume_failed)" == "$((before_rf + 1))" ]] \
+  || fail "rc86: expected exactly one context.resume_failed event"
+data="$(ch_last_event_data context.resume_failed)"
+assert_eq "$(ch_field "$data" role)" "planner" "rc86: resume_failed role"
+assert_eq "$(ch_field "$data" sessionId)" "SID-PLANNER" "rc86: resume_failed sessionId"
+[[ ! -e "$CH_LEASE" ]] || fail "rc86: lease NOT released after the fresh fallback"
+ch_cleanup
+pass "consult: rc-86 emits context.resume_failed, re-runs fresh in the SAME run, releases the lease, completes as fresh"
+
 echo "ctx-planner-resume tests passed"
