@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T12:43:17Z — TASK-0029 — decide:amend-scope
+
+- Run: `ORIGIN-20260711T123620Z-25578`
+- Branch: `agent/plancritic/TASK-0029-critic-recheck-resume`
+- Authority: decider
+- Rationale: integration-gate-red -> amend-scope: Both failures are false positives: the present-but-uncalled guard scans use coarse `grep -rl` substring matching, so the resume file's definition of gluerun_ctx_critic_recheck_record_strategy (a superstring of ...record) and a header comment mentioning gluerun_plan_recritic_resume_decide trip the checks even though neither function is actually called. Expand scope minimally to the two sibling guard tests so the worker can tighten them (word-boundary match, strip comments, exclude the new file), then retry — the invariant is preserved, no proof weakened.
+
 ### 2026-07-11T12:19:36Z — TASK-0029 — accept
 
 - Run: `RUN-20260711T121352Z-87122`
