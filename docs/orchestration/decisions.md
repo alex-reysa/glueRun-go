@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T03:09:56Z — TASK-0010 — accept
+
+- Run: `RUN-20260711T025538Z-46499`
+- Branch: `agent/session/TASK-0010-planner-resume-sha-align`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T02:52:28Z — TASK-0009 — integrate
 
 - Run: `ORIGIN-20260711T024855Z-9399`
