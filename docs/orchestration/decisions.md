@@ -2,6 +2,27 @@
 
 ## Decision Log
 
+### 2026-07-11T15:13:00Z — TASK-0032 — integrate
+
+- Run: `ORIGIN-20260711T150330Z-20887`
+- Branch: `agent/plancritic/TASK-0032-critic-recheck-locate`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0032-critic-recheck-locate (a349816471c309cb58f2b38f4f914c0afd588404) into agent/integration as 41de4ee0e87173d459abcf529f1b73f77a61258e; gate green; acceptance=accepted
+
+### 2026-07-11T15:08:21Z — TASK-0031 — integrate
+
+- Run: `ORIGIN-20260711T150330Z-20887`
+- Branch: `agent/plancritic/TASK-0031-critic-recheck-run`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0031-critic-recheck-run (a944d5ef01ecafec6f58466df35c4058010ef179) into agent/integration as e8877dab2ab5d5ddcaafb2a7d1cf54aa7de848b5; gate green; acceptance=accepted
+
+### 2026-07-11T15:03:26Z — TASK-0032 — accept
+
+- Run: `RUN-20260711T145257Z-92007`
+- Branch: `agent/plancritic/TASK-0032-critic-recheck-locate`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T14:47:15Z — TASK-0031 — accept
 
 - Run: `RUN-20260711T143746Z-89109`
