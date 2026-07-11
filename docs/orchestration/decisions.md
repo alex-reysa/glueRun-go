@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T09:30:18Z — TASK-0023 — integrate
+
+- Run: `ORIGIN-20260711T092555Z-95662`
+- Branch: `agent/plancritic/TASK-0023-plan-revise-loop`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0023-plan-revise-loop (b7d0e623ddcd15e1c0240dd39daf0dc88a8fb0ab) into agent/integration as e443eb398bebeda1dc0dc0b96cc34a898b14750c; gate green; acceptance=accepted
+
 ### 2026-07-11T09:25:28Z — TASK-0023 — accept
 
 - Run: `RUN-20260711T084946Z-31359`
