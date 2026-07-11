@@ -55,6 +55,11 @@ fi
 
 gluerun_require_target_branch
 
+# Planner session-meta lineage anchor: resolve the target-branch head at planning
+# time (the head a resumable planner session would be anchored to). Used only by
+# the default-OFF GLUERUN_PLANNER_SESSION finalize hook below; unused otherwise.
+planner_head_sha="$(git -C "$GLUERUN_ROOT" rev-parse "$GLUERUN_TARGET_BRANCH" 2>/dev/null || true)"
+
 # Pick the first eligible ungated DAG node from the manifest and authoritative
 # gate-result records.
 if [[ -n "$node_override" ]]; then
@@ -227,8 +232,18 @@ out="$run_dir/planner-out.md"
 codex_log="$run_dir/planner-codex.log"
 codex_runner="${GLUERUN_RUNNER:-${GLUERUN_CODEX_RUNNER:-$SCRIPT_DIR/codex-run.sh}}"
 codex_exit=0
-"$codex_runner" --level readonly -C "$GLUERUN_ROOT" --run-id "$run_id" \
-  --prompt-file "$prompt_file" --output-last-message "$out" >"$codex_log" 2>&1 || codex_exit=$?
+# Planner session-meta hook (default-OFF): when GLUERUN_PLANNER_SESSION=1, offer
+# the runner the canonical per-node planner session-meta path — mirroring the
+# worker/reviewer --session-meta wiring in l1-drive.sh. With the knob unset/0 no
+# --session-meta arg is added, so the invocation is byte-identical to prior.
+planner_runner_args=(--level readonly -C "$GLUERUN_ROOT" --run-id "$run_id" \
+  --prompt-file "$prompt_file" --output-last-message "$out")
+planner_session_meta=""
+if [[ "${GLUERUN_PLANNER_SESSION:-0}" == "1" ]]; then
+  planner_session_meta="$(gluerun_ctx_planner_session_path "$active_node")"
+  [[ -n "$planner_session_meta" ]] && planner_runner_args+=(--session-meta "$planner_session_meta")
+fi
+"$codex_runner" "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
 
 if [[ "$codex_exit" -ne 0 ]]; then
   failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out")"
@@ -424,6 +439,11 @@ PY
       echo "generated:$tid"
     fi
   done
+  # Accepted batch: persist the finalized planner session-meta (default-OFF; a
+  # no-op unless GLUERUN_PLANNER_SESSION=1). Never fatal.
+  gluerun_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
+    "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
+    "$planner_head_sha" 1 >/dev/null 2>&1 || true
   exit 0
 fi
 
@@ -470,6 +490,11 @@ if [[ -z "$stage_dir" ]]; then
 fi
 
 mv "$tmp" "$dest"
+# Accepted single task: persist the finalized planner session-meta (default-OFF;
+# a no-op unless GLUERUN_PLANNER_SESSION=1). Never fatal.
+gluerun_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
+  "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
+  "$planner_head_sha" 1 >/dev/null 2>&1 || true
 if [[ -n "$stage_dir" ]]; then
   gluerun_append_event "planner.staged" "task staged" \
     "{\"area\":\"$active_area\",\"taskId\":\"$next_id\",\"runId\":\"$run_id\",\"node\":\"$active_node\"}"
