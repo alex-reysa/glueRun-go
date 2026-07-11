@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T06:01:44Z — TASK-0016 — accept
+
+- Run: `RUN-20260711T054027Z-89603`
+- Branch: `agent/plancritic/TASK-0016-critique-import-gate-disposition`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T05:34:21Z — TASK-0015 — integrate
 
 - Run: `ORIGIN-20260711T053029Z-43979`
