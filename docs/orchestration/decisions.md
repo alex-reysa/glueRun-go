@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T07:27:16Z — TASK-0019 — accept
+
+- Run: `RUN-20260711T071346Z-98750`
+- Branch: `agent/plancritic/TASK-0019-plan-revise-decider`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T07:06:39Z — TASK-0018 — integrate
 
 - Run: `ORIGIN-20260711T070237Z-14597`
