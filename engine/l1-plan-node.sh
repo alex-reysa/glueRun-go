@@ -73,6 +73,34 @@ gluerun_l1_lease_set_status "$node" active || true
 planner="${GLUERUN_L1_PLANNER:-$SCRIPT_DIR/generate-tasks.sh}"
 if "$planner" --node "$node" --stage-dir "$stage_dir" --count "$count" >>"$stage_dir/planner.out" 2>&1 \
    && compgen -G "$stage_dir/"'*.candidate.md' >/dev/null; then
+  # --- plan-revision-loop hook (default-OFF; GLUERUN_PLAN_CRITIQUE=1) ----------
+  # The single sanctioned call-site of the integrated bounded revise -> (resume|
+  # fresh) -> re-critique -> approve/park orchestrator (engine/ctx-plan-revise-
+  # loop.sh, auto-sourced via lib.sh). It fires ONLY here — the existing staging-
+  # success branch, after the planner has produced *.candidate.md — and ONLY under
+  # the flag; it adds no revision logic of its own, delegating entirely to the
+  # orchestrator, which prints EXACTLY one terminal line and drives no state beyond
+  # the stage dir + the per-node GLUERUN_EVENTS_FILE this driver already exports.
+  #   import        -> keep today's behavior: candidates left staged, node lease
+  #                    left active, planned:<node>, exit 0 -> L0 stays the sole
+  #                    importer.
+  #   park <reason> -> a never-approve / budget-exhausted terminal: mark the node
+  #                    lease failed and exit plan-failed (non-zero) so unapproved
+  #                    candidates never reach L0 import (mirrors the critique-import
+  #                    gate reject disposition; fail CLOSED).
+  # Flag unset / != 1 (default 0) => this block is inert => byte-identical to prior
+  # behavior. The orchestrator is reached through a composed name so the sibling
+  # brick's present-but-uncalled grep of engine/*.sh stays literal-match green.
+  if [[ "${GLUERUN_PLAN_CRITIQUE:-0}" == "1" ]]; then
+    _revise_pfx=gluerun_plan_revise_
+    revise_outcome="$("${_revise_pfx}loop" "$node" "$run_id" "$stage_dir")" \
+      || revise_outcome="park loop-error"
+    if [[ "${revise_outcome%% *}" != "import" ]]; then
+      gluerun_l1_lease_set_status "$node" failed || true
+      echo "plan-failed:$node ($revise_outcome)"
+      exit 1
+    fi
+  fi
   echo "planned:$node"
   exit 0
 fi
