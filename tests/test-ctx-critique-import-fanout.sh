@@ -17,8 +17,9 @@ set -uo pipefail
 #     each recording exactly one origin.l1_import_rejected event with reason
 #     plan-critique and setting the node lease to failed.
 #   - Withheld nodes are counted in the l1_import_rejections= summary line.
-#   - present-but-uncalled: no existing engine path invokes the new function and
-#     engine/reconcile.sh still calls gluerun_l1_fanout.
+#   - reconcile wiring: engine/reconcile.sh's L1 parallel branch routes the import
+#     fanout through the orchestrator behind GLUERUN_PLAN_CRITIQUE (ON) and through
+#     plain gluerun_l1_fanout when the knob is 0/unset (OFF byte-identical).
 #
 # Pure bash + fixtures; NO real runner (the planner driver and the default critic
 # runner are stubbed). Modelled on tests/test-l1-parallel.sh's real-DAG fixture.
@@ -333,22 +334,55 @@ test_on_enforcement_revise() { run_on_case revise; }
 test_on_enforcement_park()   { run_on_case park; }
 
 # ---------------------------------------------------------------------------
-# present-but-uncalled: no existing engine path invokes the orchestrator, and
-# engine/reconcile.sh still calls gluerun_l1_fanout (byte-identical prior wiring).
+# reconcile wiring (flipped from present-but-uncalled): engine/reconcile.sh now
+# legitimately invokes the orchestrator in its L1 parallel branch behind the
+# GLUERUN_PLAN_CRITIQUE knob (ON routes to gluerun_ctx_critique_import_fanout),
+# while the OFF path retains a plain gluerun_l1_fanout call so default behavior
+# is byte-identical. Assert the wiring at the source level: the ON arm selects
+# the orchestrator, the OFF arm selects plain fanout, both feeding l1_out.
 # ---------------------------------------------------------------------------
-test_present_but_uncalled() {
-  local callers
-  callers="$(grep -rl 'gluerun_ctx_critique_import_fanout' \
-    "$SCRIPT_DIR" 2>/dev/null | grep -v '/ctx-critique-import-fanout.sh$' || true)"
-  [[ -z "$callers" ]] || fail "orchestrator must be present-but-uncalled; referenced by: $callers"
-  grep -q 'gluerun_l1_fanout' "$SCRIPT_DIR/reconcile.sh" \
-    || fail "reconcile.sh must still call gluerun_l1_fanout (wiring is the follow-up slice)"
+test_reconcile_wired_behind_knob() {
+  local rc="$SCRIPT_DIR/reconcile.sh"
+  # The orchestrator is now invoked by reconcile.sh with the same (run_id, base_sha).
+  grep -q 'gluerun_ctx_critique_import_fanout "$run_id" "$base_sha"' "$rc" \
+    || fail "reconcile.sh must invoke gluerun_ctx_critique_import_fanout \"\$run_id\" \"\$base_sha\""
+  # The OFF path still calls plain gluerun_l1_fanout with the same args.
+  grep -q 'gluerun_l1_fanout "$run_id" "$base_sha"' "$rc" \
+    || fail "reconcile.sh must retain gluerun_l1_fanout \"\$run_id\" \"\$base_sha\" for the OFF path"
+  # Structural: the L1 parallel branch gates the routing on GLUERUN_PLAN_CRITIQUE,
+  # with the orchestrator in the ON arm and plain fanout in the OFF (else) arm.
+  python3 - "$rc" <<'PY' || fail "reconcile.sh L1 parallel branch not gated correctly on GLUERUN_PLAN_CRITIQUE"
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+# Locate the L1 parallel branch opener (GLUERUN_ENABLE_L1_PARALLEL == "1" ... then).
+start = next(i for i, l in enumerate(lines)
+             if 'GLUERUN_ENABLE_L1_PARALLEL' in l and '== "1"' in l and 'then' in l)
+indent = len(lines[start]) - len(lines[start].lstrip())
+# The outer else closes the branch at the same indentation as its opening `if`.
+end = None
+for i in range(start + 1, len(lines)):
+    l = lines[i]
+    li = len(l) - len(l.lstrip())
+    if l.strip() == 'else' and li == indent:
+        end = i
+        break
+assert end is not None, "no matching outer else for the L1 parallel branch"
+block = "\n".join(lines[start + 1:end])
+assert 'GLUERUN_PLAN_CRITIQUE' in block, "L1 branch must gate routing on GLUERUN_PLAN_CRITIQUE"
+# Anchor on the actual call invocations (with args), not comment mentions.
+gate = block.index('GLUERUN_PLAN_CRITIQUE')
+orch = block.index('gluerun_ctx_critique_import_fanout "$run_id" "$base_sha"')
+fan = block.index('gluerun_l1_fanout "$run_id" "$base_sha"')
+# ON: the orchestrator call follows the knob gate; OFF: plain fanout is the else arm.
+assert gate < orch, "orchestrator call must sit under the GLUERUN_PLAN_CRITIQUE gate"
+assert orch < fan, "plain fanout must be the OFF (else) arm after the ON orchestrator call"
+PY
 }
 
 test_observe_only_equivalent_to_plain_fanout
 test_observe_only_ignores_reject_verdict
 test_on_enforcement_revise
 test_on_enforcement_park
-test_present_but_uncalled
+test_reconcile_wired_behind_knob
 
 echo "ctx-critique-import-fanout tests passed"

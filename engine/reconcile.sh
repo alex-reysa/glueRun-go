@@ -245,7 +245,16 @@ if [[ "$mode" == "actuate" ]]; then
   if [[ ${#ready_tasks[@]} -eq 0 && "$dispatch_budget" -gt 0 && "${GLUERUN_GENERATE:-1}" == "1" ]]; then
     if [[ "${GLUERUN_ENABLE_L1_PARALLEL:-0}" == "1" ]]; then
       echo "actuation: ready queue empty; L1 parallel fanout (cap ${GLUERUN_MAX_L1_CONCURRENT:-3})..."
-      l1_out="$(gluerun_l1_fanout "$run_id" "$base_sha" 2>&1)" || true
+      # Plan-critique knob (default-OFF): when ON, route the L1 import fanout
+      # through the integrated critique-aware orchestrator so L0 import honors the
+      # plan critic verdict; it mirrors gluerun_l1_fanout's args and summary lines
+      # (l1_planner_failures= / l1_import_rejections=), so the parsing below is
+      # unchanged. When OFF (0/unset) this is byte-identical to prior behavior.
+      if [[ "${GLUERUN_PLAN_CRITIQUE:-0}" == "1" ]]; then
+        l1_out="$(gluerun_ctx_critique_import_fanout "$run_id" "$base_sha" 2>&1)" || true
+      else
+        l1_out="$(gluerun_l1_fanout "$run_id" "$base_sha" 2>&1)" || true
+      fi
       printf '%s\n' "$l1_out" | sed 's/^/  l1: /'
       planner_failures_this_run="$(printf '%s\n' "$l1_out" | sed -n 's/^l1_planner_failures=//p' | tail -1)"
       l1_import_rejections_this_run="$(printf '%s\n' "$l1_out" | sed -n 's/^l1_import_rejections=//p' | tail -1)"
