@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T01:32:14Z — TASK-0006 — integrate
+
+- Run: `ORIGIN-20260711T012841Z-77300`
+- Branch: `agent/foundation/TASK-0006-l1-drive-paired-audit-hook`
+- Authority: origin
+- Rationale: merged agent/foundation/TASK-0006-l1-drive-paired-audit-hook (acc16924e5df5f4df615ce5d45c275c9e316b47d) into agent/integration as c2698941147acb8269a556dd8eeefe04926ad0e9; gate green; acceptance=accepted
+
 ### 2026-07-11T01:27:55Z — TASK-0006 — accept
 
 - Run: `RUN-20260711T011009Z-85006`
