@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T02:52:28Z — TASK-0009 — integrate
+
+- Run: `ORIGIN-20260711T024855Z-9399`
+- Branch: `agent/session/TASK-0009-planner-resume-decider`
+- Authority: origin
+- Rationale: merged agent/session/TASK-0009-planner-resume-decider (52955c2ea1a7b3c8af0d51108e8d7a6fbf99c055) into agent/integration as 629d5767f190d58308ddd7135026d6191408f3c8; gate green; acceptance=accepted
+
 ### 2026-07-11T02:47:51Z — TASK-0009 — accept
 
 - Run: `RUN-20260711T023045Z-18167`
