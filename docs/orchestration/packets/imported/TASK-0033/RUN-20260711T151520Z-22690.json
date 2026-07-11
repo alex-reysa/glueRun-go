@@ -1,0 +1,83 @@
+{
+  "schema": "gluerun.orchestration.state-packet.v0",
+  "packetId": "RUN-20260711T151520Z-22690-packet",
+  "runId": "RUN-20260711T151520Z-22690",
+  "taskId": "TASK-0033",
+  "area": "plancritic",
+  "role": "l2-developer",
+  "status": "accepted",
+  "baseRef": "41de4ee0e87173d459abcf529f1b73f77a61258e",
+  "branch": "agent/plancritic/TASK-0033-critic-recheck-drive-hook",
+  "headSha": "ed98ee9b5e041f7cad4074bc9f2c324fbe2911c7",
+  "workspace": "/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.worktrees/TASK-0033",
+  "ownedFiles": [
+    "engine/l1-drive.sh",
+    "tests/test-l1-drive-critic-recheck.sh"
+  ],
+  "changedFiles": [
+    "engine/l1-drive.sh",
+    "tests/test-l1-drive-critic-recheck.sh"
+  ],
+  "commands": [
+    {
+      "cmd": "bash tests/test-l1-drive-critic-recheck.sh",
+      "exitCode": 1,
+      "logRef": ".gluerun-evidence/red.log"
+    },
+    {
+      "cmd": "bash tests/test-l1-drive-critic-recheck.sh",
+      "exitCode": 0,
+      "logRef": ".gluerun-evidence/green.log"
+    },
+    {
+      "cmd": "bash tests/run.sh",
+      "exitCode": 0,
+      "logRef": ".gluerun-evidence/regression.log"
+    }
+  ],
+  "tests": [
+    {
+      "name": "test-l1-drive-critic-recheck.sh",
+      "phase": "red",
+      "status": "fail",
+      "logRef": ".gluerun-evidence/red.log"
+    },
+    {
+      "name": "test-l1-drive-critic-recheck.sh",
+      "phase": "green",
+      "status": "pass",
+      "logRef": ".gluerun-evidence/green.log"
+    },
+    {
+      "name": "tests/run.sh (full suite: 54 passed, 0 failed)",
+      "phase": "regression",
+      "status": "pass",
+      "logRef": ".gluerun-evidence/regression.log"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "red-log",
+      "ref": ".gluerun-evidence/red.log"
+    },
+    {
+      "kind": "green-log",
+      "ref": ".gluerun-evidence/green.log"
+    },
+    {
+      "kind": "regression-log",
+      "ref": ".gluerun-evidence/regression.log"
+    },
+    {
+      "kind": "gate-check",
+      "ref": "runs/RUN-20260711T151520Z-22690/gate-check.json"
+    },
+    {
+      "kind": "audit",
+      "ref": "runs/RUN-20260711T151520Z-22690/audit.json"
+    }
+  ],
+  "blockers": [],
+  "nextAction": "import into control state and reconcile",
+  "createdAt": "2026-07-11T15:31:00Z"
+}

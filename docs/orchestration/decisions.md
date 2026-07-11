@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-11T15:49:11Z — TASK-0033 — integrate
+
+- Run: `ORIGIN-20260711T154423Z-43106`
+- Branch: `agent/plancritic/TASK-0033-critic-recheck-drive-hook`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0033-critic-recheck-drive-hook (ed98ee9b5e041f7cad4074bc9f2c324fbe2911c7) into agent/integration as aac0273fa4127b6b910929f11afec1a2cf979d9a; gate green; acceptance=accepted
+
+### 2026-07-11T15:44:17Z — TASK-0033 — accept
+
+- Run: `RUN-20260711T151520Z-22690`
+- Branch: `agent/plancritic/TASK-0033-critic-recheck-drive-hook`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T15:13:00Z — TASK-0032 — integrate
 
 - Run: `ORIGIN-20260711T150330Z-20887`
