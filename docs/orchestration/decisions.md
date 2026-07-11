@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-11T19:29:05Z — TASK-0038 — integrate
+
+- Run: `ORIGIN-20260711T192349Z-88400`
+- Branch: `agent/packets/TASK-0038-assumption-ledger-carry`
+- Authority: origin
+- Rationale: merged agent/packets/TASK-0038-assumption-ledger-carry (854e25b1f34c08772d85ee4928f246a7d53e0ecc) into agent/integration as 1a0dff058e722e82f8581a5cd807a4f1e90de721; gate green; acceptance=accepted
+
+### 2026-07-11T19:23:40Z — TASK-0038 — accept
+
+- Run: `RUN-20260711T191915Z-78325`
+- Branch: `agent/packets/TASK-0038-assumption-ledger-carry`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T19:17:12Z — TASK-0037 — integrate
 
 - Run: `ORIGIN-20260711T191200Z-22180`
