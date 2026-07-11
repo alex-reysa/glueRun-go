@@ -26,13 +26,23 @@ tree_hash() {
 [[ -f "$GLUERUN" ]] || fail "cli/gluerun not present: $GLUERUN"
 [[ -f "$EXTRACTOR" ]] || fail "extractor not present: $EXTRACTOR"
 
-# Pin the engine to this repo so `metrics` resolves ctx-metrics.sh without a
-# real install or repo state (run.sh scrubs inherited GLUERUN_* before us).
-export GLUERUN_ENGINE_HOME="$ENGINE_HOME"
-
 # --- Fixture: two runs' attempts indexes + an events log ---------------------
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+
+# Hermetic engine home: run the CLI against a temp skeleton holding only the
+# bits under test. Pinning GLUERUN_ENGINE_HOME to the live repo would make the
+# no-side-effect assertion below vacuous-or-false depending on where the suite
+# runs (a pristine task worktree has no .gluerun-state; the ops tree, where
+# integrate gates run, always has one). resolve_engine_home only requires
+# engine/lib.sh to exist, and the extractor is self-contained.
+EHOME="$tmp/engine-home"
+mkdir -p "$EHOME/engine" "$EHOME/cli"
+: > "$EHOME/engine/lib.sh"
+cp "$EXTRACTOR" "$EHOME/engine/ctx-metrics.sh"
+cp "$GLUERUN" "$EHOME/cli/gluerun"
+GLUERUN="$EHOME/cli/gluerun"
+export GLUERUN_ENGINE_HOME="$EHOME"
 runs="$tmp/runs"
 events="$tmp/events.ndjson"
 mkdir -p "$runs/RUN-A/attempts" "$runs/RUN-B/attempts"
@@ -112,7 +122,7 @@ after="$(tree_hash "$runs")"
 after_events="$(shasum "$events" | awk '{print $1}')"
 [[ "$before" == "$after" ]] || fail "runs dir mutated by metrics subcommand (not read-only)"
 [[ "$before_events" == "$after_events" ]] || fail "events file mutated by metrics subcommand"
-[[ ! -e "$ENGINE_HOME/.gluerun-state" ]] || fail "metrics wrote a real .gluerun-state artifact"
+[[ ! -e "$EHOME/.gluerun-state" ]] || fail "metrics wrote a real .gluerun-state artifact"
 
 # --- Fail-safe: empty/missing runs dir + events file -> zeroed, exit 0 -------
 "$GLUERUN" metrics --json --runs-dir "$tmp/no-such-runs" --events-file "$tmp/no-such.ndjson" \
