@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-11T11:42:38Z — TASK-0027 — integrate
+
+- Run: `ORIGIN-20260711T113803Z-48407`
+- Branch: `agent/plancritic/TASK-0027-recheck-sampling-gate`
+- Authority: origin
+- Rationale: merged agent/plancritic/TASK-0027-recheck-sampling-gate (4d6e867532f5b42566e5e727d104f9e0386e6bf7) into agent/integration as 4fd04cad46e8d3a63bf5c1541e42d065fbff6899; gate green; acceptance=accepted
+
 ### 2026-07-11T11:37:53Z — TASK-0027 — accept
 
 - Run: `RUN-20260711T111740Z-39191`
