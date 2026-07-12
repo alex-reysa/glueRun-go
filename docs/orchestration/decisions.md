@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T01:07:43Z — TASK-0045 — integrate
+
+- Run: `ORIGIN-20260712T010144Z-14983`
+- Branch: `agent/routing/TASK-0045-route-resume-gates`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0045-route-resume-gates (55fcbd77128f27cb0f049597445637f3bd567658) into agent/integration as d82cc225d2e25e7ebbba61b100a3d4fa5d672673; gate green; acceptance=accepted
+
+### 2026-07-12T01:01:20Z — TASK-0045 — accept
+
+- Run: `RUN-20260712T005240Z-95045`
+- Branch: `agent/routing/TASK-0045-route-resume-gates`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T00:39:23Z — TASK-0044 — integrate
 
 - Run: `ORIGIN-20260712T003321Z-58425`
