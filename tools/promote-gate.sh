@@ -18,6 +18,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 node="${1:?usage: tools/promote-gate.sh NODE [EVIDENCE_CMD]}"
 cmd="${2:-bash tests/run.sh}"
 
+# Eval-area nodes are operator-completion authority: their requiredCompletion
+# (merged experiment report, release polish) is not provable by the test
+# suite, so a green suite must never promote them. Explicit operator override
+# only.
+case "$node" in
+  experiment-run|polish-release)
+    if [[ "${GLUERUN_FORCE_EVAL_GATE:-0}" != "1" ]]; then
+      echo "promote-gate: REFUSED — $node is an operator-driven eval node; set GLUERUN_FORCE_EVAL_GATE=1 to promote deliberately" >&2
+      exit 3
+    fi
+    ;;
+esac
+
 gates_dir="$ROOT/docs/orchestration/gates"
 logs_dir="$gates_dir/logs"
 mkdir -p "$logs_dir"
