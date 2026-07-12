@@ -337,6 +337,37 @@ cmd_graph() {
   esac
 }
 
+# Experiment raw-metrics report: delegate into the integrated experiment engine
+# suite (engine/ctx-experiment-*.sh: gluerun_ctx_experiment_summary_json /
+# _delta_json / _pipeline_md), auto-sourced by the ctx-loader block when the
+# engine entrypoint runs; here we source the experiment modules directly since
+# the CLI never loads lib.sh. Adds NO metric logic of its own — it resolves the
+# engine, sources the modules in the same sorted order as the ctx-loader (so no
+# definition is shadowed), resolves sensible runs/events/metrics defaults, and
+# forwards to the integrated entry points. Reached only when
+# GLUERUN_CTX_EXPERIMENT=1 (the dispatch arm refuses otherwise, exactly as an
+# unknown command did before this hook). Mirrors cmd_graph structurally.
+cmd_experiment_report() {
+  local sub="${1:-}"; shift || true
+  local home; home="$(resolve_engine_home)"
+  [[ -f "$home/engine/ctx-experiment-summary.sh" ]] || die "engine $home has no engine/ctx-experiment-summary.sh"
+  local m
+  for m in "$home"/engine/ctx-experiment-*.sh; do
+    [[ -f "$m" ]] || continue
+    # shellcheck disable=SC1090
+    source "$m"
+  done
+  local runs_default="${GLUERUN_RUNS_DIR:-}"
+  local events_default="${GLUERUN_EVENTS_FILE:-}"
+  local metrics_default="${GLUERUN_CTX_EXPERIMENT_METRICS_FILE:-}"
+  case "$sub" in
+    summary) gluerun_ctx_experiment_summary_json  "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
+    delta)   gluerun_ctx_experiment_delta_json    "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
+    tables)  gluerun_ctx_experiment_pipeline_md   "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
+    *) die "experiment-report: unknown subcommand: ${sub:-(none)} (usage: gluerun experiment-report <summary|delta|tables> [runs_dir] [events_file] [metrics_file])" ;;
+  esac
+}
+
 cmd_console() {
   local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
   local server="$home/plugin/scripts/gluerun_graph_server.py"
@@ -381,6 +412,14 @@ EOF
   graph rebuild|sync|query <neighbors|lineage|open-contradictions> [args]   context graph (GLUERUN_CTX_GRAPH)
 EOF
   fi
+  # Flag-gated: the experiment-report subcommand line appears ONLY when
+  # GLUERUN_CTX_EXPERIMENT=1, keeping help output byte-identical to the pre-hook
+  # binary when it is off.
+  if [[ "${GLUERUN_CTX_EXPERIMENT:-0}" == "1" ]]; then
+    cat <<'EOF'
+  experiment-report summary|delta|tables [runs_dir] [events_file] [metrics_file]   experiment raw metrics (GLUERUN_CTX_EXPERIMENT)
+EOF
+  fi
 }
 
 main() {
@@ -399,6 +438,7 @@ main() {
     promote-gate)  cmd_promote_gate "$@" ;;
     metrics)       cmd_metrics "$@" ;;
     graph)         [[ "${GLUERUN_CTX_GRAPH:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_graph "$@" ;;
+    experiment-report) [[ "${GLUERUN_CTX_EXPERIMENT:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_experiment_report "$@" ;;
     console)       cmd_console "$@" ;;
     init)          cmd_init "$@" ;;
     doctor)        cmd_doctor "$@" ;;
