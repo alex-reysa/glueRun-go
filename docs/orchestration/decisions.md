@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-12T21:46:50Z — TASK-0095 — integrate
+
+- Run: `ORIGIN-20260712T212958Z-67895`
+- Branch: `agent/eval/TASK-0095-armstate-drive-hook`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0095-armstate-drive-hook (4324ad1178fe1d6603b2c1a38207cbee9af6f181) into agent/integration as 810c3ba46a23ea4e05cafd92b2a97d6203824a29; gate green; acceptance=accepted
+
+### 2026-07-12T21:38:31Z — TASK-0094 — integrate
+
+- Run: `ORIGIN-20260712T212958Z-67895`
+- Branch: `agent/graph/TASK-0094-wire-context-mappers`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0094-wire-context-mappers (2f254129991cdd8de1cd9f9608aad0ab3cc0c712) into agent/integration as c106f9b476d7f1a3e1b36d5d3c56e66020c6a465; gate green; acceptance=accepted
+
+### 2026-07-12T21:15:31Z — TASK-0094 — accept
+
+- Run: `RUN-20260712T203946Z-72285`
+- Branch: `agent/graph/TASK-0094-wire-context-mappers`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T21:08:39Z — TASK-0095 — accept
+
+- Run: `RUN-20260712T203946Z-72368`
+- Branch: `agent/eval/TASK-0095-armstate-drive-hook`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T20:36:42Z — TASK-0093 — integrate
 
 - Run: `ORIGIN-20260712T201952Z-78933`
