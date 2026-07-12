@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-12T22:17:49Z — TASK-0097 — integrate
+
+- Run: `ORIGIN-20260712T220908Z-38610`
+- Branch: `agent/eval/TASK-0097-experiment-arm-audit`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0097-experiment-arm-audit (872c924c59dde7939e551ee814362206cbe4d7e5) into agent/integration as eb212f0833952e1fb7d96ffe47606a47cc2ff03b; gate green; acceptance=accepted
+
 ### 2026-07-12T22:06:05Z — TASK-0096 — integrate
 
 - Run: `ORIGIN-20260712T215723Z-47848`
