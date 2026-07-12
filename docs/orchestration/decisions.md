@@ -858,3 +858,18 @@
   the codex window the loop + operator completed TASK-0040/0041,
   promoted assumption-ledger; artifact-secret-scan gate not yet
   promoted — next loop cycles handle it via node-complete signals.
+
+- 2026-07-12 (CTO ops, gate-race lesson): a promote-gate evidence run
+  launched concurrently with a live reconcile cycle produced a gate-result
+  file that was silently removed before it could be committed (never
+  entered any commit; no stash; clean tree after run
+  ORIGIN-20260712T000110Z). Operational rule: promote gates only when no
+  reconcile is in flight; the master loop's own promote path already
+  satisfies this by construction. Engine polish backlog: reconcile should
+  either preserve or explicitly reject unexpected untracked files under
+  docs/orchestration/gates/, not silently drop them. Also: the cycle-3
+  planner refusal ("behaviorally complete") was contradicted one cycle
+  later by a genuine in-scope coverage gap (TASK-0044,
+  plan-critique-raw.json) — premature promotion was avoided only by the
+  race; promote on refusal only when the refusal survives an integrated
+  frontier re-read.
