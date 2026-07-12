@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T12:47:15Z — TASK-0070 — integrate
+
+- Run: `ORIGIN-20260712T124010Z-7451`
+- Branch: `agent/routing/TASK-0070-rehydrate-manifest-schema`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0070-rehydrate-manifest-schema (8db20d75e15896efdd09eea6d90a27098528744c) into agent/integration as d0ad36391abc706865ce90ec8f5878c1d5e3a4d4; gate green; acceptance=accepted
+
+### 2026-07-12T12:40:03Z — TASK-0070 — accept
+
+- Run: `RUN-20260712T123404Z-96331`
+- Branch: `agent/routing/TASK-0070-rehydrate-manifest-schema`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T12:29:07Z — TASK-0069 — integrate
 
 - Run: `ORIGIN-20260712T121547Z-63183`
