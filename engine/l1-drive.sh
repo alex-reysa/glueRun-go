@@ -451,10 +451,24 @@ rehydrate_inject_packet() {
   # The render internally gates on GLUERUN_CTX_MANIFEST (default 0) and the
   # OPTIONAL gluerun.config.json `contextManifest` field, so with either OFF it
   # returns empty and nothing is appended — the durable-only injection is
-  # byte-identical. The `implement` trigger matches the (fresh) implementer step
-  # this rehydration augments. Non-fatal: on any error nothing is appended.
+  # byte-identical. The trigger set comes from the pure builder
+  # gluerun_ctx_rehydrate_authored_triggers (TASK-0064): the run's deterministic,
+  # de-duplicated `load-when` tokens (role `implementer`, step `implement`, task
+  # id) rather than the bare literal `implement`, so authored entries scoped to a
+  # role or task — not only the literal step — become eligible. The enriched set
+  # is a strict superset of {implement}, so implement-scoped entries still match
+  # (backward compatible). The manifest-record site
+  # (engine/ctx-rehydrate-event.sh) passes the IDENTICAL set so the injected and
+  # recorded authored entries stay consistent. Minimal delegation: the set is
+  # computed and passed expanded; no selection/render logic is inlined here.
+  # Non-fatal: on any error nothing is appended.
+  local -a authored_triggers=()
+  local trigger
+  while IFS= read -r trigger; do
+    [[ -n "$trigger" ]] && authored_triggers+=("$trigger")
+  done < <(gluerun_ctx_rehydrate_authored_triggers implementer implement "$task_id" 2>/dev/null)
   local authored
-  authored="$(gluerun_ctx_rehydrate_authored_config_render implement 2>/dev/null)" || authored=""
+  authored="$(gluerun_ctx_rehydrate_authored_config_render ${authored_triggers[@]+"${authored_triggers[@]}"} 2>/dev/null)" || authored=""
   [[ -n "$authored" ]] || return 0
   {
     echo ""

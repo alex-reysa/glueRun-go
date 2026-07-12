@@ -67,16 +67,28 @@ gluerun_ctx_rehydrate_event_data() {
   # OPTIONAL authored-knowledge counterpart (node rehydrate-path; NOT part of
   # requiredCompletion, does NOT gate the node). ALSO record the config-gated
   # authored manifest entries alongside the durable sources, using the SAME
-  # `implement` trigger TASK-0062 injects with so the recorded authored entries
-  # match the injected authored section (consistency invariant). This is a
-  # minimal delegation into the integrated config gate (TASK-0058–0061): no
+  # trigger set TASK-0062 injects with so the recorded authored entries match the
+  # injected authored section (consistency invariant). The set comes from the pure
+  # builder gluerun_ctx_rehydrate_authored_triggers (TASK-0064): the run's
+  # deterministic, de-duplicated `load-when` tokens (role `implementer`, step
+  # `implement`, task id) rather than the bare literal `implement`, so authored
+  # entries scoped to a role or task — not only the literal step — become
+  # eligible. The enriched set is a strict superset of {implement}, so
+  # implement-scoped entries still match (backward compatible), and the injection
+  # site (engine/l1-drive.sh) passes the IDENTICAL set. This is a minimal
+  # delegation into the integrated config gate (TASK-0058–0061): no
   # config/selection/render logic is inlined here. The gate internally checks
   # GLUERUN_CTX_MANIFEST (default 0) and the OPTIONAL gluerun.config.json
   # `contextManifest` field, so with either OFF it returns empty and nothing is
   # merged — OFF-parity keeps the event data byte-identical to the durable-only
   # payload. Non-fatal: on any error nothing is merged.
+  local -a authored_triggers=()
+  local trigger
+  while IFS= read -r trigger; do
+    [[ -n "$trigger" ]] && authored_triggers+=("$trigger")
+  done < <(gluerun_ctx_rehydrate_authored_triggers implementer implement "$task_id" 2>/dev/null)
   local authored
-  authored="$(gluerun_ctx_rehydrate_authored_config_manifest implement 2>/dev/null)" || authored=""
+  authored="$(gluerun_ctx_rehydrate_authored_config_manifest ${authored_triggers[@]+"${authored_triggers[@]}"} 2>/dev/null)" || authored=""
 
   # Embed the metadata scalars and the NESTED manifest object into a single
   # compact JSON object. Pure: reads its argv, writes only stdout.
