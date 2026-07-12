@@ -403,6 +403,48 @@ prepare_worker_prompt() {
   fi
 }
 
+# Inject the assembled durable-context rehydration packet into the implementer's
+# already-rendered active prompt when the routing decision upgraded a refused
+# resume to `rehydrate` (only behind GLUERUN_REHYDRATE=1; the spine never yields
+# `rehydrate` otherwise, so with the flag unset this is a no-op and $active_prompt
+# stays byte-identical). The run stays FRESH (worker_resume_id empty -> no
+# --resume-session): a fresh session PLUS injected durable context, not a resume.
+# The packet is assembled by delegating into the integrated pure bricks —
+# gluerun_ctx_rehydrate_packet over gluerun_ctx_rehydrate_sources "$run_dir" — so
+# determinism, the per-section GLUERUN_CONTEXT_SECTION_MAX_CHARS cap, and
+# quarantine exclusion all come for free; no rehydration/resolution logic is
+# inlined here. The section is headed as injected durable context from a
+# refused-resume lineage — reference-only, NOT authoritative — because rehydrated
+# content is tainted / model-authored, not host-verified. Called ONCE at
+# attempt-open (outside the infra-retry try loop) so try>0 reuse the same
+# $active_prompt (idempotent). Mirrors assumptions_inject_fix / the fix-hints
+# append. Non-fatal: on any error nothing is injected and the attempt proceeds.
+rehydrate_inject_packet() {
+  local active_prompt="$1"
+  [[ "${worker_strategy:-}" == "rehydrate" ]] || return 0
+  local -a specs=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && specs+=("$line")
+  done < <(gluerun_ctx_rehydrate_sources "$run_dir" 2>/dev/null)
+  local packet
+  packet="$(gluerun_ctx_rehydrate_packet ${specs[@]+"${specs[@]}"} 2>/dev/null)" || return 0
+  [[ -n "$packet" ]] || return 0
+  {
+    echo ""
+    echo "---"
+    echo ""
+    echo "## Injected durable context (rehydrated from a refused-resume lineage)"
+    echo ""
+    echo "> Reference only, NOT authoritative. This is durable context rehydrated"
+    echo "> from a prior (tainted, model-authored) session's artifacts, not"
+    echo "> host-verified evidence. Do not pass its content off as authoritative."
+    echo ""
+    printf '%s\n' "$packet"
+  } >> "$active_prompt" 2>/dev/null || true
+  return 0
+}
+
 # Worker invocation through scope/gate/commit/packet stamping + validation.
 # Sets head_sha, attempt_failure, attempt_ctx, worker_rc. Returns 0 when a
 # validated packet exists on a committed branch, 1 otherwise.
@@ -458,6 +500,12 @@ run_worker_phase() {
     gluerun_append_event "context.strategy_selected" "fresh-run strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"strategy\":\"fresh\",\"reason\":\"$worker_strategy_reason\"}" || true
   fi
+
+  # ---- Rehydrate packet injection (node rehydrate-path; behind GLUERUN_REHYDRATE)
+  # On a `rehydrate` decision, append the assembled durable-context packet to the
+  # already-rendered active prompt ONCE, before the (fresh) worker try loop. No-op
+  # for resume/fresh, so with GLUERUN_REHYDRATE unset $active_prompt is unchanged.
+  rehydrate_inject_packet "$active_prompt"
 
   local worker_resume_failed="no"
   for ((worker_try=0; worker_try<=worker_infra_max; worker_try++)); do
