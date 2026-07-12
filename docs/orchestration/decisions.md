@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-11T23:58:07Z — TASK-0043 — integrate
+
+- Run: `ORIGIN-20260711T235133Z-39346`
+- Branch: `agent/packets/TASK-0043-artifact-scan-finalize-hook`
+- Authority: origin
+- Rationale: merged agent/packets/TASK-0043-artifact-scan-finalize-hook (6522ff6a415e3cba108da2a1d95ce812d72aabb2) into agent/integration as cb2516974faefe34483e0252ea1b9d1928d4c0ac; gate green; acceptance=accepted
+
+### 2026-07-11T23:51:03Z — TASK-0043 — accept
+
+- Run: `RUN-20260711T232429Z-78387`
+- Branch: `agent/packets/TASK-0043-artifact-scan-finalize-hook`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T23:21:03Z — TASK-0042 — integrate
 
 - Run: `ORIGIN-20260711T231526Z-15285`
