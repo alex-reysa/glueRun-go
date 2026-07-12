@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T01:23:11Z — TASK-0046 — integrate
+
+- Run: `ORIGIN-20260712T011713Z-91751`
+- Branch: `agent/routing/TASK-0046-route-lease-taint`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0046-route-lease-taint (c6884f670dabb5e22b1070f5f2773b79dd57b09a) into agent/integration as b9dbe01f4b85451a32cfe1aa4e7aa9bd39c6b638; gate green; acceptance=accepted
+
+### 2026-07-12T01:16:51Z — TASK-0046 — accept
+
+- Run: `RUN-20260712T011108Z-78804`
+- Branch: `agent/routing/TASK-0046-route-lease-taint`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T01:07:43Z — TASK-0045 — integrate
 
 - Run: `ORIGIN-20260712T010144Z-14983`
