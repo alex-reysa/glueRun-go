@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-12T16:17:31Z — TASK-0077 — decide:rerun-tests
+
+- Run: `ORIGIN-20260712T160513Z-74749`
+- Branch: `agent/eval/TASK-0077-experiment-report-metrics`
+- Authority: decider
+- Rationale: integration-gate-red -> rerun-tests: The gate red is purely environmental: every failure is 'No space left on device' / 'Read-only file system' on the runner's temp dir (mkdtemp/mktemp/sed failures), while all task-relevant tests including test-ctx-experiment-report.sh and test-ctx-metrics passed. No code defect is implicated; clearing disk and re-running should go green.
+
+### 2026-07-12T16:12:42Z — TASK-0076 — integrate
+
+- Run: `ORIGIN-20260712T160513Z-74749`
+- Branch: `agent/graph/TASK-0076-graph-projection-mappers`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0076-graph-projection-mappers (0dacf50dd13e8aead84443f3222bb01c95e66e46) into agent/integration as ac355bda5df0cbd04781423e6a5916d4961357ab; gate green; acceptance=accepted
+
+### 2026-07-12T16:04:40Z — TASK-0076 — accept
+
+- Run: `RUN-20260712T154843Z-36590`
+- Branch: `agent/graph/TASK-0076-graph-projection-mappers`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T15:59:37Z — TASK-0077 — accept
+
+- Run: `RUN-20260712T154843Z-36668`
+- Branch: `agent/eval/TASK-0077-experiment-report-metrics`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T15:43:45Z — TASK-0075 — integrate
 
 - Run: `ORIGIN-20260712T153620Z-50111`
