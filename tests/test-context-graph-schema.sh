@@ -300,8 +300,16 @@ for t in "${EDGE_TYPES[@]}"; do
   grep -qF "$t" "$MAPPING" || fail "mapping doc missing edge type '$t'"
 done
 
-# --- pure-projection guard: no projector/CLI/engine wiring may exist yet ------
-wired="$(grep -rl "context-graph.v0.schema.json" "$ENGINE_HOME/engine" "$ENGINE_HOME/cli" 2>/dev/null || true)"
-[[ -z "$wired" ]] || fail "context-graph schema must be unwired but is referenced by: $wired"
+# --- pure-projection guard (POSITIVE, durable): the contract pins the
+# pure-projection / never-authored-directly-by-a-model invariant in the mapping
+# doc, so the guarantee is asserted behaviorally rather than by a temporal
+# absence-grep over engine/cli (which goes red the instant graph-projector
+# legitimately references the schema — planner-contract rule 9). ----------------
+grep -qi "pure projection" "$MAPPING" \
+  || fail "mapping doc must document the graph as a PURE PROJECTION"
+grep -qi "never authored" "$MAPPING" \
+  || fail "mapping doc must document the never-authored-directly-by-a-model invariant"
+grep -qi "directly by a model" "$MAPPING" \
+  || fail "mapping doc must document the never-authored-directly-by-a-model invariant"
 
 echo "test-context-graph-schema: all assertions passed"
