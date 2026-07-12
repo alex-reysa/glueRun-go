@@ -82,11 +82,23 @@ gluerun_ctx_rehydrate_event_data() {
   # `contextManifest` field, so with either OFF it returns empty and nothing is
   # merged — OFF-parity keeps the event data byte-identical to the durable-only
   # payload. Non-fatal: on any error nothing is merged.
+  #
+  # NODE dimension (TASK-0066 -> TASK-0067): resolve the run's executable DAG node
+  # via the pure read-only resolver gluerun_ctx_rehydrate_authored_node from this
+  # site's own "$task_id" parameter (no signature change) and thread it into the
+  # builder's position-3 [node] slot so node-scoped `load-when` entries become
+  # eligible. Empty (fail-safe) on an absent/ambiguous association -> the builder
+  # skips it and the set stays byte-identical to the pre-node-dimension behavior.
+  # The injection site (engine/l1-drive.sh) resolves from the SAME task_id via the
+  # SAME deterministic resolver, so both derive the identical token and identical
+  # trigger set, preserving the injected<->recorded consistency invariant.
+  local node
+  node="$(gluerun_ctx_rehydrate_authored_node "$task_id" 2>/dev/null)" || node=""
   local -a authored_triggers=()
   local trigger
   while IFS= read -r trigger; do
     [[ -n "$trigger" ]] && authored_triggers+=("$trigger")
-  done < <(gluerun_ctx_rehydrate_authored_triggers implementer implement "$task_id" 2>/dev/null)
+  done < <(gluerun_ctx_rehydrate_authored_triggers implementer implement "$node" "$task_id" 2>/dev/null)
   local authored
   authored="$(gluerun_ctx_rehydrate_authored_config_manifest ${authored_triggers[@]+"${authored_triggers[@]}"} 2>/dev/null)" || authored=""
 

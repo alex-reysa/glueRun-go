@@ -146,10 +146,17 @@ noev="$(gluerun_ctx_rehydrate_authored_node "TASK-0007")" \
 export GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson"
 
 # ---------------------------------------------------------------------------
-# (a) present-but-uncalled: no existing engine path invokes the new function.
+# (a) wired-in at exactly the two expected consumer sites (TASK-0067). TASK-0066
+#     shipped this resolver present-but-uncalled; TASK-0067's node-dimension
+#     wire-in threads it into the builder's [node] slot at BOTH live consumers —
+#     the injection (engine/l1-drive.sh) and the manifest-record
+#     (engine/ctx-rehydrate-event.sh). No OTHER engine path may reference it, so
+#     the resolver stays a leaf primitive delegated to only from those two sites.
 # ---------------------------------------------------------------------------
 callers="$(grep -rl "gluerun_ctx_rehydrate_authored_node" "$ENGINE_HOME/engine" 2>/dev/null \
-  | grep -v '/ctx-rehydrate-authored-node.sh$' || true)"
-[[ -z "$callers" ]] || fail "gluerun_ctx_rehydrate_authored_node must be present-but-uncalled; referenced by: $callers"
+  | grep -v '/ctx-rehydrate-authored-node.sh$' \
+  | sed "s#^$ENGINE_HOME/##" | sort | tr '\n' ' ' | sed 's/ $//' || true)"
+[[ "$callers" == "engine/ctx-rehydrate-event.sh engine/l1-drive.sh" ]] \
+  || fail "gluerun_ctx_rehydrate_authored_node must be wired in at exactly the two node-dimension consumer sites (l1-drive.sh, ctx-rehydrate-event.sh); referenced by: $callers"
 
 echo "ctx-rehydrate-authored-node tests passed"

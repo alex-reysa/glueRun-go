@@ -480,11 +480,23 @@ rehydrate_inject_packet() {
   # recorded authored entries stay consistent. Minimal delegation: the set is
   # computed and passed expanded; no selection/render logic is inlined here.
   # Non-fatal: on any error nothing is appended.
+  #
+  # NODE dimension (TASK-0066 -> TASK-0067): resolve the run's executable DAG node
+  # via the pure read-only resolver gluerun_ctx_rehydrate_authored_node "$task_id"
+  # and thread it into the builder's position-3 [node] slot so node-scoped
+  # `load-when` entries (e.g. ["rehydrate-path"]) become eligible. The resolver
+  # returns empty (fail-safe) on an absent or ambiguous task->node association;
+  # the builder skips empty dimensions, so the set stays {implementer, implement,
+  # task-id} — byte-identical to the pre-node-dimension behavior. The
+  # manifest-record site resolves the node from the SAME task_id via the SAME
+  # deterministic resolver, so both derive the identical token and identical set.
+  local node
+  node="$(gluerun_ctx_rehydrate_authored_node "$task_id" 2>/dev/null)" || node=""
   local -a authored_triggers=()
   local trigger
   while IFS= read -r trigger; do
     [[ -n "$trigger" ]] && authored_triggers+=("$trigger")
-  done < <(gluerun_ctx_rehydrate_authored_triggers implementer implement "$task_id" 2>/dev/null)
+  done < <(gluerun_ctx_rehydrate_authored_triggers implementer implement "$node" "$task_id" 2>/dev/null)
   local authored
   authored="$(gluerun_ctx_rehydrate_authored_config_render ${authored_triggers[@]+"${authored_triggers[@]}"} 2>/dev/null)" || authored=""
   [[ -n "$authored" ]] || return 0
