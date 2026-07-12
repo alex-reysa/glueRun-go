@@ -1295,3 +1295,13 @@
   audit-needs-human-superseded.json. Full provenance chain in the run dir:
   original audit, decider decision, amended grant commit b9fc48f, re-audit
   envelope + verdict.
+
+- 2026-07-12 (TASK-0067 lease unblock, addendum): after import succeeded with
+  the superseded-accepted audit record, integrate still early-skipped the
+  task because the decider park had left the LEASE status blocked (the
+  task-file and packet fixes did not touch it). Operator flipped
+  .gluerun-state/leases/TASK-0067.json status blocked->accepted; the
+  imported-packet audit sidecar already carried the accepted verdict.
+  Lesson for the runbook: resurrecting a parked task requires FOUR state
+  surfaces in agreement — task file Status, packet status, run audit record,
+  and lease status.
