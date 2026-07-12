@@ -433,7 +433,10 @@ run_worker_phase() {
   l2_runner_basename="$(basename "$l2_runner")"
   worker_prompt_sha="$(gluerun_prompt_sha "$l2_prompt" 2>/dev/null || true)"
   local worktree_head; worktree_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
-  worker_decision="$(gluerun_session_resume_decide "$session_meta_implementer" implementer \
+  # Routed through the ctx-* adapter (GLUERUN_CTX_ROUTING; default 0 -> OFF-parity,
+  # byte-identical to the direct decider call). Step `implement` is not an
+  # independence-required step, so the routing gates (window/diff/lease) may apply.
+  worker_decision="$(gluerun_ctx_route_decide implementer implement "$session_meta_implementer" \
     "$task_id" "$run_id" "$l2_runner_basename" "$worker_prompt_sha" "$worktree" "$worktree_head" 2>/dev/null || echo "fresh decide-error")"
   worker_strategy="${worker_decision%% *}"
   worker_strategy_reason="${worker_decision#* }"
@@ -672,7 +675,11 @@ run_audit_phase() {
   local audit_runner_basename reviewer_prompt_sha reviewer_resume_id="" reviewer_decision
   audit_runner_basename="$(basename "$GLUERUN_RUNNER_BIN")"
   reviewer_prompt_sha="$(gluerun_prompt_sha "$audit_prompt" 2>/dev/null || true)"
-  reviewer_decision="$(gluerun_session_resume_decide "$session_meta_reviewer" reviewer \
+  # Routed through the ctx-* adapter (GLUERUN_CTX_ROUTING; default 0 -> OFF-parity,
+  # byte-identical to the direct decider call). Step `final-audit` is an
+  # independence-required step, so ON the taint pin binds here: a would-be resume
+  # is refused as `fresh tainted` regardless of routing knob values.
+  reviewer_decision="$(gluerun_ctx_route_decide reviewer final-audit "$session_meta_reviewer" \
     "$task_id" "$run_id" "$audit_runner_basename" "$reviewer_prompt_sha" "$worktree" "$head_sha" 2>/dev/null || echo "fresh decide-error")"
   reviewer_strategy="${reviewer_decision%% *}"
   reviewer_strategy_reason="${reviewer_decision#* }"
