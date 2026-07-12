@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T08:58:18Z — TASK-0065 — integrate
+
+- Run: `ORIGIN-20260712T085126Z-38142`
+- Branch: `agent/routing/TASK-0065-rehydrate-authored-triggers-wirein`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0065-rehydrate-authored-triggers-wirein (352819d53174fcdb25798ed1c95396f03fcaf807) into agent/integration as 460467d22af820d749171c86d806e606afe8ea29; gate green; acceptance=accepted
+
+### 2026-07-12T08:51:12Z — TASK-0065 — accept
+
+- Run: `RUN-20260712T083021Z-50840`
+- Branch: `agent/routing/TASK-0065-rehydrate-authored-triggers-wirein`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T08:27:21Z — TASK-0064 — integrate
 
 - Run: `ORIGIN-20260712T082114Z-78159`
