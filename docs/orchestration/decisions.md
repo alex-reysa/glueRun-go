@@ -1354,3 +1354,19 @@
   Lesson for the runbook: resurrecting a parked task requires FOUR state
   surfaces in agreement — task file Status, packet status, run audit record,
   and lease status.
+
+- 2026-07-12 (CTO supervisor v3, premature-promotion race): with the
+  operator-owned experiment-run node now permanently in the frontier, every
+  reconcile logs a standing planner refusal. The v2 supervisor checked
+  planner failures BEFORE its dispatch-wait, so a cycle that both dispatched
+  TASK-0071 and logged that refusal skipped the wait; free-running cycles
+  then re-planned graph-contract, hit the duplicate guard, and started
+  promoting the gate while TASK-0071's packet was still un-integrated
+  (schema absent at HEAD — suite would have passed trivially, recording a
+  FALSE gate). Operator killed promote-gate mid-run; no gate record written.
+  v3 fixes: (1) dispatch-wait always runs first; (2) promotions require
+  inbox empty + all task files integrated (defer otherwise); (3) eval nodes
+  (experiment-run, polish-release) are never auto-promotable; (4) planner
+  failures only count toward the exit limit when the cycle produced nothing.
+  Also fixed TASK-0030 status bookkeeping (engine had it already-merged; the
+  file said accepted, which would have deadlocked the new integration guard).
