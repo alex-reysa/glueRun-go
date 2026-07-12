@@ -64,13 +64,27 @@ gluerun_ctx_rehydrate_event_data() {
     manifest="$(gluerun_ctx_rehydrate_manifest)"
   fi
 
+  # OPTIONAL authored-knowledge counterpart (node rehydrate-path; NOT part of
+  # requiredCompletion, does NOT gate the node). ALSO record the config-gated
+  # authored manifest entries alongside the durable sources, using the SAME
+  # `implement` trigger TASK-0062 injects with so the recorded authored entries
+  # match the injected authored section (consistency invariant). This is a
+  # minimal delegation into the integrated config gate (TASK-0058–0061): no
+  # config/selection/render logic is inlined here. The gate internally checks
+  # GLUERUN_CTX_MANIFEST (default 0) and the OPTIONAL gluerun.config.json
+  # `contextManifest` field, so with either OFF it returns empty and nothing is
+  # merged — OFF-parity keeps the event data byte-identical to the durable-only
+  # payload. Non-fatal: on any error nothing is merged.
+  local authored
+  authored="$(gluerun_ctx_rehydrate_authored_config_manifest implement 2>/dev/null)" || authored=""
+
   # Embed the metadata scalars and the NESTED manifest object into a single
   # compact JSON object. Pure: reads its argv, writes only stdout.
-  python3 - "$role" "$task_id" "$run_id" "$attempt" "$reason" "$manifest" <<'PY'
+  python3 - "$role" "$task_id" "$run_id" "$attempt" "$reason" "$manifest" "$authored" <<'PY'
 import json
 import sys
 
-role, task_id, run_id, attempt_raw, reason, manifest_raw = sys.argv[1:7]
+role, task_id, run_id, attempt_raw, reason, manifest_raw, authored_raw = sys.argv[1:8]
 
 # `attempt` is numeric in the additive payload shape; stay non-fatal if a caller
 # ever passes a non-integer by keeping the raw value rather than raising.
@@ -83,6 +97,20 @@ try:
     manifest = json.loads(manifest_raw)
 except json.JSONDecodeError:
     manifest = {"raw": manifest_raw}
+
+# Merge the config-gated authored-knowledge manifest under a DISTINGUISHABLE
+# `authored` key, recorded apart from the durable host-verified `sources` and
+# never as authoritative. The gate returns empty when OFF/unconfigured, so the
+# key is added ONLY when there is a well-formed authored manifest to record —
+# preserving OFF-parity (byte-identical to the durable-only payload). A malformed
+# blob is skipped (fail-soft) rather than recorded as a {"raw":…} fallback.
+if authored_raw.strip() and isinstance(manifest, dict):
+    try:
+        authored = json.loads(authored_raw)
+    except json.JSONDecodeError:
+        authored = None
+    if authored is not None:
+        manifest["authored"] = authored
 
 obj = {
     "taskId": task_id,
