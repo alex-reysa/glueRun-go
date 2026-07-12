@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-12T13:11:57Z — TASK-0071 — accept
+
+- Run: `RUN-20260712T130208Z-66652`
+- Branch: `agent/graph/TASK-0071-context-graph-contract-schema`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T12:47:15Z — TASK-0070 — integrate
 
 - Run: `ORIGIN-20260712T124010Z-7451`
