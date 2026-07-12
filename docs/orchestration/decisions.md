@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T15:43:45Z — TASK-0075 — integrate
+
+- Run: `ORIGIN-20260712T153620Z-50111`
+- Branch: `agent/graph/TASK-0075-graph-corpus-assembler`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0075-graph-corpus-assembler (8415951543c33628023542b7424e12a9395cf411) into agent/integration as 44b01e507b42715f36134a4de9ad4301dbdee622; gate green; acceptance=accepted
+
+### 2026-07-12T15:36:07Z — TASK-0075 — accept
+
+- Run: `RUN-20260712T153044Z-38302`
+- Branch: `agent/graph/TASK-0075-graph-corpus-assembler`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T15:27:59Z — TASK-0074 — integrate
 
 - Run: `ORIGIN-20260712T152029Z-45717`
