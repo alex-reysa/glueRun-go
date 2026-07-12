@@ -106,22 +106,63 @@ gluerun_ctx_route() {
   fi
 
   # --- Resume gates, fail-closed, first refusal wins ---------------------------
+  # Each refusal is a refused-resume lineage-continuation step: emit its reason
+  # through the rehydrate wire-in, which upgrades `fresh <reason>` to `rehydrate
+  # <reason>` only behind GLUERUN_REHYDRATE=1 with a non-empty run_dir packet and
+  # otherwise stays byte-identical to the bare `fresh <reason>` line.
   # (a) live generalized session lease: another fanout is using the role's session.
   local lease_path
   lease_path="$(gluerun_ctx_route_session_lease_path "$role" "$lease_key")"
   if [[ -n "$lease_path" ]] && gluerun_ctx_route_session_lease_live "$lease_path"; then
-    printf 'fresh session-lease\n'; return 0
+    _gluerun_ctx_route_refuse_resume session-lease "$role" "$step" "$meta"; return 0
   fi
   # (b) window pressure: the session transcript is over the usage threshold.
   if [[ "$(gluerun_ctx_route_window_gate "$role" "$transcript")" != "pass" ]]; then
-    printf 'fresh window-pressure\n'; return 0
+    _gluerun_ctx_route_refuse_resume window-pressure "$role" "$step" "$meta"; return 0
   fi
   # (c) diff volume: role-relevant churn since headShaAtCreate is over the limit.
   if [[ "$(gluerun_ctx_route_diff_gate "$role" "$worktree" "$base_sha" "$lineage_head" "$@")" != "pass" ]]; then
-    printf 'fresh diff-volume\n'; return 0
+    _gluerun_ctx_route_refuse_resume diff-volume "$role" "$step" "$meta"; return 0
   fi
 
   # Every gate passed -> the wrapped decider's `resume <id>` stands, verbatim.
   printf '%s\n' "$baseline"
+  return 0
+}
+
+# _gluerun_ctx_route_refuse_resume <reason> <role> <step> <meta>
+#
+# The rehydrate wire-in for a refused-resume lineage step. Prints exactly one
+# line: `rehydrate <reason>` when GLUERUN_REHYDRATE=1 and the durable-artifact
+# root run_dir = dirname(meta) yields at least one surviving rehydration source,
+# otherwise the byte-identical `fresh <reason>` this spine emitted before the
+# wire-in. The resolver/manifest composition is guarded behind GLUERUN_REHYDRATE
+# so the OFF path spawns no extra work; the decision leaf (which independently
+# re-checks OFF-parity, the independence pin, and the empty-packet guard) makes
+# the final call. Appends no events and never exits non-zero — the spine keeps
+# its one-line, no-event contract, and `rehydrate` stays tainted.
+_gluerun_ctx_route_refuse_resume() {
+  local reason="$1" role="$2" step="$3" meta="$4"
+
+  # OFF-parity: with the knob unset or != 1, stay byte-identical to `fresh
+  # <reason>` and do NO resolver/manifest work at all.
+  if [[ "${GLUERUN_REHYDRATE:-0}" != "1" ]]; then
+    printf 'fresh %s\n' "$reason"; return 0
+  fi
+
+  # Compose the durable-artifact source resolver over run_dir = dirname(meta) (the
+  # same root ctx-route-drive.sh derives), assemble its manifest, and let the
+  # decision leaf render the verdict.
+  local run_dir; run_dir="$(dirname "$meta")"
+  local -a specs=()
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && specs+=("$line")
+  done < <(gluerun_ctx_rehydrate_sources "$run_dir")
+
+  local manifest
+  manifest="$(gluerun_ctx_rehydrate_manifest ${specs[@]+"${specs[@]}"})"
+
+  gluerun_ctx_route_rehydrate_decide "$reason" "$role" "$step" "$manifest"
   return 0
 }
