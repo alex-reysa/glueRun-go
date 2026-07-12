@@ -263,8 +263,11 @@ S0_S5_RECORDS=(
   # S2 — plan critique
   "plan-critique"
   "plan.critiqued"
+  "ctx.plan_critique_infra"
+  "ctx.plan_critique_retry"
   # S3 — plan revision
   "plan.revised"
+  "plan.revise_parked"
   "accepted-observation"
   "rejected-observation"
   "ctx.critic_recheck"
@@ -273,9 +276,12 @@ S0_S5_RECORDS=(
   "assumption ledger"
   "capsule"
   "ctx.artifact_secret"
+  "ctx.packet_malformed"
   # S5 — routing / rehydration
   "rehydrate"
   "decision record"
+  "decision.recorded"
+  "context.resume_failed"
 )
 for rec in "${S0_S5_RECORDS[@]}"; do
   grep -qF "$rec" "$MAPPING" || fail "mapping doc must name S0-S5 record type: '$rec'"

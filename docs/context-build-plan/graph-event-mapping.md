@@ -94,9 +94,12 @@ strings is named in this document, so no S0–S5 source is left unprojected.
 ### Stage 2 — first-class plan critique
 - `plan-critique` — critic record (`plan-critique.v0`) → `critique` node + `finding` nodes + `critiques` edge.
 - `plan.critiqued` — critique event (verdict + finding count) → `critiques` edge.
+- `ctx.plan_critique_infra` — critic infra-failure telemetry (harness/model error, no verdict produced) → `telemetry — not projected`.
+- `ctx.plan_critique_retry` — critic retry telemetry (transient re-attempt before a verdict) → `telemetry — not projected`.
 
 ### Stage 3 — in-lineage plan revision
 - `plan.revised` — revision event (`revisesRunId`) → `plan-version` node + `revises`/`supersedes` edges.
+- `plan.revise_parked` — bounded-revise park outcome (revise budget exhausted, no accepted version) → `decision` node (`claim`); sibling of `plan.revised`, records the park disposition rather than a new plan version.
 - `accepted-observation` — per-finding disposition → `accepts_observation` edge.
 - `rejected-observation` — per-finding disposition → `rejects_observation` edge.
 - `ctx.critic_recheck` — post-acceptance critic recheck → `decision` node; `survives` → `contradicts` edge.
@@ -106,11 +109,14 @@ strings is named in this document, so no S0–S5 source is left unprojected.
 - `assumption ledger` — per-run ledger carried across attempts → `assumption` node status; a violation → `contradicts` edge.
 - `capsule` — implementer/reviewer capsule per attempt → `capsule` node (`claim`).
 - `ctx.artifact_secret` — secret-scan quarantine → source excluded from projection (never a live node).
+- `ctx.packet_malformed` — context-packet parse-failure telemetry (a `## Context packet` block that failed to parse) → `telemetry — not projected`; no assumption/decision node is minted from an unparseable packet.
 
 ### Stage 5 — explicit session routing & rehydration
 - `context.strategy_selected` — routing strategy + reason (`continue|resume|fork|fresh|rehydrate`), taint flag → `decision` node (`claim`).
+- `context.resume_failed` — routing resume-refused decision (resume declined → fell back to fork/fresh) → `decision` node (`claim`); sibling of `context.strategy_selected`, records the refused-resume disposition.
 - `rehydrate` — rehydration packet manifest (which artifacts, which hashes) → `derived_from` edges from the rehydrated attempt to each source node.
 - `decision record` — a durable routing/decision record → `decision` node (`claim`).
+- `decision.recorded` — the canonical durable decision-record event (`engine/record-decision.sh`) → `decision` node (`claim`); the emitted event string behind every `decision record`.
 
 ## Invariant
 
