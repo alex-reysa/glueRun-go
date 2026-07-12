@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T02:37:26Z — TASK-0049 — integrate
+
+- Run: `ORIGIN-20260712T023116Z-21721`
+- Branch: `agent/routing/TASK-0049-route-metrics-splits`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0049-route-metrics-splits (f700085873af731bcbafbcf59bf11b032a1dca52) into agent/integration as dcd9dd5d7abacd748773bc29e05f216b3321ca34; gate green; acceptance=accepted
+
+### 2026-07-12T02:31:04Z — TASK-0049 — accept
+
+- Run: `RUN-20260712T022612Z-11119`
+- Branch: `agent/routing/TASK-0049-route-metrics-splits`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T02:21:01Z — TASK-0048 — integrate
 
 - Run: `ORIGIN-20260712T021450Z-42938`
