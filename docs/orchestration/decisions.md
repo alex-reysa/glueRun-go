@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T01:41:08Z — TASK-0047 — integrate
+
+- Run: `ORIGIN-20260712T013459Z-73068`
+- Branch: `agent/routing/TASK-0047-route-spine`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0047-route-spine (db0abd1ab3c37df79bb78cd36c695e4f51267d76) into agent/integration as 17b1fa787eb319fad2a445b422c19d4116f91520; gate green; acceptance=accepted
+
+### 2026-07-12T01:34:40Z — TASK-0047 — accept
+
+- Run: `RUN-20260712T012625Z-55535`
+- Branch: `agent/routing/TASK-0047-route-spine`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T01:23:11Z — TASK-0046 — integrate
 
 - Run: `ORIGIN-20260712T011713Z-91751`
