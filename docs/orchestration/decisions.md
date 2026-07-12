@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-12T18:41:26Z — TASK-0087 — integrate
+
+- Run: `ORIGIN-20260712T182728Z-7909`
+- Branch: `agent/eval/TASK-0087-experiment-pipeline-guard`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0087-experiment-pipeline-guard (05d48bf433dff278bf61f5756de4b05edac3a893) into agent/integration as a49a2b02cc55138b72033c89d97cf4a0c823a405; gate green; acceptance=accepted
+
+### 2026-07-12T18:34:18Z — TASK-0086 — integrate
+
+- Run: `ORIGIN-20260712T182728Z-7909`
+- Branch: `agent/graph/TASK-0086-graph-query-api`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0086-graph-query-api (e1d8ee882e10991f3834aaa72b380830d6b7784d) into agent/integration as bf7d582ee1ab5342f1deec0f72311d828553dac9; gate green; acceptance=accepted
+
+### 2026-07-12T18:27:05Z — TASK-0086 — accept
+
+- Run: `RUN-20260712T181820Z-90687`
+- Branch: `agent/graph/TASK-0086-graph-query-api`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T18:24:35Z — TASK-0087 — accept
+
+- Run: `RUN-20260712T181820Z-90765`
+- Branch: `agent/eval/TASK-0087-experiment-pipeline-guard`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T18:14:59Z — TASK-0085 — integrate
 
 - Run: `ORIGIN-20260712T180104Z-46329`
