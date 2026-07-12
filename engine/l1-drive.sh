@@ -444,6 +444,16 @@ run_worker_phase() {
     worker_resume_id="$worker_strategy_reason"; worker_strategy_reason="resume"
     gluerun_append_event "context.strategy_selected" "session resume strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"strategy\":\"resume\",\"reason\":\"resume\",\"sessionId\":\"$worker_resume_id\"}" || true
+  elif [[ "$worker_strategy" == "rehydrate" ]]; then
+    # A refused-resume lineage step upgraded to rehydrate (only behind
+    # GLUERUN_REHYDRATE=1; the routing spine never yields `rehydrate` otherwise).
+    # Record strategy=rehydrate, the refusal reason, and the NESTED packet manifest
+    # (ids + hashes only) by delegating into the integrated pure assembler over the
+    # durable-artifact root run_dir. No resume session is reused (rehydrate is a
+    # fresh session with injected context); the packet-injection hook is a later
+    # slice. worker_resume_id stays empty so the worker runs fresh below.
+    gluerun_append_event "context.strategy_selected" "rehydrate strategy selected" \
+      "$(gluerun_ctx_rehydrate_event_data implementer "$task_id" "$run_id" "$n" "$worker_strategy_reason" "$run_dir")" || true
   else
     gluerun_append_event "context.strategy_selected" "fresh-run strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"strategy\":\"fresh\",\"reason\":\"$worker_strategy_reason\"}" || true
