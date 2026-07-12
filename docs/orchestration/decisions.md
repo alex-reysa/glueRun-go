@@ -2,6 +2,41 @@
 
 ## Decision Log
 
+### 2026-07-12T10:27:11Z — TASK-0067 — escalate-parked
+
+- Run: `RUN-20260712T091942Z-41168`
+- Branch: `agent/routing/TASK-0067-rehydrate-authored-node-wirein`
+- Authority: policy
+- Rationale: decider terminal action after no-changes
+
+### 2026-07-12T10:27:10Z — TASK-0067 — decide:escalate-parked
+
+- Run: `RUN-20260712T091942Z-41168`
+- Branch: `agent/routing/TASK-0067-rehydrate-authored-node-wirein`
+- Authority: policy
+- Rationale: fast-path: no-changes -> escalate-parked
+
+### 2026-07-12T10:12:49Z — TASK-0067 — decide:amend-scope
+
+- Run: `RUN-20260712T091942Z-41168`
+- Branch: `agent/routing/TASK-0067-rehydrate-authored-node-wirein`
+- Authority: decider
+- Rationale: audit-needs-human -> amend-scope: The auditor confirms the wire-in is technically correct with valid red→green→regression evidence and gate exit 0, and the sole blocker is a governance-only file-scope discrepancy: the diff necessarily edits the sibling test tests/test-ctx-rehydrate-authored-node.sh (flipping TASK-0066's intentional 'present-but-uncalled' invariant), which the worker already self-declared as a 4th owned file and disclosed in packet.nextAction. Since this is the auditor's own option (a) — a minimal, necessary, reversible scope grant that leaves the run accept-ready — and reconciling the grant is exactly the authority the Decider replaces, I expand ownership by one sibling test and re-verify rather than escalate.
+
+### 2026-07-12T09:53:36Z — TASK-0067 — decide:amend-scope
+
+- Run: `RUN-20260712T091942Z-41168`
+- Branch: `agent/routing/TASK-0067-rehydrate-authored-node-wirein`
+- Authority: policy
+- Rationale: fast-path: scope-violation -> amend-scope
+
+### 2026-07-12T09:44:03Z — TASK-0067 — decide:retry
+
+- Run: `RUN-20260712T091942Z-41168`
+- Branch: `agent/routing/TASK-0067-rehydrate-authored-node-wirein`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
 ### 2026-07-12T09:16:52Z — TASK-0066 — integrate
 
 - Run: `ORIGIN-20260712T091001Z-59248`
@@ -1211,3 +1246,18 @@
   is chosen deliberately. Note: the fine decomposition also produced the
   23-for-23 first-attempt streak — the S7 report should present width vs
   acceptance-rate as an explicit trade-off curve, not a defect.
+
+- 2026-07-12 (operator actuation of decider amend-scope, TASK-0067): first
+  needs-human audit of the run (26 tasks in). Auditor verified the wire-in
+  fully correct (red->green, regression 90/90, gate 0) but refused to ratify
+  a worker-disclosed 4th owned file (tests/test-ctx-rehydrate-authored-node.sh,
+  whose TASK-0066 'present-but-uncalled' assertion the wire-in intentionally
+  flips). Decider ruled action=amend-scope — grant the sibling test, do not
+  park; host exits rc=3 because scope grants are operator authority to apply.
+  Actuated: TASK-0067.md owned files +1, fresh re-audit launched with the
+  amended grant (RUN-20260712T102918Z-reaudit67, TASK-0003 precedent).
+  Systemic lessons for the planner prompt/S7: (a) a wire-in task that flips a
+  sibling leaf's present-but-uncalled invariant must own that sibling test at
+  authoring time; (b) present-but-uncalled assertions are rule-9 temporal
+  negative assertions and keep slipping through — the leaf-then-wire-in
+  rhythm should pin them as 'wired-in OR present-but-uncalled' from birth.
