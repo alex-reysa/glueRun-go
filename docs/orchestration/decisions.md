@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-12T12:29:07Z — TASK-0069 — integrate
+
+- Run: `ORIGIN-20260712T121547Z-63183`
+- Branch: `agent/routing/TASK-0069-rehydrate-e2e-guard`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0069-rehydrate-e2e-guard (6bba7418e6f65cc413c98767a15a751c05a209b3) into agent/integration as 7b9a7408ea19882c0a6716f0e9df1d4f8c6c95ba; gate green; acceptance=accepted
+
+### 2026-07-12T12:22:33Z — TASK-0067 — integrate
+
+- Run: `ORIGIN-20260712T121547Z-63183`
+- Branch: `agent/routing/TASK-0067-rehydrate-authored-node-wirein`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0067-rehydrate-authored-node-wirein (6f74a5369c62133c374d29abec20eb8998b5417f) into agent/integration as 63f43f772562e29b1685abf06082effc5e4ca214; gate green; acceptance=accepted
+
+### 2026-07-12T12:15:21Z — TASK-0069 — accept
+
+- Run: `RUN-20260712T115311Z-12719`
+- Branch: `agent/routing/TASK-0069-rehydrate-e2e-guard`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T12:08:56Z — TASK-0069 — decide:retry
+
+- Run: `RUN-20260712T115311Z-12719`
+- Branch: `agent/routing/TASK-0069-rehydrate-e2e-guard`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
 ### 2026-07-12T11:47:53Z — TASK-0068 — integrate
 
 - Run: `ORIGIN-20260712T114056Z-12319`
