@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T05:47:36Z — TASK-0057 — integrate
+
+- Run: `ORIGIN-20260712T054100Z-13603`
+- Branch: `agent/routing/TASK-0057-rehydrate-packet-inject`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0057-rehydrate-packet-inject (21029dd6305e0caa3d6f57687ffec5054dc17157) into agent/integration as 5fbf8af8a82e6b53de03e88abb8047af918d615b; gate green; acceptance=accepted
+
+### 2026-07-12T05:40:42Z — TASK-0057 — accept
+
+- Run: `RUN-20260712T051954Z-75778`
+- Branch: `agent/routing/TASK-0057-rehydrate-packet-inject`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T05:16:38Z — TASK-0056 — integrate
 
 - Run: `ORIGIN-20260712T051012Z-7711`
