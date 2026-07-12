@@ -5,30 +5,30 @@ Initial gluerun scaffold. Reconcile snapshots will be maintained below.
 ## Latest Reconcile Snapshot
 
 <!-- gluerun:reconcile-snapshot:start -->
-Updated: 2026-07-12T00:00:38Z
-Run: `ORIGIN-20260711T235133Z-39346`
+Updated: 2026-07-12T00:08:16Z
+Run: `ORIGIN-20260712T000110Z-6177`
 Mode: `actuate`
 Current branch: `agent/integration`
 Target branch: `agent/integration`
-Head: `26d3248`
-Tracked/untracked status entries: 2
+Head: `2b2d15a`
+Tracked/untracked status entries: 0
 Git worktrees: 46
-Inbox packets: 1
-Valid inbox packets: 1
+Inbox packets: 0
+Valid inbox packets: 0
 Invalid inbox packets: 0
-Imported packets: 43
-Imported this run: 1
+Imported packets: 86
+Imported this run: 0
 Failed imports: 0
-Dispatched this run: 0
+Dispatched this run: 1
 Failed dispatches: 0
-Integrated this run: 1
+Integrated this run: 0
 Failed integrations: 0
-Planner failures this run: 1
+Planner failures this run: 0
 L1 import rejections this run: 0
 
 Actions:
 
-- Dry-run validates inbox packet shape and writes this snapshot to `.gluerun-state/runs/ORIGIN-20260711T235133Z-39346/reconcile-snapshot.md`.
+- Dry-run validates inbox packet shape and writes this snapshot to `.gluerun-state/runs/ORIGIN-20260712T000110Z-6177/reconcile-snapshot.md`.
 - Apply mode imports valid inbox packets into `docs/orchestration/packets/imported/**`.
 - Keep L1/L2 worker launch disabled during Phase 2/3 dry-run scaffolding.
 - Continue toward one manual artifact-area proof loop after scaffolding is accepted.
