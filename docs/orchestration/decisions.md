@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-12T20:06:33Z — TASK-0091 — integrate
+
+- Run: `ORIGIN-20260712T195046Z-92497`
+- Branch: `agent/eval/TASK-0091-experiment-report-cli`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0091-experiment-report-cli (7d0265efd7cb301613a8aa430699e924b35989c4) into agent/integration as dbdb69748060b512c864b132e88ee1ca93b2a11d; gate green; acceptance=accepted
+
+### 2026-07-12T19:58:53Z — TASK-0090 — integrate
+
+- Run: `ORIGIN-20260712T195046Z-92497`
+- Branch: `agent/graph/TASK-0090-graph-requiredcompletion-guard`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0090-graph-requiredcompletion-guard (346b2d8ceb54b5861a41a0993386d40b157ff903) into agent/integration as 8cd27fd20447e05063fc13b7fe61481dd8e67826; gate green; acceptance=accepted
+
+### 2026-07-12T19:50:39Z — TASK-0090 — accept
+
+- Run: `RUN-20260712T192606Z-76079`
+- Branch: `agent/graph/TASK-0090-graph-requiredcompletion-guard`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T19:49:37Z — TASK-0091 — accept
+
+- Run: `RUN-20260712T192606Z-76157`
+- Branch: `agent/eval/TASK-0091-experiment-report-cli`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T19:23:20Z — TASK-0089 — integrate
 
 - Run: `ORIGIN-20260712T190802Z-11588`
