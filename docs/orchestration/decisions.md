@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T00:39:23Z — TASK-0044 — integrate
+
+- Run: `ORIGIN-20260712T003321Z-58425`
+- Branch: `agent/packets/TASK-0044-critique-raw-artifact-coverage`
+- Authority: origin
+- Rationale: merged agent/packets/TASK-0044-critique-raw-artifact-coverage (02381b140fa71c724a7809517b30ab117d0df3f5) into agent/integration as 01805ed31bc48fe0f2ea0cadb8a504a57ae1f57f; gate green; acceptance=accepted
+
+### 2026-07-12T00:23:44Z — TASK-0044 — accept
+
+- Run: `RUN-20260712T000816Z-68671`
+- Branch: `agent/packets/TASK-0044-critique-raw-artifact-coverage`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-11T23:58:07Z — TASK-0043 — integrate
 
 - Run: `ORIGIN-20260711T235133Z-39346`
