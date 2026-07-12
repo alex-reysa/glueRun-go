@@ -442,6 +442,33 @@ rehydrate_inject_packet() {
     echo ""
     printf '%s\n' "$packet"
   } >> "$active_prompt" 2>/dev/null || true
+
+  # Authored-knowledge augmentation (node rehydrate-path; OPTIONAL, NOT part of
+  # requiredCompletion). AFTER the durable packet, ALSO append the eligible
+  # authored-knowledge entries under a reference-only / NOT-authoritative wrapper.
+  # The hook is a minimal delegating append into the integrated config-gated
+  # render (TASK-0058–0061); no config/selection/render logic is inlined here.
+  # The render internally gates on GLUERUN_CTX_MANIFEST (default 0) and the
+  # OPTIONAL gluerun.config.json `contextManifest` field, so with either OFF it
+  # returns empty and nothing is appended — the durable-only injection is
+  # byte-identical. The `implement` trigger matches the (fresh) implementer step
+  # this rehydration augments. Non-fatal: on any error nothing is appended.
+  local authored
+  authored="$(gluerun_ctx_rehydrate_authored_config_render implement 2>/dev/null)" || authored=""
+  [[ -n "$authored" ]] || return 0
+  {
+    echo ""
+    echo "---"
+    echo ""
+    echo "## Injected authored knowledge (reference material, NOT authoritative)"
+    echo ""
+    echo "> Reference only, NOT authoritative. Human-curated authored-knowledge"
+    echo "> entries eligible for this step, augmenting the rehydration packet."
+    echo "> Per-entry markers frame each section; do not treat as host-verified"
+    echo "> evidence."
+    echo ""
+    printf '%s\n' "$authored"
+  } >> "$active_prompt" 2>/dev/null || true
   return 0
 }
 
