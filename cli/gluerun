@@ -301,6 +301,42 @@ cmd_metrics() {
   gluerun_ctx_metrics_json "$runs_dir" "$events_file"
 }
 
+# Context provenance graph: delegate into the integrated engine/ctx-graph*.sh
+# projector/reader functions (auto-sourced by the ctx-loader block when the
+# engine entrypoint runs; here we source the graph modules directly since the
+# CLI never loads lib.sh). Adds NO projection logic of its own — it resolves the
+# engine, sources the graph modules in the same sorted order as the ctx-loader,
+# resolves sensible stateDir/graphDir defaults, and forwards to
+# gluerun_graph_rebuild / gluerun_graph_sync / gluerun_graph_query_*. Reached
+# only when GLUERUN_CTX_GRAPH=1 (the dispatch arm refuses otherwise, exactly as
+# an unknown command did before this hook).
+cmd_graph() {
+  local sub="${1:-}"; shift || true
+  local home; home="$(resolve_engine_home)"
+  [[ -f "$home/engine/ctx-graph.sh" ]] || die "engine $home has no engine/ctx-graph.sh"
+  local g
+  for g in "$home"/engine/ctx-graph*.sh; do
+    [[ -f "$g" ]] || continue
+    # shellcheck disable=SC1090
+    source "$g"
+  done
+  local state_default="${GLUERUN_STATE_DIR:-.gluerun-state}"
+  local graph_default="${GLUERUN_CTX_GRAPH_DIR:-$state_default/graph}"
+  case "$sub" in
+    rebuild) gluerun_graph_rebuild "${1:-$state_default}" "${2:-$graph_default}" ;;
+    sync)    gluerun_graph_sync    "${1:-$state_default}" "${2:-$graph_default}" ;;
+    query)
+      local reader="${1:-}"; shift || true
+      case "$reader" in
+        neighbors)           gluerun_graph_query_neighbors "$graph_default" "$@" ;;
+        lineage)             gluerun_graph_query_lineage "$graph_default" "$@" ;;
+        open-contradictions) gluerun_graph_query_open_contradictions "$graph_default" "$@" ;;
+        *) die "graph query: unknown reader: ${reader:-(none)} (usage: gluerun graph query <neighbors|lineage|open-contradictions> [args])" ;;
+      esac ;;
+    *) die "graph: unknown subcommand: ${sub:-(none)} (usage: gluerun graph <rebuild|sync|query> [args])" ;;
+  esac
+}
+
 cmd_console() {
   local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
   local server="$home/plugin/scripts/gluerun_graph_server.py"
@@ -338,6 +374,13 @@ Setup / lifecycle:
   migrate              bring this repo's schemaVersion up to the engine's
   version              print CLI + resolved engine version
 EOF
+  # Flag-gated: the graph subcommand line appears ONLY when GLUERUN_CTX_GRAPH=1,
+  # keeping help output byte-identical to the pre-hook binary when it is off.
+  if [[ "${GLUERUN_CTX_GRAPH:-0}" == "1" ]]; then
+    cat <<'EOF'
+  graph rebuild|sync|query <neighbors|lineage|open-contradictions> [args]   context graph (GLUERUN_CTX_GRAPH)
+EOF
+  fi
 }
 
 main() {
@@ -355,6 +398,7 @@ main() {
     area-gate)     run_engine dag.sh area-gate "$@" ;;
     promote-gate)  cmd_promote_gate "$@" ;;
     metrics)       cmd_metrics "$@" ;;
+    graph)         [[ "${GLUERUN_CTX_GRAPH:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_graph "$@" ;;
     console)       cmd_console "$@" ;;
     init)          cmd_init "$@" ;;
     doctor)        cmd_doctor "$@" ;;
