@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-12T19:23:20Z — TASK-0089 — integrate
+
+- Run: `ORIGIN-20260712T190802Z-11588`
+- Branch: `agent/eval/TASK-0089-experiment-arm-delta`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0089-experiment-arm-delta (c458a00495b1bffed9c1284d32d23855bccccda1) into agent/integration as d6bd9be3e658ff9dd860637db7d5716021d0fa32; gate green; acceptance=accepted
+
+### 2026-07-12T19:15:49Z — TASK-0088 — integrate
+
+- Run: `ORIGIN-20260712T190802Z-11588`
+- Branch: `agent/graph/TASK-0088-gluerun-graph-cli`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0088-gluerun-graph-cli (e0a161fe99bcdae5356d9f26966d7d9e89037be9) into agent/integration as 33615e385c192b0f771875e799e1647d62f20043; gate green; acceptance=accepted
+
+### 2026-07-12T19:07:34Z — TASK-0088 — accept
+
+- Run: `RUN-20260712T184452Z-55345`
+- Branch: `agent/graph/TASK-0088-gluerun-graph-cli`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T18:55:16Z — TASK-0089 — accept
+
+- Run: `RUN-20260712T184452Z-55423`
+- Branch: `agent/eval/TASK-0089-experiment-arm-delta`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T18:41:26Z — TASK-0087 — integrate
 
 - Run: `ORIGIN-20260712T182728Z-7909`
