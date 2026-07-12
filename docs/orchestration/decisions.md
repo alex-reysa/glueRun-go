@@ -1167,3 +1167,19 @@
   plan-critique-raw.json) — premature promotion was avoided only by the
   race; promote on refusal only when the refusal survives an integrated
   frontier re-read.
+
+- 2026-07-12 (CTO task-economics): operator asked whether the system detects
+  too-small tasks. Answer: no host mechanism exists — audits do not scale to
+  diff size, and the folding rule only folds MUTUALLY-INDEPENDENT slices, so
+  chained micro-slices each pay full per-task overhead (~25 min). That blind
+  spot is what inflated rehydrate-path to 15 tasks (the manifest-ingestion
+  chain could not fold). Actions: (a) docked l1-planner.md gains a
+  CHAINED-SLICE BUNDLING rule — small dependent same-node slices bundle
+  in-order into one task up to the slice budget (now 3); (b) S7 report must
+  compute lines-changed-per-task and overhead ratio as the "too-small"
+  metric; (c) engine polish backlog: audit-effort scaling by diff size
+  (cheaper auditor tier or skip paired-audit below a diff threshold — final
+  audit always stays), and a planner-visible expected-overhead hint so width
+  is chosen deliberately. Note: the fine decomposition also produced the
+  23-for-23 first-attempt streak — the S7 report should present width vs
+  acceptance-rate as an explicit trade-off curve, not a defect.

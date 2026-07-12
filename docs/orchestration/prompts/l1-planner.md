@@ -45,6 +45,17 @@ Required completion: `[REQUIRED-COMPLETION]`
   ready slices as possible into the earliest task, up to `[SLICE-BUDGET]`,
   before emitting another task. If `N` independent ready slices are available,
   emit approximately `ceil(N / [SLICE-BUDGET])` tasks, capped by `[COUNT]`.
+- CHAINED-SLICE BUNDLING (task-width rule): small slices that depend on each
+  other IN THE SAME NODE — e.g. a new helper function, then a consumer of that
+  helper, then the record merge — MUST also be bundled into one task, ordered,
+  up to `[SLICE-BUDGET]`, whenever each slice is small (roughly: one new
+  function or one narrow edit plus its test). A five-line leaf must never be
+  its own task: the per-task overhead (fresh worker, full audit, integrate,
+  gate) dwarfs the work. Emit a chained micro-slice as a separate task ONLY
+  when it is genuinely large, risky (touches a driver/existing file with a
+  full-suite gate), or must land alone for scope-ownership reasons. Inside the
+  task's Objective, list the slices in implementation order. Same-batch tasks
+  must still never overlap owned files.
 - Tasks in the same output batch must be mutually independent: no task may
   depend on another task in the same batch, and owned files must not overlap.
 - `Status: ready`. `Area: [AREA]`. `Worker branch:
