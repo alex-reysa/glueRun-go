@@ -117,10 +117,18 @@ gluerun_graph_rebuild() {
   done < <(find "$state_dir/runs" -mindepth 2 -maxdepth 2 -type f \
              -name 'plan-critique.json' 2>/dev/null | LC_ALL=C sort)
 
-  # docs/orchestration/tasks/TASK-*.md -> task node
+  # docs/orchestration/tasks/TASK-*.md -> task node + assumption nodes.
+  # The S4 context mappers (gluerun_graph_project_assumptions / _capsules,
+  # engine/ctx-graph-project-context.sh) are sibling ctx-*.sh files loaded by the
+  # lib.sh ctx-loader alongside this one; guard on their presence so the walk
+  # degrades gracefully in an isolated harness that sources only a mapper subset
+  # (the guard is identical in gluerun_graph_sync, preserving sync == rebuild).
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
     gluerun_graph_project_task "$f" >> "$combined" || rc=1
+    if declare -F gluerun_graph_project_assumptions >/dev/null 2>&1; then
+      gluerun_graph_project_assumptions "$f" >> "$combined" || rc=1
+    fi
   done < <(find "$state_dir/docs/orchestration/tasks" -mindepth 1 -maxdepth 1 -type f \
              -name 'TASK-*.md' 2>/dev/null | LC_ALL=C sort)
 
@@ -130,6 +138,16 @@ gluerun_graph_rebuild() {
     gluerun_graph_project_paired_audits "$f" >> "$combined" || rc=1
   done < <(find "$state_dir/runs" -mindepth 2 -maxdepth 2 -type f \
              -name 'paired-audit.json' 2>/dev/null | LC_ALL=C sort)
+
+  # runs/*/{implementer,reviewer}-capsule.json -> capsule node (see guard note above).
+  if declare -F gluerun_graph_project_capsules >/dev/null 2>&1; then
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      gluerun_graph_project_capsules "$f" >> "$combined" || rc=1
+    done < <(find "$state_dir/runs" -mindepth 2 -maxdepth 2 -type f \
+               \( -name 'implementer-capsule.json' -o -name 'reviewer-capsule.json' \) \
+               2>/dev/null | LC_ALL=C sort)
+  fi
 
   if [[ "$rc" -ne 0 ]]; then
     rm -rf "$work"

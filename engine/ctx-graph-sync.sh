@@ -181,10 +181,16 @@ with open(os.environ["GLUERUN_GS_PATH"], encoding="utf-8") as fh:
   done < <(find "$state_dir/runs" -mindepth 2 -maxdepth 2 -type f \
              -name 'plan-critique.json' 2>/dev/null | LC_ALL=C sort)
 
-  # docs/orchestration/tasks/TASK-*.md -> task node
+  # docs/orchestration/tasks/TASK-*.md -> task node + assumption nodes. Guard on
+  # the S4 context mapper's presence exactly as gluerun_graph_rebuild does, so an
+  # isolated harness sourcing only a mapper subset degrades identically and the
+  # sync == rebuild equivalence holds byte-for-byte.
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
     gluerun_graph_project_task "$f" >> "$combined" || rc=1
+    if declare -F gluerun_graph_project_assumptions >/dev/null 2>&1; then
+      gluerun_graph_project_assumptions "$f" >> "$combined" || rc=1
+    fi
   done < <(find "$state_dir/docs/orchestration/tasks" -mindepth 1 -maxdepth 1 -type f \
              -name 'TASK-*.md' 2>/dev/null | LC_ALL=C sort)
 
@@ -194,6 +200,16 @@ with open(os.environ["GLUERUN_GS_PATH"], encoding="utf-8") as fh:
     gluerun_graph_project_paired_audits "$f" >> "$combined" || rc=1
   done < <(find "$state_dir/runs" -mindepth 2 -maxdepth 2 -type f \
              -name 'paired-audit.json' 2>/dev/null | LC_ALL=C sort)
+
+  # runs/*/{implementer,reviewer}-capsule.json -> capsule node (see guard note above).
+  if declare -F gluerun_graph_project_capsules >/dev/null 2>&1; then
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      gluerun_graph_project_capsules "$f" >> "$combined" || rc=1
+    done < <(find "$state_dir/runs" -mindepth 2 -maxdepth 2 -type f \
+               \( -name 'implementer-capsule.json' -o -name 'reviewer-capsule.json' \) \
+               2>/dev/null | LC_ALL=C sort)
+  fi
 
   if [[ "$rc" -ne 0 ]]; then
     rm -rf "$work"
