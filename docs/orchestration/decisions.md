@@ -1261,3 +1261,16 @@
   authoring time; (b) present-but-uncalled assertions are rule-9 temporal
   negative assertions and keep slipping through — the leaf-then-wire-in
   rhythm should pin them as 'wired-in OR present-but-uncalled' from birth.
+
+- 2026-07-12 (TASK-0067 audit-record supersession): the fail-closed import
+  guard refused the accepted packet because the run's durable audit record
+  still held the superseded needs-human verdict (the accept-waiver path is
+  reserved for decider action=accept-waiver on audit-needs-fix, which this
+  was not — fabricating one would be dishonest). Resolution: the fresh
+  re-audit (RUN-20260712T102918Z-reaudit67, verdict accepted, same
+  runId/taskId/branch/headSha, conducted per the decider amend-scope ruling)
+  IS the final audit for RUN-20260712T091942Z-41168; installed it as the
+  run's audit.json, preserving the original as
+  audit-needs-human-superseded.json. Full provenance chain in the run dir:
+  original audit, decider decision, amended grant commit b9fc48f, re-audit
+  envelope + verdict.
