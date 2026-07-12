@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T15:27:59Z — TASK-0074 — integrate
+
+- Run: `ORIGIN-20260712T152029Z-45717`
+- Branch: `agent/graph/TASK-0074-graph-projection-primitives`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0074-graph-projection-primitives (20bb4a936915220d803f8770ea6cbdc9d3dcc14f) into agent/integration as 787259809371c0d834e5039f7f30889a7e535225; gate green; acceptance=accepted
+
+### 2026-07-12T15:18:18Z — TASK-0074 — accept
+
+- Run: `RUN-20260712T151253Z-34153`
+- Branch: `agent/graph/TASK-0074-graph-projection-primitives`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T14:56:37Z — TASK-0073 — integrate
 
 - Run: `ORIGIN-20260712T144908Z-24579`
