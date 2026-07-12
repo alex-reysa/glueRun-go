@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T02:21:01Z — TASK-0048 — integrate
+
+- Run: `ORIGIN-20260712T021450Z-42938`
+- Branch: `agent/routing/TASK-0048-route-drive-wirein`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0048-route-drive-wirein (ce72d3a419e0843a088c697209fceb57e1a4bb10) into agent/integration as 815c9ab14afde56b2fd4fcffd5a2bf199ad047a5; gate green; acceptance=accepted
+
+### 2026-07-12T02:14:44Z — TASK-0048 — accept
+
+- Run: `RUN-20260712T014545Z-40683`
+- Branch: `agent/routing/TASK-0048-route-drive-wirein`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T01:41:08Z — TASK-0047 — integrate
 
 - Run: `ORIGIN-20260712T013459Z-73068`
