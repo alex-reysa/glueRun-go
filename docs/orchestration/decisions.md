@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-12T17:21:56Z — TASK-0081 — integrate
+
+- Run: `ORIGIN-20260712T170837Z-27987`
+- Branch: `agent/eval/TASK-0081-experiment-attempts-metrics`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0081-experiment-attempts-metrics (3000449462c4bffdb1ac9adb6630711124cb0ab0) into agent/integration as b3fb2a46ce6a418ea7a5f8ad3aed123f10cfb1e0; gate green; acceptance=accepted
+
+### 2026-07-12T17:15:20Z — TASK-0080 — integrate
+
+- Run: `ORIGIN-20260712T170837Z-27987`
+- Branch: `agent/graph/TASK-0080-graph-project-records`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0080-graph-project-records (b6ea016ea6acc5a22a974262f840a8178aabec46) into agent/integration as c2b38fc59666fd45ef09a9dae231a6a9d76c1e42; gate green; acceptance=accepted
+
+### 2026-07-12T17:06:13Z — TASK-0080 — accept
+
+- Run: `RUN-20260712T165929Z-17064`
+- Branch: `agent/graph/TASK-0080-graph-project-records`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T17:06:00Z — TASK-0081 — accept
+
+- Run: `RUN-20260712T165929Z-17142`
+- Branch: `agent/eval/TASK-0081-experiment-attempts-metrics`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T16:56:05Z — TASK-0079 — integrate
 
 - Run: `ORIGIN-20260712T164231Z-66247`
