@@ -2,6 +2,27 @@
 
 ## Decision Log
 
+### 2026-07-12T23:39:57Z — TASK-0101 — integrate
+
+- Run: `ORIGIN-20260712T232245Z-65096`
+- Branch: `agent/graph/TASK-0101-subgraph-sources`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0101-subgraph-sources (1bcb633f86d518a5ab044e195ebc0ade52136f9b) into agent/integration as bf5e16313dfb6fae1b42745d78c736ac3823fed8; gate green; acceptance=accepted
+
+### 2026-07-12T23:31:31Z — TASK-0099 — integrate
+
+- Run: `ORIGIN-20260712T232245Z-65096`
+- Branch: `agent/graph/TASK-0099-subgraph-selection`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0099-subgraph-selection (8f846af25a9995a199bdfc05bb877e755c0350a1) into agent/integration as f0ed4c2d87b170db40fe7b64704bf83d71a7f13c; gate green; acceptance=accepted
+
+### 2026-07-12T23:20:20Z — TASK-0101 — accept
+
+- Run: `RUN-20260712T231337Z-57581`
+- Branch: `agent/graph/TASK-0101-subgraph-sources`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T23:09:01Z — TASK-0100 — integrate
 
 - Run: `ORIGIN-20260712T230021Z-66480`
