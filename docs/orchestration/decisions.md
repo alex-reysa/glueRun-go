@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T03:58:24Z — TASK-0053 — integrate
+
+- Run: `ORIGIN-20260712T035210Z-21042`
+- Branch: `agent/routing/TASK-0053-rehydrate-source-resolver`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0053-rehydrate-source-resolver (fd591fa0794f5193b1095126459d8255b58ebc2e) into agent/integration as efcba39d56b0c840013771211eebdbd2b32f2824; gate green; acceptance=accepted
+
+### 2026-07-12T03:52:05Z — TASK-0053 — accept
+
+- Run: `RUN-20260712T034635Z-8689`
+- Branch: `agent/routing/TASK-0053-rehydrate-source-resolver`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T03:42:42Z — TASK-0052 — integrate
 
 - Run: `ORIGIN-20260712T033631Z-41657`
