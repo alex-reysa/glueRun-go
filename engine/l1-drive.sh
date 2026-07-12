@@ -1306,6 +1306,28 @@ if [[ -n "$critic_recheck_node" ]]; then
 fi
 unset _cr_pfx
 
+# ---- Experiment arm knob-state finalize hook (DAG node experiment-run, layer
+# evaluation; behind the default-OFF GLUERUN_CTX_ARMSTATE knob) ----------------
+# Beside the sibling per-run provenance blocks above (the GLUERUN_CTX_ARTIFACT_SCAN
+# durable-artifacts block, the paired-audit recorder, and the critic-recheck
+# block): durably RECORD this run's observed continuity knob-state so the
+# experiment report's per-arm attribution (control = M0 knob-state vs treatment)
+# is auditable on disk. TASK-0093 shipped the pure read-only emitter
+# gluerun_ctx_experiment_armstate_json but left it present-but-uncalled; this hook
+# is the separable driver wire-in that emitter's context packet deferred.
+#
+# Minimal delegating call site — it inlines NO knob-state logic and only forwards
+# to the integrated emitter, writing its output (for the run's environment) to a
+# durable arm-knob-state.json under the run directory, non-fatal (|| true),
+# mirroring the GLUERUN_CTX_ARTIFACT_SCAN block that writes durable-artifacts.manifest.
+# When the knob is unset or "0" this whole block is a no-op: no file, no event,
+# no state write — the accepted flow is byte-identical to pre-hook behavior. The
+# recorded knob-state NEVER feeds back into the accept decision or the exit status
+# (evidence invariance; it only writes an auditable file).
+if [[ -n "${GLUERUN_CTX_ARMSTATE:-}" && "${GLUERUN_CTX_ARMSTATE}" != "0" ]]; then
+  gluerun_ctx_experiment_armstate_json > "$run_dir/arm-knob-state.json" 2>/dev/null || true
+fi
+
 echo ""
 echo "ACCEPTED: $task_id @ $head_sha (waiver=$waiver)"
 echo "  packet: $inbox_packet  audit: $audit_record (verdict: $verdict)"
