@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T22:37:38Z — TASK-0098 — integrate
+
+- Run: `ORIGIN-20260712T222857Z-33521`
+- Branch: `agent/eval/TASK-0098-experiment-render-result`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0098-experiment-render-result (008ea56beefb39db04819ff691b0e0bcc481cead) into agent/integration as 13b63ac691030f3b37496038da0cb0b263e4e209; gate green; acceptance=accepted
+
+### 2026-07-12T22:28:44Z — TASK-0098 — accept
+
+- Run: `RUN-20260712T222149Z-27519`
+- Branch: `agent/eval/TASK-0098-experiment-render-result`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T22:17:49Z — TASK-0097 — integrate
 
 - Run: `ORIGIN-20260712T220908Z-38610`
