@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T06:44:52Z — TASK-0060 — integrate
+
+- Run: `ORIGIN-20260712T063816Z-79845`
+- Branch: `agent/routing/TASK-0060-rehydrate-authored-compose`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0060-rehydrate-authored-compose (5c6d04582ac2100a3fa687000dd1e26d2ab7a117) into agent/integration as e1b4cfa929471e9978deedcc77201019284a9002; gate green; acceptance=accepted
+
+### 2026-07-12T06:38:03Z — TASK-0060 — accept
+
+- Run: `RUN-20260712T063010Z-62984`
+- Branch: `agent/routing/TASK-0060-rehydrate-authored-compose`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T06:27:21Z — TASK-0059 — integrate
 
 - Run: `ORIGIN-20260712T062047Z-93865`
