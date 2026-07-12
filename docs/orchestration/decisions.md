@@ -2,6 +2,27 @@
 
 ## Decision Log
 
+### 2026-07-12T14:56:37Z — TASK-0073 — integrate
+
+- Run: `ORIGIN-20260712T144908Z-24579`
+- Branch: `agent/graph/TASK-0073-graph-contract-drop-unwired-guard`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0073-graph-contract-drop-unwired-guard (a3245d2334d154210b58cce9e5af94c08e56c52a) into agent/integration as 4be6a8cd057b42d6570158dfdc962ac9db66e30d; gate green; acceptance=accepted
+
+### 2026-07-12T14:46:57Z — TASK-0073 — accept
+
+- Run: `RUN-20260712T142128Z-31284`
+- Branch: `agent/graph/TASK-0073-graph-contract-drop-unwired-guard`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T14:28:07Z — TASK-0073 — decide:retry
+
+- Run: `RUN-20260712T142128Z-31284`
+- Branch: `agent/graph/TASK-0073-graph-contract-drop-unwired-guard`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
 ### 2026-07-12T14:12:01Z — TASK-0072 — integrate
 
 - Run: `ORIGIN-20260712T140455Z-7920`
