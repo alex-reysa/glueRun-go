@@ -2,6 +2,34 @@
 
 ## Decision Log
 
+### 2026-07-12T20:36:42Z — TASK-0093 — integrate
+
+- Run: `ORIGIN-20260712T201952Z-78933`
+- Branch: `agent/eval/TASK-0093-experiment-armstate`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0093-experiment-armstate (128c92c290a28331f0aeef8104b52e206d1785aa) into agent/integration as f58b7e7193edaa2ac90175d36f173965a8e992db; gate green; acceptance=accepted
+
+### 2026-07-12T20:28:20Z — TASK-0092 — integrate
+
+- Run: `ORIGIN-20260712T201952Z-78933`
+- Branch: `agent/graph/TASK-0092-graph-project-context`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0092-graph-project-context (48ad47ec6db7e99dfceb74e1b025a3558380fbcf) into agent/integration as 1e4f0bd36a44ad4bc0a15999fa73f9310cb7e22d; gate green; acceptance=accepted
+
+### 2026-07-12T20:19:26Z — TASK-0092 — accept
+
+- Run: `RUN-20260712T201113Z-58836`
+- Branch: `agent/graph/TASK-0092-graph-project-context`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T20:17:58Z — TASK-0093 — accept
+
+- Run: `RUN-20260712T201113Z-58914`
+- Branch: `agent/eval/TASK-0093-experiment-armstate`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T20:06:33Z — TASK-0091 — integrate
 
 - Run: `ORIGIN-20260712T195046Z-92497`
