@@ -44,6 +44,7 @@ SCHEMA="$ENGINE_HOME/schemas/context-graph.v0.schema.json"
 GG_PROJECT="$ENGINE_HOME/engine/ctx-graph-project.sh"
 GG_PLANS="$ENGINE_HOME/engine/ctx-graph-project-plans.sh"
 GG_RECORDS="$ENGINE_HOME/engine/ctx-graph-project-records.sh"
+GG_CONTEXT="$ENGINE_HOME/engine/ctx-graph-project-context.sh"
 GG_CORPUS="$ENGINE_HOME/engine/ctx-graph-corpus.sh"
 GG_REBUILD="$ENGINE_HOME/engine/ctx-graph-rebuild.sh"
 GG_SYNC="$ENGINE_HOME/engine/ctx-graph-sync.sh"
@@ -258,6 +259,7 @@ rm -rf "$work"
 [[ -f "$GG_PROJECT" ]] || fail "impl not present yet: $GG_PROJECT (strict-test-first RED)"
 [[ -f "$GG_PLANS" ]]   || fail "impl not present yet: $GG_PLANS (strict-test-first RED)"
 [[ -f "$GG_RECORDS" ]] || fail "impl not present yet: $GG_RECORDS (strict-test-first RED)"
+[[ -f "$GG_CONTEXT" ]] || fail "impl not present yet: $GG_CONTEXT (strict-test-first RED)"
 [[ -f "$GG_CORPUS" ]]  || fail "impl not present yet: $GG_CORPUS (strict-test-first RED)"
 [[ -f "$GG_REBUILD" ]] || fail "impl not present yet: $GG_REBUILD (strict-test-first RED)"
 [[ -f "$GG_SYNC" ]]    || fail "impl not present yet: $GG_SYNC (strict-test-first RED)"
@@ -278,8 +280,8 @@ unset GLUERUN_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$E2E_SNAP" \
     && source "$CTX_GRAPH" && source "$GG_PROJECT" && source "$GG_PLANS" \
-    && source "$GG_RECORDS" && source "$GG_CORPUS" && source "$GG_REBUILD" \
-    && source "$GG_SYNC" && source "$GG_QUERY" ) \
+    && source "$GG_RECORDS" && source "$GG_CONTEXT" && source "$GG_CORPUS" \
+    && source "$GG_REBUILD" && source "$GG_SYNC" && source "$GG_QUERY" ) \
   || fail "sourcing the composed graph modules failed"
 off_after="$(cd "$E2E_SNAP" && find . | LC_ALL=C sort)"
 [[ "$off_before" == "$off_after" ]] \
@@ -292,6 +294,8 @@ source "$GG_PROJECT" || fail "sourcing $GG_PROJECT failed"
 source "$GG_PLANS"   || fail "sourcing $GG_PLANS failed"
 # shellcheck disable=SC1090
 source "$GG_RECORDS" || fail "sourcing $GG_RECORDS failed"
+# shellcheck disable=SC1090
+source "$GG_CONTEXT" || fail "sourcing $GG_CONTEXT failed"
 # shellcheck disable=SC1090
 source "$GG_CORPUS"  || fail "sourcing $GG_CORPUS failed"
 # shellcheck disable=SC1090
@@ -398,11 +402,45 @@ JSON
 }
 JSON
 
+  # Task markdown carries a `## Context packet` `### Assumptions` block so the
+  # wired assumption mapper mints assumption nodes over the rebuild walk.
   cat > "$STATE/docs/orchestration/tasks/$E2E_NODE.md" <<MD
 # $E2E_NODE: Assemble the graph-projector rebuild entry point
 
 Objective: walk the durable sources and rebuild the canonical corpus.
+
+## Context packet
+
+### Assumptions
+
+- [validated] The durable sources are fully written before rebuild — basis: the S0-S5 write contract.
+- [open] Some runs may omit a capsule record; absence is empty, not an error — basis: the fail-safe mapper contract.
 MD
+
+  # Per-run implementer/reviewer context capsules so the wired capsule mapper
+  # mints capsule nodes over the runs/*/{implementer,reviewer}-capsule.json walk.
+  cat > "$STATE/runs/$E2E_RUN_A/implementer-capsule.json" <<JSON
+{
+  "schema": "gluerun.orchestration.context-capsule.v0",
+  "role": "implementer",
+  "taskId": "$E2E_NODE",
+  "runId": "$E2E_RUN_A",
+  "attempt": 2,
+  "headSha": "bbb",
+  "nextAction": "await review"
+}
+JSON
+
+  cat > "$STATE/runs/$E2E_RUN_A/reviewer-capsule.json" <<JSON
+{
+  "schema": "gluerun.orchestration.context-capsule.v0",
+  "role": "reviewer",
+  "taskId": "$E2E_NODE",
+  "runId": "$E2E_RUN_A",
+  "attempt": 2,
+  "verdict": "accepted"
+}
+JSON
 
   cat > "$STATE/events.ndjson" <<JSON
 {"ts":"2026-07-12T10:00:00Z","type":"plan.revised","message":"m","data":{"node":"$E2E_NODE","runId":"$E2E_RUN_A"}}
@@ -489,6 +527,25 @@ print("ok" if ok else "bad")
 [[ "$(count_type "$NODES_R" evidenceClass claim)" -ge 1 ]] \
   || fail "rebuilt corpus has no claim node (fixture too thin)"
 
+# --- context-family mappers LIVE in rebuild: assumption + capsule nodes --------
+# The wired assumption/capsule mappers mint their node families into the corpus,
+# and (evidence invariance) both are claim — never authoritative.
+for t in assumption capsule; do
+  [[ "$(count_type "$NODES_R" type "$t")" -ge 1 ]] \
+    || fail "rebuilt corpus has no $t node (context mapper not wired into rebuild)"
+  for id in $(e2e_node_ids_of_type "$NODES_R" "$t"); do
+    ec="$(GG_ID="$id" python3 -c '
+import json, os, sys
+want = os.environ["GG_ID"]
+for line in open(sys.argv[1], encoding="utf-8"):
+    line = line.rstrip("\n")
+    if line.strip() and json.loads(line).get("id") == want:
+        print(json.loads(line).get("evidenceClass")); break
+' "$NODES_R")"
+    [[ "$ec" == "claim" ]] || fail "$t node $id must be claim (got $ec)"
+  done
+done
+
 # --- rebuild determinism: repeat run is byte-identical ------------------------
 NODES_SNAP="$E2E_ROOT/nodes-run1.jsonl"; EDGES_SNAP="$E2E_ROOT/edges-run1.jsonl"
 cp "$NODES_R" "$NODES_SNAP"; cp "$EDGES_R" "$EDGES_SNAP"
@@ -507,6 +564,11 @@ GDIR_S="$E2E_ROOT/graph-sync"
 gluerun_graph_sync "$STATE" "$GDIR_S" || fail "gluerun_graph_sync (from scratch) failed"
 diff -q "$NODES_R" "$GDIR_S/nodes.jsonl" >/dev/null || fail "sync != rebuild (nodes.jsonl) from scratch"
 diff -q "$EDGES_R" "$GDIR_S/edges.jsonl" >/dev/null || fail "sync != rebuild (edges.jsonl) from scratch"
+# The wired context families survive sync-equals-rebuild (present in sync corpus).
+for t in assumption capsule; do
+  [[ "$(count_type "$GDIR_S/nodes.jsonl" type "$t")" -ge 1 ]] \
+    || fail "sync corpus missing $t node (context mapper not wired into sync)"
+done
 
 # --- sync equals rebuild: INCREMENTAL (rebuild, append events, sync) ----------
 STATE_I="$E2E_ROOT/state-inc"
