@@ -31,6 +31,7 @@ printf '{"schema":"x","role":"reviewer","sessionId":"sid-clean"}\n' >"$run_dir/s
 printf '{"schema":"x","role":"planner","sessionId":"sid-clean"}\n' >"$run_dir/sessions/planner/planner-session-meta.json"
 printf '{"taskId":"TASK-CLEAN","notes":"no credential here"}\n' >"$run_dir/packet.json"
 printf '{"schema":"x","verdict":"accepted"}\n' >"$run_dir/l1-staging/planner-session-meta/plan-critique.json"
+printf '{"schema":"x","transcript":"no credential here"}\n' >"$run_dir/l1-staging/planner-session-meta/plan-critique-raw.json"
 printf '{"schema":"x","agreement":true}\n' >"$run_dir/paired-audit.json"
 
 clean_out="$("$SCAN" --artifacts "$run_dir" 2>&1)" || fail "clean artifacts should exit 0: $clean_out"
@@ -58,6 +59,8 @@ printf '{"body":"%s"}\n' "$github_token" \
   >"$run_dir/packet.json"
 printf '{"finding":"OpenAI key %s"}\n' "$openai_key" \
   >"$run_dir/l1-staging/planner-session-meta/plan-critique.json"
+printf '{"raw":"verbatim critic output leaked %s"}\n' "$sbp_token" \
+  >"$run_dir/l1-staging/planner-session-meta/plan-critique-raw.json"
 printf '{"raw":"%s"}\n' "$private_key_header" \
   >"$run_dir/paired-audit-raw.json"
 
@@ -80,6 +83,8 @@ assert_contains "$hit_out" "$run_dir/packet.json" "packet path"
 assert_contains "$hit_out" "GitHub token" "GitHub label"
 assert_contains "$hit_out" "$run_dir/l1-staging/planner-session-meta/plan-critique.json" "critique path"
 assert_contains "$hit_out" "OpenAI key" "OpenAI label"
+assert_contains "$hit_out" "$run_dir/l1-staging/planner-session-meta/plan-critique-raw.json" "raw critique path"
+assert_contains "$hit_out" "Supabase token (sbp_)" "raw critique Supabase label"
 assert_contains "$hit_out" "$run_dir/paired-audit-raw.json" "paired audit raw path"
 assert_contains "$hit_out" "private key block" "private key label"
 

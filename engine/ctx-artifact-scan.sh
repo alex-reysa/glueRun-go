@@ -25,7 +25,7 @@ gluerun_ctx_artifact_scan_paths() {
     find "$run_dir/sessions/planner" -type f -name '*.json' -print 2>/dev/null
   fi
 
-  find "$run_dir" -type f \( -name 'plan-critique.json' -o -name 'critique.json' \) -print 2>/dev/null
+  find "$run_dir" -type f \( -name 'plan-critique.json' -o -name 'plan-critique-raw.json' -o -name 'critique.json' \) -print 2>/dev/null
 }
 
 gluerun_ctx_artifact_scan() {
