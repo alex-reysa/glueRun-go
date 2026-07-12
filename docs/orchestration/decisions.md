@@ -1468,3 +1468,12 @@
   failures only count toward the exit limit when the cycle produced nothing.
   Also fixed TASK-0030 status bookkeeping (engine had it already-merged; the
   file said accepted, which would have deadlocked the new integration guard).
+
+- 2026-07-12 (INTEGRATE-RED, environmental): TASK-0077's post-merge gate went
+  red solely because the machine's data volume hit 100% (mktemp "No space
+  left on device" across the suite). Decider correctly ruled rerun-tests.
+  Operator freed ~5.5GB (npm cache, updater cache, puppeteer cache — kept
+  codex-runtimes for runner-switch resilience) and relaunched the loop;
+  integrate retries with space available. Ops note for the runbook: a long
+  self-hosting run should check free disk in the heartbeat — full-suite
+  gates fail confusingly when temp allocation dies mid-run.
