@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-07-12T16:28:16Z — TASK-0077 — integrate
+
+- Run: `ORIGIN-20260712T162105Z-26910`
+- Branch: `agent/eval/TASK-0077-experiment-report-metrics`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0077-experiment-report-metrics (28e3257d92db655e2958135cf0d8f6be073c62b2) into agent/integration as 9b23df762d5c6aa804445b85c44719de9397cde1; gate green; acceptance=accepted
+
 ### 2026-07-12T16:17:31Z — TASK-0077 — decide:rerun-tests
 
 - Run: `ORIGIN-20260712T160513Z-74749`
