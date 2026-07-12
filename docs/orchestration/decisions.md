@@ -2,6 +2,27 @@
 
 ## Decision Log
 
+### 2026-07-12T14:12:01Z — TASK-0072 — integrate
+
+- Run: `ORIGIN-20260712T140455Z-7920`
+- Branch: `agent/graph/TASK-0072-mapping-s0-s5-coverage-completion`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0072-mapping-s0-s5-coverage-completion (276575430ab316065dd239ae7408763cac1b4dd1) into agent/integration as 51810f5f6dc752804d903df4da8ad4ec3c29acc1; gate green; acceptance=accepted
+
+### 2026-07-12T14:04:31Z — TASK-0072 — accept
+
+- Run: `RUN-20260712T133549Z-45139`
+- Branch: `agent/graph/TASK-0072-mapping-s0-s5-coverage-completion`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-07-12T13:41:21Z — TASK-0072 — decide:retry
+
+- Run: `RUN-20260712T133549Z-45139`
+- Branch: `agent/graph/TASK-0072-mapping-s0-s5-coverage-completion`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
 ### 2026-07-12T13:11:57Z — TASK-0071 — accept
 
 - Run: `RUN-20260712T130208Z-66652`
