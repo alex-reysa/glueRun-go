@@ -353,6 +353,19 @@ worker_strategy_reason="init"
 reviewer_strategy="fresh"
 reviewer_strategy_reason="init"
 
+# Durable `decision-record` extra spec (node rehydrate-path, layer engine_runtime).
+# The repo-level decision log lives OUTSIDE run_dir, so the pure resolver
+# gluerun_ctx_rehydrate_sources never emits it; it is supplied as a class-tagged
+# extra computed by the pure leaf over GLUERUN_ROOT. It is snapshotted ONCE here at
+# drive start (existence-gated) so a rehydrate attempt rehydrates the decision log
+# as it stood when the run began — NOT this run's own in-flight decider appends
+# (record-decision.sh mutates docs/orchestration/decisions.md between attempts, and
+# capturing those would be circular). Empty when the decision log is absent at
+# drive start. Both rehydrate sites reference this identical spec, so the injected
+# packet and the recorded manifest carry the SAME decision record (id + content
+# hash) by construction. Its CONTENT is hashed/rendered later at rehydrate time.
+decision_source_extra="$(gluerun_ctx_rehydrate_decision_source "$GLUERUN_ROOT" 2>/dev/null || true)"
+
 # Worker-runner selection (gluerun_select_l2_runner): generic engine returns the
 # default runner; an enabled module may route specific tasks to an alternate
 # runner (3rd arg). An explicit GLUERUN_RUNNER override always wins.
@@ -422,11 +435,16 @@ prepare_worker_prompt() {
 rehydrate_inject_packet() {
   local active_prompt="$1"
   [[ "${worker_strategy:-}" == "rehydrate" ]] || return 0
+  # The repo-level `decision-record` lives OUTSIDE run_dir; it is supplied as the
+  # class-tagged extra `decision_source_extra` snapshotted at drive start. The event
+  # record site passes the IDENTICAL spec, so the injected packet and the recorded
+  # manifest carry the SAME decision record. Empty when the decision log was absent
+  # at drive start.
   local -a specs=()
   local line
   while IFS= read -r line; do
     [[ -n "$line" ]] && specs+=("$line")
-  done < <(gluerun_ctx_rehydrate_sources "$run_dir" 2>/dev/null)
+  done < <(gluerun_ctx_rehydrate_sources "$run_dir" ${decision_source_extra:+"$decision_source_extra"} 2>/dev/null)
   local packet
   packet="$(gluerun_ctx_rehydrate_packet ${specs[@]+"${specs[@]}"} 2>/dev/null)" || return 0
   [[ -n "$packet" ]] || return 0
@@ -535,8 +553,12 @@ run_worker_phase() {
     # durable-artifact root run_dir. No resume session is reused (rehydrate is a
     # fresh session with injected context); the packet-injection hook is a later
     # slice. worker_resume_id stays empty so the worker runs fresh below.
+    # The repo-level `decision-record` lives OUTSIDE run_dir; supply it as a trailing
+    # class-tagged extra so the recorded manifest carries the SAME decision record
+    # (id + content hash) the packet-injection hook injects — both reference the
+    # identical drive-start `decision_source_extra`, so they agree by construction.
     gluerun_append_event "context.strategy_selected" "rehydrate strategy selected" \
-      "$(gluerun_ctx_rehydrate_event_data implementer "$task_id" "$run_id" "$n" "$worker_strategy_reason" "$run_dir")" || true
+      "$(gluerun_ctx_rehydrate_event_data implementer "$task_id" "$run_id" "$n" "$worker_strategy_reason" "$run_dir" ${decision_source_extra:+"$decision_source_extra"})" || true
   else
     gluerun_append_event "context.strategy_selected" "fresh-run strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"strategy\":\"fresh\",\"reason\":\"$worker_strategy_reason\"}" || true
