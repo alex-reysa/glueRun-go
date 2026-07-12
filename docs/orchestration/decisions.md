@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-12T03:01:06Z — TASK-0050 — integrate
+
+- Run: `ORIGIN-20260712T025454Z-16077`
+- Branch: `agent/routing/TASK-0050-route-continue-class`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0050-route-continue-class (4d691b8e1b3f9cfcbc02b7a8653d39c2f3d29ed9) into agent/integration as 0e7d5f5dc348dd0fcb2adfddab90d09571bef2c8; gate green; acceptance=accepted
+
+### 2026-07-12T02:54:49Z — TASK-0050 — accept
+
+- Run: `RUN-20260712T025019Z-5959`
+- Branch: `agent/routing/TASK-0050-route-continue-class`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T02:37:26Z — TASK-0049 — integrate
 
 - Run: `ORIGIN-20260712T023116Z-21721`
