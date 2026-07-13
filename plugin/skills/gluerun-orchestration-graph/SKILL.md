@@ -99,6 +99,16 @@ GET /api/task/TASK-0309    → full read-only task detail (objective, scope, acc
                              plus agentsInvolved + toolsUsed observed for the run)
 GET /api/roles             → declared role/skill catalog (static reference, cached)
 GET /api/health            → liveness
+GET /api/overview          → plan overview (DAG stages/nodes with gate status)
+GET /api/node/<node-id>    → single DAG node detail (requiredCompletion, gate
+                             result, tasks attributed to the node)
+GET /api/area/<area>/nodes → all DAG nodes for one area
+GET /api/events?cursor=N   → paged event-log reader over .gluerun-state/events.ndjson
+                             (returns a next cursor; poll-friendly)
+GET /api/sessions          → runtime session inventory (cached; planner/worker
+                             session-meta discovered from durable records)
+GET /api/session/<id>      → paged session transcript reader
+                             (?cursor=N&limit=N&file=<name>&raw=1)
 ```
 
 The snapshot also carries L1-parallelism facts (read-only): `orchestration.nextAreas`
