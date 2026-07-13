@@ -87,8 +87,8 @@ Prerequisites:
 
 ```bash
 # Clone and install the engine to ~/.gluerun
-git clone https://github.com/alex-reysa/glueRun-go /path/to/glueRun-go
-cd /path/to/glueRun-go
+git clone https://github.com/alex-reysa/singular-lite /path/to/singular-lite
+cd /path/to/singular-lite
 bash install.sh
 # -> ~/.gluerun/versions/<ver>/  ~/.gluerun/current  ~/.gluerun/bin/gluerun
 
