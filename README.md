@@ -298,7 +298,7 @@ Two versions move independently:
 ## Development and tests
 
 ```bash
-bash tests/run.sh    # 23 regression tests
+bash tests/run.sh    # full regression suite (120+ tests)
 ```
 
 The test suite uses no live state — all fixtures use a generic layer vocabulary. The

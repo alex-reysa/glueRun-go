@@ -1,6 +1,6 @@
 # Project State
 
-Initial gluerun scaffold. Reconcile snapshots will be maintained below.
+glueRun-go self-hosted context-evolution build — COMPLETE (0.4.0, 2026-07-13). Snapshot block below is machine-maintained. Reconcile snapshots will be maintained below.
 
 ## Latest Reconcile Snapshot
 

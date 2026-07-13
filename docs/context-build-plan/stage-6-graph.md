@@ -1,5 +1,7 @@
 # Stage 6 — Provenance graph projection (M6)
 
+> **Gate-passed** — this stage's nodes are complete; evidence in `../orchestration/gates/`.
+
 Purpose: the durable semantic layer — as a PROJECTION. The graph is derived
 from the event log, decision records, gate results, critiques, and ledgers. It
 is rebuildable from scratch at any time and is never written directly by a

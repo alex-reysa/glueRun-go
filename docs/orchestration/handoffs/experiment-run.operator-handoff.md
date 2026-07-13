@@ -1,5 +1,11 @@
 # Operator hand-off — `experiment-run` (area: eval, kind: evaluation)
 
+> **COMPLETED 2026-07-13:** the operator path below was executed —
+> `docs/context-build-plan/experiment-report.md` merged, per-knob decisions
+> recorded, and `docs/orchestration/gates/experiment-run.gate-result.json`
+> published (operator-promoted via GLUERUN_FORCE_EVAL_GATE=1). The text
+> below is the historical hand-off record as written before completion.
+
 Status: **operator-blocked, planner-cannot-advance.** This record surfaces the
 hand-off; it does not and cannot declare the node complete. Completion authority
 for this area is the manually-published gate result

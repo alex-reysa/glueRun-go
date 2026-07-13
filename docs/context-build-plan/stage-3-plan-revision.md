@@ -1,5 +1,7 @@
 # Stage 3 — In-lineage plan revision (M3)
 
+> **Gate-passed** — this stage's nodes are complete; evidence in `../orchestration/gates/`.
+
 Purpose: the planner that produced a critiqued batch revises it in the same
 reasoning lineage, with provenance. This is the first stage where continuity is
 *intended to change outcomes* — which is why the invariant redefinition ships

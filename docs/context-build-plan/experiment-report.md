@@ -10,7 +10,9 @@ evidence attached to `docs/orchestration/gates/experiment-run.gate-result.json`.
 
 This is an **observational before/after comparison over one real backlog**
 (this repo's own context-evolution build, 105 integrated tasks with full
-lifecycle records in `.gluerun-state/events.ndjson`), not a randomized
+lifecycle records in `.gluerun-state/events.ndjson` — the arms-analyzed
+corpus; the finished plan totals 107, the last two release-phase tasks
+landing after this analysis was cut), not a randomized
 concurrent A/B. Arms are defined by knob-state era, matching the DAG's
 `control = M0 knob-state` framing:
 

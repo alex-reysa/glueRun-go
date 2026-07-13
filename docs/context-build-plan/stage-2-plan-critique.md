@@ -1,5 +1,7 @@
 # Stage 2 — First-class plan critique (M2)
 
+> **Gate-passed** — this stage's nodes are complete; evidence in `../orchestration/gates/`.
+
 Purpose: plans get reviewed before they become work. This wires the role the
 orphaned `templates/prompts/reviewer.md` was evidently meant for.
 

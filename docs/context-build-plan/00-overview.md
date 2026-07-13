@@ -1,5 +1,9 @@
 # Context-Aware Orchestration — Build Plan (self-hosted)
 
+> **STATUS: COMPLETE 2026-07-13** — all 22 DAG nodes gate-passed
+> (`../orchestration/gates/`), 107 tasks integrated, 0.4.0 released.
+> Knob-default decisions: `experiment-report.md` §5.
+
 This plan evolves glueRun-go from "session continuity as a token-cost optimization"
 to "context as a first-class, routed, measured capability" — while preserving the
 engine's design center: reproducibility, durable authoritative state, role

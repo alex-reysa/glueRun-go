@@ -1,5 +1,7 @@
 # Stage 5 — Explicit session routing (M5)
 
+> **Gate-passed** — this stage's nodes are complete; evidence in `../orchestration/gates/`.
+
 Purpose: one routing module, five named strategies, every decision
 reason-coded. Ordered fail-closed gates — NOT a numeric score. Judgment calls go
 to the model decider with recorded rationale; arithmetic never trades away an

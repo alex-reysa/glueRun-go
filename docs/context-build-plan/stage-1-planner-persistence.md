@@ -1,5 +1,7 @@
 # Stage 1 — Planner session persistence (M1)
 
+> **Gate-passed** — this stage's nodes are complete; evidence in `../orchestration/gates/`.
+
 Purpose: planner sessions become durable, addressable working memory per DAG
 node. Today `generate-tasks.sh` invokes the runner with no `--session-meta`; the
 planner's session id is discarded.

@@ -1,5 +1,7 @@
 # Stage 4 — Rich context packets (M4)
 
+> **Gate-passed** — this stage's nodes are complete; evidence in `../orchestration/gates/`.
+
 Purpose: the handoff artifact carries the planner's reasoning residue —
 decisions, assumptions, rejected alternatives, inspected symbols — so a fresh
 implementer (and later, rehydration) loses less. This is the enriched-artifact

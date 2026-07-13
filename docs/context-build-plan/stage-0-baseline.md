@@ -1,5 +1,7 @@
 # Stage 0 — Baseline and instrumentation (M0)
 
+> **Gate-passed** — this stage's nodes are complete; evidence in `../orchestration/gates/`.
+
 Purpose: make the current engine measurable and create the single structural
 hook every later stage builds on. Nothing in this stage changes task outcomes.
 

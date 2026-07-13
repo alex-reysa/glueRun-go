@@ -1,5 +1,7 @@
 # Stage 7 — Evaluation and polish (M7)
 
+> **Gate-passed** — this stage's nodes are complete; evidence in `../orchestration/gates/`.
+
 Purpose: prove it, write it down, ship it. Both nodes are operator-driven
 (kind: evaluation — reports and doc rewrites don't fit strict-test-first
 mechanics); gate results are published manually with the evidence attached.
