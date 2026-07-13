@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-07-13T00:32:38Z — TASK-0103 — integrate
+
+- Run: `ORIGIN-20260713T002353Z-20286`
+- Branch: `agent/eval/TASK-0103-experiment-run-operator-handoff`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0103-experiment-run-operator-handoff (a81ef1f23c75e81fbb0856dc460e3f586b94b7fc) into agent/integration as e436f6822b2a6831d32ab4ce068bba458ae0cc2a; gate green; acceptance=accepted
+
+### 2026-07-13T00:23:43Z — TASK-0103 — accept
+
+- Run: `RUN-20260712T234435Z-35600`
+- Branch: `agent/eval/TASK-0103-experiment-run-operator-handoff`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-13T00:02:36Z — TASK-0103 — decide:amend-scope
 
 - Run: `RUN-20260712T234435Z-35600`
