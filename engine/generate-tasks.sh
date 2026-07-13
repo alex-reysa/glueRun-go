@@ -55,6 +55,11 @@ fi
 
 gluerun_require_target_branch
 
+# Planner session-meta lineage anchor: resolve the target-branch head at planning
+# time (the head a resumable planner session would be anchored to). Used only by
+# the default-OFF GLUERUN_PLANNER_SESSION finalize hook below; unused otherwise.
+planner_head_sha="$(git -C "$GLUERUN_ROOT" rev-parse "$GLUERUN_TARGET_BRANCH" 2>/dev/null || true)"
+
 # Pick the first eligible ungated DAG node from the manifest and authoritative
 # gate-result records.
 if [[ -n "$node_override" ]]; then
@@ -227,8 +232,77 @@ out="$run_dir/planner-out.md"
 codex_log="$run_dir/planner-codex.log"
 codex_runner="${GLUERUN_RUNNER:-${GLUERUN_CODEX_RUNNER:-$SCRIPT_DIR/codex-run.sh}}"
 codex_exit=0
-"$codex_runner" --level readonly -C "$GLUERUN_ROOT" --run-id "$run_id" \
-  --prompt-file "$prompt_file" --output-last-message "$out" >"$codex_log" 2>&1 || codex_exit=$?
+# Planner session-meta hook (default-OFF): when GLUERUN_PLANNER_SESSION=1, offer
+# the runner the canonical per-node planner session-meta path — mirroring the
+# worker/reviewer --session-meta wiring in l1-drive.sh. With the knob unset/0 no
+# --session-meta arg is added, so the invocation is byte-identical to prior.
+planner_runner_args=(--level readonly -C "$GLUERUN_ROOT" --run-id "$run_id" \
+  --prompt-file "$prompt_file" --output-last-message "$out")
+planner_session_meta=""
+if [[ "${GLUERUN_PLANNER_SESSION:-0}" == "1" ]]; then
+  planner_session_meta="$(gluerun_ctx_planner_session_path "$active_node")"
+  [[ -n "$planner_session_meta" ]] && planner_runner_args+=(--session-meta "$planner_session_meta")
+fi
+
+# Planner session-resume consult hook (default-OFF): when GLUERUN_PLANNER_SESSION=1,
+# consult the already-integrated ordered fail-closed decider before invoking the
+# runner — mirroring the implementer/reviewer resume path in l1-drive.sh. The
+# lineage head is the current target-branch head (planner_head_sha), the same
+# anchor the finalize hook records. On `resume <sessionId>` add --resume-session
+# and acquire the canonical per-node planner session-lease before the run; on
+# `fresh <reason>` invoke without it. Either way emit EXACTLY ONE
+# context.strategy_selected event (role "planner") carrying the exact gate reason
+# returned by the decider (plus sessionId on resume), so ctx-metrics.sh sees
+# planner routing and every gate reason is event-visible. The decider's
+# fail-closed verdict is trusted verbatim — a `fresh <reason>` (or any decide
+# error) is NEVER upgraded to a resume, so a non-planner session is never resumed
+# as the planner. With the knob unset/0 nothing is consulted, no --resume-session
+# is added, no strategy event is emitted, and no lease is acquired.
+planner_resume_id=""
+planner_lease_path=""
+planner_base_args=("${planner_runner_args[@]}")
+if [[ "${GLUERUN_PLANNER_SESSION:-0}" == "1" ]]; then
+  planner_decision="$(gluerun_planner_resume_decide "$planner_session_meta" "$active_node" \
+    "$(basename "$codex_runner")" "$GLUERUN_ROOT" "$planner_head_sha" 2>/dev/null || echo "fresh decide-error")"
+  planner_strategy="${planner_decision%% *}"
+  planner_strategy_reason="${planner_decision#* }"
+  if [[ "$planner_strategy" == "resume" ]]; then
+    planner_resume_id="$planner_strategy_reason"
+    planner_runner_args+=(--resume-session "$planner_resume_id")
+    # Acquire the canonical planner session-lease before the resume run so a
+    # parallel L1 fanout's decider sees `leased` and does not resume concurrently.
+    planner_lease_path="$(gluerun_planner_resume_lease_path "$active_node")"
+    if [[ -n "$planner_lease_path" ]]; then
+      mkdir -p "$(dirname "$planner_lease_path")"
+      printf '{"pid": %s}\n' "$$" >"$planner_lease_path"
+    fi
+    gluerun_append_event "context.strategy_selected" "planner session resume strategy selected" \
+      "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"strategy\":\"resume\",\"reason\":\"resume\",\"sessionId\":\"$planner_resume_id\"}" || true
+  else
+    gluerun_append_event "context.strategy_selected" "planner fresh-run strategy selected" \
+      "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"strategy\":\"fresh\",\"reason\":\"$planner_strategy_reason\"}" || true
+  fi
+fi
+
+"$codex_runner" "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
+
+# rc-86 in-run fresh fallback: the runner refused the resume. Drop
+# --resume-session and re-run the planner FRESH within the SAME run (a pure
+# optimization miss; the planning outcome is unchanged), mirroring the worker
+# rc-86 fallback in l1-drive.sh.
+if [[ "$codex_exit" -eq 86 && -n "$planner_resume_id" ]]; then
+  gluerun_append_event "context.resume_failed" "planner resume failed; re-running fresh" \
+    "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"sessionId\":\"$planner_resume_id\"}" || true
+  planner_runner_args=("${planner_base_args[@]}")
+  codex_exit=0
+  "$codex_runner" "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
+fi
+
+# Release the planner session-lease after the run returns — including after an
+# rc-86 fresh fallback and on runner error (subsequent failure paths exit below).
+if [[ -n "$planner_lease_path" ]]; then
+  rm -f "$planner_lease_path"
+fi
 
 if [[ "$codex_exit" -ne 0 ]]; then
   failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out")"
@@ -424,6 +498,11 @@ PY
       echo "generated:$tid"
     fi
   done
+  # Accepted batch: persist the finalized planner session-meta (default-OFF; a
+  # no-op unless GLUERUN_PLANNER_SESSION=1). Never fatal.
+  gluerun_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
+    "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
+    "$planner_head_sha" 1 >/dev/null 2>&1 || true
   exit 0
 fi
 
@@ -470,6 +549,11 @@ if [[ -z "$stage_dir" ]]; then
 fi
 
 mv "$tmp" "$dest"
+# Accepted single task: persist the finalized planner session-meta (default-OFF;
+# a no-op unless GLUERUN_PLANNER_SESSION=1). Never fatal.
+gluerun_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
+  "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
+  "$planner_head_sha" 1 >/dev/null 2>&1 || true
 if [[ -n "$stage_dir" ]]; then
   gluerun_append_event "planner.staged" "task staged" \
     "{\"area\":\"$active_area\",\"taskId\":\"$next_id\",\"runId\":\"$run_id\",\"node\":\"$active_node\"}"

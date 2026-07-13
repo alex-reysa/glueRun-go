@@ -10,24 +10,45 @@ set -euo pipefail
 #   secret-scan.sh --worktree PATH --staged          # scan staged diff (pre-commit)
 #   secret-scan.sh --worktree PATH --range A..B       # scan a commit range (pre-push)
 #   secret-scan.sh --worktree PATH                    # scan unstaged + untracked
+#   secret-scan.sh --artifacts RUN_DIR                # scan durable context artifacts
 #
 # Exit 0 = clean; exit 2 = secret(s) found (offending lines printed to stderr).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
+gluerun_secret_scan_patterns() {
+  printf '%s\t%s\n' "Supabase token (sbp_)" 'sbp_[A-Za-z0-9]{20,}'
+  printf '%s\t%s\n' "AWS access key id" 'AKIA[0-9A-Z]{16}'
+  printf '%s\t%s\n' "private key block" '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  printf '%s\t%s\n' "JWT / bearer token" 'eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}'
+  printf '%s\t%s\n' "GitHub token" 'gh[pousr]_[A-Za-z0-9]{20,}'
+  printf '%s\t%s\n' "OpenAI key" 'sk-[A-Za-z0-9]{20,}'
+}
+
 worktree="$GLUERUN_ROOT"
 mode="working"
 range=""
+artifacts_dir=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --worktree|-C) worktree="$2"; shift 2 ;;
     --staged) mode="staged"; shift ;;
     --range) mode="range"; range="$2"; shift 2 ;;
+    --artifacts)
+      [[ $# -ge 2 ]] || { echo "missing value for --artifacts" >&2; exit 2; }
+      mode="artifacts"; artifacts_dir="$2"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+if [[ "$mode" == "artifacts" ]]; then
+  # shellcheck disable=SC1090
+  source "$SCRIPT_DIR/ctx-artifact-scan.sh"
+  gluerun_ctx_artifact_scan "$artifacts_dir"
+  exit $?
+fi
 
 # Gather the diff text (added lines) plus the set of added file paths.
 case "$mode" in
@@ -56,12 +77,9 @@ scan() {
   fi
 }
 
-scan "Supabase token (sbp_)"      'sbp_[A-Za-z0-9]{20,}'
-scan "AWS access key id"          'AKIA[0-9A-Z]{16}'
-scan "private key block"          '-----BEGIN [A-Z ]*PRIVATE KEY-----'
-scan "JWT / bearer token"         'eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}'
-scan "GitHub token"               'gh[pousr]_[A-Za-z0-9]{20,}'
-scan "OpenAI key"                 'sk-[A-Za-z0-9]{20,}'
+while IFS="$(printf '\t')" read -r label regex; do
+  scan "$label" "$regex"
+done < <(gluerun_secret_scan_patterns)
 
 # Flag any added dotenv files outright.
 while IFS= read -r p; do

@@ -89,14 +89,22 @@ gluerun_validate_codex_sandbox() {
 gluerun_codex_reasoning_effort() {
   local level="$1" prompt_file="$2" prompt_name
   case "$level" in
+    l0|l1)
+      printf '%s\n' "${GLUERUN_CODEX_L1_REASONING_EFFORT:-high}"
+      ;;
     l2)
       printf '%s\n' "${GLUERUN_CODEX_L2_REASONING_EFFORT:-medium}"
       ;;
     readonly|read-only)
       prompt_name="$(basename "$prompt_file")"
       case "$prompt_name" in
-        planner-prompt.md) printf '%s\n' "${GLUERUN_CODEX_PLANNER_REASONING_EFFORT:-xhigh}" ;;
+        planner-prompt.md) printf '%s\n' "${GLUERUN_CODEX_PLANNER_REASONING_EFFORT:-high}" ;;
+        auditor.md) printf '%s\n' "${GLUERUN_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
         auditor-*.md) printf '%s\n' "${GLUERUN_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
+        reviewer.md|reviewer-*.md) printf '%s\n' "${GLUERUN_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
+        decider.md|decider-prompt-*.md) printf '%s\n' "${GLUERUN_CODEX_DECIDER_REASONING_EFFORT:-high}" ;;
+        *critic*.md) printf '%s\n' "${GLUERUN_CODEX_CRITIC_REASONING_EFFORT:-high}" ;;
+        *) printf '%s\n' "${GLUERUN_CODEX_READONLY_REASONING_EFFORT:-high}" ;;
       esac
       ;;
   esac

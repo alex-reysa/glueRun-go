@@ -364,7 +364,7 @@ test_codex_run_l2_uses_medium_reasoning_without_service_tier() {
   assert_not_contains "$args" "service_tier=\"fast\"" "l2 codex-run does not request fast service tier"
 }
 
-test_codex_run_readonly_planner_uses_xhigh_reasoning() {
+test_codex_run_readonly_planner_uses_high_reasoning() {
   with_fixture
   make_codex_arg_stub
   local prompt="$GLUERUN_STATE_DIR/planner-prompt.md"
@@ -376,8 +376,22 @@ test_codex_run_readonly_planner_uses_xhigh_reasoning() {
   args="$(cat "$GLUERUN_STATE_DIR/codex-args.log")"
   assert_contains "$args" "--sandbox read-only" "planner codex-run uses readonly sandbox"
   assert_contains "$args" "-m gpt-5.5" "planner codex-run pins the model"
-  assert_contains "$args" "model_reasoning_effort=\"xhigh\"" "planner codex-run uses xhigh reasoning"
+  assert_contains "$args" "model_reasoning_effort=\"high\"" "planner codex-run uses high reasoning"
   assert_not_contains "$args" "service_tier=" "planner codex-run leaves service tier at the API default"
+}
+
+test_codex_run_readonly_aux_roles_use_high_reasoning() {
+  with_fixture
+  make_codex_arg_stub
+
+  local name prompt args
+  for name in auditor.md reviewer.md decider-prompt-worker-no-packet.md plan-critic.md generic-readonly.md; do
+    prompt="$GLUERUN_STATE_DIR/$name"
+    printf 'role prompt\n' >"$prompt"
+    "$SCRIPT_DIR/codex-run.sh" --level readonly --prompt-file "$prompt" -C "$GLUERUN_ROOT" >/dev/null 2>&1
+    args="$(cat "$GLUERUN_STATE_DIR/codex-args.log")"
+    assert_contains "$args" "model_reasoning_effort=\"high\"" "$name codex-run uses high reasoning"
+  done
 }
 
 test_codex_run_readonly_auditor_uses_high_reasoning() {
@@ -877,8 +891,9 @@ test_reconcile_parallel_batch_with_shared_forbidden_file
 test_reconcile_counts_failed_child
 test_codex_run_l2_defaults_to_workspace_write_sandbox
 test_codex_run_l2_uses_medium_reasoning_without_service_tier
-test_codex_run_readonly_planner_uses_xhigh_reasoning
+test_codex_run_readonly_planner_uses_high_reasoning
 test_codex_run_readonly_auditor_uses_high_reasoning
+test_codex_run_readonly_aux_roles_use_high_reasoning
 test_codex_run_l2_allows_explicit_sandbox_override
 test_codex_run_l2_rejects_invalid_sandbox_override
 test_gate_red_external_proof_env_blocker_detected

@@ -55,6 +55,18 @@ independence-pinned paths provably unreachable by resume/rehydrate.
   independence-required steps.
 - Tests `tests/test-ctx-rehydrate.sh`: packet assembly determinism given fixed
   artifacts; caps enforced; quarantine exclusion; OFF-parity.
-
-Exit gate: suite green; a stub retry with resume artificially refused
-produces a rehydrated run whose injected packet matches the recorded manifest.
+- OPTIONAL ADDITIVE SLICE — authored-knowledge manifest ingestion (see
+  `../context-build-plan/singular-brain-integration.md`, integration point 3):
+  when `gluerun.config.json` declares an optional `contextManifest` path
+  (additive field) AND `GLUERUN_CTX_MANIFEST=1` (default 0), the rehydration
+  packet may additionally ingest entries from that machine-readable JSON
+  manifest (contract: entries carry ids, `load-when` triggers, freshness
+  state). Rules: entries flagged `description_unverified` are injected with
+  the flag or skipped, never as current; quarantined artifacts excluded; the
+  packet manifest records injected entry ids like any other source. The
+  manifest is AUTHORED-KNOWLEDGE class — human-curated repo content, distinct
+  from host-verified evidence AND from model-authored (tainted) records; it
+  must never be recorded as `authoritative` evidence. Implement and test
+  against FIXTURE manifests only — no dependency on the singular-brain
+  runtime (the JSON contract is the interface; bundling is a separate
+  post-plan track).

@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# Covers the post-acceptance critic-recheck LOCATOR brick
+# engine/ctx-critic-recheck-locate.sh: the pure, read-only resolvers the terminal
+# l1-drive.sh post-acceptance hook needs to feed the recheck runner (TASK-0031) the
+# two inputs NOT in scope at the acceptance site — the executable DAG node that owns
+# an accepted task's critiqued batch, and the path to the prior
+# gluerun.orchestration.plan-critique.v0 record produced for that node at planning
+# time. The acceptance hook has only run_id/task_id/run_dir/worktree; it carries
+# neither the originating node nor the critique-record path. These locators resolve
+# both from ALREADY-INTEGRATED artifacts (the durable node association recorded for
+# the task in the control-state event log, and the plan-critique record convention).
+#
+# It builds ONLY on already-integrated primitives (the planner.staged/planner.generated
+# task->node association events emitted into GLUERUN_EVENTS_FILE, and the
+# plan-critique.v0 record shape TASK-0012) and does NOT depend on the recheck runner
+# (TASK-0031, accepted but not yet integrated). The file defines NEW functions only and
+# is invoked by NO existing engine path, so with it present-but-uncalled the engine is
+# byte-identical to prior behavior (mirroring TASK-0027 / TASK-0028 / TASK-0029).
+#
+# Asserts:
+#   (a) present-but-uncalled: lib.sh auto-sources it (engine/ctx-*.sh) and it defines
+#       the two NEW public functions; no existing engine path invokes them.
+#   (b) gluerun_ctx_critic_recheck_locate_node <task_id> [worktree] is PURE/READ-ONLY:
+#       prints the resolved node when the durable association is present and
+#       unambiguous; prints EMPTY (exit 0) when the association is missing or ambiguous
+#       (the same task mapped to two different nodes); appends no event, writes no state.
+#   (c) gluerun_ctx_critic_recheck_locate_record <node> <task_id> [worktree] is
+#       PURE/READ-ONLY: prints the record path ONLY when the file exists and parses as a
+#       gluerun.orchestration.plan-critique.v0 record (via the durable per-node
+#       convention and via the stage-dir convention); prints EMPTY (exit 0) on a
+#       missing, unparseable, or wrong-schema record; appends no event, writes no state.
+#   (d) fail-safe invariance: an indeterminate node, or an absent/unparseable/wrong-schema
+#       record, resolves to empty output (never a crash, never a fabricated node or path).
+# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and all inputs to tmp so
+# the suite never mutates real run state.
+set -uo pipefail
+
+ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB="$ENGINE_HOME/engine/lib.sh"
+CTX="$ENGINE_HOME/engine/ctx-critic-recheck-locate.sh"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# --- Isolated state: never touch the real repo or its events log -------------
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/state"
+
+export GLUERUN_ROOT="$tmp"
+export GLUERUN_STATE_DIR="$tmp/state"
+export GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson"
+export GLUERUN_RUNS_DIR="$tmp/state/runs"
+: > "$GLUERUN_EVENTS_FILE"
+
+# shellcheck disable=SC1090
+source "$LIB" || fail "sourcing lib.sh failed"
+
+# (a) The engine file must exist and be auto-sourced by lib.sh's ctx-loader; it
+#     defines the two NEW functions (RED before impl).
+[[ -f "$CTX" ]] || fail "engine not present yet: $CTX"
+[[ "$(type -t gluerun_ctx_critic_recheck_locate_node)" == "function" ]] \
+  || fail "gluerun_ctx_critic_recheck_locate_node not defined (auto-source failed?)"
+[[ "$(type -t gluerun_ctx_critic_recheck_locate_record)" == "function" ]] \
+  || fail "gluerun_ctx_critic_recheck_locate_record not defined (auto-source failed?)"
+
+# A sentinel runner: if any locator ever spawns a runner, this file appears.
+SENTINEL="$tmp/runner-invoked"
+STUB="$tmp/stub-runner.sh"
+cat > "$STUB" <<STUBEOF
+#!/usr/bin/env bash
+touch "$SENTINEL"
+exit 0
+STUBEOF
+chmod +x "$STUB"
+export GLUERUN_RUNNER="$STUB"
+
+# A helper to append a raw control-state association event (as generate-tasks.sh /
+# the l1 importer do): {ts,type,message,data:{taskId,node,...}} NDJSON lines. We write
+# the fixture directly (not via gluerun_append_event) so the locator's own purity can
+# be measured against a fixed pre-populated log.
+emit_assoc() { # <type> <task_id> <node>
+  printf '{"ts":"2026-07-11T00:00:00Z","type":"%s","message":"m","data":{"taskId":"%s","runId":"RUN-X","node":"%s"}}\n' \
+    "$1" "$2" "$3" >> "$GLUERUN_EVENTS_FILE"
+}
+
+# ---------------------------------------------------------------------------
+# (b) node resolution from a recorded (durable) task->node association.
+# ---------------------------------------------------------------------------
+emit_assoc "planner.staged" "TASK-0007" "critic-carryover"
+# An unrelated task/node pair must not leak into the answer.
+emit_assoc "planner.staged" "TASK-0099" "some-other-node"
+
+# Purity fingerprint of the event log + state dir before the read-only call.
+events_ck_before="$(cksum < "$GLUERUN_EVENTS_FILE")"
+state_fp_before="$(cd "$GLUERUN_STATE_DIR" && find . | sort | cksum)"
+
+node_out="$(gluerun_ctx_critic_recheck_locate_node "TASK-0007")" \
+  || fail "locate_node must exit 0"
+[[ "$node_out" == "critic-carryover" ]] \
+  || fail "locate_node must resolve the recorded node (got: '$node_out')"
+
+# Purity: no events appended, no state written by the read-only locator.
+[[ "$(cksum < "$GLUERUN_EVENTS_FILE")" == "$events_ck_before" ]] \
+  || fail "locate_node mutated the event log (must be read-only)"
+[[ "$(cd "$GLUERUN_STATE_DIR" && find . | sort | cksum)" == "$state_fp_before" ]] \
+  || fail "locate_node mutated the state dir (must be read-only)"
+[[ ! -e "$SENTINEL" ]] || fail "locate_node spawned a runner"
+
+# Missing association -> empty output, no crash.
+miss="$(gluerun_ctx_critic_recheck_locate_node "TASK-NONE")" \
+  || fail "locate_node on missing association must not crash"
+[[ -z "$miss" ]] || fail "missing association must yield empty output (got: '$miss')"
+
+# Empty task id -> empty output, no crash.
+empty_tid="$(gluerun_ctx_critic_recheck_locate_node "")" \
+  || fail "locate_node on empty task id must not crash"
+[[ -z "$empty_tid" ]] || fail "empty task id must yield empty output (got: '$empty_tid')"
+
+# Ambiguous association (same task mapped to two DIFFERENT nodes) -> empty output.
+emit_assoc "planner.generated" "TASK-0055" "node-alpha"
+emit_assoc "planner.generated" "TASK-0055" "node-beta"
+ambig="$(gluerun_ctx_critic_recheck_locate_node "TASK-0055")" \
+  || fail "locate_node on ambiguous association must not crash"
+[[ -z "$ambig" ]] || fail "ambiguous association must yield empty output (got: '$ambig')"
+
+# A task mapped repeatedly to the SAME node is unambiguous -> resolves.
+emit_assoc "planner.staged"    "TASK-0077" "node-gamma"
+emit_assoc "planner.generated" "TASK-0077" "node-gamma"
+same="$(gluerun_ctx_critic_recheck_locate_node "TASK-0077")" \
+  || fail "locate_node on repeated same-node association must not crash"
+[[ "$same" == "node-gamma" ]] \
+  || fail "repeated same-node association must resolve (got: '$same')"
+
+# Missing / empty event log -> empty output, no crash.
+export GLUERUN_EVENTS_FILE="$tmp/state/no-such-events.ndjson"
+noev="$(gluerun_ctx_critic_recheck_locate_node "TASK-0007")" \
+  || fail "locate_node with absent event log must not crash"
+[[ -z "$noev" ]] || fail "absent event log must yield empty output (got: '$noev')"
+export GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson"
+
+# ---------------------------------------------------------------------------
+# (c) record resolution: durable per-node convention + stage-dir convention.
+# ---------------------------------------------------------------------------
+NODE="critic-carryover"
+
+valid_record() { # <path> <node> <task_in_batch>
+  mkdir -p "$(dirname "$1")"
+  cat > "$1" <<JSON
+{
+  "schema": "gluerun.orchestration.plan-critique.v0",
+  "node": "$2",
+  "runId": "RUN-CRIT",
+  "batchTaskIds": ["$3"],
+  "verdict": "revise",
+  "findings": [],
+  "assumptionsChallenged": [],
+  "rationale": "test critique"
+}
+JSON
+}
+
+# --- Durable per-node convention: $GLUERUN_STATE_DIR/critique/<node>/plan-critique.json
+durable="$GLUERUN_STATE_DIR/critique/$NODE/plan-critique.json"
+valid_record "$durable" "$NODE" "TASK-0007"
+
+events_ck_before="$(cksum < "$GLUERUN_EVENTS_FILE")"
+rec_ck_before="$(cksum < "$durable")"
+
+rec_out="$(gluerun_ctx_critic_recheck_locate_record "$NODE" "TASK-0007")" \
+  || fail "locate_record must exit 0"
+[[ "$rec_out" == "$durable" ]] \
+  || fail "locate_record must resolve the durable per-node record (got: '$rec_out')"
+
+# Purity: no events appended, record not mutated, no runner.
+[[ "$(cksum < "$GLUERUN_EVENTS_FILE")" == "$events_ck_before" ]] \
+  || fail "locate_record mutated the event log (must be read-only)"
+[[ "$(cksum < "$durable")" == "$rec_ck_before" ]] \
+  || fail "locate_record mutated the prior record (must be read-only)"
+[[ ! -e "$SENTINEL" ]] || fail "locate_record spawned a runner"
+
+# --- Stage-dir convention: $GLUERUN_RUNS_DIR/<run>/l1-staging/<node>/plan-critique.json
+rm -rf "$GLUERUN_STATE_DIR/critique"   # remove the durable copy; only stage-dir remains
+staged="$GLUERUN_RUNS_DIR/RUN-STAGE/l1-staging/$NODE/plan-critique.json"
+valid_record "$staged" "$NODE" "TASK-0007"
+stage_out="$(gluerun_ctx_critic_recheck_locate_record "$NODE" "TASK-0007")" \
+  || fail "locate_record via stage-dir must exit 0"
+[[ "$stage_out" == "$staged" ]] \
+  || fail "locate_record must resolve the stage-dir record (got: '$stage_out')"
+
+# ---------------------------------------------------------------------------
+# (d) fail-safe: missing / unparseable / wrong-schema / node-mismatch -> empty.
+# ---------------------------------------------------------------------------
+rm -rf "$GLUERUN_RUNS_DIR" "$GLUERUN_STATE_DIR/critique"
+
+# Missing record entirely.
+missrec="$(gluerun_ctx_critic_recheck_locate_record "$NODE" "TASK-0007")" \
+  || fail "locate_record on missing record must not crash"
+[[ -z "$missrec" ]] || fail "missing record must yield empty output (got: '$missrec')"
+
+# Empty node -> empty.
+emptynode="$(gluerun_ctx_critic_recheck_locate_record "" "TASK-0007")" \
+  || fail "locate_record on empty node must not crash"
+[[ -z "$emptynode" ]] || fail "empty node must yield empty output (got: '$emptynode')"
+
+# Unparseable record at the durable path -> empty (never a crash).
+mkdir -p "$GLUERUN_STATE_DIR/critique/$NODE"
+printf 'not { valid json\n' > "$durable"
+badrec="$(gluerun_ctx_critic_recheck_locate_record "$NODE" "TASK-0007")" \
+  || fail "locate_record on unparseable record must not crash"
+[[ -z "$badrec" ]] || fail "unparseable record must yield empty output (got: '$badrec')"
+
+# Wrong-schema record -> empty (never a fabricated path).
+cat > "$durable" <<'JSON'
+{ "schema": "gluerun.orchestration.state-packet.v0", "node": "critic-carryover" }
+JSON
+wrongschema="$(gluerun_ctx_critic_recheck_locate_record "$NODE" "TASK-0007")" \
+  || fail "locate_record on wrong-schema record must not crash"
+[[ -z "$wrongschema" ]] || fail "wrong-schema record must yield empty output (got: '$wrongschema')"
+
+# Node-mismatch record (right schema, wrong node) -> empty (fail closed).
+valid_record "$durable" "some-other-node" "TASK-0007"
+nodemismatch="$(gluerun_ctx_critic_recheck_locate_record "$NODE" "TASK-0007")" \
+  || fail "locate_record on node-mismatch record must not crash"
+[[ -z "$nodemismatch" ]] || fail "node-mismatch record must yield empty output (got: '$nodemismatch')"
+
+# Wrong-batch record (right node+schema, task NOT in batch) -> empty (fail closed).
+valid_record "$durable" "$NODE" "TASK-9999"
+wrongbatch="$(gluerun_ctx_critic_recheck_locate_record "$NODE" "TASK-0007")" \
+  || fail "locate_record on wrong-batch record must not crash"
+[[ -z "$wrongbatch" ]] || fail "wrong-batch record must yield empty output (got: '$wrongbatch')"
+
+# ...but with an empty task id (node-only resolution), a node-matching record resolves.
+nodeonly="$(gluerun_ctx_critic_recheck_locate_record "$NODE" "")" \
+  || fail "locate_record node-only must not crash"
+[[ "$nodeonly" == "$durable" ]] \
+  || fail "node-only resolution must accept a node-matching record (got: '$nodeonly')"
+
+# Final purity sweep: neither locator ever appended an event to the pinned log.
+[[ ! -s "$GLUERUN_EVENTS_FILE" || -n "$(head -c1 "$GLUERUN_EVENTS_FILE")" ]] || true
+# The only lines in the events log are our fixture associations (no locator appended).
+appended="$(grep -c '"type":"context' "$GLUERUN_EVENTS_FILE" 2>/dev/null || true)"
+appended="${appended:-0}"
+[[ "$appended" == "0" ]] || fail "a locator appended a context event (must be read-only)"
+
+# ---------------------------------------------------------------------------
+# (a) present-but-uncalled: no existing engine path invokes the new functions.
+# ---------------------------------------------------------------------------
+for fn in gluerun_ctx_critic_recheck_locate_node gluerun_ctx_critic_recheck_locate_record; do
+  callers="$(grep -rl "$fn" "$ENGINE_HOME/engine" 2>/dev/null \
+    | grep -v '/ctx-critic-recheck-locate.sh$' || true)"
+  [[ -z "$callers" ]] || fail "$fn must be present-but-uncalled; referenced by: $callers"
+done
+
+echo "ctx-critic-recheck-locate tests passed"

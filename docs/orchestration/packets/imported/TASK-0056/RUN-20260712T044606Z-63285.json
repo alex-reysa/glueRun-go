@@ -1,0 +1,83 @@
+{
+  "schema": "gluerun.orchestration.state-packet.v0",
+  "packetId": "PKT-TASK-0056-rehydrate-event-wirein",
+  "runId": "RUN-20260712T044606Z-63285",
+  "taskId": "TASK-0056",
+  "area": "routing",
+  "role": "l2-developer",
+  "status": "accepted",
+  "baseRef": "f8a3df7800ec9ecf7f6a1877df33a0697050021b",
+  "branch": "agent/routing/TASK-0056-rehydrate-event-wirein",
+  "headSha": "5543027d10a13be61049ed7d072411776ce70daa",
+  "workspace": "/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.worktrees/TASK-0056",
+  "ownedFiles": [
+    "engine/l1-drive.sh",
+    "tests/test-ctx-rehydrate-event-drive.sh"
+  ],
+  "changedFiles": [
+    "engine/l1-drive.sh",
+    "tests/test-ctx-rehydrate-event-drive.sh"
+  ],
+  "commands": [
+    {
+      "cmd": "bash tests/test-ctx-rehydrate-event-drive.sh",
+      "exitCode": 1,
+      "logRef": ".gluerun-evidence/red.log"
+    },
+    {
+      "cmd": "bash tests/test-ctx-rehydrate-event-drive.sh",
+      "exitCode": 0,
+      "logRef": ".gluerun-evidence/green.log"
+    },
+    {
+      "cmd": "bash tests/run.sh",
+      "exitCode": 0,
+      "logRef": ".gluerun-evidence/regression.log"
+    }
+  ],
+  "tests": [
+    {
+      "name": "test-ctx-rehydrate-event-drive.sh",
+      "phase": "red",
+      "status": "fail",
+      "logRef": ".gluerun-evidence/red.log"
+    },
+    {
+      "name": "test-ctx-rehydrate-event-drive.sh",
+      "phase": "green",
+      "status": "pass",
+      "logRef": ".gluerun-evidence/green.log"
+    },
+    {
+      "name": "tests/run.sh (full suite, 79 passed / 0 failed)",
+      "phase": "regression",
+      "status": "pass",
+      "logRef": ".gluerun-evidence/regression.log"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "red-log",
+      "ref": ".gluerun-evidence/red.log"
+    },
+    {
+      "kind": "green-log",
+      "ref": ".gluerun-evidence/green.log"
+    },
+    {
+      "kind": "regression-log",
+      "ref": ".gluerun-evidence/regression.log"
+    },
+    {
+      "kind": "gate-check",
+      "ref": "runs/RUN-20260712T044606Z-63285/gate-check.json"
+    },
+    {
+      "kind": "audit",
+      "ref": "runs/RUN-20260712T044606Z-63285/audit.json"
+    }
+  ],
+  "blockers": [],
+  "nextAction": "import into control state and reconcile",
+  "createdAt": "2026-07-12T00:00:00Z"
+}

@@ -45,3 +45,12 @@ broaden scope beyond the node's stage file in `docs/context-build-plan/`.
 - Acceptance criteria: behavior-level, checkable by the named test, mirroring
   the node's `requiredCompletion`.
 - Worker branch: `agent/<area>/<task-id>-<kebab-slug>`.
+
+9. **No temporal negative assertions in tests.** A slice's test asserts the
+   behavior of what THAT slice ships — never the absence of future work
+   ("X is out of scope so it must not be defined", "present-but-uncalled"
+   greps). Such assertions are true only until the next slice legitimately
+   lands and have twice broken integration (TASK-0024's workaround,
+   TASK-0028's integrate-gate red). Slice-boundary state belongs in the task
+   file, not in permanent tests; behavioral guarantees (e.g. "this function
+   never appends events") must be pinned behaviorally, not by absence.

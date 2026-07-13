@@ -30,6 +30,16 @@ mechanics); gate results are published manually with the evidence attached.
 Exit gate: report merged with raw metrics artifacts referenced; per-knob
 default decisions recorded in `docs/orchestration/decisions.md`.
 
+### Follow-on experiment (recorded, runs in the consumer of record)
+
+The singular-brain manifest arm (integration point 4 of
+`singular-brain-integration.md`) cannot run in THIS repo's experiment — no
+curated authored-knowledge corpus exists here. It runs in PMGO-launch after
+the 0.2.0 resync and dock wiring: arm A injects `docs/KNOWLEDGE.md` into
+planner/worker prompts, arm B does not; same metrics (tokens/accepted task,
+attempts-to-accept, escape rate). The S5 `contextManifest` hook ships
+fixture-tested either way, so the consumer experiment needs no engine change.
+
 ## Node `polish-release` (area: eval, kind: evaluation — operator-driven)
 
 - README: continuity + routing + graph sections rewritten around the shipped

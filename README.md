@@ -121,6 +121,18 @@ gluerun auto
 
 # Block until all detached workers finish (useful in CI or clean shutdown)
 gluerun reconcile --drain
+
+# Context graph (behind GLUERUN_CTX_GRAPH): project the event log into
+# context-graph.v0 JSONL, sync incrementally, and query it
+gluerun graph rebuild
+gluerun graph sync
+gluerun graph query neighbors <node-id>
+
+# Experiment tooling (behind GLUERUN_CTX_EXPERIMENT): per-arm metrics,
+# treatment-vs-control delta, and rendered report tables
+gluerun experiment-report summary
+gluerun experiment-report delta
+gluerun experiment-report tables
 ```
 
 ## Configuration
@@ -165,6 +177,34 @@ patterns ending in `*`; allowed values are written to
 | `GLUERUN_CONTEXT_SECTION_MAX_CHARS` | `4000` | Per-section cap on continuity content appended to prompts. |
 | `GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE` | `1` | Preflight requires non-empty `acceptanceCriteria` on a task. |
 
+### Context knobs (0.4.0)
+
+Raw engine defaults stay `0` (OFF-parity is test-pinned); the **recommended
+production values** below follow the per-knob decisions in
+`docs/context-build-plan/experiment-report.md` and ship in this repo's own
+dock config. Raw-default flips land in 0.5 with a test-migration slice.
+
+| Env knob | Raw default | Recommended | Effect |
+| --- | --- | --- | --- |
+| `GLUERUN_PLANNER_SESSION` | `0` | **`1`** | Per-node planner session persistence + resume behind fail-closed lineage/template/lease gates. |
+| `GLUERUN_PLAN_CRITIQUE` | `0` | **`1`** | Fresh read-only skeptic critic over staged planner batches before L0 import. |
+| `GLUERUN_PLAN_REVISE_MAX` | `0` | `2` | Bounded revise→re-critique loop for `revise` verdicts. |
+| `GLUERUN_CTX_PACKET` | `0` | **`1`** | Planner context packets (decisions/assumptions/rejected alternatives) flow into worker, fix, and audit prompts; per-run assumption ledger. |
+| `GLUERUN_CTX_ROUTING` | `0` | **`1`** | Explicit 5-strategy routing (`continue/resume/fork/fresh/rehydrate`) with reason codes, window-pressure + diff-volume gates, and structural taint on resumed sessions. |
+| `GLUERUN_CTX_ARTIFACT_SCAN` | `0` | **`1`** | Secret scan over durable artifacts; hits quarantine (`.quarantined`) and drop out of all prompt assembly. |
+| `GLUERUN_PAIRED_AUDIT_PCT` | `0` | `25` | Sampled post-acceptance paired fresh audits (bias measurement + independence spine). |
+| `GLUERUN_REHYDRATE` | `0` | opt-in | Inject deterministic durable-artifact packets on refused-resume lineage steps. |
+| `GLUERUN_CTX_MANIFEST` | `0` | opt-in | Authored-knowledge manifest ingestion into rehydration packets (`contextManifest` config field; fixture contract). |
+| `GLUERUN_CTX_GRAPH` | `0` | opt-in | Context-graph projector/sync/query + subgraph-selected rehydration. |
+| `GLUERUN_CTX_EXPERIMENT` | `0` | opt-in | Experiment aggregators, delta, renderers, and `gluerun experiment-report`. |
+| `GLUERUN_CTX_ARMSTATE` | `0` | opt-in | Per-run knob-state provenance recording for arm-integrity audits. |
+
+Key context event types (all in `.gluerun-state/events.ndjson`, countable via
+`gluerun metrics`): `context.strategy_selected`, `context.resume_failed`,
+`ctx.arm_assigned`, `ctx.paired_audit`, `ctx.critic_recheck`,
+`ctx.artifact_secret`, `ctx.packet_malformed`, `plan.critiqued`,
+`plan.revised`, `plan.revise_parked`, `planner.backoff_active`.
+
 ## Context continuity
 
 Between retry attempts glueRun-go carries authoritative state forward rather than
@@ -181,14 +221,50 @@ re-deriving it from a log tail:
 - **Attempt archive** — each attempt's artifacts are copied (never moved) under
   `runs/<id>/attempts/<n>/` with an `attempts/index.json`.
 
-### Session affinity
+### Session affinity and routing
 
-Optional role-keyed runtime session resume (`codex exec resume`, `claude -r`) behind
-10 staleness gates, defaulting ON (`GLUERUN_SESSION_AFFINITY=1`). Any gate failure or
-runner that refuses the resume degrades silently to a fresh run within the same attempt.
+Role-keyed runtime session resume (`codex exec resume`, `claude -r`) behind ordered
+fail-closed staleness gates, for three roles:
 
-> **Invariant:** session resume is a token-cost optimization that never changes a task
-> outcome.
+- **Implementer/reviewer** (within one drive): defaulting ON
+  (`GLUERUN_SESSION_AFFINITY=1`); any gate failure or runner refusal degrades
+  silently to a fresh run within the same attempt.
+- **Planner** (across planning runs, per DAG node): behind
+  `GLUERUN_PLANNER_SESSION` — persisted per-node session meta, node-lineage and
+  template-sha gates, session leases against concurrent resume, rc-86 fresh
+  fallback. A planner session can decompose a multi-slice node across
+  consecutive resumes.
+- **Plan critic** (re-critique of a revised batch): the skeptic may be offered
+  its own prior session — never an advocate's.
+
+Every routing decision is reason-coded as a `context.strategy_selected` event
+(`strategy` + the exact gate reason) and countable via `gluerun metrics`.
+
+> **Invariant (evidence invariance):** routing never changes what counts as
+> evidence. Gates, red/green proofs, scope checks, and the fresh implementation
+> auditor are identical under every strategy — `fresh` or `resume`. Outcomes MAY
+> improve with continuity (that is the point), and the improvement is measured,
+> not assumed: per-strategy outcomes flow into the attempts index and
+> `gluerun metrics`.
+
+> **Advocate/skeptic line:** a session never crosses between advocate roles
+> (planner, implementer) and skeptic roles (plan critic, auditor), in either
+> direction. Per-role session-meta files make violations structural, not merely
+> checked. Resumed or rehydrated sessions never satisfy an independence-required
+> step.
+
+### Plan critique and revision
+
+Behind `GLUERUN_PLAN_CRITIQUE` (default OFF; flip only with the revision loop in
+service): staged planner batches are reviewed by a fresh, read-only plan critic
+on the default runner before L0 import. Verdicts follow `plan-critique.v0`:
+`approve` → import; `revise` → the node's planner session is resumed with the
+critic's structured findings (bounded by `GLUERUN_PLAN_REVISE_MAX`), records
+per-finding dispositions (accepted/rejected-observation; silent drops are
+recorded as unaddressed), and re-enters the critic; `park` / budget exhaustion →
+candidates never reach import (fail closed). Critic infrastructure failure fails
+OPEN with an event — the critic is an added safety layer; the un-bypassable
+implementation auditor remains the floor.
 
 ## Modules
 

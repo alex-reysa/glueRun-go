@@ -1,0 +1,83 @@
+{
+  "schema": "gluerun.orchestration.state-packet.v0",
+  "packetId": "PKT-TASK-0088-gluerun-graph-cli",
+  "runId": "RUN-20260712T184452Z-55345",
+  "taskId": "TASK-0088",
+  "area": "graph",
+  "role": "l2-developer",
+  "status": "accepted",
+  "baseRef": "a49a2b02cc55138b72033c89d97cf4a0c823a405",
+  "branch": "agent/graph/TASK-0088-gluerun-graph-cli",
+  "headSha": "e0a161fe99bcdae5356d9f26966d7d9e89037be9",
+  "workspace": "/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.worktrees/TASK-0088",
+  "ownedFiles": [
+    "cli/gluerun",
+    "tests/test-gluerun-graph-cli.sh"
+  ],
+  "changedFiles": [
+    "cli/gluerun",
+    "tests/test-gluerun-graph-cli.sh"
+  ],
+  "commands": [
+    {
+      "cmd": "bash tests/test-gluerun-graph-cli.sh",
+      "exitCode": 1,
+      "logRef": ".gluerun-evidence/red.log"
+    },
+    {
+      "cmd": "bash tests/test-gluerun-graph-cli.sh",
+      "exitCode": 0,
+      "logRef": ".gluerun-evidence/green.log"
+    },
+    {
+      "cmd": "bash tests/run.sh",
+      "exitCode": 0,
+      "logRef": ".gluerun-evidence/regression.log"
+    }
+  ],
+  "tests": [
+    {
+      "name": "test-gluerun-graph-cli.sh",
+      "phase": "red",
+      "status": "fail",
+      "logRef": ".gluerun-evidence/red.log"
+    },
+    {
+      "name": "test-gluerun-graph-cli.sh",
+      "phase": "green",
+      "status": "pass",
+      "logRef": ".gluerun-evidence/green.log"
+    },
+    {
+      "name": "tests/run.sh (full suite: 110 passed, 0 failed)",
+      "phase": "regression",
+      "status": "pass",
+      "logRef": ".gluerun-evidence/regression.log"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "red-log",
+      "ref": ".gluerun-evidence/red.log"
+    },
+    {
+      "kind": "green-log",
+      "ref": ".gluerun-evidence/green.log"
+    },
+    {
+      "kind": "regression-log",
+      "ref": ".gluerun-evidence/regression.log"
+    },
+    {
+      "kind": "gate-check",
+      "ref": "runs/RUN-20260712T184452Z-55345/gate-check.json"
+    },
+    {
+      "kind": "audit",
+      "ref": "runs/RUN-20260712T184452Z-55345/audit.json"
+    }
+  ],
+  "blockers": [],
+  "nextAction": "import into control state and reconcile",
+  "createdAt": "2026-07-12T18:57:04Z"
+}

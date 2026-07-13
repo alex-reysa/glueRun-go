@@ -353,6 +353,19 @@ worker_strategy_reason="init"
 reviewer_strategy="fresh"
 reviewer_strategy_reason="init"
 
+# Durable `decision-record` extra spec (node rehydrate-path, layer engine_runtime).
+# The repo-level decision log lives OUTSIDE run_dir, so the pure resolver
+# gluerun_ctx_rehydrate_sources never emits it; it is supplied as a class-tagged
+# extra computed by the pure leaf over GLUERUN_ROOT. It is snapshotted ONCE here at
+# drive start (existence-gated) so a rehydrate attempt rehydrates the decision log
+# as it stood when the run began — NOT this run's own in-flight decider appends
+# (record-decision.sh mutates docs/orchestration/decisions.md between attempts, and
+# capturing those would be circular). Empty when the decision log is absent at
+# drive start. Both rehydrate sites reference this identical spec, so the injected
+# packet and the recorded manifest carry the SAME decision record (id + content
+# hash) by construction. Its CONTENT is hashed/rendered later at rehydrate time.
+decision_source_extra="$(gluerun_ctx_rehydrate_decision_source "$GLUERUN_ROOT" 2>/dev/null || true)"
+
 # Worker-runner selection (gluerun_select_l2_runner): generic engine returns the
 # default runner; an enabled module may route specific tasks to an alternate
 # runner (3rd arg). An explicit GLUERUN_RUNNER override always wins.
@@ -403,6 +416,121 @@ prepare_worker_prompt() {
   fi
 }
 
+# Inject the assembled durable-context rehydration packet into the implementer's
+# already-rendered active prompt when the routing decision upgraded a refused
+# resume to `rehydrate` (only behind GLUERUN_REHYDRATE=1; the spine never yields
+# `rehydrate` otherwise, so with the flag unset this is a no-op and $active_prompt
+# stays byte-identical). The run stays FRESH (worker_resume_id empty -> no
+# --resume-session): a fresh session PLUS injected durable context, not a resume.
+# The packet is assembled by delegating into the integrated pure bricks —
+# gluerun_ctx_rehydrate_packet over gluerun_ctx_rehydrate_sources "$run_dir" — so
+# determinism, the per-section GLUERUN_CONTEXT_SECTION_MAX_CHARS cap, and
+# quarantine exclusion all come for free; no rehydration/resolution logic is
+# inlined here. The section is headed as injected durable context from a
+# refused-resume lineage — reference-only, NOT authoritative — because rehydrated
+# content is tainted / model-authored, not host-verified. Called ONCE at
+# attempt-open (outside the infra-retry try loop) so try>0 reuse the same
+# $active_prompt (idempotent). Mirrors assumptions_inject_fix / the fix-hints
+# append. Non-fatal: on any error nothing is injected and the attempt proceeds.
+rehydrate_inject_packet() {
+  local active_prompt="$1"
+  [[ "${worker_strategy:-}" == "rehydrate" ]] || return 0
+  # The repo-level `decision-record` lives OUTSIDE run_dir; it is supplied as the
+  # class-tagged extra `decision_source_extra` snapshotted at drive start. The event
+  # record site passes the IDENTICAL spec, so the injected packet and the recorded
+  # manifest carry the SAME decision record. Empty when the decision log was absent
+  # at drive start.
+  # SUBGRAPH branch (node subgraph-rehydrate; behind GLUERUN_CTX_SUBGRAPH_REHYDRATE
+  # and only on the treatment arm with a present non-empty corpus). The shared
+  # selector yields the contradictions-first subgraph packet keyed on the SAME
+  # task_id / arm-mode / node the manifest-record site (ctx-rehydrate-event.sh)
+  # keys on, so the injected packet and the recorded manifest carry the SAME
+  # subgraph sources by construction. Inject THAT under the identical reference-
+  # only / NOT-authoritative header and skip the flat durable composition. With the
+  # knob off / control arm / absent corpus the selector returns non-zero/empty and
+  # the flat path below runs unchanged (byte-identical to today).
+  local packet=""
+  local subgraph_packet
+  if subgraph_packet="$(gluerun_ctx_route_subgraph_render "$task_id" packet 2>/dev/null)" \
+     && [[ -n "$subgraph_packet" ]]; then
+    packet="$subgraph_packet"
+  else
+    local -a specs=()
+    local line
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && specs+=("$line")
+    done < <(gluerun_ctx_rehydrate_sources "$run_dir" ${decision_source_extra:+"$decision_source_extra"} 2>/dev/null)
+    packet="$(gluerun_ctx_rehydrate_packet ${specs[@]+"${specs[@]}"} 2>/dev/null)" || return 0
+  fi
+  [[ -n "$packet" ]] || return 0
+  {
+    echo ""
+    echo "---"
+    echo ""
+    echo "## Injected durable context (rehydrated from a refused-resume lineage)"
+    echo ""
+    echo "> Reference only, NOT authoritative. This is durable context rehydrated"
+    echo "> from a prior (tainted, model-authored) session's artifacts, not"
+    echo "> host-verified evidence. Do not pass its content off as authoritative."
+    echo ""
+    printf '%s\n' "$packet"
+  } >> "$active_prompt" 2>/dev/null || true
+
+  # Authored-knowledge augmentation (node rehydrate-path; OPTIONAL, NOT part of
+  # requiredCompletion). AFTER the durable packet, ALSO append the eligible
+  # authored-knowledge entries under a reference-only / NOT-authoritative wrapper.
+  # The hook is a minimal delegating append into the integrated config-gated
+  # render (TASK-0058–0061); no config/selection/render logic is inlined here.
+  # The render internally gates on GLUERUN_CTX_MANIFEST (default 0) and the
+  # OPTIONAL gluerun.config.json `contextManifest` field, so with either OFF it
+  # returns empty and nothing is appended — the durable-only injection is
+  # byte-identical. The trigger set comes from the pure builder
+  # gluerun_ctx_rehydrate_authored_triggers (TASK-0064): the run's deterministic,
+  # de-duplicated `load-when` tokens (role `implementer`, step `implement`, task
+  # id) rather than the bare literal `implement`, so authored entries scoped to a
+  # role or task — not only the literal step — become eligible. The enriched set
+  # is a strict superset of {implement}, so implement-scoped entries still match
+  # (backward compatible). The manifest-record site
+  # (engine/ctx-rehydrate-event.sh) passes the IDENTICAL set so the injected and
+  # recorded authored entries stay consistent. Minimal delegation: the set is
+  # computed and passed expanded; no selection/render logic is inlined here.
+  # Non-fatal: on any error nothing is appended.
+  #
+  # NODE dimension (TASK-0066 -> TASK-0067): resolve the run's executable DAG node
+  # via the pure read-only resolver gluerun_ctx_rehydrate_authored_node "$task_id"
+  # and thread it into the builder's position-3 [node] slot so node-scoped
+  # `load-when` entries (e.g. ["rehydrate-path"]) become eligible. The resolver
+  # returns empty (fail-safe) on an absent or ambiguous task->node association;
+  # the builder skips empty dimensions, so the set stays {implementer, implement,
+  # task-id} — byte-identical to the pre-node-dimension behavior. The
+  # manifest-record site resolves the node from the SAME task_id via the SAME
+  # deterministic resolver, so both derive the identical token and identical set.
+  local node
+  node="$(gluerun_ctx_rehydrate_authored_node "$task_id" 2>/dev/null)" || node=""
+  local -a authored_triggers=()
+  local trigger
+  while IFS= read -r trigger; do
+    [[ -n "$trigger" ]] && authored_triggers+=("$trigger")
+  done < <(gluerun_ctx_rehydrate_authored_triggers implementer implement "$node" "$task_id" 2>/dev/null)
+  local authored
+  authored="$(gluerun_ctx_rehydrate_authored_config_render ${authored_triggers[@]+"${authored_triggers[@]}"} 2>/dev/null)" || authored=""
+  [[ -n "$authored" ]] || return 0
+  {
+    echo ""
+    echo "---"
+    echo ""
+    echo "## Injected authored knowledge (reference material, NOT authoritative)"
+    echo ""
+    echo "> Reference only, NOT authoritative. Human-curated authored-knowledge"
+    echo "> entries eligible for this step, augmenting the rehydration packet."
+    echo "> Per-entry markers frame each section; do not treat as host-verified"
+    echo "> evidence."
+    echo ""
+    printf '%s\n' "$authored"
+  } >> "$active_prompt" 2>/dev/null || true
+  return 0
+}
+
 # Worker invocation through scope/gate/commit/packet stamping + validation.
 # Sets head_sha, attempt_failure, attempt_ctx, worker_rc. Returns 0 when a
 # validated packet exists on a committed branch, 1 otherwise.
@@ -433,7 +561,10 @@ run_worker_phase() {
   l2_runner_basename="$(basename "$l2_runner")"
   worker_prompt_sha="$(gluerun_prompt_sha "$l2_prompt" 2>/dev/null || true)"
   local worktree_head; worktree_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
-  worker_decision="$(gluerun_session_resume_decide "$session_meta_implementer" implementer \
+  # Routed through the ctx-* adapter (GLUERUN_CTX_ROUTING; default 0 -> OFF-parity,
+  # byte-identical to the direct decider call). Step `implement` is not an
+  # independence-required step, so the routing gates (window/diff/lease) may apply.
+  worker_decision="$(gluerun_ctx_route_decide implementer implement "$session_meta_implementer" \
     "$task_id" "$run_id" "$l2_runner_basename" "$worker_prompt_sha" "$worktree" "$worktree_head" 2>/dev/null || echo "fresh decide-error")"
   worker_strategy="${worker_decision%% *}"
   worker_strategy_reason="${worker_decision#* }"
@@ -441,10 +572,30 @@ run_worker_phase() {
     worker_resume_id="$worker_strategy_reason"; worker_strategy_reason="resume"
     gluerun_append_event "context.strategy_selected" "session resume strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"strategy\":\"resume\",\"reason\":\"resume\",\"sessionId\":\"$worker_resume_id\"}" || true
+  elif [[ "$worker_strategy" == "rehydrate" ]]; then
+    # A refused-resume lineage step upgraded to rehydrate (only behind
+    # GLUERUN_REHYDRATE=1; the routing spine never yields `rehydrate` otherwise).
+    # Record strategy=rehydrate, the refusal reason, and the NESTED packet manifest
+    # (ids + hashes only) by delegating into the integrated pure assembler over the
+    # durable-artifact root run_dir. No resume session is reused (rehydrate is a
+    # fresh session with injected context); the packet-injection hook is a later
+    # slice. worker_resume_id stays empty so the worker runs fresh below.
+    # The repo-level `decision-record` lives OUTSIDE run_dir; supply it as a trailing
+    # class-tagged extra so the recorded manifest carries the SAME decision record
+    # (id + content hash) the packet-injection hook injects — both reference the
+    # identical drive-start `decision_source_extra`, so they agree by construction.
+    gluerun_append_event "context.strategy_selected" "rehydrate strategy selected" \
+      "$(gluerun_ctx_rehydrate_event_data implementer "$task_id" "$run_id" "$n" "$worker_strategy_reason" "$run_dir" ${decision_source_extra:+"$decision_source_extra"})" || true
   else
     gluerun_append_event "context.strategy_selected" "fresh-run strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"strategy\":\"fresh\",\"reason\":\"$worker_strategy_reason\"}" || true
   fi
+
+  # ---- Rehydrate packet injection (node rehydrate-path; behind GLUERUN_REHYDRATE)
+  # On a `rehydrate` decision, append the assembled durable-context packet to the
+  # already-rendered active prompt ONCE, before the (fresh) worker try loop. No-op
+  # for resume/fresh, so with GLUERUN_REHYDRATE unset $active_prompt is unchanged.
+  rehydrate_inject_packet "$active_prompt"
 
   local worker_resume_failed="no"
   for ((worker_try=0; worker_try<=worker_infra_max; worker_try++)); do
@@ -609,6 +760,11 @@ PY
     || gluerun_append_event "l1.capsule_write_failed" "implementer capsule write failed (non-fatal)" \
          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n}" || true
 
+  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): record this
+  # attempt's ledger (assumption statuses) alongside the implementer capsule write,
+  # additively and non-fatally. No-op when OFF.
+  assumptions_record_capsule "$n" || true
+
   # Session affinity (T-E5): merge host-authority fields into the runner-written
   # implementer meta so the NEXT attempt can resume it. headShaAtCreate = the
   # committed head (the lineage anchor the resume decider checks). Never fatal.
@@ -640,6 +796,12 @@ run_audit_phase() {
     cp "$audit_prompt" "$active_audit_prompt" 2>/dev/null || active_audit_prompt="$audit_prompt"
   fi
 
+  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): inject the
+  # assembled auditSection (staged at attempt-open) into the per-attempt auditor prompt
+  # so the auditor verifies the assumptions and flags violations citing the assumption
+  # id. No-op when OFF (byte-identical) and never aborts the drive.
+  assumptions_inject_audit "$active_audit_prompt" || true
+
   # ---- Auditor runner with bounded infra-retry (T-E6) -----------------------
   # An auditor "infra failure" is the runner itself timing out (rc 124) / refusing
   # (later-wave rc 86), the record file never appearing, or output that carries no
@@ -661,7 +823,11 @@ run_audit_phase() {
   local audit_runner_basename reviewer_prompt_sha reviewer_resume_id="" reviewer_decision
   audit_runner_basename="$(basename "$GLUERUN_RUNNER_BIN")"
   reviewer_prompt_sha="$(gluerun_prompt_sha "$audit_prompt" 2>/dev/null || true)"
-  reviewer_decision="$(gluerun_session_resume_decide "$session_meta_reviewer" reviewer \
+  # Routed through the ctx-* adapter (GLUERUN_CTX_ROUTING; default 0 -> OFF-parity,
+  # byte-identical to the direct decider call). Step `final-audit` is an
+  # independence-required step, so ON the taint pin binds here: a would-be resume
+  # is refused as `fresh tainted` regardless of routing knob values.
+  reviewer_decision="$(gluerun_ctx_route_decide reviewer final-audit "$session_meta_reviewer" \
     "$task_id" "$run_id" "$audit_runner_basename" "$reviewer_prompt_sha" "$worktree" "$head_sha" 2>/dev/null || echo "fresh decide-error")"
   reviewer_strategy="${reviewer_decision%% *}"
   reviewer_strategy_reason="${reviewer_decision#* }"
@@ -753,6 +919,12 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
       # (the audited head). Never fatal.
       gluerun_session_meta_finalize "$session_meta_reviewer" reviewer "$task_id" "$run_id" \
         "$audit_runner_basename" "$reviewer_prompt_sha" "$head_sha" "$n" >/dev/null 2>&1 || true
+      # Assumption ledger attempt-close (node assumption-ledger; behind
+      # GLUERUN_CTX_PACKET): fold the auditor findings (which cite assumption ids) into
+      # this attempt's input ledger via the integrated host-derived transition and
+      # persist the updated ledger to the run_dir sidecar, so the NEXT attempt's
+      # assemble carries sticky `violated` statuses. No-op when OFF; never fatal.
+      assumptions_attempt_close "$audit_record" || true
     }
   else
     # Auditor infra failure persisted across GLUERUN_AUDIT_INFRA_MAX fresh re-runs:
@@ -795,6 +967,116 @@ archive_attempt() {
            "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"n\":$1}" 2>/dev/null || true; }
 }
 
+# ---- Assumption ledger wire-in (node assumption-ledger; behind GLUERUN_CTX_PACKET) --
+# Terminal driver wire-in for the S4-context-packets assumption-ledger node. Every
+# site below is a no-op unless GLUERUN_CTX_PACKET is set to a non-zero value (default
+# 0), so with the flag unset/0 l1-drive.sh renders byte-identical prompts, writes no
+# ledger sidecar / section files, and emits no assumptions events. Each site delegates
+# into the integrated PURE bricks (gluerun_ctx_assumptions_assemble at attempt-open,
+# gluerun_ctx_assumptions_transition at attempt-close) and adds no rendering of its
+# own. Fail-closed: on any error the attempt proceeds WITHOUT injection (non-fatal),
+# preserving the run. These sites are additive and disjoint from the post-acceptance
+# paired-audit (TASK-0006) and critic-recheck (TASK-0033) hooks, so this node's
+# l1-drive.sh ownership does not collide with theirs.
+assumptions_ctx_enabled() { [[ -n "${GLUERUN_CTX_PACKET:-}" && "${GLUERUN_CTX_PACKET}" != "0" ]]; }
+assumptions_ledger_sidecar="$run_dir/assumptions-ledger.json"
+assumptions_fix_section_file="$run_dir/assumptions-fix-section.md"
+assumptions_audit_section_file="$run_dir/assumptions-audit-section.md"
+assumptions_attempt_ledger_file="$run_dir/assumptions-attempt-ledger.json"
+
+# Attempt-open: assemble the per-run ledger as carry(prior, seed(task)) from the task
+# packet and the per-run prior sidecar (empty on attempt 1) and stage this attempt's
+# fixSection/auditSection + input-ledger snapshot to run_dir files. Non-fatal; on any
+# error nothing is staged (fail-closed) and the attempt proceeds without injection.
+assumptions_attempt_open() {
+  assumptions_ctx_enabled || return 0
+  rm -f "$assumptions_fix_section_file" "$assumptions_audit_section_file" \
+    "$assumptions_attempt_ledger_file" 2>/dev/null || true
+  local prior='' envelope
+  [[ -f "$assumptions_ledger_sidecar" ]] && prior="$(cat "$assumptions_ledger_sidecar" 2>/dev/null || true)"
+  envelope="$(gluerun_ctx_assumptions_assemble "$task_file" "$prior" 2>/dev/null)" || return 0
+  [[ -n "$envelope" ]] || return 0
+  python3 - "$envelope" "$assumptions_fix_section_file" "$assumptions_audit_section_file" \
+    "$assumptions_attempt_ledger_file" <<'PY' 2>/dev/null || return 0
+import json, sys
+env = json.loads(sys.argv[1])
+fix = env.get("fixSection") or ""
+aud = env.get("auditSection") or ""
+led = env.get("ledger") or {}
+if fix:
+    open(sys.argv[2], "w", encoding="utf-8").write(fix)
+if aud:
+    open(sys.argv[3], "w", encoding="utf-8").write(aud)
+open(sys.argv[4], "w", encoding="utf-8").write(json.dumps(led, sort_keys=True))
+PY
+  return 0
+}
+
+# Inject the staged fixSection into the implementer's already-rendered active/fix
+# prompt (the file the worker runner reads). Called AFTER prepare_worker_prompt so it
+# applies uniformly across the attempt-1 copy and the retry fix-prompt render. No-op
+# when OFF or when the section is empty (a zero-assumption task).
+assumptions_inject_fix() {
+  assumptions_ctx_enabled || return 0
+  [[ -s "$assumptions_fix_section_file" ]] || return 0
+  { echo ""; echo "---"; echo ""; cat "$assumptions_fix_section_file"; } \
+    >> "$run_dir/l2-active-prompt.md" 2>/dev/null || true
+  return 0
+}
+
+# Inject the staged auditSection into the per-attempt auditor prompt (the file the
+# auditor runner reads), around the re-audit render site and before the runner reads
+# it. No-op when OFF or when the section is empty.
+assumptions_inject_audit() {
+  local active_audit_prompt="$1"
+  assumptions_ctx_enabled || return 0
+  [[ -s "$assumptions_audit_section_file" ]] || return 0
+  { echo ""; echo "---"; echo ""; cat "$assumptions_audit_section_file"; } \
+    >> "$active_audit_prompt" 2>/dev/null || true
+  return 0
+}
+
+# Record the per-attempt ledger (assumption statuses) alongside the implementer
+# capsule write — additive and non-fatal: a failure logs an event and never aborts
+# the attempt. No-op when OFF.
+assumptions_record_capsule() {
+  local n="$1"
+  assumptions_ctx_enabled || return 0
+  [[ -f "$assumptions_attempt_ledger_file" ]] || return 0
+  cp "$assumptions_attempt_ledger_file" "$run_dir/assumptions-attempt-$n.json" 2>/dev/null \
+    || gluerun_append_event "l1.assumptions_record_failed" "per-attempt assumption ledger record failed (non-fatal)" \
+         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
+  return 0
+}
+
+# Attempt-close: after a parseable auditor verdict, fold the auditor findings (which
+# the injected auditSection instructs the auditor to cite by assumption id) into this
+# attempt's input ledger via the integrated host-derived transition, then persist the
+# updated ledger to the run_dir sidecar so the NEXT attempt's assemble carries sticky
+# `violated` statuses. Non-fatal; fail-closed leaves the prior sidecar untouched.
+assumptions_attempt_close() {
+  local audit_record="$1"
+  assumptions_ctx_enabled || return 0
+  [[ -f "$assumptions_attempt_ledger_file" && -f "$audit_record" ]] || return 0
+  local ledger findings updated
+  ledger="$(cat "$assumptions_attempt_ledger_file" 2>/dev/null || true)"
+  [[ -n "$ledger" ]] || return 0
+  findings="$(python3 - "$audit_record" <<'PY' 2>/dev/null)" || return 0
+import json, sys
+try:
+    r = json.load(open(sys.argv[1]))
+except Exception:
+    r = {}
+f = r.get("findings") if isinstance(r, dict) else None
+sys.stdout.write(json.dumps(f if isinstance(f, list) else []))
+PY
+  updated="$(gluerun_ctx_assumptions_transition "$ledger" "$findings" 2>/dev/null)" || return 0
+  [[ -n "$updated" ]] || return 0
+  printf '%s\n' "$updated" > "$assumptions_ledger_sidecar.tmp" 2>/dev/null \
+    && mv "$assumptions_ledger_sidecar.tmp" "$assumptions_ledger_sidecar" 2>/dev/null || true
+  return 0
+}
+
 # ---- Decider-driven retry loop ----
 # prev_failure_class/prev_attempt_ctx carry the PRIOR attempt's failure into the
 # next prepare_worker_prompt (the per-iteration reset clears attempt_failure
@@ -810,7 +1092,13 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
   attempt_failure=""; attempt_ctx=""
   verdict="unknown"; head_sha=""
   attempt_ok="no"
+  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): assemble
+  # this attempt's ledger from the task packet + per-run prior sidecar BEFORE the
+  # prompt is rendered, then inject the assembled fixSection into the already-rendered
+  # active/fix prompt. Both no-op when OFF (byte-identical) and never abort the drive.
+  assumptions_attempt_open "$n" || true
   prepare_worker_prompt "$n"
+  assumptions_inject_fix || true
   if run_worker_phase "$n"; then
     if run_audit_phase "$n"; then attempt_ok="yes"; fi
   fi
@@ -954,6 +1242,106 @@ mv "$inbox_packet.tmp" "$inbox_packet"
 _l1_outcome="accepted"
 gluerun_append_event "l1.task_accepted" "l1 task accepted" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$worker_branch\",\"headSha\":\"$head_sha\",\"waiver\":\"$waiver\"}"
+
+# ---- Artifact secret-scan finalize hook (DAG node artifact-secret-scan, layer
+# engine_runtime; behind the default-OFF GLUERUN_CTX_ARTIFACT_SCAN knob) --------
+# Strictly AFTER acceptance is finalized above and placed BEFORE the
+# post-acceptance paired-audit fresh-audit prompt is assembled from durable
+# artifacts (the gluerun_ctx_paired_audit_record hook below), beside the paired-
+# audit / critic-recheck hooks. When the knob is unset or "0" this whole block is
+# a no-op: no scan, no rename, no ctx.artifact_secret event, no manifest — so the
+# accepted flow is byte-identical to pre-hook behavior. When ON it delegates into
+# the integrated, already-tested containment bricks (ctx-artifact-quarantine.sh,
+# ctx-artifact-exclude.sh, ctx-artifact-scan.sh) and adds no scan/exclude logic
+# of its own:
+#   1. gluerun_ctx_artifact_quarantine "$run_dir" renames any durable context
+#      artifact whose content matches a secret pattern to `<path>.quarantined`
+#      (evidence-preserving; content never deleted), records exactly one
+#      ctx.artifact_secret event per hit, and leaves the accept/reject outcome
+#      untouched. The rename already removes the artifact from its canonical path.
+#   2. As belt-and-suspenders beyond the rename, enumerate the durable artifacts
+#      (gluerun_ctx_artifact_scan_paths) and apply gluerun_ctx_artifact_exclude so
+#      any quarantined artifact is dropped from the durable-artifact set that
+#      feeds downstream rendered prompt assembly; the surviving safe set is staged
+#      to $run_dir/durable-artifacts.manifest.
+# Non-fatal (same pattern as the capsule-write-failed / paired-audit hooks): on
+# any quarantine error it logs an l1.artifact_scan_failed event and NEVER aborts
+# the drive. The quarantine/exclude result NEVER feeds back into the accept
+# decision or the exit status.
+if [[ -n "${GLUERUN_CTX_ARTIFACT_SCAN:-}" && "${GLUERUN_CTX_ARTIFACT_SCAN}" != "0" ]]; then
+  # The shared secret patterns (gluerun_secret_scan_patterns) live in
+  # secret-scan.sh — a self-executing script that lib.sh does NOT source — so the
+  # containment bricks would otherwise find the patterns helper unavailable. Load
+  # ONLY its function definition (single source of truth), scoped to this ON
+  # branch so the OFF path stays byte-identical and pays no cost.
+  if [[ "$(type -t gluerun_secret_scan_patterns)" != "function" ]]; then
+    eval "$(sed -n '/^gluerun_secret_scan_patterns()/,/^}/p' "$SCRIPT_DIR/secret-scan.sh")" 2>/dev/null || true
+  fi
+  if ! gluerun_ctx_artifact_quarantine "$run_dir" >/dev/null 2>&1; then
+    gluerun_append_event "l1.artifact_scan_failed" "artifact secret-scan quarantine failed (non-fatal)" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}" || true
+  fi
+  # Belt-and-suspenders: the durable-artifact set that feeds downstream prompt
+  # assembly, with every quarantined artifact excluded. Non-fatal.
+  gluerun_ctx_artifact_scan_paths "$run_dir" 2>/dev/null \
+    | gluerun_ctx_artifact_exclude > "$run_dir/durable-artifacts.manifest" 2>/dev/null \
+    || true
+fi
+
+# Post-acceptance paired audit (observability only). Strictly AFTER acceptance is
+# finalized above; self-guards on the default-OFF GLUERUN_PAIRED_AUDIT_PCT knob
+# (unset/0 -> no fresh audit, no event, no file) so the accepted flow is
+# byte-identical when disabled. The paired verdict NEVER feeds back into the
+# accept decision or the exit status; a recorder/runner failure is non-fatal.
+gluerun_ctx_paired_audit_record "$run_id" "$task_id" "$run_dir" "$worktree" || true
+
+# Post-acceptance critic recheck (read-only; observability only). Strictly AFTER
+# acceptance is finalized above, beside the paired-audit hook. Minimal delegation
+# per the planner driver-hook rule: resolve the node and the prior plan-critique
+# record via the pure/read-only locators (TASK-0032), and only when BOTH resolve
+# invoke the recheck runner (TASK-0031). The runner self-guards on the default-OFF
+# GLUERUN_CRITIC_RECHECK_PCT sampling gate (unset/0 -> no ctx.critic_recheck event,
+# no recheck files, no state write) so the accepted flow is byte-identical when
+# disabled. The recheck verdict/dispositions NEVER feed back into the accept
+# decision or the exit status; a locator or runner failure is non-fatal (guarded).
+#
+# The integrated locators/runner are reached through an ASSEMBLED PREFIX (never the
+# contiguous literal name), mirroring engine/ctx-critic-recheck-run.sh: this is the
+# codebase's S2 contract-gate idiom that keeps a brick "structurally present but
+# uncalled" under its own literal-substring invariance grep while a later slice
+# (this hook) legitimately composes it (planner-contract rule 9). The delegation
+# adds no recheck logic of its own.
+_cr_pfx=gluerun_ctx_critic_recheck_
+critic_recheck_node="$("${_cr_pfx}locate_node" "$task_id" "$worktree" 2>/dev/null || true)"
+if [[ -n "$critic_recheck_node" ]]; then
+  critic_recheck_record="$("${_cr_pfx}locate_record" "$critic_recheck_node" "$task_id" "$worktree" 2>/dev/null || true)"
+  if [[ -n "$critic_recheck_record" ]]; then
+    "${_cr_pfx}run" "$critic_recheck_node" "$run_id" "$task_id" "$run_dir" "$critic_recheck_record" "$worktree" || true
+  fi
+fi
+unset _cr_pfx
+
+# ---- Experiment arm knob-state finalize hook (DAG node experiment-run, layer
+# evaluation; behind the default-OFF GLUERUN_CTX_ARMSTATE knob) ----------------
+# Beside the sibling per-run provenance blocks above (the GLUERUN_CTX_ARTIFACT_SCAN
+# durable-artifacts block, the paired-audit recorder, and the critic-recheck
+# block): durably RECORD this run's observed continuity knob-state so the
+# experiment report's per-arm attribution (control = M0 knob-state vs treatment)
+# is auditable on disk. TASK-0093 shipped the pure read-only emitter
+# gluerun_ctx_experiment_armstate_json but left it present-but-uncalled; this hook
+# is the separable driver wire-in that emitter's context packet deferred.
+#
+# Minimal delegating call site — it inlines NO knob-state logic and only forwards
+# to the integrated emitter, writing its output (for the run's environment) to a
+# durable arm-knob-state.json under the run directory, non-fatal (|| true),
+# mirroring the GLUERUN_CTX_ARTIFACT_SCAN block that writes durable-artifacts.manifest.
+# When the knob is unset or "0" this whole block is a no-op: no file, no event,
+# no state write — the accepted flow is byte-identical to pre-hook behavior. The
+# recorded knob-state NEVER feeds back into the accept decision or the exit status
+# (evidence invariance; it only writes an auditable file).
+if [[ -n "${GLUERUN_CTX_ARMSTATE:-}" && "${GLUERUN_CTX_ARMSTATE}" != "0" ]]; then
+  gluerun_ctx_experiment_armstate_json > "$run_dir/arm-knob-state.json" 2>/dev/null || true
+fi
 
 echo ""
 echo "ACCEPTED: $task_id @ $head_sha (waiver=$waiver)"

@@ -45,14 +45,39 @@ Required completion: `[REQUIRED-COMPLETION]`
   ready slices as possible into the earliest task, up to `[SLICE-BUDGET]`,
   before emitting another task. If `N` independent ready slices are available,
   emit approximately `ceil(N / [SLICE-BUDGET])` tasks, capped by `[COUNT]`.
+- CHAINED-SLICE BUNDLING (task-width rule): small slices that depend on each
+  other IN THE SAME NODE — e.g. a new helper function, then a consumer of that
+  helper, then the record merge — MUST also be bundled into one task, ordered,
+  up to `[SLICE-BUDGET]`, whenever each slice is small (roughly: one new
+  function or one narrow edit plus its test). A five-line leaf must never be
+  its own task: the per-task overhead (fresh worker, full audit, integrate,
+  gate) dwarfs the work. Emit a chained micro-slice as a separate task ONLY
+  when it is genuinely large, risky (touches a driver/existing file with a
+  full-suite gate), or must land alone for scope-ownership reasons. Inside the
+  task's Objective, list the slices in implementation order. Same-batch tasks
+  must still never overlap owned files.
 - Tasks in the same output batch must be mutually independent: no task may
   depend on another task in the same batch, and owned files must not overlap.
 - `Status: ready`. `Area: [AREA]`. `Worker branch:
   agent/[AREA]/<task-id>-<kebab-slug>`. `Test policy: strict_test_first`.
-  `Gate command: bash tests/run.sh`.
+- Gate command — SCOPED by ownership (wall-clock optimization; the full suite
+  still runs structurally at every integrate and node-gate promotion, so
+  nothing merges without a complete green run):
+  - Task owns ONLY new files (new `engine/ctx-*.sh` / new `schemas/` /
+    new `templates/prompts/` files plus their own new `tests/test-*.sh`):
+    `Gate command: bash tests/<its-own-test>.sh && bash tests/test-engine-clean.sh`
+  - Task owns ANY existing file (driver hooks: `l1-drive.sh`,
+    `generate-tasks.sh`, `l1-plan-node.sh`, `reconcile.sh`, `cli/gluerun`,
+    `secret-scan.sh`, or any other pre-existing engine/test file):
+    `Gate command: bash tests/run.sh` (full suite — these are the tasks that
+    can break unrelated behavior).
 - `Dispatch mode: canonical`.
-- `Depends on: []` when there are no task dependencies, otherwise a comma
-  separated list of already-integrated `TASK-XXXX` ids only.
+- `Depends on: []` — ALWAYS empty in this dock. Anything your task builds on
+  is already integrated into the target branch your worker branches from, so
+  listing it is redundant — and in staged planning the host validator uses
+  node-local temp ids that collide with real integrated ids, so a listed
+  integrated id is misread as an illegal same-batch dependency and fails the
+  whole batch. Cross-node ordering lives in the DAG's `dependsOn`, not here.
 - Owned files: up to `[SLICE-BUDGET]` mutually-independent slices, each slice
   typically one new `engine/ctx-*.sh` (or the single sanctioned hook site
   named by the stage file) plus its `tests/test-ctx-*.sh` (1–2 files per
@@ -69,6 +94,17 @@ Required completion: `[REQUIRED-COMPLETION]`
   node's `requiredCompletion` and the stage file's exit gate.
 - Every task must respect the planner contract's binding rules (feature-flag
   discipline, additive schemas, advocate/skeptic line, evidence invariance).
+- OPTIONAL context packet: when a task's reasoning residue would help the
+  implementer, add an additive `## Context packet` block to the task markdown
+  with any of the subsections `Decisions`, `Assumptions`, `Rejected
+  alternatives`, `Inspected symbols` — keep it capped and concrete: decisions
+  with their why, rejected alternatives with their why-not, and assumptions the
+  implementer must not silently violate, each written in the assumption
+  grammar `[open|validated|violated] <claim> — <basis>`. Standing rule:
+  never restate what the repo can answer —
+  no symbol inventories, only symbols whose ROLE in the plan is non-obvious.
+  The block is OPTIONAL; omit it (or any subsection) freely — absent packets
+  remain valid.
 - Do NOT duplicate an already-integrated slice. Advance the stage.
 - Task objective and acceptance criteria must name the executable DAG node
   `[NODE]` and layer `[LAYER]` when relevant.
