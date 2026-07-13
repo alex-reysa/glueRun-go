@@ -68,3 +68,40 @@ gluerun_ctx_route_subgraph_manifest() {
   gluerun_ctx_rehydrate_manifest ${specs[@]+"${specs[@]}"}
   return 0
 }
+
+# gluerun_ctx_route_subgraph_render <task_id> <packet|manifest>
+#   The SHARED subgraph selector both the l1-drive.sh packet-injection site and the
+#   ctx-rehydrate-event.sh manifest-record site key on, so the injected packet and
+#   the recorded manifest carry the SAME subgraph sources BY CONSTRUCTION: both
+#   pass the SAME task_id, the same arm-mode decider re-checks the same knob /
+#   treatment arm / present non-empty corpus, and the SAME deterministic node id is
+#   resolved.
+#
+#   When gluerun_ctx_rehydrate_subgraph_arm_mode <task_id> <graphDir> == subgraph
+#   (graphDir = ${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}), resolve
+#     node = gluerun_graph_node_id( gluerun_graph_identity task <task_id> )
+#   and print gluerun_ctx_rehydrate_subgraph_assemble <graphDir> <node> <mode>,
+#   returning 0. Otherwise print NOTHING and return non-zero, signalling the caller
+#   to keep its existing FLAT composition. <mode> is `packet` or `manifest`.
+#
+#   Feature-flag discipline: the arm decider defaults GLUERUN_CTX_SUBGRAPH_REHYDRATE
+#   OFF, so this always returns non-zero/empty by default and both sites use the
+#   flat path — byte-identical to today. The subgraph branch is reachable only with
+#   the knob on, the treatment arm, and a present non-empty corpus (all re-checked
+#   by the arm decider — do NOT duplicate those conditions here).
+#
+#   Evidence invariance: a PURE READ — appends no events, writes/renames/deletes
+#   nothing, confers NO independence; the `rehydrate` strategy stays tainted per
+#   gluerun_ctx_route_strategy_tainted regardless of which path is chosen.
+gluerun_ctx_route_subgraph_render() {
+  local task_id="$1" mode="$2"
+
+  local graph_dir="${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}"
+  [[ "$(gluerun_ctx_rehydrate_subgraph_arm_mode "$task_id" "$graph_dir")" == "subgraph" ]] \
+    || return 1
+
+  local node
+  node="$(gluerun_graph_node_id "$(gluerun_graph_identity task "$task_id")")"
+  gluerun_ctx_rehydrate_subgraph_assemble "$graph_dir" "$node" "$mode"
+  return 0
+}

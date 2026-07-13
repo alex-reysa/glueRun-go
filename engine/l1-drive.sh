@@ -440,13 +440,28 @@ rehydrate_inject_packet() {
   # record site passes the IDENTICAL spec, so the injected packet and the recorded
   # manifest carry the SAME decision record. Empty when the decision log was absent
   # at drive start.
-  local -a specs=()
-  local line
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && specs+=("$line")
-  done < <(gluerun_ctx_rehydrate_sources "$run_dir" ${decision_source_extra:+"$decision_source_extra"} 2>/dev/null)
-  local packet
-  packet="$(gluerun_ctx_rehydrate_packet ${specs[@]+"${specs[@]}"} 2>/dev/null)" || return 0
+  # SUBGRAPH branch (node subgraph-rehydrate; behind GLUERUN_CTX_SUBGRAPH_REHYDRATE
+  # and only on the treatment arm with a present non-empty corpus). The shared
+  # selector yields the contradictions-first subgraph packet keyed on the SAME
+  # task_id / arm-mode / node the manifest-record site (ctx-rehydrate-event.sh)
+  # keys on, so the injected packet and the recorded manifest carry the SAME
+  # subgraph sources by construction. Inject THAT under the identical reference-
+  # only / NOT-authoritative header and skip the flat durable composition. With the
+  # knob off / control arm / absent corpus the selector returns non-zero/empty and
+  # the flat path below runs unchanged (byte-identical to today).
+  local packet=""
+  local subgraph_packet
+  if subgraph_packet="$(gluerun_ctx_route_subgraph_render "$task_id" packet 2>/dev/null)" \
+     && [[ -n "$subgraph_packet" ]]; then
+    packet="$subgraph_packet"
+  else
+    local -a specs=()
+    local line
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && specs+=("$line")
+    done < <(gluerun_ctx_rehydrate_sources "$run_dir" ${decision_source_extra:+"$decision_source_extra"} 2>/dev/null)
+    packet="$(gluerun_ctx_rehydrate_packet ${specs[@]+"${specs[@]}"} 2>/dev/null)" || return 0
+  fi
   [[ -n "$packet" ]] || return 0
   {
     echo ""
