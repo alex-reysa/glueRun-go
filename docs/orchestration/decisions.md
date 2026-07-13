@@ -1925,3 +1925,20 @@
   integrate retries with space available. Ops note for the runbook: a long
   self-hosting run should check free disk in the heartbeat — full-suite
   gates fail confusingly when temp allocation dies mid-run.
+
+- 2026-07-13 (S7 experiment-run, per-knob default decisions — CEO/CTO):
+  authored docs/context-build-plan/experiment-report.md from the run's
+  durable records (observational before/after, arms = knob-state eras,
+  confounds stated). Headline: treatment era = 75 tasks, 0 audit escapes
+  (control era 1/30), attempts-to-accept 1.15 vs 1.20, median wall-clock
+  9.6m vs 19.1m; planner resume rate 76% with zero affinity incidents and a
+  fully enumerated fresh-fallback reason mix; zero paired-audit
+  disagreements at 25%. Decisions: PLANNER_SESSION, PLAN_CRITIQUE,
+  CTX_PACKET, CTX_ROUTING, CTX_ARTIFACT_SCAN flip default-ON;
+  PAIRED_AUDIT_PCT stays 25; REHYDRATE, CTX_MANIFEST, CTX_GRAPH,
+  CTX_EXPERIMENT stay opt-in pending live-scale / consumer evidence. Stage 6
+  graph: projection layer earned in; graph-driven routing beyond rehydration
+  selection frozen pending the consumer subgraph-vs-flat measurement.
+  Controlled A/B + manifest arm recorded as the consumer-of-record
+  follow-on. Gate published manually per the operator hand-off with
+  GLUERUN_FORCE_EVAL_GATE=1 (deliberate operator authority).
