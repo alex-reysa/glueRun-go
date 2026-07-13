@@ -114,15 +114,15 @@ gluerun_ctx_route() {
   local lease_path
   lease_path="$(gluerun_ctx_route_session_lease_path "$role" "$lease_key")"
   if [[ -n "$lease_path" ]] && gluerun_ctx_route_session_lease_live "$lease_path"; then
-    _gluerun_ctx_route_refuse_resume session-lease "$role" "$step" "$meta"; return 0
+    _gluerun_ctx_route_refuse_resume session-lease "$role" "$step" "$meta" "$key"; return 0
   fi
   # (b) window pressure: the session transcript is over the usage threshold.
   if [[ "$(gluerun_ctx_route_window_gate "$role" "$transcript")" != "pass" ]]; then
-    _gluerun_ctx_route_refuse_resume window-pressure "$role" "$step" "$meta"; return 0
+    _gluerun_ctx_route_refuse_resume window-pressure "$role" "$step" "$meta" "$key"; return 0
   fi
   # (c) diff volume: role-relevant churn since headShaAtCreate is over the limit.
   if [[ "$(gluerun_ctx_route_diff_gate "$role" "$worktree" "$base_sha" "$lineage_head" "$@")" != "pass" ]]; then
-    _gluerun_ctx_route_refuse_resume diff-volume "$role" "$step" "$meta"; return 0
+    _gluerun_ctx_route_refuse_resume diff-volume "$role" "$step" "$meta" "$key"; return 0
   fi
 
   # Every gate passed -> the wrapped decider's `resume <id>` stands, verbatim.
@@ -130,19 +130,29 @@ gluerun_ctx_route() {
   return 0
 }
 
-# _gluerun_ctx_route_refuse_resume <reason> <role> <step> <meta>
+# _gluerun_ctx_route_refuse_resume <reason> <role> <step> <meta> <key>
 #
 # The rehydrate wire-in for a refused-resume lineage step. Prints exactly one
-# line: `rehydrate <reason>` when GLUERUN_REHYDRATE=1 and the durable-artifact
-# root run_dir = dirname(meta) yields at least one surviving rehydration source,
-# otherwise the byte-identical `fresh <reason>` this spine emitted before the
-# wire-in. The resolver/manifest composition is guarded behind GLUERUN_REHYDRATE
-# so the OFF path spawns no extra work; the decision leaf (which independently
-# re-checks OFF-parity, the independence pin, and the empty-packet guard) makes
-# the final call. Appends no events and never exits non-zero — the spine keeps
-# its one-line, no-event contract, and `rehydrate` stays tainted.
+# line: `rehydrate <reason>` when GLUERUN_REHYDRATE=1 and the manifest chosen for
+# this step yields at least one surviving rehydration source, otherwise the byte-
+# identical `fresh <reason>` this spine emitted before the wire-in. The
+# manifest composition is guarded behind GLUERUN_REHYDRATE so the OFF path spawns
+# no extra work; the decision leaf (which independently re-checks OFF-parity, the
+# independence pin, and the empty-packet guard) makes the final call.
+#
+# WHICH manifest the leaf sees is delegated to the flat-vs-subgraph selector
+# gluerun_ctx_route_subgraph_manifest (engine/ctx-route-subgraph.sh): with
+# GLUERUN_CTX_SUBGRAPH_REHYDRATE default 0 it returns the flat manifest and this
+# path is byte-identical to today; only with the subgraph knob on, the treatment
+# arm, and a present non-empty graph corpus does it hand the leaf the graph-
+# selected packet instead of the flat capsule. <key> is the taskId the route
+# contract already carries for task roles and is threaded here so the selector can
+# resolve the deterministic task node id.
+#
+# Appends no events and never exits non-zero — the spine keeps its one-line,
+# no-event contract, and `rehydrate` stays tainted.
 _gluerun_ctx_route_refuse_resume() {
-  local reason="$1" role="$2" step="$3" meta="$4"
+  local reason="$1" role="$2" step="$3" meta="$4" key="${5:-}"
 
   # OFF-parity: with the knob unset or != 1, stay byte-identical to `fresh
   # <reason>` and do NO resolver/manifest work at all.
@@ -150,18 +160,11 @@ _gluerun_ctx_route_refuse_resume() {
     printf 'fresh %s\n' "$reason"; return 0
   fi
 
-  # Compose the durable-artifact source resolver over run_dir = dirname(meta) (the
-  # same root ctx-route-drive.sh derives), assemble its manifest, and let the
-  # decision leaf render the verdict.
-  local run_dir; run_dir="$(dirname "$meta")"
-  local -a specs=()
-  local line
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && specs+=("$line")
-  done < <(gluerun_ctx_rehydrate_sources "$run_dir")
-
+  # Select the manifest (flat by default; graph-selected only under the subgraph
+  # knob + treatment arm + present corpus) and let the decision leaf render the
+  # verdict.
   local manifest
-  manifest="$(gluerun_ctx_rehydrate_manifest ${specs[@]+"${specs[@]}"})"
+  manifest="$(gluerun_ctx_route_subgraph_manifest "$reason" "$role" "$step" "$meta" "$key")"
 
   gluerun_ctx_route_rehydrate_decide "$reason" "$role" "$step" "$manifest"
   return 0
