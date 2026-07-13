@@ -17,6 +17,13 @@ gate/audit pipelines, and git-worktree isolation. The engine is installed once p
 and pinned per consumer repo — improvements propagate by bumping a version pin, not by
 re-copying scripts.
 
+## Video overview
+
+[Watch the 72-second video overview](docs/assets/gluerun-go-orchestration.mp4)
+
+The video shows the orchestration loop from source intent through planning, isolated
+worker execution, state packets, review, retry continuity, and integration.
+
 ## How it works
 
 ### Agent tiers
