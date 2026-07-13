@@ -2,6 +2,41 @@
 
 ## Decision Log
 
+### 2026-07-13T00:02:36Z — TASK-0103 — decide:amend-scope
+
+- Run: `RUN-20260712T234435Z-35600`
+- Branch: `agent/eval/TASK-0103-experiment-run-operator-handoff`
+- Authority: policy
+- Rationale: fast-path: scope-violation -> amend-scope
+
+### 2026-07-13T00:02:35Z — TASK-0102 — integrate
+
+- Run: `ORIGIN-20260712T235346Z-15138`
+- Branch: `agent/graph/TASK-0102-subgraph-packet`
+- Authority: origin
+- Rationale: merged agent/graph/TASK-0102-subgraph-packet (54d8efcedbf1ffaaa17de2d2b628d13d8cc9a8bc) into agent/integration as 53f8e17ad2be78547aa4844c532ae9c3b7bc8042; gate green; acceptance=accepted
+
+### 2026-07-13T00:01:37Z — TASK-0103 — decide:retry
+
+- Run: `RUN-20260712T234435Z-35600`
+- Branch: `agent/eval/TASK-0103-experiment-run-operator-handoff`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
+### 2026-07-12T23:54:47Z — TASK-0103 — decide:retry
+
+- Run: `RUN-20260712T234435Z-35600`
+- Branch: `agent/eval/TASK-0103-experiment-run-operator-handoff`
+- Authority: policy
+- Rationale: fast-path: no-changes -> retry
+
+### 2026-07-12T23:53:24Z — TASK-0102 — accept
+
+- Run: `RUN-20260712T234435Z-35521`
+- Branch: `agent/graph/TASK-0102-subgraph-packet`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-07-12T23:39:57Z — TASK-0101 — integrate
 
 - Run: `ORIGIN-20260712T232245Z-65096`
