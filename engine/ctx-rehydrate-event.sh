@@ -50,18 +50,31 @@ gluerun_ctx_rehydrate_event_data() {
   # Resolve the surviving durable sources for this run (plus caller extras), then
   # assemble the quarantine-aware manifest over exactly those specs. Both helpers
   # are pure and read-only; the manifest is the single content-hash authority.
-  local -a source_specs=()
-  local line
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && source_specs+=("$line")
-  done < <(gluerun_ctx_rehydrate_sources "$run_dir" "$@")
-
-  local manifest
-  if [[ ${#source_specs[@]} -gt 0 ]]; then
-    manifest="$(gluerun_ctx_rehydrate_manifest "${source_specs[@]}")"
+  # SUBGRAPH branch (node subgraph-rehydrate; behind GLUERUN_CTX_SUBGRAPH_REHYDRATE
+  # and only on the treatment arm with a present non-empty corpus). The shared
+  # selector yields the subgraph manifest keyed on the SAME task_id / arm-mode /
+  # node the packet-injection site (l1-drive.sh) keys on, so the recorded manifest
+  # documents exactly the injected sources (same-sources invariant). With the knob
+  # off / control arm / absent corpus the selector returns non-zero/empty and the
+  # flat manifest below is recorded unchanged (byte-identical to today).
+  local manifest=""
+  local subgraph_manifest
+  if subgraph_manifest="$(gluerun_ctx_route_subgraph_render "$task_id" manifest 2>/dev/null)" \
+     && [[ -n "$subgraph_manifest" ]]; then
+    manifest="$subgraph_manifest"
   else
-    # Empty source set -> the manifest is still well-formed with sources: [].
-    manifest="$(gluerun_ctx_rehydrate_manifest)"
+    local -a source_specs=()
+    local line
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && source_specs+=("$line")
+    done < <(gluerun_ctx_rehydrate_sources "$run_dir" "$@")
+
+    if [[ ${#source_specs[@]} -gt 0 ]]; then
+      manifest="$(gluerun_ctx_rehydrate_manifest "${source_specs[@]}")"
+    else
+      # Empty source set -> the manifest is still well-formed with sources: [].
+      manifest="$(gluerun_ctx_rehydrate_manifest)"
+    fi
   fi
 
   # OPTIONAL authored-knowledge counterpart (node rehydrate-path; NOT part of
