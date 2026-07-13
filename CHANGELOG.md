@@ -7,6 +7,67 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.4.0] — 2026-07-13 — Context-aware orchestration (self-hosted S0–S7 complete)
+
+Completes the context-evolution plan the engine built against itself: 107
+worker-implemented, independently audited, gate-promoted tasks across 20
+executable DAG nodes, closed by an operator-authored experiment report
+(`docs/context-build-plan/experiment-report.md`). Additive and default-OFF at
+the raw engine level; the **shipped config flips five knobs ON per the
+report's per-knob decisions** (see below). Raw-default flips are deferred to
+0.5 with a test-migration slice (OFF-parity tests pin unset == legacy).
+
+- **Context packets + assumption ledger** (`GLUERUN_CTX_PACKET`): planner
+  reasoning residue (decisions / assumptions / rejected alternatives /
+  inspected symbols) rides task files into worker, fix, and audit prompts;
+  per-run assumption ledger with host-derived status transitions in the
+  assumption grammar `[open|validated|violated]`.
+- **Artifact secret scan + quarantine** (`GLUERUN_CTX_ARTIFACT_SCAN`):
+  `secret-scan.sh --artifacts` covers capsules, session meta, packets,
+  critique and paired-audit records; hits rename to `.quarantined`, emit
+  `ctx.artifact_secret`, and are excluded from every prompt-assembly and
+  rehydration path without changing task outcomes.
+- **Explicit session routing** (`GLUERUN_CTX_ROUTING`): one dispatcher
+  (`gluerun_ctx_route`) returning `continue|resume|fork|fresh|rehydrate`
+  with a reason code; window-pressure and diff-volume refusal gates;
+  generalized session leases; structural taint marking makes
+  independence-pinned steps (final + paired audits) unreachable by resumed or
+  rehydrated sessions; per-role strategy/outcome metrics splits.
+- **Rehydration** (`GLUERUN_REHYDRATE`): deterministic, capped,
+  quarantine-aware packets assembled from durable artifacts (packets,
+  capsules, ledgers, critiques, decision records) injected on refused-resume
+  lineage steps, with the packet manifest recorded in strategy events.
+  Optional authored-knowledge manifest ingestion (`GLUERUN_CTX_MANIFEST` +
+  additive `contextManifest` config field): select → eligibility
+  (`load-when` across role/step/node/task) → compose → inject → record,
+  fixture-contract only (singular-brain bridge, no runtime dependency).
+- **Context graph** (`GLUERUN_CTX_GRAPH`): `context-graph.v0` schema
+  (append-only JSONL nodes/edges, full edge taxonomy,
+  `evidenceClass: authoritative|claim`, provenance refs) + S0–S5
+  event-to-graph mapping; deterministic projector over all record families;
+  incremental sync ≡ rebuild; loss-free delete/rebuild; query read API
+  (neighbors, lineage walk, open-contradictions); `gluerun graph
+  rebuild|sync|query` CLI. Subgraph-selected rehydration (lineage-walk
+  selection, rejected observations excluded, contradictions surfaced first)
+  with a flat-vs-subgraph A/B arm.
+- **Experiment toolchain** (`GLUERUN_CTX_EXPERIMENT` /
+  `GLUERUN_CTX_ARMSTATE`): per-arm aggregators (escape-rate, cost, bias,
+  attempts-to-accept, findings-per-attempt, resume/rehydrate hit-rates,
+  refusal reason mix), treatment-vs-control delta, knob-state provenance
+  recording + consistency audit, markdown renderers, composed report body,
+  `gluerun experiment-report` CLI, operator hand-off record.
+- **Shipped-config defaults per the experiment report**: `PLANNER_SESSION`,
+  `PLAN_CRITIQUE`, `CTX_PACKET`, `CTX_ROUTING`, `CTX_ARTIFACT_SCAN` ON and
+  `PAIRED_AUDIT_PCT=25` in the self-dock config; `REHYDRATE`,
+  `CTX_MANIFEST`, `CTX_GRAPH`, `CTX_EXPERIMENT` stay opt-in pending
+  live-scale / consumer evidence.
+- New event types: `context.strategy_selected`, `context.resume_failed`,
+  `ctx.arm_assigned`, `ctx.artifact_secret`, `ctx.paired_audit`,
+  `ctx.critic_recheck`, `ctx.packet_malformed`, `plan.critiqued`,
+  `plan.revised`, `plan.revise_parked`, `planner.backoff_active`.
+
+---
+
 ## [0.4.0-m1] — 2026-07-11 — Context-evolution M0–M3 (self-hosted, unreleased dev pin)
 
 Built by the engine itself under `docs/context-build-plan/` (self-docked, all

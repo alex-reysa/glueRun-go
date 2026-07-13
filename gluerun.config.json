@@ -1,6 +1,6 @@
 {
   "schemaVersion": "v1",
-  "engineVersion": "0.4.0-m1",
+  "engineVersion": "0.4.0",
   "targetBranch": "agent/integration",
   "gateCommand": "bash tests/run.sh",
   "runner": "claude-run.sh",
@@ -77,6 +77,9 @@
     "GLUERUN_CODEX_AUDITOR_REASONING_EFFORT": "high",
     "GLUERUN_CODEX_CRITIC_REASONING_EFFORT": "high",
     "GLUERUN_CODEX_DECIDER_REASONING_EFFORT": "high",
-    "GLUERUN_CODEX_READONLY_REASONING_EFFORT": "high"
+    "GLUERUN_CODEX_READONLY_REASONING_EFFORT": "high",
+    "GLUERUN_CTX_PACKET": "1",
+    "GLUERUN_CTX_ROUTING": "1",
+    "GLUERUN_CTX_ARTIFACT_SCAN": "1"
   }
 }

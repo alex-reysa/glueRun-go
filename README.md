@@ -114,6 +114,18 @@ gluerun auto
 
 # Block until all detached workers finish (useful in CI or clean shutdown)
 gluerun reconcile --drain
+
+# Context graph (behind GLUERUN_CTX_GRAPH): project the event log into
+# context-graph.v0 JSONL, sync incrementally, and query it
+gluerun graph rebuild
+gluerun graph sync
+gluerun graph query neighbors <node-id>
+
+# Experiment tooling (behind GLUERUN_CTX_EXPERIMENT): per-arm metrics,
+# treatment-vs-control delta, and rendered report tables
+gluerun experiment-report summary
+gluerun experiment-report delta
+gluerun experiment-report tables
 ```
 
 ## Configuration
@@ -157,6 +169,34 @@ patterns ending in `*`; allowed values are written to
 | `GLUERUN_AUDIT_INFRA_MAX` | `2` | Extra auditor re-runs on an infra failure before surfacing `audit-infra`. |
 | `GLUERUN_CONTEXT_SECTION_MAX_CHARS` | `4000` | Per-section cap on continuity content appended to prompts. |
 | `GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE` | `1` | Preflight requires non-empty `acceptanceCriteria` on a task. |
+
+### Context knobs (0.4.0)
+
+Raw engine defaults stay `0` (OFF-parity is test-pinned); the **recommended
+production values** below follow the per-knob decisions in
+`docs/context-build-plan/experiment-report.md` and ship in this repo's own
+dock config. Raw-default flips land in 0.5 with a test-migration slice.
+
+| Env knob | Raw default | Recommended | Effect |
+| --- | --- | --- | --- |
+| `GLUERUN_PLANNER_SESSION` | `0` | **`1`** | Per-node planner session persistence + resume behind fail-closed lineage/template/lease gates. |
+| `GLUERUN_PLAN_CRITIQUE` | `0` | **`1`** | Fresh read-only skeptic critic over staged planner batches before L0 import. |
+| `GLUERUN_PLAN_REVISE_MAX` | `0` | `2` | Bounded revise→re-critique loop for `revise` verdicts. |
+| `GLUERUN_CTX_PACKET` | `0` | **`1`** | Planner context packets (decisions/assumptions/rejected alternatives) flow into worker, fix, and audit prompts; per-run assumption ledger. |
+| `GLUERUN_CTX_ROUTING` | `0` | **`1`** | Explicit 5-strategy routing (`continue/resume/fork/fresh/rehydrate`) with reason codes, window-pressure + diff-volume gates, and structural taint on resumed sessions. |
+| `GLUERUN_CTX_ARTIFACT_SCAN` | `0` | **`1`** | Secret scan over durable artifacts; hits quarantine (`.quarantined`) and drop out of all prompt assembly. |
+| `GLUERUN_PAIRED_AUDIT_PCT` | `0` | `25` | Sampled post-acceptance paired fresh audits (bias measurement + independence spine). |
+| `GLUERUN_REHYDRATE` | `0` | opt-in | Inject deterministic durable-artifact packets on refused-resume lineage steps. |
+| `GLUERUN_CTX_MANIFEST` | `0` | opt-in | Authored-knowledge manifest ingestion into rehydration packets (`contextManifest` config field; fixture contract). |
+| `GLUERUN_CTX_GRAPH` | `0` | opt-in | Context-graph projector/sync/query + subgraph-selected rehydration. |
+| `GLUERUN_CTX_EXPERIMENT` | `0` | opt-in | Experiment aggregators, delta, renderers, and `gluerun experiment-report`. |
+| `GLUERUN_CTX_ARMSTATE` | `0` | opt-in | Per-run knob-state provenance recording for arm-integrity audits. |
+
+Key context event types (all in `.gluerun-state/events.ndjson`, countable via
+`gluerun metrics`): `context.strategy_selected`, `context.resume_failed`,
+`ctx.arm_assigned`, `ctx.paired_audit`, `ctx.critic_recheck`,
+`ctx.artifact_secret`, `ctx.packet_malformed`, `plan.critiqued`,
+`plan.revised`, `plan.revise_parked`, `planner.backoff_active`.
 
 ## Context continuity
 
