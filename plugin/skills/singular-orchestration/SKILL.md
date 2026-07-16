@@ -1,6 +1,6 @@
 ---
 name: singular-orchestration
-description: Operate Singular (repo "singular-lite", formerly glueRun-go; CLI command `gluerun`) — an autonomous multi-agent orchestration engine that drives parallel AI coding agents against a git repo through a three-tier L0/L1/L2 model with DAG plans, durable leases, gate pipelines, and worktree isolation. Use whenever the user wants to orchestrate agents on a repo, set up gluerun/Singular in a repo, create or edit an orchestration plan or DAG, decompose a project into parallel tasks, run/resume/stop an orchestration, drive a single task end-to-end, check what orchestration agents are doing, or open the orchestration console — even if they just say "singular", "gluerun", "orchestrate this", "run agents in parallel on this repo", or "show me the agent graph" without naming a command.
+description: Operate Singular (repo "singular-lite", formerly glueRun-go; CLI command `gluerun`) — an autonomous multi-agent orchestration engine that drives parallel AI coding agents against a git repo through a three-tier L0/L1/L2 model with DAG plans, durable leases, gate pipelines, and worktree isolation. Use whenever the user wants to orchestrate agents on a repo, set up gluerun/Singular in a repo, create or edit an orchestration plan or DAG, decompose a project into parallel tasks, run/resume/stop an orchestration, drive a single task end-to-end, check what orchestration agents are doing, or open the orchestration console/dashboard/viewer/visualization UI — even if they just say "singular", "gluerun", "orchestrate this", "run agents in parallel on this repo", "show me the dashboard", or "show me the agent graph" without naming a command.
 ---
 
 # Singular orchestration (`gluerun`)
@@ -196,21 +196,48 @@ Control and safety:
 
 ## 4. Monitor
 
+**Heartbeat loop (use this for periodic supervision — do NOT re-read this
+skill or run a full command battery per poll):**
+
 ```bash
-gluerun status                  # orchestration status (incl. inbox/imported packet counts)
+gluerun console --ensure   # once: prints the dashboard URL (idempotent)
+prev=""
+while sleep 60; do
+  d="$(gluerun health --json)"          # <2s digest: gates, frontier, leases,
+  cur="$(jq -r .digest <<<"$d")"        # backoff, breaker, STOP, disk, attention[]
+  [[ "$cur" == "$prev" ]] && continue   # digest unchanged -> nothing to do
+  prev="$cur"
+  jq '{ok, gates, attention}' <<<"$d"
+  # attention[] non-empty or ok:false -> read the Recovery recipes in
+  # references/operations.md and act; otherwise keep looping.
+done
+```
+
+The `digest` field hashes everything except the timestamp — comparing it is
+the whole cheap-poll contract. `attention[]` names exactly what needs an
+operator (STOP present, backoff active, breaker open, stale L1 leases, disk
+below floor, autonomate dead).
+
+Deeper inspection when something changed:
+
+```bash
+gluerun status                  # orchestration status (incl. console URL when live)
+gluerun gates                   # per-node gate table
+gluerun next-areas --explain    # frontier + per-node exclusion reasons
 gluerun metrics                 # read-only per-task/aggregate context metrics
-gluerun console                 # browser console on a free local port
 gluerun console --snapshot      # one-shot JSON health snapshot, no browser
 gluerun console --task TASK-0042   # one-shot task detail JSON
 ```
 
 The console is a read-only web UI (L0→L1→L2 graph, task inspector, events,
-JSON API); the `--snapshot`/`--task` one-shot modes print JSON and exit
-without starting a server. Ground rules: durable
-state is authoritative, "active" is derived from live facts (pids, active
-leases, worktrees) — never from markdown claims or bare lease-file existence.
-Full console usage, all API endpoints, and derived-state rules:
-[references/console.md](references/console.md).
+JSON API) — start/reuse it with `gluerun console --ensure` (URL persists in
+`.gluerun-state/console.url`; `--status`/`--stop` manage it). Ground rules:
+durable state is authoritative, "active" is derived from live facts (pids,
+active leases, worktrees) — never from markdown claims or bare lease-file
+existence. Full console usage, all API endpoints, and derived-state rules:
+[references/console.md](references/console.md). Canonical artifact file map +
+jq cookbook (exact field names per artifact):
+[references/artifacts.md](references/artifacts.md).
 
 While a run is live, watch for: worker liveness vs lease count, planner
 failures (only fatal when a cycle produced nothing), and **free disk** — a
@@ -231,27 +258,49 @@ gluerun promote-gate <node-id>   # write the gate result
 configured to demand and writes `gates/<node>.gate-result.json`. You are
 responsible for verifying the evidence is real before invoking it.
 
+Since 0.5.0, gates auto-promote at integrate time (`GLUERUN_AUTO_PROMOTE_GATES=1`
+default) — manual promotion is the exception, not the routine.
+
 Promotion discipline (these have each caused real incidents):
 
 - Promote only when the packet inbox is empty and every one of the node's
-  task files is integrated — a lingering packet means work is still in
-  flight. Concrete check: `gluerun status` reports the inbox/imported packet
-  counts (inbox = `.gluerun-state/inbox/*.json`); it must read 0.
+  task files is integrated or satisfied (superseded/blocked predecessors with
+  an integrated successor count as satisfied since 0.5.0). Concrete check:
+  `gluerun status` reports the inbox packet count; it must read 0.
 - Never run `promote-gate` concurrently with a live reconcile cycle: the
   cycle's git operations clobber uncommitted gate files. Promote in a
-  wait/drain window.
-- Never auto-promote evaluation/operator-driven nodes (`kind: evaluation`) —
-  those need human or explicit-operator judgment.
+  wait/drain window (`gluerun stop --wait` … `gluerun resume`).
+- Evaluation nodes (`kind: evaluation`) are authority decisions, enforced by
+  the engine since 0.5.0: `gluerun promote-gate <node> --operator
+  --evidence <ref>` promotes on operator say-so; a node declaring
+  `authority: agent-review-allowed` in the DAG also promotes on a valid
+  PASSING review file at `gates/evidence/<node>.review.json`
+  (gate-review.v0: independent reviewer identity, evidence refs, headSha
+  ancestor check). A failed review never writes a failed gate.
 - A planner's "this node is already complete" refusal may be premature;
   re-read the claim after the last integration before promoting on it.
 
-Recovery: `gluerun recover --scan` (report) / `--prune` (reclaim orphans).
-Escalated or parked tasks need four state surfaces in agreement before
-resurrection — task-file Status, packet status, run-dir audit verdict, and
-lease status. The full knob tables, autonomy-supervisor runbook, and
-troubleshooting pitfalls are in
-[references/operations.md](references/operations.md) — read it before
-debugging a stuck or misbehaving run.
+**Escalation contract:** when the frontier consists only of evaluation/
+operator nodes, report ONCE to the operator with the exact required action
+(the promote-gate command line or the review-file path), then idle — do not
+re-notify every poll, do not silence the condition, and never weaken the gate
+to make progress.
+
+Recovery is CLI verbs since 0.5.0 — never hand-edit state files:
+
+```bash
+gluerun supersede TASK-XXXX --by TASK-YYYY   # all four surfaces atomically
+gluerun clear-backoff                        # false/stale planner backoff
+gluerun breaker reset                        # after fixing the failing class
+gluerun wake                                 # backoff+breaker+STOP+nap, one shot
+gluerun recover --scan                       # stale L2 + L1 leases, orphans
+gluerun accept-packet <packet.json>          # stranded accepted work (usually automatic)
+gluerun gc --dry-run                         # runs-history/worktrees/events hygiene
+```
+
+Numbered recipes per incident class (symptom → verify → command → expected
+event) are in [references/operations.md](references/operations.md) — read it
+before debugging a stuck or misbehaving run.
 
 ## Invariants — do not weaken
 
@@ -261,8 +310,9 @@ debugging a stuck or misbehaving run.
   critic/auditor steps, and resumed sessions never satisfy an
   independence-required step.
 - `.gluerun-state/`, `.worktrees/`, and `.gluerun-evidence/` are runtime
-  state — never commit them, never hand-edit them except for documented
-  levers (STOP file, clearing `planner-backoff.json` after a runner switch).
+  state — never commit them, never hand-edit them. Every sanctioned mutation
+  has a verb: `gluerun stop/resume`, `clear-backoff`, `breaker reset`,
+  `supersede`, `wake`, `gc`.
 - Singular executes repo-configured shell commands and launches coding
   agents; review `gluerun.config.json` and task files before running it in a
   repo you don't trust.

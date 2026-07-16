@@ -7,6 +7,163 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.5.0] — 2026-07-17 — Field-hardening from the first external consumer run
+
+Every change in this release traces to the singular-frontend V1 field run
+(Jul 13–16, codex session 019f5ce7): a 4-day, 78-dispatch, 47-node run that
+converged but lost ~40 of ~96 hours to engine defects and needed ~15 manual
+state surgeries. `schemaVersion` stays **v1** — all schema changes are
+additive (`authority` node field; new `gate-review.v0`), so `gluerun migrate`
+is a no-op for 0.4.0 consumers.
+
+### Autonomy & failure classification
+- **Limit/quota windows require structured evidence**: only engine-written
+  runner logs are scanned (never `.md`/model artifacts — repo prose like a
+  "quota-banner" feature armed ≥13 false 30-minute backoffs in the field),
+  markers are word-boundary contextual regexes, quota backoffs refuse to arm
+  without a `logRef`, and import rejections are excluded from limit
+  eligibility. **`GLUERUN_LIMIT_SLEEPTHROUGH`** (default 1) supersedes the
+  deprecated `GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH`.
+- **Monotonic task ids**: durable counter seeded from every surface (tasks
+  incl. `superseded/`, leases, dispatch records, worktrees, imported packets,
+  `agent/*` branches). Archived ids can never be recycled (4 field
+  collisions, 2 breaker halts); collisions reject the batch instead of
+  overwriting, and `gluerun_lease_write` refuses to clobber
+  accepted/integrated leases.
+- **Duplicate guard v2**: status-aware (terminal tasks never block a
+  successor — the blocked-task deadlock killed a whole night), keyed on the
+  new `DAG node:` task header (legacy `S#/D#` token regex is fallback only),
+  `Supersedes:` header bypasses the guard, and unknown-node matches require a
+  full signature. Empty planner batches (`{"tasks": []}`) are a first-class
+  no-op (`planner.no_tasks`), not invalid output.
+- **Exit-code contract**: dispatch exit 2 = refusal (never breaker input),
+  3 = decided-terminal, other = crash. Repeated refusals park the task
+  (**`GLUERUN_REFUSAL_PARK_THRESHOLD`**=3) instead of starving the loop.
+- **Whole-tree reap liveness**: descendants, process group, run-id command
+  lines, and recent run-dir writes all count as alive
+  (**`GLUERUN_STALE_HARD_MINUTES`**=240 caps the conservatism). The 0.4.0
+  root-pid check destroyed accepted work under a live auditor.
+- **Accepted-work auto-heal** (**`GLUERUN_AUTO_ACCEPT_EXISTING`**=1): a
+  dispatch against an `accepted` lease re-accepts the stranded packet
+  deterministically and enqueues it; a new `accept-pending` trap state means
+  a post-acceptance crash never fails the lease.
+
+### Runners & retries
+- **`GLUERUN_CODEX_TIMEOUT_SEC`** (default 2400; 0 disables) bounds codex
+  runs with a kill-tree, and opt-in **`GLUERUN_CODEX_IDLE_SEC`** kills runs
+  whose JSONL output stops growing — field hangs ran 28–380 minutes
+  unbounded. rc 124 classifies as timeout/infra everywhere already.
+- **Empty-diff retries reconcile**: a retry whose content was committed by a
+  prior attempt (gate green, owned files differ from base) proceeds instead
+  of parking fully green work as `no-changes`.
+- **Audit-verdict validation** joins decider-verdict validation
+  (**`GLUERUN_AUDIT_VERDICT_VALIDATE`**=warn; `strict` re-runs the auditor).
+  Legacy `pmgo.*` schema ids are tolerated-with-warning
+  (**`GLUERUN_LEGACY_SCHEMA_MODE`**=warn; `reject` post-migration) — the
+  0.4.0 hard rejection parked every decision in consumers scaffolded with
+  legacy prompts (18.5h halt).
+
+### Promotion & governance
+- **Auto-promotion actually fires**: **`GLUERUN_AUTO_PROMOTE_GATES`** now
+  defaults to 1; gates promote at integrate time (`promote-gate --if-ready`)
+  the moment a node's last task lands, and the empty-queue reconcile pass no
+  longer requires a free dispatch slot. Promotions count as loop progress.
+- **`gluerun promote-gate` honors the config `promoter` key** (new
+  `engine/promote-gate.sh` wrapper sources lib.sh; explicit env still wins);
+  actionable errors; stderr progress heartbeat
+  (**`GLUERUN_PROMOTE_PROGRESS_SECS`**=15).
+- **Terminal-predecessor tolerance** (**`GLUERUN_PROMOTE_TOLERATE_TERMINAL`**=1):
+  superseded/blocked predecessors with an integrated successor count as
+  satisfied; `tasks/superseded/` is scanned.
+- **Planner suppression** (**`GLUERUN_SUPPRESS_UNPROMOTED_REPLAN`**=1): nodes
+  whose tasks are complete but whose gate is unpublished are not re-planned
+  (the field's duplicate-churn source); a published failed gate keeps the
+  node plannable.
+- **Evaluation-gate governance**: DAG nodes may declare
+  `authority: operator | agent-review-allowed` (additive). `kind: evaluation`
+  nodes promote via `promote-gate --operator --evidence REF`, or — when
+  opted in — via a valid PASSING **`gate-review.v0`** file at
+  `gates/evidence/<node>.review.json` (independent reviewer identity,
+  evidence refs, headSha ancestor check,
+  **`GLUERUN_REVIEW_MAX_AGE_HOURS`**=168). The dag schema file drops 0.4.0's
+  project-specific layer/kind enums to match the engine validator.
+
+### Recovery becomes verbs
+- New CLI: **`supersede`** (all four resurrection surfaces atomically, live-
+  dispatch guard, `--force`), **`clear-backoff`**, **`breaker show|reset`**,
+  **`stop [--wait]`**, **`resume`**, **`wake`**, **`gates [--json]`**,
+  **`health [--json]`** (sub-2s digest with a stable hash field for cheap
+  heartbeats + `attention[]`), **`gc [--dry-run]`**
+  (**`GLUERUN_RUNS_KEEP`**=200 runs-history cap with reference protection,
+  integrated-worktree pruning, events rotation at
+  **`GLUERUN_EVENTS_MAX_MB`**=64), plus `lease` and `accept-packet` wiring.
+- `next-areas --explain` emits per-node exclusion reasons; a corrupt gate
+  file no longer crashes the frontier computation.
+- `recover` reclassifies stale **L1 planning leases**
+  (**`GLUERUN_RECOVER_L1`**=1; report-only before), reports orphaned
+  worktrees **once** (`recover-orphans.json`), and can auto-prune clean
+  integrated worktrees (**`GLUERUN_AUTO_PRUNE`**, default 0).
+- Opt-in **`GLUERUN_INTEGRATE_REBASE`**: rebase-and-regate an audited branch
+  once on merge conflict instead of terminally parking.
+- Detached workers' process groups are killed on supersede `--force`
+  (**`GLUERUN_KILL_ORPHAN_PGROUP`**=1) so gate webservers stop leaking.
+
+### Lifecycle & loop
+- **`gluerun auto --detach`**: supported daemonized launch (setsid
+  double-fork, `.gluerun-state/autonomate.log`, post-launch liveness check).
+- Interruptible naps: STOP takes effect mid-sleep within
+  **`GLUERUN_SLEEP_POLL_SEC`**=10; `gluerun wake` / `clear-backoff` end naps
+  early — killing sleep children (which killed the whole loop in the field)
+  is never needed. Quota budget counts only actually-slept seconds.
+
+### Console & observability
+- `/api/state` no longer shells `make orch-*` probes or a blocking `du`: the
+  snapshot is assembled natively from durable files, disk usage samples on
+  its own 5-minute background cache, and a stale-but-marked snapshot
+  (`stale`/`computing`/`snapshotAgeSeconds`) is served instantly while a
+  refresh runs (`?fresh=1` still blocks). Snapshot keys `gateD0`/`gateD1`
+  are replaced by `orchestration.gates {passed,total,byNode}`.
+- `gluerun console --ensure | --status | --stop`; the URL/pid persist at
+  `.gluerun-state/console.url`/`console.pid`; the banner moved to stderr
+  (one-shot JSON is pipe-pure); default port **8765** with free-port
+  fallback; `gluerun status` prints the live console URL.
+- `origin-state.json` gains `gates{passed,total}`, `completedNodes`,
+  per-status `taskCounts`, and writer provenance; STATUS.md states its
+  staleness contract.
+
+### Doctor & skill
+- Doctor preflights: model-prefix sanity, `~/.codex/hooks.json` parse (FAIL),
+  MCP server fan-out count, legacy `pmgo.*` id scan (FAIL + migrate pointer),
+  stale pidfiles, disk floor, `.worktrees` size, console-port availability.
+- Skill rewritten for cheap monitoring: a `gluerun health --json`
+  digest-compare heartbeat loop, a full 0.5.0 knob table, six numbered
+  recovery recipes, the operator-gate escalation contract, and a new
+  `references/artifacts.md` (canonical field names per artifact + jq
+  cookbook). Console trigger words (dashboard/viewer/visualization/UI) added
+  to the skill and plugin manifest.
+
+### Migrating from 0.4.0
+- **No schema migration**: `schemaVersion` stays v1; `authority` and
+  `gate-review.v0` are additive.
+- **Behavior flips (opt out in config `env{}` if needed)**:
+  `GLUERUN_AUTO_PROMOTE_GATES=1` (was 0), codex runs bounded at 2400s (set
+  `GLUERUN_CODEX_TIMEOUT_SEC=0` to restore unbounded), exit-2 refusals no
+  longer feed the breaker, planner suppression of pending-promotion nodes,
+  stale L1 lease reclassification (`GLUERUN_RECOVER_L1=0` restores
+  report-only), duplicate guard ignores terminal tasks, legacy `pmgo.*`
+  verdict ids tolerated (`GLUERUN_LEGACY_SCHEMA_MODE=reject` restores strict).
+- **Console**: default port is 8765; the launch banner moved to stderr —
+  update any script that parsed it from stdout; `gateD0`/`gateD1` snapshot
+  keys are gone.
+- **New state files**: `.gluerun-state/task-id-counter`, `WAKE`,
+  `console.url`/`console.pid`, `recover-orphans.json`,
+  `dispatch/<task>.refusals`. Task-id sequences may show gaps (intentional).
+- **Consumer templates**: add `DAG node: <node-id>` to `tasks/TEMPLATE.md`
+  and planner prompts (scaffold only creates-if-missing; new consumers get
+  it automatically).
+
+---
+
 ## [0.4.0] — 2026-07-13 — Context-aware orchestration (self-hosted S0–S7 complete)
 
 Completes the context-evolution plan the engine built against itself: 107

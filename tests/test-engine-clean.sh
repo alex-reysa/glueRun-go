@@ -28,6 +28,22 @@ if [[ -n "$shits" ]]; then
   fail=1
 fi
 
+# Skill/CLI verb drift (0.5.0): every `gluerun <verb>` the skill documents
+# must exist in the CLI dispatch table — docs promising missing verbs cost
+# real operator time in the field.
+skill_dir="$ROOT/plugin/skills/singular-orchestration"
+if [[ -d "$skill_dir" ]]; then
+  cli_verbs="$(sed -n 's/^    \([a-z-]*\))[[:space:]].*/\1/p' "$ROOT/cli/gluerun" | sort -u)"
+  doc_verbs="$(grep -rhoE 'gluerun (supersede|clear-backoff|breaker|stop|resume|wake|gates|health|gc|lease|accept-packet|console|status|recover|next-areas|promote-gate|auto|doctor|init|metrics|validate-dag|area-gate)' \
+    "$skill_dir"/SKILL.md "$skill_dir"/references/*.md 2>/dev/null | awk '{print $2}' | sort -u)"
+  for v in $doc_verbs; do
+    if ! grep -qx "$v" <<<"$cli_verbs"; then
+      echo "FAIL: skill documents 'gluerun $v' but cli/gluerun has no such verb" >&2
+      fail=1
+    fi
+  done
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo "" >&2
   echo "Move project-specific logic to gluerun-ext/ (module) or consumer config." >&2

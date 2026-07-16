@@ -1,24 +1,25 @@
 {
-  "name": "gluerun-orchestration-graph",
-  "version": "0.2.0",
-  "description": "Read-only operator console for glueRun-go L0/L1/L2 orchestration state, deployed sub-agents, and per-task inspection from local durable records.",
+  "name": "singular-orchestration",
+  "version": "0.5.0",
+  "description": "Operate Singular (CLI: gluerun) multi-agent orchestration \u2014 author DAG plans, run autonomous parallel agent loops, and monitor L0/L1/L2 state through the read-only console/dashboard.",
   "author": {
-    "name": "glueRun-go local tools"
+    "name": "Singular local tools"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "glueRun-go Orchestration Console",
-    "shortDescription": "Operator console for glueRun-go agents, tasks, and gates.",
-    "longDescription": "A read-only local console for glueRun-go orchestration: a top status/control bar (health, STOP, drift, frontier, active counts, disk, gates), a main L0 to L1 to L2 graph viewport with agents and list views, and a bottom inspector drawer that drills into any task — objective, owned and forbidden files, acceptance criteria, required evidence, lease metadata, run id, worktree existence, packets, integration audit, and task-scoped events. Deployed sub-agents are derived from durable facts only.",
-    "developerName": "glueRun-go local tools",
+    "displayName": "Singular Orchestration",
+    "shortDescription": "Operate Singular (gluerun) agents, plans, tasks, gates \u2014 with a live dashboard/console viewer.",
+    "longDescription": "An operator skill plus read-only local console (dashboard/viewer/visualization UI, started idempotently with `gluerun console --ensure`) for Singular (formerly glueRun-go) orchestration. The skill teaches an agent to set up a repo, author parallel DAG plans and planner contracts, run the autonomous loop at maximum parallelization, promote gates, and recover stuck runs. The bundled console shows a top status/control bar (health, STOP, drift, frontier, active counts, disk, gates), a main L0 to L1 to L2 graph viewport with agents and list views, and an inspector drawer that drills into any task \u2014 objective, owned and forbidden files, acceptance criteria, required evidence, lease metadata, run id, worktree existence, packets, integration audit, and task-scoped events. Deployed sub-agents are derived from durable facts only.",
+    "developerName": "Singular local tools",
     "category": "Productivity",
     "capabilities": [
       "Read",
       "Interactive"
     ],
     "defaultPrompt": [
-      "Open the glueRun-go orchestration console.",
-      "Show glueRun-go L0/L1/L2 status and deployed sub-agents."
+      "Run the Singular orchestration on this repo.",
+      "Open the Singular orchestration console and show L0/L1/L2 status.",
+      "Show me the orchestration dashboard."
     ]
   }
 }
