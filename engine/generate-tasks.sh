@@ -147,21 +147,24 @@ PY
   exit 1
 fi
 
-# Next task id = max existing + 1. In staged mode the ids are node-local temps
-# (TASK-0001..N); the real, globally-unique ids are assigned by L0's serial
-# importer, so we deliberately do NOT consult the global tasks dir here (that
-# read would also race against concurrent planners).
-max_n=0
-if [[ -z "$stage_dir" ]]; then
-  while IFS= read -r f; do
-    n="$(basename "$f" .md | sed -n 's/^TASK-0*\([0-9][0-9]*\)$/\1/p')"
-    [[ -n "$n" && "$n" -gt "$max_n" ]] && max_n="$n"
-  done < <(find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null)
-fi
+# Task ids. In staged mode the ids are node-local temps (TASK-0001..N); the
+# real, globally-unique ids are assigned by L0's serial importer, so we
+# deliberately do NOT consult the allocator here (that would also race against
+# concurrent planners). Non-staged mode reserves real ids from the durable
+# monotonic allocator (gluerun_task_id_next) BEFORE the planner runs — a failed
+# planner burns its reserved ids, which is intentional: monotonicity (never
+# reusing an archived task's id) is the invariant, not density.
 declare -a next_ids=()
-for ((i=1; i<=count; i++)); do
-  next_ids+=("$(printf 'TASK-%04d' $((max_n + i)))")
-done
+if [[ -z "$stage_dir" ]]; then
+  while IFS= read -r _id; do
+    [[ -n "$_id" ]] && next_ids+=("$_id")
+  done < <(gluerun_task_id_next "$count")
+  [[ ${#next_ids[@]} -eq "$count" ]] || { echo "task-id allocation failed" >&2; exit 1; }
+else
+  for ((i=1; i<=count; i++)); do
+    next_ids+=("$(printf 'TASK-%04d' "$i")")
+  done
+fi
 next_id="${next_ids[0]}"
 next_ids_csv="$(IFS=,; echo "${next_ids[*]}")"
 

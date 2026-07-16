@@ -183,9 +183,30 @@ assert_invalid_decider_payload_parks() {
     || fail "$msg invalid verdict should be preserved"
 }
 
+test_decider_legacy_schema_id_tolerated_in_warn_mode_rejected_in_reject_mode() {
+  # 0.5.0: a well-formed verdict with a legacy pmgo.* schema id is tolerated by
+  # default (GLUERUN_LEGACY_SCHEMA_MODE=warn) — the 0.4.0 hard rejection parked
+  # every decision in consumers scaffolded with legacy prompts (field audit:
+  # 18.5h halt). Reject mode restores the strict behavior post-migration.
+  local payload='{"schema":"pmgo.orchestration.decider-verdict.v0","failureClass":"gate-red","taskId":"TASK-0001","action":"retry","rationale":"legacy namespace","nextOwner":"l1"}'
+  local out
+
+  with_fixture
+  write_lease 0 3
+  make_payload_runner
+  out="$(GLUERUN_LEGACY_SCHEMA_MODE=warn run_decider_payload "$payload" gate-red)"
+  assert_contains "$out" "action=retry" "warn mode honors legacy-schema verdict"
+
+  with_fixture
+  write_lease 0 3
+  make_payload_runner
+  out="$(GLUERUN_LEGACY_SCHEMA_MODE=reject run_decider_payload "$payload" gate-red)"
+  assert_contains "$out" "action=escalate-parked" "reject mode parks legacy-schema verdict"
+}
+
 test_decider_rejects_bad_schema_missing_fields_unknown_action_and_mismatched_failure_class() {
   assert_invalid_decider_payload_parks \
-    '{"schema":"pmgo.orchestration.decider-verdict.v0","failureClass":"gate-red","taskId":"TASK-0001","action":"retry","rationale":"bad namespace","nextOwner":"l1"}' \
+    '{"schema":"wrong.namespace.decider-verdict.v0","failureClass":"gate-red","taskId":"TASK-0001","action":"retry","rationale":"bad namespace","nextOwner":"l1"}' \
     "bad schema"
   assert_invalid_decider_payload_parks \
     '{"schema":"gluerun.orchestration.decider-verdict.v0","action":"retry","rationale":"missing fields"}' \
@@ -202,5 +223,6 @@ test_decider_timeout_retries_buildable_audit_with_budget
 test_decider_timeout_parks_exhausted_audit_retry_budget
 test_decider_timeout_parks_nonbuildable_failure_class
 test_decider_rejects_bad_schema_missing_fields_unknown_action_and_mismatched_failure_class
+test_decider_legacy_schema_id_tolerated_in_warn_mode_rejected_in_reject_mode
 
 echo "decider tests passed"

@@ -157,21 +157,34 @@ PY
   if [[ "$progress" == "yes" ]]; then
     gluerun_breaker_reset
   elif [[ "$faild" -gt 0 || "$faili" -gt 0 || "$planner_failures" -gt 0 || "$l1_import_rejections" -gt 0 || ( "${GLUERUN_DETACHED_DISPATCH:-0}" == "1" && "$reaped_failures" -gt 0 ) ]]; then
-    # C2: a usage-limit / 403-org-disabled / overload window can poison the
-    # decider, auditor, L1 fanout, or dispatch paths -- or surface as a planner
-    # codex-exit (the 403 markers are outside the planner quota classifier) --
-    # producing cycle failures with NO active quota backoff. C1 only sleeps
-    # through the planner-backoff path, so those windows tripped the breaker and
-    # caused ~2h halts for a condition that self-heals. If this cycle's role logs
-    # carry limit/403 markers, ARM a quota backoff so the NEXT iteration sleeps
-    # through (C1's bounded, budget-capped, STOP-honored nap) and do NOT increment
-    # the breaker. Detection is FAIL-CLOSED: no markers -> not a limit window ->
-    # the breaker still trips, so genuine code failures are unaffected.
-    # GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH=1 forces the legacy always-trip behavior.
-    if [[ "${GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH:-0}" != "1" ]] && gluerun_cycle_limit_window_detected; then
-      gluerun_planner_backoff_set quota "RUN-limit-chokepoint" "breaker-chokepoint" ""
-      echo "  [autonomate] no progress + LIMIT/403-induced failure; armed quota backoff, NO breaker increment (breaker stays $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
-      gluerun_append_event "autonomate.limit_window_detected" "limit/403 window at breaker chokepoint; armed quota backoff instead of tripping" "{\"iteration\":$iteration,\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections}"
+    # C2 (0.5.0): a usage-limit / 403 / overload window can poison the decider,
+    # auditor, L1 fanout, or dispatch paths, producing cycle failures with NO
+    # active quota backoff. When STRUCTURED evidence exists in this cycle's
+    # runner logs (gluerun_cycle_limit_window_evidence_json; non-empty logRef is
+    # the arming contract), ARM a quota backoff so the next iteration sleeps
+    # through, and do NOT increment the breaker. Import rejections are
+    # deterministic validation outcomes (duplicate candidates, bad batches) and
+    # can never be quota evidence — they are excluded from limit ELIGIBILITY
+    # (0.4.0 counted them, arming false 30-minute backoffs from healthy cycles)
+    # though they still count toward the breaker branch. FAIL-CLOSED: no
+    # evidence -> the breaker trips, so genuine code failures are unaffected.
+    # GLUERUN_LIMIT_SLEEPTHROUGH=0 (or legacy GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH=1,
+    # deprecated) forces the always-trip behavior.
+    limit_eligible=$((faild + faili + planner_failures))
+    [[ "${GLUERUN_DETACHED_DISPATCH:-0}" == "1" ]] && limit_eligible=$((limit_eligible + reaped_failures))
+    sleepthrough="${GLUERUN_LIMIT_SLEEPTHROUGH:-1}"
+    [[ "${GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH:-0}" == "1" ]] && sleepthrough=0
+    limit_evidence=""
+    if [[ "$sleepthrough" == "1" && "$limit_eligible" -gt 0 ]]; then
+      limit_evidence="$(gluerun_cycle_limit_window_evidence_json 2>/dev/null || true)"
+    fi
+    ev_logref=""
+    if [[ -n "$limit_evidence" ]]; then
+      ev_logref="$(printf '%s' "$limit_evidence" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("logRef",""))' 2>/dev/null || true)"
+    fi
+    if [[ -n "$ev_logref" ]] && gluerun_planner_backoff_set quota "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_logref"; then
+      echo "  [autonomate] no progress + limit/403 evidence ($ev_logref); armed quota backoff, NO breaker increment (breaker stays $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
+      gluerun_append_event "autonomate.limit_window_detected" "limit/403 window at breaker chokepoint; armed quota backoff instead of tripping" "{\"iteration\":$iteration,\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections,\"evidence\":$limit_evidence}"
     else
       nb="$(gluerun_breaker_trip)"; echo "  [autonomate] no progress + failure; breaker -> $nb"
     fi

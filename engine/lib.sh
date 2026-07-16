@@ -186,6 +186,21 @@ GLUERUN_L2_SLICE_BUDGET="${GLUERUN_L2_SLICE_BUDGET:-1}"         # independent st
 GLUERUN_L2_SLICE_BUDGET_MAX="${GLUERUN_L2_SLICE_BUDGET_MAX:-3}" # hard cap on slice budget (per-task blast-radius guard)
 GLUERUN_MIN_DISK_GB="${GLUERUN_MIN_DISK_GB:-2}"                 # below this free-space floor, fanout blocks entirely
 
+# 0.5.0 field-hardening knobs (see CHANGELOG "Migrating from 0.4.0").
+# NOTE: the WAKE and task-id-counter paths are derived at CALL time via
+# gluerun_wake_file / gluerun_task_id_counter_file so fixtures that re-point
+# GLUERUN_STATE_DIR after sourcing lib.sh keep working; export the
+# corresponding env var to pin a path explicitly.
+GLUERUN_SLEEP_POLL_SEC="${GLUERUN_SLEEP_POLL_SEC:-10}"                     # interruptible-sleep chunk size
+# Whole-tree liveness: a dispatch is alive if any process in its tree/pgroup
+# survives OR its run dir saw writes within this window. HARD_MINUTES bounds
+# conservatism: past that lease age we report dead regardless.
+GLUERUN_TREE_ACTIVITY_WINDOW_SEC="${GLUERUN_TREE_ACTIVITY_WINDOW_SEC:-120}"
+GLUERUN_STALE_HARD_MINUTES="${GLUERUN_STALE_HARD_MINUTES:-240}"
+# Legacy pmgo.* schema ids in verdicts: "warn" tolerates + rewrites for
+# validation (file untouched); "reject" hard-fails (post-migration hygiene).
+GLUERUN_LEGACY_SCHEMA_MODE="${GLUERUN_LEGACY_SCHEMA_MODE:-warn}"
+
 gluerun_timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
@@ -516,6 +531,40 @@ gluerun_current_branch() {
 gluerun_pid_alive() {
   local pid="$1"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# SIGKILL a pid and every transitive descendant. Snapshots the full ps tree
+# (intact at kill time, before anything exits) so reparenting can't let a child
+# escape — more reliable than recursive pgrep -P or a process-group kill.
+# Shared by claude-run.sh / codex-run.sh / decide.sh guards.
+gluerun_kill_tree() {
+  python3 - "$1" <<'PY' 2>/dev/null || true
+import os, signal, subprocess, sys
+root = int(sys.argv[1])
+out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
+                     capture_output=True, text=True).stdout
+children = {}
+for line in out.splitlines():
+    f = line.split()
+    if len(f) != 2:
+        continue
+    try:
+        pid, ppid = int(f[0]), int(f[1])
+    except ValueError:
+        continue
+    children.setdefault(ppid, []).append(pid)
+order, stack = [], [root]
+while stack:
+    p = stack.pop()
+    for c in children.get(p, []):
+        order.append(c)
+        stack.append(c)
+for pid in list(reversed(order)) + [root]:
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+PY
 }
 
 gluerun_acquire_lock() {
@@ -856,6 +905,9 @@ data = {
     "testPolicy": "",
     "gateCommand": "",
     "dispatchMode": "",
+    "dagNode": "",
+    "supersedes": [],
+    "supersededBy": [],
     "dependsOn": [],
     "objective": "",
     "ownedFiles": [],
@@ -872,6 +924,7 @@ header_keys = {
     "test policy": "testPolicy",
     "gate command": "gateCommand",
     "dispatch mode": "dispatchMode",
+    "dag node": "dagNode",
 }
 
 def parse_depends(raw):
@@ -901,6 +954,12 @@ for raw in lines:
             key = km.group(1).strip().lower()
             if key == "depends on":
                 data["dependsOn"] = parse_depends(km.group(2))
+            elif key == "supersedes" or key == "superseded by":
+                # "Supersedes:" declares intentional replacement (duplicate-guard
+                # bypass); "Superseded by:" is the inverse pointer written by the
+                # supersede verb. Both parse to TASK-id lists.
+                field = "supersedes" if key == "supersedes" else "supersededBy"
+                data[field] = parse_depends(km.group(2))
             elif key in header_keys:
                 data[header_keys[key]] = strip_ticks(km.group(2))
         continue
@@ -931,9 +990,159 @@ for raw in lines:
         if im:
             data["acceptanceCriteria"].append(im.group(1).strip())
         continue
+    if section == "executable dag frontier" and not data["dagNode"]:
+        # Planner-appended provenance ("- node: `X`") — the dagNode fallback for
+        # tasks authored before the `DAG node:` header existed.
+        nm = re.match(r"^[-*]\s+node:\s*(.+)$", line.strip(), re.I)
+        if nm:
+            data["dagNode"] = strip_ticks(nm.group(1))
+        continue
 
 data["objective"] = " ".join(objective_lines).strip()
 print(json.dumps(data, separators=(",", ":")))
+PY
+}
+
+# The DAG node a task belongs to (header `DAG node:` first, planner frontier
+# section as fallback). Empty when the task predates node attribution.
+gluerun_task_node() {
+  gluerun_task_field "$1" dagNode 2>/dev/null || true
+}
+
+# JSON index of every task attributed to a DAG node, scanning the tasks dir
+# INCLUDING subdirs (tasks/superseded/ etc.). One python pass — a per-file
+# gluerun_task_json fan-out is too slow for promoter/health paths. The parse
+# here is a deliberate minimal subset of gluerun_task_json (header lines,
+# owned-files list, frontier-section node fallback); keep the two in sync.
+# Output: [{"taskId","status","ownedFiles":[],"supersededBy":[],"file"}...]
+gluerun_node_task_index_json() {
+  local node="$1"
+  python3 - "$GLUERUN_TASKS_DIR" "$node" <<'PY'
+import json
+import os
+import re
+import sys
+
+tasks_dir, want_node = sys.argv[1], sys.argv[2]
+out = []
+
+
+def strip_ticks(s):
+    return s.strip().strip("`").strip()
+
+
+for dirpath, _dirs, files in os.walk(tasks_dir):
+    for name in sorted(files):
+        if not (name.startswith("TASK-") and name.endswith(".md")):
+            continue
+        path = os.path.join(dirpath, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            continue
+        task_id = status = dag_node = ""
+        owned, superseded_by = [], []
+        section = subsection = None
+        for raw in lines:
+            line = raw.rstrip()
+            m = re.match(r"^#\s+(TASK-\d{4,})\s*:", line)
+            if m:
+                task_id = m.group(1)
+                continue
+            hm = re.match(r"^##\s+(.*)$", line)
+            if hm:
+                section = hm.group(1).strip().lower()
+                subsection = None
+                continue
+            if section is None:
+                km = re.match(r"^([A-Za-z][A-Za-z ]+):\s*(.*)$", line)
+                if km:
+                    key = km.group(1).strip().lower()
+                    if key == "status":
+                        status = strip_ticks(km.group(2)).lower()
+                    elif key == "dag node":
+                        dag_node = strip_ticks(km.group(2))
+                    elif key == "superseded by":
+                        superseded_by = re.findall(r"TASK-\d{4,}", km.group(2))
+                continue
+            if section == "scope":
+                sm = re.match(r"^(Owned files|Forbidden files)\s*:?\s*$", line.strip(), re.I)
+                if sm:
+                    subsection = sm.group(1).lower()
+                    continue
+                im = re.match(r"^[-*]\s+(.*)$", line.strip())
+                if im and subsection == "owned files":
+                    owned.append(strip_ticks(im.group(1)))
+                continue
+            if section == "executable dag frontier" and not dag_node:
+                nm = re.match(r"^[-*]\s+node:\s*(.+)$", line.strip(), re.I)
+                if nm:
+                    dag_node = strip_ticks(nm.group(1))
+                continue
+        if task_id and dag_node == want_node:
+            out.append({
+                "taskId": task_id,
+                "status": status,
+                "ownedFiles": sorted(set(owned)),
+                "supersededBy": superseded_by,
+                "file": path,
+            })
+print(json.dumps(out, separators=(",", ":")))
+PY
+}
+
+# A node is "pending promotion" when its planned work is done but its gate has
+# not been published: >=1 task, zero open tasks (ready/planned/running/
+# needs-review/accepted), >=1 integrated, every terminal task satisfied
+# (integrated; or superseded/blocked/failed/cancelled with an integrated task
+# covering its owned files or an integrated supersededBy successor), and the
+# gate result is not passed. Planner suppression + integrate-time promotion
+# both key on this predicate.
+gluerun_node_pending_promotion() {
+  local node="$1"
+  local index gate_status=""
+  index="$(gluerun_node_task_index_json "$node")" || return 1
+  local gate="$GLUERUN_ORCH_DIR/gates/$node.gate-result.json"
+  if [[ -f "$gate" ]]; then
+    gate_status="$(gluerun_json_field "$gate" status 2>/dev/null || true)"
+  fi
+  python3 - "$gate_status" <<PY
+import json
+import sys
+
+tasks = json.loads('''$index''')
+gate_status = sys.argv[1]
+if gate_status == "passed" or not tasks:
+    sys.exit(1)
+
+OPEN = {"ready", "planned", "running", "needs-review", "accepted", ""}
+by_id = {t["taskId"]: t for t in tasks}
+integrated = [t for t in tasks if t["status"] == "integrated"]
+if not integrated:
+    sys.exit(1)
+if any(t["status"] in OPEN for t in tasks):
+    sys.exit(1)
+
+
+def satisfied(t, depth=0):
+    if t["status"] == "integrated":
+        return True
+    if depth > 16:
+        return False
+    for succ in t.get("supersededBy", []):
+        nxt = by_id.get(succ)
+        if nxt is not None and satisfied(nxt, depth + 1):
+            return True
+    owned = set(t.get("ownedFiles", []))
+    if owned:
+        for it in integrated:
+            if owned <= set(it.get("ownedFiles", [])):
+                return True
+    return False
+
+
+sys.exit(0 if all(satisfied(t) for t in tasks) else 1)
 PY
 }
 
@@ -1126,6 +1335,16 @@ PY
 
 gluerun_planner_backoff_set() {
   local failure_class="$1" run_id="${2:-}" node="${3:-}" log_ref="${4:-}"
+  # A quota backoff without a logRef is unfalsifiable — every false backoff in
+  # the field audit carried logRef:"" — so refuse to arm one. Callers with real
+  # provider evidence always have the failing run's log path.
+  if [[ "$failure_class" == "quota" && -z "$log_ref" ]]; then
+    gluerun_append_event "backoff.rejected_no_evidence" \
+      "quota backoff refused: no logRef evidence" \
+      "{\"runId\":\"$run_id\",\"node\":\"$node\"}" 2>/dev/null || true
+    echo "quota backoff refused: no logRef evidence (runId=$run_id node=$node)" >&2
+    return 1
+  fi
   local seconds
   if [[ "$failure_class" == "quota" ]]; then
     seconds="${GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS:-1800}"
@@ -1157,22 +1376,83 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
-# C2: detect a usage-limit / 403-org-disabled-subscription / overload window from
-# THIS cycle's role outputs. A limit/403 window can fail the decider, auditor, L1
-# fanout, or dispatch paths (not only the planner-backoff path C1 covers) and can
-# even surface as a planner codex-exit (the 403 markers are outside the planner
-# quota classifier). The breaker chokepoint uses this to ARM a quota backoff (so
-# C1 sleeps through) instead of tripping, so a self-healing window does not cause a
-# multi-hour halt. Scans run-dir .log/.md/.json outputs modified within
-# GLUERUN_LIMIT_SCAN_WINDOW_SEC (default 900s) for the same markers
-# gluerun_planner_failure_class uses, plus the 403 org-disabled strings. FAIL-CLOSED:
-# returns non-zero on absence/ambiguity, so a genuine code failure (no markers)
-# still trips the breaker. Returns 0 if a marker is found, 1 otherwise.
-gluerun_cycle_limit_window_detected() {
+# Remove the planner backoff (operator "clear-backoff" primitive). Prints what
+# was cleared; emits backoff.cleared with the prior record. Always exits 0 —
+# clearing an absent backoff is a no-op, not an error.
+gluerun_planner_backoff_clear() {
+  if [[ ! -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]]; then
+    echo "no active backoff"
+    return 0
+  fi
+  local prior
+  prior="$(python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1])),separators=(",",":")))' \
+    "$GLUERUN_PLANNER_BACKOFF_FILE" 2>/dev/null || echo '{}')"
+  rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
+  gluerun_append_event "backoff.cleared" "planner backoff cleared by operator" "{\"previous\":$prior}"
+  echo "backoff cleared (was: $prior)"
+}
+
+# Scan ONE file for usage-limit / overload / 403-entitlement markers. This is
+# the single marker source for gluerun_planner_failure_class and the cycle
+# limit-window detector. Markers are word-boundary contextual regexes — a bare
+# repo word like "quota" (e.g. a quota-banner feature) must NOT match; only
+# provider-error phrasings do. On match prints {"marker":...,"line":N}; rc 1
+# when clean/unreadable.
+gluerun_limit_marker_scan() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  python3 - "$file" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+markers = [
+    r"usage limit",
+    r"\bquota (?:exceeded|reached|exhausted|limit)",
+    r"\brate[ -]?limit(?:ed|s)?\b",
+    r"too many requests",
+    r"\btry again at\b",
+    r"session limit",
+    r"you've hit your",
+    r"\blimit reached\b",
+    r"\boverloaded\b",
+    r"api_error_status\":(?:429|529|503)",
+    r"organization has disabled",
+    r"subscription access for claude code",
+    r"disabled claude subscription",
+]
+pattern = re.compile("|".join(f"(?:{m})" for m in markers))
+try:
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for lineno, line in enumerate(handle, 1):
+            m = pattern.search(line.lower())
+            if m:
+                print(json.dumps({"marker": m.group(0), "line": lineno}, separators=(",", ":")))
+                sys.exit(0)
+except OSError:
+    pass
+sys.exit(1)
+PY
+}
+
+# C2 (0.5.0 rewrite): detect a usage-limit / 403-org-disabled / overload window
+# from THIS cycle's RUNNER logs and print structured evidence
+# {"logRef","marker","line"} — the non-empty logRef is the arming contract for
+# gluerun_planner_backoff_set. The 0.4.0 detector free-text-scanned every
+# .log/.md/.json in the runs dir, so repo prose (a "quota-banner" feature, the
+# word "quota" in a prompt .md) armed 30-minute backoffs from healthy cycles
+# (field audit: >=13 false backoffs). Now:
+#   - only engine-written runner output files are scanned (exact-name
+#     whitelist; NEVER .md — prompts embed repo content),
+#   - markers are word-boundary contextual regexes (gluerun_limit_marker_scan),
+#   - still bounded to files modified within GLUERUN_LIMIT_SCAN_WINDOW_SEC.
+# FAIL-CLOSED: no evidence -> rc 1 -> the breaker still trips on real failures.
+gluerun_cycle_limit_window_evidence_json() {
   local runs_dir="${GLUERUN_RUNS_DIR:-$GLUERUN_STATE_DIR/runs}"
   [[ -d "$runs_dir" ]] || return 1
-  local res
-  res="$(python3 - "$runs_dir" "${GLUERUN_LIMIT_SCAN_WINDOW_SEC:-900}" <<'PY'
+  local candidates
+  candidates="$(python3 - "$runs_dir" "${GLUERUN_LIMIT_SCAN_WINDOW_SEC:-900}" <<'PY'
 import os
 import sys
 import time
@@ -1183,26 +1463,19 @@ try:
 except ValueError:
     window = 900
 now = time.time()
-# Same usage-limit / overload markers as gluerun_planner_failure_class, plus the 403
-# organization-disabled-subscription strings (an account/entitlement block that,
-# like a usage limit, cannot be fixed by spinning -> sleep, then escalate to STOP).
-markers = (
-    "usage limit",
-    "rate limit",
-    "quota",
-    "too many requests",
-    "try again at",
-    "session limit",
-    "you've hit your",
-    "limit reached",
-    "overloaded",
-    'api_error_status":429',
-    'api_error_status":529',
-    'api_error_status":503',
-    "organization has disabled",
-    "subscription access for claude code",
-    "disabled claude subscription",
-)
+
+# Engine-written runner output files only. Prompts (*.md), packets, verdicts,
+# and task files are excluded by construction.
+RUNNER_LOG_NAMES = {
+    "worker-codex.log",
+    "planner-codex.log",
+    "auditor-codex.log",
+    "decider-codex.log",
+    "plan.log",
+    "gate-check.log",
+    "claude-envelope.json",
+}
+RUNNER_LOG_SUFFIXES = (".runner.log", "-codex.log", "-claude.log", "-ctl.log")
 
 
 def recent(path):
@@ -1212,14 +1485,12 @@ def recent(path):
         return False
 
 
-found = False
+out = []
 try:
     entries = list(os.scandir(runs_dir))
 except OSError:
     entries = []
 for entry in entries:
-    if found:
-        break
     try:
         if not entry.is_dir() or not recent(entry.path):
             continue
@@ -1227,25 +1498,37 @@ for entry in entries:
         continue
     for root, _dirs, files in os.walk(entry.path):
         for name in files:
-            if not name.endswith((".log", ".md", ".json")):
-                continue
-            path = os.path.join(root, name)
-            if not recent(path):
-                continue
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                    text = handle.read().lower()
-            except OSError:
-                continue
-            if any(marker in text for marker in markers):
-                found = True
-                break
-        if found:
-            break
-print("yes" if found else "no")
+            if name in RUNNER_LOG_NAMES or name.endswith(RUNNER_LOG_SUFFIXES):
+                path = os.path.join(root, name)
+                if recent(path):
+                    out.append(path)
+for p in out:
+    print(p)
 PY
 )"
-  [[ "$res" == "yes" ]]
+  [[ -n "$candidates" ]] || return 1
+  local file hit
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    if hit="$(gluerun_limit_marker_scan "$file")"; then
+      python3 - "$file" "$hit" <<'PY'
+import json
+import sys
+
+log_ref, hit_raw = sys.argv[1], sys.argv[2]
+hit = json.loads(hit_raw)
+hit["logRef"] = log_ref
+print(json.dumps(hit, separators=(",", ":")))
+PY
+      return 0
+    fi
+  done <<<"$candidates"
+  return 1
+}
+
+# Thin compat wrapper (0.4.0 name): true iff structured evidence exists.
+gluerun_cycle_limit_window_detected() {
+  gluerun_cycle_limit_window_evidence_json >/dev/null
 }
 
 gluerun_blocked_gate_planner_guard_json() {
@@ -1567,6 +1850,23 @@ gluerun_lease_write() {
   mkdir -p "$GLUERUN_LEASES_DIR"
   local lease
   lease="$(gluerun_lease_path "$task_id")"
+  # Protect accepted/integrated work: a fresh lease write for a DIFFERENT
+  # branch over a terminal-good lease is an identity collision (the 0.4.0
+  # allocator reused archived ids and the failed pre-lease destroyed the
+  # superseded task's lease). Refuse instead of clobbering.
+  if [[ -f "$lease" ]]; then
+    local prev_status prev_branch
+    prev_status="$(gluerun_json_field "$lease" status 2>/dev/null || true)"
+    prev_branch="$(gluerun_json_field "$lease" branch 2>/dev/null || true)"
+    if [[ ( "$prev_status" == "accepted" || "$prev_status" == "integrated" ) \
+      && -n "$prev_branch" && -n "$branch" && "$prev_branch" != "$branch" ]]; then
+      gluerun_append_event "lease.write_refused_protected" \
+        "refused to overwrite $prev_status lease with different branch" \
+        "{\"taskId\":\"$task_id\",\"prevBranch\":\"$prev_branch\",\"newBranch\":\"$branch\",\"prevStatus\":\"$prev_status\"}"
+      echo "lease write refused: $task_id has $prev_status lease for $prev_branch (incoming: $branch)" >&2
+      return 1
+    fi
+  fi
   python3 - "$lease" "$task_id" "$branch" "$area" "$owner" "$scope" "$status" "$run_id" "$worktree" \
     "$base_sha" "$batch_id" "$owned_json" "$forbidden_json" <<'PY'
 import json
@@ -1749,18 +2049,25 @@ gluerun_dispatch_record_write() {
   # args: task_id run_id pid pid_start log base_sha batch_id
   local task_id="$1" run_id="$2" pid="$3" pid_start="$4" log="$5" base_sha="$6" batch_id="$7"
   mkdir -p "$GLUERUN_DISPATCH_DIR"
-  python3 - "$(gluerun_dispatch_record_path "$task_id")" "$task_id" "$run_id" "$pid" "$pid_start" "$log" "$base_sha" "$batch_id" <<'PY'
+  # pgid: recorded for whole-tree liveness checks and (when the dispatch was
+  # setsid'd, i.e. pgid == pid) safe orphan process-group cleanup.
+  local pgid=""
+  if [[ -n "$pid" ]]; then
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  fi
+  python3 - "$(gluerun_dispatch_record_path "$task_id")" "$task_id" "$run_id" "$pid" "$pid_start" "$log" "$base_sha" "$batch_id" "$pgid" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 
-path, task_id, run_id, pid, pid_start, log, base_sha, batch_id = sys.argv[1:9]
+path, task_id, run_id, pid, pid_start, log, base_sha, batch_id, pgid = sys.argv[1:10]
 data = {
     "taskId": task_id,
     "runId": run_id,
     "pid": int(pid) if pid.isdigit() else 0,
     "pidStart": pid_start,
+    "pgid": int(pgid) if pgid.isdigit() else 0,
     "startedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     "log": log,
     "baseSha": base_sha,
@@ -1813,6 +2120,114 @@ with open(tmp, "w", encoding="utf-8") as f:
 os.replace(tmp, path)
 PY
   rm -f "$(gluerun_dispatch_exit_path "$task_id")"
+}
+
+# Whole-tree dispatch liveness. The 0.4.0 reaper checked only the recorded root
+# pid, so a dead wrapper with a still-running auditor child was "crashed" — the
+# lease was deleted under a live process (field audit: accepted work destroyed,
+# then an infinite re-dispatch loop). Alive (rc 0) if ANY of:
+#   - root pid alive with matching pidStart (pid-reuse-safe),
+#   - any live process in the recorded pgid (skipped when it is our own group),
+#   - any live descendant reachable from the root pid,
+#   - any process whose command line carries the run id (survives reparenting),
+#   - any file under the run dir modified within GLUERUN_TREE_ACTIVITY_WINDOW_SEC.
+# Bounded conservatism: if lease_age_min >= GLUERUN_STALE_HARD_MINUTES, report
+# dead regardless (prefer false-alive inside the window, never forever).
+# args: task_id pid pid_start run_id pgid [lease_age_min]
+gluerun_dispatch_tree_alive() {
+  local task_id="$1" pid="$2" pid_start="$3" run_id="$4" pgid="${5:-0}" lease_age_min="${6:-}"
+  if [[ -n "$lease_age_min" && "$lease_age_min" =~ ^[0-9]+$ ]] \
+    && (( lease_age_min >= ${GLUERUN_STALE_HARD_MINUTES:-240} )); then
+    return 1
+  fi
+  if gluerun_pid_alive "$pid"; then
+    local now_start
+    now_start="$(gluerun_dispatch_pid_start "$pid")"
+    if [[ -z "$pid_start" || "$now_start" == "$pid_start" ]]; then
+      return 0
+    fi
+  fi
+  python3 - "$pid" "$pgid" "$run_id" <<'PY' && return 0
+import os
+import subprocess
+import sys
+
+pid_raw, pgid_raw, run_id = sys.argv[1:4]
+try:
+    root = int(pid_raw)
+except ValueError:
+    root = 0
+try:
+    pgid = int(pgid_raw)
+except ValueError:
+    pgid = 0
+
+out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "pgid="],
+                     capture_output=True, text=True).stdout
+children = {}
+groups = {}
+for line in out.splitlines():
+    f = line.split()
+    if len(f) != 3:
+        continue
+    try:
+        p, pp, pg = int(f[0]), int(f[1]), int(f[2])
+    except ValueError:
+        continue
+    children.setdefault(pp, []).append(p)
+    groups.setdefault(pg, []).append(p)
+
+# Live descendant of the recorded root pid.
+stack = [root]
+seen = set()
+while stack:
+    p = stack.pop()
+    for c in children.get(p, []):
+        if c in seen:
+            continue
+        seen.add(c)
+        stack.append(c)
+if seen:
+    sys.exit(0)
+
+# Live member of the recorded process group — but never our own group (a
+# non-detached dispatch shares the reconciler's pgid; that proves nothing).
+own_pgid = os.getpgid(0)
+if pgid > 1 and pgid != own_pgid and groups.get(pgid):
+    sys.exit(0)
+
+# Command line carrying the run id (orphan re-parented past the tree walk).
+if run_id:
+    probe = subprocess.run(["pgrep", "-f", run_id], capture_output=True, text=True)
+    pids = [x for x in probe.stdout.split() if x.isdigit() and int(x) != os.getpid()]
+    if pids:
+        sys.exit(0)
+sys.exit(1)
+PY
+  # Recent run-dir writes: an active runner streams logs even when the process
+  # topology is unreadable.
+  if [[ -n "$run_id" && -d "$GLUERUN_RUNS_DIR/$run_id" ]]; then
+    if python3 - "$GLUERUN_RUNS_DIR/$run_id" "${GLUERUN_TREE_ACTIVITY_WINDOW_SEC:-120}" <<'PY'
+import os
+import sys
+import time
+
+base, window = sys.argv[1], int(sys.argv[2])
+now = time.time()
+for dirpath, _dirs, files in os.walk(base):
+    for name in files:
+        try:
+            if now - os.path.getmtime(os.path.join(dirpath, name)) <= window:
+                sys.exit(0)
+        except OSError:
+            continue
+sys.exit(1)
+PY
+    then
+      return 0
+    fi
+  fi
+  return 1
 }
 
 # Reap finished/crashed dispatches. Echoes counter lines for the caller:
@@ -1988,16 +2403,83 @@ check(data, schema, root)
 PY
 }
 
+# Load a verdict file as compact JSON, normalizing a legacy "pmgo.orchestration.*"
+# schema id to "gluerun.orchestration.*" for validation purposes only (the file
+# is never rewritten). Default mode "warn" keeps 0.4.0-era consumers alive with
+# a stderr warning + schema.legacy_id_tolerated event; GLUERUN_LEGACY_SCHEMA_MODE=reject
+# hard-fails with a migration pointer (post-migration hygiene). Prints the
+# (possibly normalized) compact JSON on stdout.
+gluerun_normalize_schema_id() {
+  local file="$1" label="${2:-verdict}"
+  python3 - "$file" "${GLUERUN_LEGACY_SCHEMA_MODE:-warn}" "$label" <<'PY'
+import json
+import sys
+
+path, mode, label = sys.argv[1:4]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+schema = str(data.get("schema", ""))
+if schema.startswith("pmgo.orchestration."):
+    new = "gluerun.orchestration." + schema[len("pmgo.orchestration."):]
+    if mode == "reject":
+        print(
+            f"{label}: legacy schema id {schema!r} — run migrations/v0-to-v1.sh "
+            "or set GLUERUN_LEGACY_SCHEMA_MODE=warn",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    print(f"{label}: tolerating legacy schema id {schema!r} -> {new!r}", file=sys.stderr)
+    data["schema"] = new
+print(json.dumps(data, separators=(",", ":")))
+PY
+  local rc=$?
+  if [[ $rc -eq 0 ]]; then
+    # Emit the tolerance event only when a rewrite actually happened.
+    if grep -q '"schema"[[:space:]]*:[[:space:]]*"pmgo\.orchestration\.' "$file" 2>/dev/null; then
+      gluerun_append_event "schema.legacy_id_tolerated" "legacy pmgo schema id tolerated" \
+        "{\"file\":\"$file\",\"label\":\"$label\"}" 2>/dev/null || true
+    fi
+  fi
+  return $rc
+}
+
+# Central audit-verdict validator (symmetric with gluerun_validate_decider_verdict —
+# 0.4.0 validated decider verdicts centrally but audit verdicts nowhere, so a
+# malformed auditor JSON silently poisoned acceptance decisions). Schema-checks
+# against GLUERUN_AUDIT_SCHEMA plus cross-field checks: taskId must match when
+# both sides are non-empty; runId mismatch is warn-only (infra retries reuse runs).
+gluerun_validate_audit_verdict() {
+  local verdict="$1" task_id="${2:-}" run_id="${3:-}"
+  local data
+  data="$(gluerun_normalize_schema_id "$verdict" "audit verdict")" || return $?
+  gluerun_json_schema_check "$data" "$GLUERUN_AUDIT_SCHEMA" "audit verdict" || return $?
+  python3 - "$verdict" "$task_id" "$run_id" <<'PY'
+import json
+import sys
+
+path, task_id, run_id = sys.argv[1:4]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+verdict_task = data.get("taskId", "")
+if task_id and verdict_task and verdict_task != task_id:
+    print(
+        "audit verdict taskId mismatch: expected %r, got %r" % (task_id, verdict_task),
+        file=sys.stderr,
+    )
+    sys.exit(2)
+verdict_run = data.get("runId", "")
+if run_id and verdict_run and verdict_run != run_id:
+    print(
+        "audit verdict runId mismatch (warn-only): expected %r, got %r" % (run_id, verdict_run),
+        file=sys.stderr,
+    )
+PY
+}
+
 gluerun_validate_decider_verdict() {
   local verdict="$1" failure_class="$2" task_id="${3:-}"
   local data
-  data="$(python3 - "$verdict" <<'PY'
-import json
-import sys
-with open(sys.argv[1], "r", encoding="utf-8") as f:
-    print(json.dumps(json.load(f), separators=(",", ":")))
-PY
-)" || return $?
+  data="$(gluerun_normalize_schema_id "$verdict" "decider verdict")" || return $?
   gluerun_json_schema_check "$data" "$GLUERUN_DECIDER_SCHEMA" "decider verdict" || return $?
   python3 - "$verdict" "$failure_class" "$task_id" <<'PY'
 import json
@@ -2362,15 +2844,109 @@ gluerun_free_disk_gb() {
   df -k "$GLUERUN_ROOT" 2>/dev/null | awk 'NR==2 { printf "%d", $4 / 1024 / 1024 }'
 }
 
-# Highest existing TASK-#### number in the tasks dir (0 if none). Single source
-# for serial task-id allocation.
+# Highest TASK-#### number observable across EVERY durable surface: task files
+# (including tasks/superseded/ and any archive subdir), leases (filenames and
+# taskId fields, incl. quarantined), dispatch records, worktree dirs, imported
+# packet dirs, and agent/* branches. The 0.4.0 allocator scanned only the
+# active tasks dir at maxdepth 1, so archiving the highest task let the next
+# plan REUSE its id and collide with the preserved worktree/lease/branch
+# (field audit: 4 collisions, 2 breaker halts, 1 destroyed lease).
+gluerun_task_id_scan_max() {
+  python3 - "$GLUERUN_TASKS_DIR" "$GLUERUN_LEASES_DIR" "$GLUERUN_DISPATCH_DIR" \
+    "$GLUERUN_WORKTREES_DIR" "$GLUERUN_ORCH_DIR/packets/imported" "$GLUERUN_ROOT" <<'PY'
+import os
+import re
+import subprocess
+import sys
+
+tasks_dir, leases_dir, dispatch_dir, worktrees_dir, imported_dir, root = sys.argv[1:7]
+pat = re.compile(r"TASK-0*(\d+)")
+best = 0
+
+
+def see(text):
+    global best
+    for m in pat.finditer(text or ""):
+        n = int(m.group(1))
+        if n > best:
+            best = n
+
+
+for base in (tasks_dir,):
+    for dirpath, _dirs, files in os.walk(base):
+        for name in files:
+            if name.startswith("TASK-") and name.endswith(".md"):
+                see(name)
+for base in (leases_dir, dispatch_dir):
+    for dirpath, _dirs, files in os.walk(base) if os.path.isdir(base) else []:
+        for name in files:
+            see(name)
+for base in (worktrees_dir, imported_dir):
+    try:
+        for name in os.listdir(base):
+            see(name)
+    except OSError:
+        pass
+try:
+    out = subprocess.run(
+        ["git", "-C", root, "for-each-ref", "--format=%(refname:short)", "refs/heads/agent/"],
+        capture_output=True, text=True, timeout=10,
+    ).stdout
+    see(out)
+except Exception:
+    pass
+print(best)
+PY
+}
+
+# Allocate `count` fresh sequential task ids, printed one per line. Monotonic
+# via a durable counter file seeded/self-healed from gluerun_task_id_scan_max on
+# every allocation (a deleted or stale counter can never regress below observed
+# reality). Serialized by a mkdir lock; gaps from failed planner runs are
+# intentional — monotonicity is the invariant, not density.
+gluerun_task_id_counter_file() {
+  printf '%s' "${GLUERUN_TASK_ID_COUNTER_FILE:-$GLUERUN_STATE_DIR/task-id-counter}"
+}
+
+gluerun_task_id_next() {
+  local count="${1:-1}"
+  [[ "$count" =~ ^[0-9]+$ && "$count" -ge 1 ]] || count=1
+  gluerun_ensure_state_dirs
+  local counter lock
+  counter="$(gluerun_task_id_counter_file)"
+  mkdir -p "$(dirname "$counter")" 2>/dev/null || true
+  lock="$counter.lock"
+  local waited=0
+  until mkdir "$lock" 2>/dev/null; do
+    sleep 0.2
+    waited=$((waited + 1))
+    if (( waited >= 50 )); then
+      echo "task-id allocator lock busy: $lock" >&2
+      return 1
+    fi
+  done
+  # shellcheck disable=SC2064
+  trap "rmdir '$lock' 2>/dev/null || true" RETURN
+  local stored=0 scan seed i
+  if [[ -f "$counter" ]]; then
+    stored="$(head -1 "$counter" 2>/dev/null | tr -d '[:space:]')"
+    [[ "$stored" =~ ^[0-9]+$ ]] || stored=0
+  fi
+  scan="$(gluerun_task_id_scan_max)"
+  [[ "$scan" =~ ^[0-9]+$ ]] || scan=0
+  seed=$(( stored > scan ? stored : scan ))
+  printf '%s\n' "$((seed + count))" >"$counter"
+  for ((i = 1; i <= count; i++)); do
+    printf 'TASK-%04d\n' "$((seed + i))"
+  done
+  rmdir "$lock" 2>/dev/null || true
+  trap - RETURN
+}
+
+# Deprecated 0.4.0 alias: the old maxdepth-1 active-dir scan. Kept for any
+# external caller; new code must use gluerun_task_id_next.
 gluerun_max_task_id() {
-  local f n max=0
-  while IFS= read -r f; do
-    n="$(basename "$f" .md | sed -n 's/^TASK-0*\([0-9][0-9]*\)$/\1/p')"
-    [[ -n "$n" && "$n" -gt "$max" ]] && max="$n"
-  done < <(find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null)
-  echo "$max"
+  gluerun_task_id_scan_max
 }
 
 # Rewrite every WHOLE TASK-#### token equal to $2 with $3 in file $1. Token-safe
@@ -2494,11 +3070,12 @@ gluerun_l1_import_staged() {
         "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
       continue
     fi
-    # Validate the whole batch first (all-or-nothing) and pre-assign real ids.
-	    local ok=1 i=0 max_n real v_id v_status v_area v_owned v_mode
+    # Validate the whole batch first (all-or-nothing); real ids come from the
+    # durable monotonic allocator AFTER validation succeeds (so a rejected
+    # batch never burns ids).
+	    local ok=1 real v_id v_status v_area v_owned v_mode
 	    local duplicate_json="" duplicate_event_json=""
 	    local -a src=() ids=() temps=()
-    max_n="$(gluerun_max_task_id)"
     for cand in "${cands[@]}"; do
       v_id="$(gluerun_task_field "$cand" taskId 2>/dev/null || echo '')"
       v_status="$(gluerun_task_field "$cand" status 2>/dev/null || echo '')"
@@ -2511,9 +3088,14 @@ gluerun_l1_import_staged() {
 	      if duplicate_json="$(gluerun_find_duplicate_task_signature "$cand" "$node" 2>/dev/null)"; then
 	        ok=2; break
 	      fi
-	      i=$((i + 1)); real="$(printf 'TASK-%04d' $((max_n + i)))"
-	      src+=("$cand"); ids+=("$real"); temps+=("$v_id")
+	      src+=("$cand"); temps+=("$v_id")
 	    done
+	    if [[ "$ok" -eq 1 ]]; then
+	      while IFS= read -r real; do
+	        [[ -n "$real" ]] && ids+=("$real")
+	      done < <(gluerun_task_id_next "${#src[@]}")
+	      [[ ${#ids[@]} -eq ${#src[@]} ]] || ok=0
+	    fi
 	    if [[ "$ok" -eq 2 ]]; then
 	      import_rejections=$((import_rejections + 1))
 	      gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
@@ -2552,6 +3134,14 @@ gluerun_l1_import_staged() {
     # already promoted so a partial batch never lands in the global tasks dir, mark
     # the node failed, and move on to the next node.
     for j in "${!src[@]}"; do
+      # Collision preflight: never overwrite an existing task file. With the
+      # monotonic allocator this cannot happen; if it does (foreign file, clock
+      # rollback), reject the batch loudly instead of destroying state.
+      if [[ -e "$GLUERUN_TASKS_DIR/${ids[$j]}.md" ]]; then
+        gluerun_append_event "origin.task_id_collision" "refusing to overwrite existing task file" \
+          "{\"runId\":\"$run_id\",\"node\":\"$node\",\"taskId\":\"${ids[$j]}\"}"
+        mv_ok=0; break
+      fi
       if mv "${src[$j]}" "$GLUERUN_TASKS_DIR/${ids[$j]}.md" 2>/dev/null; then
         moved+=("${ids[$j]}")
       else
@@ -3442,6 +4032,50 @@ PY
 
 gluerun_stop_requested() {
   [[ -f "$GLUERUN_STOP_FILE" ]]
+}
+
+gluerun_wake_file() {
+  printf '%s' "${GLUERUN_WAKE_FILE:-$GLUERUN_STATE_DIR/WAKE}"
+}
+
+# Interruptible nap: sleeps `total` seconds in GLUERUN_SLEEP_POLL_SEC chunks,
+# checking control files between chunks so a nap never outlives operator intent.
+# Returns: 0 = slept the full duration; 1 = woken early (WAKE file consumed, or
+# — with watch_backoff=1 — the planner backoff was cleared/expired); 2 = STOP.
+# Never signal/kill sleep children to wake the loop: touch the WAKE file
+# (gluerun wake) instead.
+gluerun_interruptible_sleep() {
+  local total="$1" watch_backoff="${2:-0}"
+  [[ "$total" =~ ^[0-9]+$ ]] || total=0
+  local poll="${GLUERUN_SLEEP_POLL_SEC:-10}"
+  [[ "$poll" =~ ^[0-9]+$ && "$poll" -ge 1 ]] || poll=10
+  local wake slept=0 chunk
+  wake="$(gluerun_wake_file)"
+  while (( slept < total )); do
+    chunk=$(( total - slept < poll ? total - slept : poll ))
+    sleep "$chunk"
+    slept=$((slept + chunk))
+    if gluerun_stop_requested; then
+      return 2
+    fi
+    if [[ -f "$wake" ]]; then
+      rm -f "$wake" 2>/dev/null || true
+      return 1
+    fi
+    if [[ "$watch_backoff" == "1" ]] && ! gluerun_planner_backoff_active_json >/dev/null 2>&1; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+gluerun_request_wake() {
+  gluerun_ensure_state_dirs
+  local wake
+  wake="$(gluerun_wake_file)"
+  : >"$wake"
+  gluerun_append_event "autonomate.wake_requested" "operator requested wake" "{}"
+  echo "wake requested ($wake)"
 }
 
 gluerun_breaker_count() {

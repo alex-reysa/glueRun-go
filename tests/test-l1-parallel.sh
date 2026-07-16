@@ -623,11 +623,30 @@ test_autonomate_quota_wait_budget_sets_stop() {
 # breaker chokepoint can sleep through instead of tripping.
 test_cycle_limit_window_detected_finds_marker() {
   with_fixture
+  # 0.5.0: only engine-written RUNNER logs are evidence (claude-envelope.json,
+  # *-codex.log, ...). Model-authored artifacts (audit.json verdicts, prompts)
+  # can echo repo text and are excluded by construction.
   mkdir -p "$GLUERUN_RUNS_DIR/RUN-limit/sub"
-  cat >"$GLUERUN_RUNS_DIR/RUN-limit/sub/audit.json" <<'EOF'
+  cat >"$GLUERUN_RUNS_DIR/RUN-limit/sub/claude-envelope.json" <<'EOF'
 {"error":"api_error_status":429,"message":"Overloaded"}
 EOF
   gluerun_cycle_limit_window_detected || fail "a recent run log with a usage-limit/overload marker must be detected"
+}
+
+# Model-authored artifacts must NOT be evidence even when they carry markers --
+# audit verdicts and prompt files echo repo prose (the 0.4.0 false-backoff bug).
+test_cycle_limit_window_ignores_model_authored_artifacts() {
+  with_fixture
+  mkdir -p "$GLUERUN_RUNS_DIR/RUN-artifacts"
+  cat >"$GLUERUN_RUNS_DIR/RUN-artifacts/audit.json" <<'EOF'
+{"rationale":"the quota banner shows: rate limit exceeded"}
+EOF
+  cat >"$GLUERUN_RUNS_DIR/RUN-artifacts/l2-prompt.md" <<'EOF'
+Implement the quota exceeded banner per api_error_status fixtures.
+EOF
+  if gluerun_cycle_limit_window_detected; then
+    fail "audit.json/prompt .md content must never arm a limit window"
+  fi
 }
 
 # The 403 organization-disabled-subscription window (the 6th-trip mode) is an
@@ -669,11 +688,44 @@ EOF
 # arms a quota backoff (for C1 to sleep through) and does NOT trip the breaker.
 test_autonomate_limit_induced_failure_arms_backoff_not_breaker() {
   with_fixture
+  # 0.5.0: evidence must live in a RUNNER log and the failing counter must be
+  # limit-ELIGIBLE (dispatch/integration/planner failures). Import rejections
+  # are deterministic validation outcomes and are excluded (see below).
   mkdir -p "$GLUERUN_RUNS_DIR/RUN-cycle"
-  cat >"$GLUERUN_RUNS_DIR/RUN-cycle/audit.json" <<'EOF'
-{"verdict":"you've hit your session limit; resets 10:40pm"}
+  cat >"$GLUERUN_RUNS_DIR/RUN-cycle/planner-codex.log" <<'EOF'
+you've hit your session limit; resets 10:40pm
 EOF
   local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "dispatched_this_run=0"
+echo "failed_dispatches=1"
+echo "integrated_this_run=0"
+echo "failed_integrations=0"
+echo "planner_failures_this_run=0"
+echo "l1_import_rejections_this_run=0"
+STUB
+  chmod +x "$stub"
+  local out
+  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_contains "$out" "limit/403 evidence" "a limit-induced cycle is recognized at the chokepoint"
+  assert_not_contains "$out" "breaker -> 1" "a limit window does NOT trip the breaker"
+  assert_eq "$(gluerun_breaker_count)" "0" "a limit window leaves the breaker at zero"
+  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "a limit window arms a quota backoff for the next iteration to sleep through"
+  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' "the armed backoff is a quota window"
+  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" 'planner-codex.log' "the armed backoff carries the evidence logRef"
+}
+
+# Import rejections alone are never limit-eligible: even with a genuine limit
+# marker in a runner log, a rejections-only failure cycle trips the breaker
+# (0.4.0 armed a false 30-minute backoff here -- the field audit's top defect).
+test_autonomate_import_rejections_never_arm_backoff() {
+  with_fixture
+  mkdir -p "$GLUERUN_RUNS_DIR/RUN-rej"
+  cat >"$GLUERUN_RUNS_DIR/RUN-rej/planner-codex.log" <<'EOF'
+you've hit your session limit; resets 10:40pm
+EOF
+  local stub="$GLUERUN_ROOT/reconcile-reject-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -686,11 +738,9 @@ STUB
   chmod +x "$stub"
   local out
   out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
-  assert_contains "$out" "LIMIT/403-induced failure" "a limit-induced cycle is recognized at the chokepoint"
-  assert_not_contains "$out" "breaker -> 1" "a limit window does NOT trip the breaker"
-  assert_eq "$(gluerun_breaker_count)" "0" "a limit window leaves the breaker at zero"
-  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "a limit window arms a quota backoff for the next iteration to sleep through"
-  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' "the armed backoff is a quota window"
+  assert_contains "$out" "breaker -> 1" "rejections-only failures trip the breaker"
+  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] && fail "import rejections must never arm a quota backoff"
+  true
 }
 
 # Safety: with C2 detection active, a real failure (no limit markers anywhere in
@@ -927,10 +977,12 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_autonomate_expired_quota_backoff_falls_through
 	test_autonomate_quota_wait_budget_sets_stop
 	test_cycle_limit_window_detected_finds_marker
+	test_cycle_limit_window_ignores_model_authored_artifacts
 	test_cycle_limit_window_detected_finds_403_org_disabled
 	test_cycle_limit_window_detected_ignores_plain_failure
 	test_cycle_limit_window_detected_ignores_stale_marker
 	test_autonomate_limit_induced_failure_arms_backoff_not_breaker
+	test_autonomate_import_rejections_never_arm_backoff
 	test_autonomate_real_failure_still_trips_with_detection_active
 	test_fanout_invalid_staged_imports_nothing_for_that_node
 test_frontier_scope_guard_excludes_conflict_via_configured_area_map
