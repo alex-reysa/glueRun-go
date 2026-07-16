@@ -230,7 +230,17 @@ _l1_outcome="incomplete"
 _l1_lease_written="no"
 l1_on_exit() {
   local code=$?
-  if [[ "$_l1_outcome" == "incomplete" && "$_l1_lease_written" == "yes" ]]; then
+  if [[ "$_l1_outcome" == "accept-pending" ]]; then
+    # Audit ACCEPTED but the driver died before inbox placement. Never fail
+    # the lease — the committed branch + packet + audit record are intact and
+    # the next dispatch self-heals via accept-existing-packet (0.4.0 marked
+    # the lease failed here, orphaning accepted work behind an exit-2
+    # re-dispatch loop).
+    gluerun_record_recovery "accepted work stranded before inbox placement; next dispatch auto-heals via accept-existing-packet" \
+      "$task_id" "$worker_branch" "accept-existing-packet" "origin" "auto-heal on next dispatch" "origin" || true
+    gluerun_append_event "l1.accept_interrupted" "l1 drive died between acceptance and inbox placement" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"code\":$code}" || true
+  elif [[ "$_l1_outcome" == "incomplete" && "$_l1_lease_written" == "yes" ]]; then
     gluerun_lease_set_status "$task_id" "failed" 2>/dev/null || true
     gluerun_record_recovery "l1-drive exited before a terminal outcome (code $code)" \
       "$task_id" "$worker_branch" "rebuild-context" "origin" "rerun or decide" "origin" || true
@@ -282,10 +292,44 @@ l1_note_refusal_and_maybe_park() {
   fi
 }
 
+# Auto-heal stranded accepted work (E5): an `accepted` lease whose packet
+# never reached the inbox (driver died post-acceptance, reap race) used to
+# refuse every re-dispatch forever (exit-2 loop -> breaker). If the prior
+# run's packet exists and validates, accept it deterministically and enqueue —
+# no worker/auditor re-run.
+l1_try_auto_accept_existing() {
+  [[ "${GLUERUN_AUTO_ACCEPT_EXISTING:-1}" == "1" ]] || return 1
+  local prev_run cand
+  prev_run="$(gluerun_lease_field "$task_id" runId 2>/dev/null || true)"
+  [[ -n "$prev_run" ]] || return 1
+  # Already queued or imported: the work is in flight — dispatch is a no-op.
+  if [[ -f "$GLUERUN_INBOX_DIR/$prev_run.json" ]]     || find "$GLUERUN_ORCH_DIR/packets/imported/$task_id" -maxdepth 1 -name '*.json'          -not -name '*.audit.json' -type f 2>/dev/null | grep -q .; then
+    echo "accepted packet for $task_id already queued/imported; dispatch is a no-op"
+    exit 0
+  fi
+  cand="$GLUERUN_RUNS_DIR/$prev_run/packet.json"
+  [[ -f "$cand" ]] || return 1
+  [[ "$(gluerun_json_field "$cand" taskId 2>/dev/null || true)" == "$task_id" ]] || return 1
+  if "$SCRIPT_DIR/accept-existing-packet.sh" "$cand"; then
+    cp "$cand" "$GLUERUN_INBOX_DIR/$prev_run.json.tmp" \
+      && mv "$GLUERUN_INBOX_DIR/$prev_run.json.tmp" "$GLUERUN_INBOX_DIR/$prev_run.json"
+    gluerun_append_event "l1.auto_accepted_existing" "stranded accepted packet re-accepted and enqueued" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$prev_run\",\"packet\":\"$cand\"}"
+    echo "auto-accepted stranded packet for $task_id (run $prev_run); enqueued to inbox"
+    exit 0
+  fi
+  return 1
+}
+
 if gluerun_worktree_registered "$worktree" || [[ -e "$worktree" ]]; then
   existing_lease="$(gluerun_lease_status "$task_id" 2>/dev/null || echo none)"
   case "$existing_lease" in
-    running|planned|needs-review|accepted|integrated)
+    accepted)
+      l1_try_auto_accept_existing || true
+      l1_note_refusal_and_maybe_park "accepted worktree without importable packet (lease: $existing_lease)"
+      echo "active/accepted worktree for $task_id (lease: $existing_lease); refusing (use --reset)" >&2
+      exit 2 ;;
+    running|planned|needs-review|integrated)
       l1_note_refusal_and_maybe_park "active/accepted worktree (lease: $existing_lease)"
       echo "active/accepted worktree for $task_id (lease: $existing_lease); refusing (use --reset)" >&2
       exit 2 ;;
@@ -1133,6 +1177,10 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
   fi
   if [[ "$attempt_ok" == "yes" ]]; then
     accepted="yes"
+    # From this decision until inbox placement, an interruption must never
+    # revert the lease to failed — the packet/audit already exist and the
+    # next dispatch auto-heals via accept-existing-packet (E5).
+    _l1_outcome="accept-pending"
     archive_attempt "$n" "" "accept" "l1"
     break
   fi
@@ -1215,6 +1263,7 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
       continue ;;
     accept-waiver)
       accepted="yes"; waiver="yes"
+      _l1_outcome="accept-pending"
       archive_attempt "$n" "$attempt_failure" "accept-waiver" "$decider_authority"
       break ;;
     *)

@@ -261,22 +261,16 @@ audit = {
     "rationale": "Existing worker output was accepted deterministically because the packet is valid, branch head matches, scope is clean, evidence is present, and successful packet commands pass when rerun.",
 }
 
-with open(schema_path, encoding="utf-8") as f:
-    schema = json.load(f)
-missing = [key for key in schema["required"] if key not in audit]
-extra = sorted(set(audit) - set(schema["properties"]))
-if missing or extra:
-    raise SystemExit(f"audit schema validation failed; missing={missing} extra={extra}")
-if audit["schema"] != schema["properties"]["schema"]["const"]:
-    raise SystemExit("audit schema validation failed; wrong schema")
-if audit["verdict"] not in schema["properties"]["verdict"]["enum"]:
-    raise SystemExit("audit schema validation failed; wrong verdict")
-
 os.makedirs(os.path.dirname(audit_path), exist_ok=True)
 with open(audit_path, "w", encoding="utf-8") as f:
     json.dump(audit, f, indent=2)
     f.write("\n")
 PY
+
+# Central validator (0.5.0): the same schema check every auditor verdict gets,
+# replacing this script's hand-rolled required/extra/const/enum python.
+gluerun_validate_audit_verdict "$audit_record" "$task_id" "$run_id" \
+  || { echo "audit schema validation failed for $audit_record" >&2; exit 2; }
 
 python3 - "$packet" "$run_id" <<'PY'
 import json
