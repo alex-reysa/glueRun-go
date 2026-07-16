@@ -253,6 +253,58 @@ PY
     echo "FAILED $task_id: git lock unavailable; retrying next cycle"
     failed_integrations=$((failed_integrations + 1)); continue
   fi
+  # Opt-in rebase-and-regate (0.5.0, GLUERUN_INTEGRATE_REBASE=1, default 0):
+  # rebase the audited branch onto the target in its worktree, rerun the gate
+  # there, and retry the merge once. A green gate on the rebased tree
+  # substitutes for re-audit (the substitution is recorded as a decision).
+  # 0.4.0 had no path at all — any target drift terminally parked the task.
+  if [[ "$merge_ec" -ne 0 && "${GLUERUN_INTEGRATE_REBASE:-0}" == "1" && "${_rebased_once:-}" != "$task_id" ]]; then
+    rb_wt="$GLUERUN_WORKTREES_DIR/$task_id"
+    rb_ok="no"
+    if [[ -d "$rb_wt" && -z "$(git -C "$rb_wt" status --porcelain 2>/dev/null)" ]]; then
+      gluerun_append_event "integration.rebase_started" "rebase-and-regate attempt" \
+        "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"branch\":\"$branch\"}"
+      if git -C "$rb_wt" rebase "$GLUERUN_TARGET_BRANCH" >/dev/null 2>&1; then
+        rb_gate_ec=0
+        gluerun_run_in_worktree_env "$rb_wt" "$SCRIPT_DIR/gate-check.sh" "$run_id-rebase-$task_id" -- bash -c "$gate_cmd" \
+          >/dev/null 2>&1 || rb_gate_ec=$?
+        if [[ "$rb_gate_ec" -eq 0 ]]; then
+          rb_old_head="$actual_head"
+          actual_head="$(git -C "$rb_wt" rev-parse HEAD)"
+          "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "integrate-rebased" \
+            --rationale "rebased $rb_old_head -> $actual_head onto $GLUERUN_TARGET_BRANCH; gate green on rebased tree substitutes for re-audit (GLUERUN_INTEGRATE_REBASE)" \
+            --run "$run_id" --branch "$branch" --authority origin 2>/dev/null || true
+          gluerun_append_event "integration.rebased" "audited branch rebased and re-gated" \
+            "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"oldHead\":\"$rb_old_head\",\"newHead\":\"$actual_head\"}"
+          echo "  rebase-and-regate: $rb_old_head -> $actual_head (gate green); retrying merge"
+          rb_ok="yes"
+        else
+          git -C "$rb_wt" rebase --abort 2>/dev/null || true
+          git -C "$rb_wt" reset --hard "$actual_head" >/dev/null 2>&1 || true
+          echo "  rebase-and-regate: gate RED on rebased tree; restored $actual_head"
+        fi
+      else
+        git -C "$rb_wt" rebase --abort 2>/dev/null || true
+        echo "  rebase-and-regate: rebase conflicted; aborted"
+      fi
+    else
+      echo "  rebase-and-regate: worktree missing or dirty; skipping"
+    fi
+    if [[ "$rb_ok" == "yes" ]]; then
+      merge_ec=0
+      _rebased_once="$task_id"
+      if gluerun_git_lock_acquire; then
+        git -C "$GLUERUN_ROOT" merge --no-ff --no-commit "$actual_head" >/dev/null 2>&1 || merge_ec=$?
+        if [[ "$merge_ec" -ne 0 ]]; then
+          git -C "$GLUERUN_ROOT" diff --name-only --diff-filter=U >"$run_dir/conflict-$task_id.log" 2>/dev/null || true
+          git -C "$GLUERUN_ROOT" merge --abort 2>/dev/null || true
+        fi
+        gluerun_git_lock_release
+      else
+        merge_ec=1
+      fi
+    fi
+  fi
   if [[ "$merge_ec" -ne 0 ]]; then
     action="$(integration_decide "integration-conflict" "$task_id" "$branch" "$run_dir/conflict-$task_id.log")"
     echo "  decider (conflict): ${action:-escalate-parked}"
@@ -261,8 +313,8 @@ PY
     gluerun_record_recovery "merge conflict integrating $task_id into $GLUERUN_TARGET_BRANCH" \
       "$task_id" "$branch" "${action:-escalate-parked}" "decider" "fresh conflict resolution with re-audit if branch changes" "origin"
     gluerun_append_event "integration.failed" "integration merge conflict" \
-      "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"reason\":\"conflict\",\"action\":\"${action:-escalate-parked}\",\"note\":\"audited branch not rebased in v1\"}"
-    echo "FAILED $task_id: merge conflict (decider: ${action:-escalate-parked}; audited branch not rebased)"
+      "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"reason\":\"conflict\",\"action\":\"${action:-escalate-parked}\",\"note\":\"rebase not attempted or failed (GLUERUN_INTEGRATE_REBASE)\"}"
+    echo "FAILED $task_id: merge conflict (decider: ${action:-escalate-parked}; rebase not attempted or failed)"
     failed_integrations=$((failed_integrations + 1)); continue
   fi
 

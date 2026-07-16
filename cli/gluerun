@@ -176,6 +176,133 @@ cmd_doctor() {
   # runner CLI (best-effort)
   command -v claude >/dev/null 2>&1 && printf "  ok    claude CLI on PATH\n" || printf "  warn  claude CLI not on PATH\n"
   command -v codex  >/dev/null 2>&1 && printf "  ok    codex CLI on PATH\n"  || printf "  warn  codex CLI not on PATH\n"
+
+  # --- 0.5.0 preflights (each bit the field run) -------------------------------
+  # Model id prefix sanity (invalid `gpt-5.6` failed only at planner runtime as
+  # a generic codex-exit, costing three launches).
+  local cfg_env_val
+  cfg_env_val() { # key -> config env{} value (empty if none)
+    [[ -n "$root" && -f "$root/gluerun.config.json" ]] || { echo ""; return; }
+    python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("env", {}).get(sys.argv[2], ""))
+except Exception:
+    print("")' "$root/gluerun.config.json" "$1" 2>/dev/null
+  }
+  local claude_model codex_model
+  claude_model="${GLUERUN_CLAUDE_MODEL:-$(cfg_env_val GLUERUN_CLAUDE_MODEL)}"
+  codex_model="${GLUERUN_CODEX_MODEL:-$(cfg_env_val GLUERUN_CODEX_MODEL)}"
+  if [[ -n "$claude_model" ]]; then
+    case "$claude_model" in
+      claude-*|sonnet*|opus*|haiku*) printf "  ok    claude model: %s\n" "$claude_model" ;;
+      *) printf "  warn  GLUERUN_CLAUDE_MODEL '%s' has an unrecognized prefix (typo?)\n" "$claude_model" ;;
+    esac
+  fi
+  if [[ -n "$codex_model" ]]; then
+    case "$codex_model" in
+      gpt-*|o[0-9]*|codex-*) printf "  ok    codex model: %s\n" "$codex_model" ;;
+      *) printf "  warn  GLUERUN_CODEX_MODEL '%s' has an unrecognized prefix (typo?)\n" "$codex_model" ;;
+    esac
+  fi
+
+  # ~/.codex/hooks.json parseability (a 0-byte file spammed a parse error into
+  # EVERY runner spawn for four days).
+  if [[ -f "$HOME/.codex/hooks.json" ]]; then
+    if python3 -m json.tool "$HOME/.codex/hooks.json" >/dev/null 2>&1; then
+      printf "  ok    ~/.codex/hooks.json parses\n"
+    else
+      printf "  FAIL  ~/.codex/hooks.json is not valid JSON (every codex spawn logs a parse error; fix or: echo '{}' > ~/.codex/hooks.json)\n"; ok=1
+    fi
+  fi
+
+  # MCP fan-out: every configured server spawns as a child of every worker.
+  local mcp_count=0 mcp_src=""
+  if [[ -n "$root" && -f "$root/.mcp.json" ]]; then
+    local c; c="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1])).get("mcpServers",{})))' "$root/.mcp.json" 2>/dev/null || echo 0)"
+    mcp_count=$((mcp_count + c)); [[ "$c" -gt 0 ]] && mcp_src+=" repo:.mcp.json($c)"
+  fi
+  if [[ -f "$HOME/.claude.json" ]]; then
+    local c; c="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1])).get("mcpServers",{})))' "$HOME/.claude.json" 2>/dev/null || echo 0)"
+    mcp_count=$((mcp_count + c)); [[ "$c" -gt 0 ]] && mcp_src+=" ~/.claude.json($c)"
+  fi
+  if [[ -f "$HOME/.codex/config.toml" ]]; then
+    local c; c="$(grep -c '^\[mcp_servers\.' "$HOME/.codex/config.toml" 2>/dev/null || true)"
+    [[ "$c" =~ ^[0-9]+$ ]] || c=0
+    mcp_count=$((mcp_count + c)); [[ "$c" -gt 0 ]] && mcp_src+=" ~/.codex/config.toml($c)"
+  fi
+  if [[ "$mcp_count" -gt 0 ]]; then
+    printf "  warn  %s MCP server(s) configured (%s) — each worker/auditor spawn may start them (latency, log noise)\n" "$mcp_count" "${mcp_src# }"
+  else
+    printf "  ok    no MCP servers inherited by workers\n"
+  fi
+
+  # Legacy pmgo.* schema ids in consumer artifacts (parked every decider
+  # verdict in the field until repaired).
+  if [[ -n "$root" ]]; then
+    local pmgo_hits
+    pmgo_hits="$(grep -rl --include='*.json' --include='*.md' '"pmgo\.' \
+      "$root/docs/orchestration/prompts" "$root/schemas" 2>/dev/null | head -5 || true)"
+    if [[ -n "$pmgo_hits" ]]; then
+      printf "  FAIL  legacy pmgo.* schema ids found (run migrations/v0-to-v1.sh):\n"
+      printf "        %s\n" $pmgo_hits
+      ok=1
+    else
+      printf "  ok    no legacy pmgo.* schema ids in prompts/schemas\n"
+    fi
+    # Stale pidfiles.
+    local pidf pid
+    for pidf in "$root/.gluerun-state/autonomate.pid" "$root/.gluerun-state/console.pid"; do
+      [[ -f "$pidf" ]] || continue
+      pid="$(tr -d '[:space:]' <"$pidf" 2>/dev/null || true)"
+      if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        printf "  ok    %s alive (pid %s)\n" "$(basename "$pidf")" "$pid"
+      else
+        printf "  warn  stale pidfile %s (pid %s dead; rm it or restart)\n" "$pidf" "${pid:-?}"
+      fi
+    done
+    # Disk floor.
+    local free_gb min_gb
+    free_gb="$(df -Pk "$root" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1048576}')"
+    min_gb="${GLUERUN_MIN_DISK_GB:-$(cfg_env_val GLUERUN_MIN_DISK_GB)}"; [[ "$min_gb" =~ ^[0-9]+$ ]] || min_gb=2
+    if [[ "$free_gb" =~ ^[0-9]+$ ]]; then
+      if (( free_gb < min_gb )); then
+        printf "  FAIL  disk below floor: %sGiB free < %sGiB (GLUERUN_MIN_DISK_GB) — gates go all-red on a full volume\n" "$free_gb" "$min_gb"; ok=1
+      elif (( free_gb < min_gb * 2 )); then
+        printf "  warn  disk near floor: %sGiB free (floor %sGiB)\n" "$free_gb" "$min_gb"
+      else
+        printf "  ok    disk: %sGiB free (floor %sGiB)\n" "$free_gb" "$min_gb"
+      fi
+    fi
+    # .worktrees size.
+    if [[ -d "$root/.worktrees" ]]; then
+      local wt_n wt_kb wt_gb warn_gb
+      wt_n="$(find "$root/.worktrees" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | grep -c . || true)"
+      wt_kb="$(du -sk "$root/.worktrees" 2>/dev/null | awk '{print $1}' || echo 0)"
+      wt_gb=$((wt_kb / 1048576))
+      warn_gb="${GLUERUN_WORKTREES_WARN_GB:-5}"
+      if (( wt_gb >= warn_gb )); then
+        printf "  warn  .worktrees: %s entries, %sGiB (>= %sGiB; run: gluerun gc)\n" "$wt_n" "$wt_gb" "$warn_gb"
+      else
+        printf "  ok    .worktrees: %s entries, %sGiB\n" "$wt_n" "$wt_gb"
+      fi
+    fi
+    # Console port availability (when pinned).
+    local cport
+    cport="${GLUERUN_CONSOLE_PORT:-$(cfg_env_val GLUERUN_CONSOLE_PORT)}"
+    if [[ "$cport" =~ ^[0-9]+$ && "$cport" -gt 0 ]]; then
+      if python3 -c 'import socket,sys
+s=socket.socket()
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1])))
+    s.close()
+except OSError:
+    sys.exit(1)' "$cport" 2>/dev/null; then
+        printf "  ok    console port %s free\n" "$cport"
+      else
+        printf "  warn  console port %s already bound (a healthy console? check .gluerun-state/console.url)\n" "$cport"
+      fi
+    fi
+  fi
   return "$ok"
 }
 
@@ -387,9 +514,23 @@ Run anywhere (operate on the current repo):
   status                                              orchestration status
   recover [--scan|--prune]                            stale leases / orphans
   validate-dag | next-area | next-areas | area-gate NODE
-  promote-gate NODE                                   gate promotion (project promoter)
+  promote-gate NODE [--operator --evidence REF]       gate promotion (project promoter;
+                                                      --operator for evaluation nodes)
   metrics [--json] [--runs-dir DIR] [--events-file FILE]   read-only ctx metrics
   console                                             launch the visualization plugin
+
+Operate / recover:
+  health [--json]      compact loop-health digest (gates, leases, backoff, breaker, digest hash)
+  gates [--json]       per-node gate table from gate-result files
+  supersede TASK-XXXX [--by TASK-YYYY] [--force]      atomically supersede a task (all four surfaces)
+  clear-backoff        remove the planner backoff (with event)
+  breaker [show|reset] circuit-breaker state
+  stop [--wait[=S]]    write STOP (and optionally wait for autonomate to exit)
+  resume               remove STOP
+  wake                 clear backoff + reset breaker + drop STOP + end the current nap
+  gc [--dry-run]       cap runs history, prune integrated worktrees, rotate events
+  lease list|show|set-status|create                    raw lease operations
+  accept-packet PATH   deterministic acceptance of an existing state packet
 
 Setup / lifecycle:
   init                 scaffold gluerun.config.json + docs/orchestration in this repo
@@ -429,6 +570,17 @@ main() {
     next-areas)    run_engine dag.sh next-areas "$@" ;;
     area-gate)     run_engine dag.sh area-gate "$@" ;;
     promote-gate)  run_engine promote-gate.sh "$@" ;;   # sources lib.sh -> honors config "promoter"
+    supersede)     run_engine ops.sh supersede "$@" ;;
+    clear-backoff) run_engine ops.sh clear-backoff "$@" ;;
+    breaker)       run_engine ops.sh breaker "$@" ;;
+    stop)          run_engine ops.sh stop "$@" ;;
+    resume)        run_engine ops.sh resume "$@" ;;
+    wake)          run_engine ops.sh wake "$@" ;;
+    gates)         run_engine ops.sh gates "$@" ;;
+    health)        run_engine ops.sh health "$@" ;;
+    gc)            run_engine ops.sh gc "$@" ;;
+    lease)         run_engine lease.sh "$@" ;;
+    accept-packet) run_engine accept-existing-packet.sh "$@" ;;
     metrics)       cmd_metrics "$@" ;;
     graph)         [[ "${GLUERUN_CTX_GRAPH:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_graph "$@" ;;
     experiment-report) [[ "${GLUERUN_CTX_EXPERIMENT:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_experiment_report "$@" ;;

@@ -28,6 +28,7 @@ gluerun_ensure_state_dirs
 stale_minutes="${GLUERUN_STALE_MINUTES:-60}"
 recovery_decider="${GLUERUN_RECOVERY_DECIDER:-$SCRIPT_DIR/decide.sh}"
 actions=0
+known_orphans=0
 
 # 1. Reclassify stale leases.
 if [[ -d "$GLUERUN_LEASES_DIR" ]]; then
@@ -159,6 +160,16 @@ PY
   done < <(find "$GLUERUN_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
 fi
 
+# 1b. Stale L1 planning leases (0.5.0, GLUERUN_RECOVER_L1=1): reclassify to
+# failed so their nodes re-enter the frontier; =0 restores report-only.
+if [[ "${GLUERUN_RECOVER_L1:-1}" == "1" ]]; then
+  gluerun_l1_reclaim_stale
+else
+  gluerun_l1_list_stale | while IFS=' ' read -r n s a; do
+    [[ -n "$n" ]] && echo "recover: stale l1 lease $n ($s, ${a}m) — report-only (GLUERUN_RECOVER_L1=0)"
+  done
+fi
+
 # 2. Detect (and optionally prune) orphaned worktrees.
 if [[ -d "$GLUERUN_WORKTREES_DIR" ]]; then
   while IFS= read -r wt; do
@@ -172,7 +183,50 @@ if [[ -d "$GLUERUN_WORKTREES_DIR" ]]; then
         continue
         ;;
     esac
-    echo "recover: orphaned worktree $wt (lease status: $status)"
+    # Report-once (0.5.0): the field run printed the same ~40 orphaned
+    # worktrees on every reconcile cycle for days. Track first/last sight in
+    # recover-orphans.json and echo only new paths or status changes.
+    orphans_file="$GLUERUN_STATE_DIR/recover-orphans.json"
+    if python3 - "$orphans_file" "$wt" "$status" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, wt, status = sys.argv[1:4]
+try:
+    data = json.load(open(path))
+except Exception:
+    data = {}
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+entry = data.get(wt)
+fresh = entry is None or entry.get("leaseStatus") != status
+data[wt] = {"leaseStatus": status,
+            "firstSeen": (entry or {}).get("firstSeen", now), "lastSeen": now}
+os.makedirs(os.path.dirname(path), exist_ok=True)
+json.dump(data, open(path, "w"), indent=2)
+sys.exit(0 if fresh else 1)
+PY
+    then
+      echo "recover: orphaned worktree $wt (lease status: $status)"
+    else
+      known_orphans=$((known_orphans + 1))
+    fi
+    # Auto-prune (0.5.0, GLUERUN_AUTO_PRUNE=1, default 0): during --scan,
+    # prune only worktrees that are integrated AND merged into the target AND
+    # clean — the same predicate gluerun gc uses.
+    if [[ "$mode" == "scan" && "${GLUERUN_AUTO_PRUNE:-0}" == "1" && "$status" == "integrated" ]]; then
+      wt_head="$(git -C "$wt" rev-parse HEAD 2>/dev/null || true)"
+      if [[ -n "$wt_head" ]] \
+        && git -C "$GLUERUN_ROOT" merge-base --is-ancestor "$wt_head" "${GLUERUN_TARGET_BRANCH:-HEAD}" 2>/dev/null \
+        && [[ -z "$(git -C "$wt" status --porcelain 2>/dev/null)" ]]; then
+        git -C "$GLUERUN_ROOT" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
+        gluerun_record_recovery "auto-pruned integrated worktree" "$task_id" "n/a" "rebuild-context" "origin" "n/a" "origin"
+        echo "recover: auto-pruned integrated worktree $wt"
+        actions=$((actions + 1))
+        continue
+      fi
+    fi
     if [[ "$mode" == "prune" ]]; then
       # Only delete the directory after git has released the worktree, so we
       # never leave git tracking a path we already removed.
@@ -197,4 +251,7 @@ if [[ -d "$GLUERUN_WORKTREES_DIR" ]]; then
 fi
 
 git -C "$GLUERUN_ROOT" worktree prune 2>/dev/null || true
+if [[ "${known_orphans:-0}" -gt 0 ]]; then
+  echo "recover: $known_orphans known orphaned worktree(s) (report-once; see .gluerun-state/recover-orphans.json)"
+fi
 echo "recover ($mode): $actions action(s)"

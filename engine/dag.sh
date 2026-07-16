@@ -287,8 +287,15 @@ def gate_data(node_id):
     path = gate_path(node_id)
     if not os.path.exists(path):
         return None
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        # A corrupt gate file must never take down the whole frontier
+        # computation (0.5.0): treat it as not-passed and say so on stderr —
+        # fail-closed for the node, fail-soft for the DAG.
+        print(f"warning: unreadable gate file for {node_id}: {path} ({exc})", file=sys.stderr)
+        return None
     validate_gate(data, path, node_id)
     if data.get("node") != node_id:
         fail(f"gate node mismatch for {node_id}: {path}")
@@ -336,20 +343,35 @@ elif cmd == "next-areas":
     # "virtually complete", so a node whose dependency is merely in progress
     # (no passing gate) is correctly excluded. Emits a single line of JSON so a
     # console/reconciler can consume the whole frontier; next-area is unchanged.
+    # --explain (0.5.0): also emit excluded[] with per-node exclusion reasons —
+    # the field run's operator had to source lib.sh internals to learn why the
+    # frontier was empty.
+    explain = "--explain" in args
     frontier = []
+    excluded = []
     all_passed = True
     for node in nodes:
         node_id = node["id"]
         if gate_passed(node_id):
+            if explain:
+                excluded.append({"node": node_id, "reason": "gate-passed"})
             continue
         all_passed = False
         if gate_authoritative_blocked(node_id):
+            if explain:
+                excluded.append({"node": node_id, "reason": "authoritative-blocked"})
             continue
-        if all(gate_passed(dep) for dep in node.get("dependsOn", [])):
-            entry = {key: node[key] for key in ("stage", "area", "layer", "kind", "requiredCompletion")}
-            entry["node"] = node_id
-            frontier.append(entry)
+        unmet = [dep for dep in node.get("dependsOn", []) if not gate_passed(dep)]
+        if unmet:
+            if explain:
+                excluded.append({"node": node_id, "reason": "deps-not-gated", "unmetDeps": unmet})
+            continue
+        entry = {key: node[key] for key in ("stage", "area", "layer", "kind", "requiredCompletion")}
+        entry["node"] = node_id
+        frontier.append(entry)
     result = {"frontier": frontier}
+    if explain:
+        result["excluded"] = excluded
     if all_passed:
         result["allComplete"] = True
     print(json.dumps(result, separators=(",", ":")))

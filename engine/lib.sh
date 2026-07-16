@@ -2286,6 +2286,36 @@ PY
   return 1
 }
 
+# Kill a dispatch's process GROUP — but only when the recorded pgid proves a
+# setsid leader (pgid == recorded pid), never our own group, never pgid <= 1.
+# Bounds the field leak of orphan Vite/Playwright gate servers surviving their
+# parked workers. GLUERUN_KILL_ORPHAN_PGROUP=0 disables.
+gluerun_kill_dispatch_pgroup() {
+  local task_id="$1"
+  [[ "${GLUERUN_KILL_ORPHAN_PGROUP:-1}" == "1" ]] || return 1
+  local record pgid pid
+  record="$(gluerun_dispatch_record_path "$task_id")"
+  [[ -f "$record" ]] || return 1
+  pgid="$(gluerun_json_field "$record" pgid 2>/dev/null || true)"
+  pid="$(gluerun_json_field "$record" pid 2>/dev/null || true)"
+  [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || return 1
+  [[ "$pgid" == "$pid" ]] || return 1                      # setsid leader proven
+  local own_pgid
+  own_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$pgid" != "$own_pgid" ]] || return 1
+  kill -TERM -- "-$pgid" 2>/dev/null || true
+  local waited=0
+  while pgrep -g "$pgid" >/dev/null 2>&1 && (( waited < 5 )); do
+    sleep 1; waited=$((waited + 1))
+  done
+  if pgrep -g "$pgid" >/dev/null 2>&1; then
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+  fi
+  gluerun_append_event "dispatch.pgroup_killed" "dispatch process group terminated" \
+    "{\"taskId\":\"$task_id\",\"pgid\":$pgid}" 2>/dev/null || true
+  return 0
+}
+
 # Reap finished/crashed dispatches. Echoes counter lines for the caller:
 #   reaped_ok=N reaped_failures=N reaped_refused=N reaped_terminal=N workers_running=N
 # Exit-code contract (l1-drive): 0 = ok/no-op, 2 = REFUSAL (preconditions
@@ -2753,6 +2783,29 @@ if a is None or a >= minutes:
     print("%s %s %s" % (node, status, "unknown" if a is None else int(a)))
 PY
   done < <(find "$GLUERUN_L1_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
+}
+
+# Reclaim stale L1 planning leases (0.5.0). gluerun_l1_list_stale is
+# report-only; in the field three orphaned `active` L1 leases from an
+# interrupted planning run excluded their nodes from the frontier for hours
+# with no recovery path short of hand-editing lease JSON. Marks each stale
+# lease failed (frontier selection only excludes proposed|planning|active) and
+# emits recover.l1_lease_reclaimed. Planners are short-lived; the wall-clock
+# threshold (GLUERUN_L1_STALE_MINUTES) is conservative.
+gluerun_l1_reclaim_stale() {
+  local line node status age reclaimed=0
+  while IFS=' ' read -r node status age; do
+    [[ -n "$node" ]] || continue
+    if ! gluerun_l1_lease_set_status "$node" failed; then
+      echo "recover: could not reclassify l1 lease $node (see error above)" >&2
+      continue
+    fi
+    gluerun_append_event "recover.l1_lease_reclaimed" "stale l1 planning lease reclassified failed" \
+      "{\"node\":\"$node\",\"previousStatus\":\"$status\",\"ageMin\":\"$age\"}"
+    echo "recover: reclaimed stale l1 lease $node ($status, ${age}m)"
+    reclaimed=$((reclaimed + 1))
+  done < <(gluerun_l1_list_stale)
+  return 0
 }
 
 # Select up to `limit` ready L1 nodes for parallel planning. READ-ONLY: queries
