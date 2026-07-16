@@ -194,7 +194,8 @@ PY
   l1_import_rejections="$(field l1_import_rejections_this_run)"
   reaped_ok="$(field reaped_ok)"; reaped_failures="$(field reaped_failures)"
   workers_running="$(field workers_running)"
-  for v in dispatched integrated faild faili planner_failures l1_import_rejections reaped_ok reaped_failures workers_running; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
+  promoted="$(field gates_promoted_this_run)"
+  for v in dispatched integrated faild faili planner_failures l1_import_rejections reaped_ok reaped_failures workers_running promoted; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
   gen_complete="no"; printf '%s\n' "$cycle_out" | grep -q 'all-areas-complete' && gen_complete="yes"
   gen_made="no"; printf '%s\n' "$cycle_out" | grep -q 'gen:.*generated:' && gen_made="yes"
   ready_now="$(gluerun_list_ready_tasks | wc -l | tr -d ' ')"
@@ -207,9 +208,9 @@ PY
     # and reset the breaker, which could then never trip). Progress is an
     # observed completion, an integration, or new planned work; reap failures
     # join the failure side below.
-    { [[ "$reaped_ok" -gt 0 ]] || [[ "$integrated" -gt 0 ]] || [[ "$gen_made" == "yes" ]]; } && progress="yes"
+    { [[ "$reaped_ok" -gt 0 ]] || [[ "$integrated" -gt 0 ]] || [[ "$gen_made" == "yes" ]] || [[ "$promoted" -gt 0 ]]; } && progress="yes"
   else
-    { [[ "$dispatched" -gt 0 && "$faild" -eq 0 ]] || [[ "$integrated" -gt 0 ]] || [[ "$gen_made" == "yes" ]]; } && progress="yes"
+    { [[ "$dispatched" -gt 0 && "$faild" -eq 0 ]] || [[ "$integrated" -gt 0 ]] || [[ "$gen_made" == "yes" ]] || [[ "$promoted" -gt 0 ]]; } && progress="yes"
   fi
 
   if [[ "$progress" == "yes" ]]; then

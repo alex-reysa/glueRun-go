@@ -240,7 +240,10 @@ if [[ "$mode" == "actuate" ]]; then
   # candidates when enabled, then plan the next dispatch frontier. Promotion is
   # L0 completion-authority work, not planner generation, so GLUERUN_GENERATE=0
   # does not suppress it.
-  if [[ ${#ready_tasks[@]} -eq 0 && "$dispatch_budget" -gt 0 && "${GLUERUN_AUTO_PROMOTE_GATES:-0}" == "1" ]]; then
+  # 0.5.0: default ON, and promotion no longer requires a free dispatch slot —
+  # it is completion-authority work, not dispatch (0.4.0's extra condition
+  # meant auto-promotion effectively never fired in the field).
+  if [[ ${#ready_tasks[@]} -eq 0 && "${GLUERUN_AUTO_PROMOTE_GATES:-1}" == "1" ]]; then
     echo "actuation: ready queue empty; attempting gate promotion..."
     promo_out="$("${GLUERUN_PROMOTER:-$SCRIPT_DIR/promote-gate.sh}" --from-reconcile --frontier 2>&1)" || true
     printf '%s\n' "$promo_out" | sed 's/^/  promotion: /'

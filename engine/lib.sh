@@ -1114,7 +1114,10 @@ import sys
 
 tasks = json.loads('''$index''')
 gate_status = sys.argv[1]
-if gate_status == "passed" or not tasks:
+# passed -> nothing to promote; failed/blocked -> promotion was ATTEMPTED and
+# refused, so the node needs more work and must stay plannable (suppressing
+# here would deadlock an all-integrated node behind a red gate).
+if gate_status in ("passed", "failed", "blocked") or not tasks:
     sys.exit(1)
 
 OPEN = {"ready", "planned", "running", "needs-review", "accepted", ""}
@@ -3054,6 +3057,20 @@ gluerun_l1_fanout() {
   fi
   local -a nodes=()
   mapfile -t nodes < <(gluerun_select_l1_frontier "$cap")
+  # Pending-promotion pre-filter (0.5.0): nodes whose tasks are complete but
+  # whose gate is unpublished must not be re-planned (duplicate churn).
+  if [[ "${GLUERUN_SUPPRESS_UNPROMOTED_REPLAN:-1}" == "1" && "${#nodes[@]}" -gt 0 ]]; then
+    local -a plannable=()
+    local _n
+    for _n in "${nodes[@]}"; do
+      if gluerun_node_pending_promotion "$_n" 2>/dev/null; then
+        echo "actuation: l1 fanout: skipped pending-promotion node=$_n"
+      else
+        plannable+=("$_n")
+      fi
+    done
+    nodes=(${plannable[@]+"${plannable[@]}"})
+  fi
   if [[ "${#nodes[@]}" -eq 0 ]]; then
     echo "actuation: l1 fanout: no eligible frontier nodes"
     return 0

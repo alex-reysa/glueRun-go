@@ -20,6 +20,9 @@ source "$ENGINE_BIN/lib.sh"
 
 from_reconcile="no"
 frontier_mode="no"
+if_ready_mode="no"
+operator_mode="no"
+declare -a operator_evidence=()
 declare -a requested_nodes=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,8 +30,19 @@ while [[ $# -gt 0 ]]; do
       from_reconcile="yes"; shift ;;
     --frontier)
       frontier_mode="yes"; shift ;;
+    --if-ready)
+      # Named nodes with frontier (non-strict) disposition: promote when
+      # registered+ready, skip silently otherwise. Used by integrate-time
+      # auto-promotion (0.5.0).
+      if_ready_mode="yes"; shift ;;
+    --operator)
+      # Operator authority for kind=evaluation nodes: promote on the
+      # operator's say-so with --evidence refs (no review file needed).
+      operator_mode="yes"; shift ;;
+    --evidence)
+      operator_evidence+=("$2"); shift 2 ;;
     --help|-h)
-      echo "usage: $0 [--from-reconcile] NODE | [--from-reconcile] --frontier" >&2
+      echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier" >&2
       exit 0 ;;
     -*)
       echo "unknown option: $1" >&2; exit 2 ;;
@@ -38,7 +52,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$frontier_mode" != "yes" && "${#requested_nodes[@]}" -eq 0 ]]; then
-  echo "usage: $0 [--from-reconcile] NODE | [--from-reconcile] --frontier" >&2
+  echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier" >&2
   exit 2
 fi
 
@@ -762,8 +776,61 @@ gate_promoter_config() {
 
 task_integrated() {
   local task_id="$1" task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+  # Superseded tasks are archived under tasks/superseded/ (0.5.0 convention).
+  [[ -f "$task_file" ]] || task_file="$GLUERUN_TASKS_DIR/superseded/$task_id.md"
   [[ -f "$task_file" ]] || return 1
   grep -Eq '^Status:[[:space:]]+integrated[[:space:]]*$' "$task_file"
+}
+
+# Terminal-predecessor tolerance (0.5.0, GLUERUN_PROMOTE_TOLERATE_TERMINAL=1).
+# 0.4.0's promoter counted only `Status: integrated` tasks, so superseded or
+# blocked predecessors of an integrated successor kept a finished node
+# permanently `node-tasks-not-integrated` (field audit: every gate needed a
+# manual STOP-drain + hand-supersede of historical attempt chains). A required
+# task is SATISFIED when it is integrated, OR when its supersededBy chain
+# reaches an integrated task, OR when an integrated task in the same node
+# covers its owned files.
+task_satisfied() {
+  local task_id="$1"
+  task_integrated "$task_id" && return 0
+  [[ "${GLUERUN_PROMOTE_TOLERATE_TERMINAL:-1}" == "1" ]] || return 1
+  local task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+  [[ -f "$task_file" ]] || task_file="$GLUERUN_TASKS_DIR/superseded/$task_id.md"
+  [[ -f "$task_file" ]] || return 1
+  local node
+  node="$(gluerun_task_node "$task_file" 2>/dev/null || true)"
+  python3 - "$task_id" "$(gluerun_node_task_index_json "$node" 2>/dev/null || echo '[]')" <<'PY'
+import json
+import sys
+
+task_id, index_raw = sys.argv[1], sys.argv[2]
+tasks = json.loads(index_raw)
+by_id = {t["taskId"]: t for t in tasks}
+me = by_id.get(task_id)
+if me is None:
+    sys.exit(1)
+integrated = [t for t in tasks if t["status"] == "integrated"]
+
+
+def satisfied(t, depth=0):
+    if t["status"] == "integrated":
+        return True
+    if depth > 16:
+        return False
+    for succ in t.get("supersededBy", []):
+        nxt = by_id.get(succ)
+        if nxt is not None and satisfied(nxt, depth + 1):
+            return True
+    owned = set(t.get("ownedFiles", []))
+    if owned:
+        for it in integrated:
+            if owned <= set(it.get("ownedFiles", [])):
+                return True
+    return False
+
+
+sys.exit(0 if satisfied(me) else 1)
+PY
 }
 
 integrated_task_signature_index_json() {
@@ -815,11 +882,16 @@ def parse_task(path):
     }
 
 items = []
-if os.path.isdir(tasks_dir):
-    for name in sorted(os.listdir(tasks_dir)):
+# Include tasks/superseded/ (0.5.0): a superseded predecessor's owned files may
+# be the signature evidence that its integrated successor covers.
+scan_dirs = [tasks_dir, os.path.join(tasks_dir, "superseded")]
+for base in scan_dirs:
+    if not os.path.isdir(base):
+        continue
+    for name in sorted(os.listdir(base)):
         if not name.startswith("TASK-") or not name.endswith(".md") or name == "TEMPLATE.md":
             continue
-        item = parse_task(os.path.join(tasks_dir, name))
+        item = parse_task(os.path.join(base, name))
         if item:
             items.append(item)
 print(json.dumps(items, separators=(",", ":")))
@@ -889,7 +961,7 @@ required_tasks_integrated() {
     return 0
   fi
   for task_id in "${gate_required_tasks[@]}"; do
-    task_integrated "$task_id" || gate_missing_tasks+=("$task_id")
+    task_satisfied "$task_id" || gate_missing_tasks+=("$task_id")
   done
   if [[ "${#gate_missing_tasks[@]}" -gt 0 ]]; then
     echo "required task not integrated for $gate_node: ${gate_missing_tasks[*]}" >&2
@@ -1382,11 +1454,50 @@ promote_storage_proof_node() {
   echo "promoted node=$node gate=$gates_dir/$node.gate-result.json log=$green_log_ref skip-guard-red=$red_log_ref"
 }
 
+unsupported_node_help() {
+  local node="$1"
+  cat >&2 <<EOF
+unsupported gate promotion node: $node
+  This promoter promotes only nodes in its registry (gate_promoter_config).
+  Options:
+    - register $node in your project promoter (config key "promoter" in
+      gluerun.config.json points at it)
+    - inspect eligibility: gluerun next-areas --explain
+EOF
+}
+
+# Run a promotion gate command with a stderr progress heartbeat every
+# GLUERUN_PROMOTE_PROGRESS_SECS (default 15; 0 disables). The field run's
+# promoter was silent for its full 17-47s regression runtime, so operators
+# repeatedly mistook a healthy promotion for a hang. stdout stays byte-
+# identical (parsed by reconcile); the heartbeat goes to stderr only.
+run_gate_command_with_progress() {
+  # args: command log_path  -- returns the command's exit code
+  local command="$1" log_path="$2"
+  local interval="${GLUERUN_PROMOTE_PROGRESS_SECS:-15}"
+  [[ "$interval" =~ ^[0-9]+$ ]] || interval=15
+  local ec=0
+  if (( interval == 0 )); then
+    (cd "$GLUERUN_ROOT" && bash -c "$command") >"$log_path" 2>&1 || ec=$?
+    return "$ec"
+  fi
+  (cd "$GLUERUN_ROOT" && bash -c "$command") >"$log_path" 2>&1 &
+  local child=$! started=$SECONDS
+  while kill -0 "$child" 2>/dev/null; do
+    sleep 1
+    if (( (SECONDS - started) % interval == 0 && SECONDS > started )); then
+      echo "promote-gate: still running ($((SECONDS - started))s; log: $log_path)" >&2
+    fi
+  done
+  wait "$child" || ec=$?
+  return "$ec"
+}
+
 promote_node() {
   local node="$1" strict="${2:-yes}"
   if ! gate_promoter_config "$node"; then
     if [[ "$strict" == "yes" ]]; then
-      echo "unsupported gate promotion node: $node" >&2
+      unsupported_node_help "$node"
       return 2
     fi
     return 0
@@ -1466,11 +1577,8 @@ promote_node() {
   gluerun_append_event "gate_promotion.started" "gate promotion started" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
   local exit_code=0
-  if (cd "$GLUERUN_ROOT" && bash -c "$command") >"$log_path" 2>&1; then
-    exit_code=0
-  else
-    exit_code=$?
-  fi
+  echo "promote-gate: node=$node running regression (log: $log_ref)" >&2
+  run_gate_command_with_progress "$command" "$log_path" || exit_code=$?
   if [[ "$exit_code" -ne 0 ]]; then
     rm -f "$tmp_gate"
     gluerun_append_event "gate_promotion.failed" "gate promotion command failed" \
@@ -1495,8 +1603,208 @@ promote_node() {
 
 # Route one node to the correct disposition: promote (or block-on-readiness)
 # for promotable nodes, block for block-registry nodes, refuse/skip otherwise.
+# --- Evaluation gates (0.5.0 governance) -------------------------------------
+# kind=evaluation nodes are judgment calls, not regression runs. Authority:
+#   - `--operator` always promotes (evidenceClass operator-review; requires
+#     >=1 --evidence ref naming the reviewed artifact(s)).
+#   - nodes declaring `authority: agent-review-allowed` in the DAG promote on
+#     a VALID passing review file at
+#     docs/orchestration/gates/evidence/<node>.review.json (gate-review.v0:
+#     verdict pass, node match, evidenceRefs exist, headSha ancestor of the
+#     target head, age <= GLUERUN_REVIEW_MAX_AGE_HOURS, default 168; 0=off).
+#   - default authority (operator) without --operator refuses with the exact
+#     unlock instructions. The field run's promoter accepted agent-authored
+#     evidence for an operator-only node with no check at all — this closes
+#     that hole while codifying the sanctioned sub-agent-review path.
+promote_evaluation_node() {
+  local node="$1" strict="${2:-yes}"
+  if node_already_passed "$node"; then
+    echo "already-passed node=$node"
+    return 0
+  fi
+  local head_sha recorded_at gate_path tmp_gate
+  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
+  recorded_at="$(gluerun_timestamp)"
+  gate_path="$gates_dir/$node.gate-result.json"
+
+  if [[ "$operator_mode" == "yes" ]]; then
+    if [[ ${#operator_evidence[@]} -eq 0 ]]; then
+      echo "promote-gate --operator requires at least one --evidence REF for $node" >&2
+      return 2
+    fi
+    tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
+    python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "${operator_evidence[@]}" <<'PY'
+import json
+import sys
+
+node, head_sha, recorded_at, out_path = sys.argv[1:5]
+refs = sys.argv[5:]
+gate = {
+    "schema": "gluerun.orchestration.gate-result.v0",
+    "node": node,
+    "status": "passed",
+    "authoritative": True,
+    "evidenceClass": "operator-review",
+    "evidence": [
+        {"kind": "source-path", "ref": ref, "description": f"operator-reviewed evidence for {node}"}
+        for ref in refs
+    ],
+    "decidedBy": "operator:" + (__import__("os").environ.get("USER") or "cli"),
+    "rationale": f"Evaluation gate {node} promoted on operator authority (promote-gate --operator).",
+    "recordedAt": recorded_at,
+}
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(gate, f, indent=2)
+    f.write("\n")
+PY
+    validate_gate_candidate_file "$node" "$tmp_gate"
+    mv "$tmp_gate" "$gate_path"
+    "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
+    gluerun_append_event "gate_promotion.completed" "evaluation gate promoted (operator)" \
+      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"evidenceClass\":\"operator-review\"}"
+    promoted_total=$((promoted_total + 1))
+    echo "promoted node=$node gate=$gate_path evidenceClass=operator-review"
+    return 0
+  fi
+
+  local authority
+  authority="$(node_static_field "$node" authority 2>/dev/null || echo operator)"
+  [[ -n "$authority" ]] || authority="operator"
+  local review_file="$gates_dir/evidence/$node.review.json"
+  if [[ "$authority" != "agent-review-allowed" ]]; then
+    if [[ "$strict" == "yes" ]]; then
+      cat >&2 <<EOF
+evaluation node $node requires operator authority.
+  Options:
+    - rerun with: gluerun promote-gate $node --operator --evidence <path>...
+    - or set "authority": "agent-review-allowed" on the node in dag.v0.json
+      and record review evidence at $review_file (gate-review.v0)
+EOF
+      return 2
+    fi
+    return 0
+  fi
+
+  if [[ ! -f "$review_file" ]]; then
+    if [[ "$strict" == "yes" ]]; then
+      echo "evaluation node $node: no review evidence at $review_file (gate-review.v0)" >&2
+      return 2
+    fi
+    return 0
+  fi
+  local review_json
+  if ! review_json="$(gluerun_normalize_schema_id "$review_file" "gate review")"; then
+    echo "evaluation node $node: unreadable review file $review_file" >&2
+    return 2
+  fi
+  if ! gluerun_json_schema_check "$review_json" "$GLUERUN_ENGINE_HOME/schemas/gate-review.v0.schema.json" "gate review" 2>&1; then
+    echo "evaluation node $node: review file failed gate-review.v0 validation" >&2
+    return 2
+  fi
+  local r_node r_verdict r_head r_reviewer_kind r_reviewer_id r_recorded
+  r_node="$(gluerun_json_field "$review_file" node)"
+  r_verdict="$(gluerun_json_field "$review_file" verdict)"
+  r_head="$(gluerun_json_field "$review_file" headSha)"
+  r_reviewer_kind="$(gluerun_json_field "$review_file" reviewer.kind 2>/dev/null || echo agent)"
+  r_reviewer_id="$(gluerun_json_field "$review_file" reviewer.id 2>/dev/null || echo unknown)"
+  r_recorded="$(gluerun_json_field "$review_file" recordedAt)"
+  if [[ "$r_node" != "$node" ]]; then
+    echo "evaluation node $node: review file names node $r_node" >&2
+    return 2
+  fi
+  if [[ "$r_verdict" != "pass" ]]; then
+    echo "evaluation node $node: review verdict is '$r_verdict' — refusing to promote (a failed review never auto-writes a failed gate; that is an operator action)" >&2
+    return 2
+  fi
+  if ! git -C "$GLUERUN_ROOT" merge-base --is-ancestor "$r_head" "$head_sha" 2>/dev/null; then
+    echo "evaluation node $node: review headSha $r_head is not an ancestor of the target head — re-review at the current head" >&2
+    return 2
+  fi
+  local max_age="${GLUERUN_REVIEW_MAX_AGE_HOURS:-168}"
+  if [[ "$max_age" =~ ^[0-9]+$ && "$max_age" -gt 0 ]]; then
+    if ! python3 - "$r_recorded" "$max_age" <<'PY'
+import sys
+from datetime import datetime, timezone
+recorded, max_h = sys.argv[1], int(sys.argv[2])
+try:
+    t = datetime.fromisoformat(recorded.replace("Z", "+00:00"))
+except Exception:
+    sys.exit(1)
+age_h = (datetime.now(timezone.utc) - t).total_seconds() / 3600.0
+sys.exit(0 if age_h <= max_h else 1)
+PY
+    then
+      echo "evaluation node $node: review evidence is older than ${max_age}h (GLUERUN_REVIEW_MAX_AGE_HOURS) — re-review" >&2
+      return 2
+    fi
+  fi
+  # Missing evidenceRefs fail closed.
+  local missing_ref
+  missing_ref="$(python3 - "$review_file" "$GLUERUN_ROOT" <<'PY'
+import json, os, sys
+review, root = sys.argv[1], sys.argv[2]
+data = json.load(open(review))
+for ref in data.get("evidenceRefs", []):
+    if not os.path.exists(os.path.join(root, ref)):
+        print(ref)
+        sys.exit(0)
+PY
+)"
+  if [[ -n "$missing_ref" ]]; then
+    echo "evaluation node $node: review evidenceRef does not exist in repo: $missing_ref" >&2
+    return 2
+  fi
+
+  tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
+  python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "$review_file" "$r_reviewer_kind" "$r_reviewer_id" "$GLUERUN_ROOT" <<'PY'
+import json
+import os
+import sys
+
+node, head_sha, recorded_at, out_path, review_file, r_kind, r_id, root = sys.argv[1:9]
+review = json.load(open(review_file))
+evidence = [
+    {"kind": "source-path", "ref": os.path.relpath(review_file, root),
+     "description": f"gate-review.v0 evidence for {node} (reviewer {r_kind}/{r_id})"}
+]
+for ref in review.get("evidenceRefs", []):
+    evidence.append({"kind": "source-path", "ref": ref,
+                     "description": f"review-cited evidence for {node}"})
+gate = {
+    "schema": "gluerun.orchestration.gate-result.v0",
+    "node": node,
+    "status": "passed",
+    "authoritative": True,
+    "evidenceClass": "agent-review",
+    "evidence": evidence,
+    "decidedBy": f"agent-review:{r_kind}/{r_id}",
+    "rationale": review.get("rationale", f"Evaluation gate {node} promoted on independent review evidence."),
+    "recordedAt": recorded_at,
+}
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(gate, f, indent=2)
+    f.write("\n")
+PY
+  validate_gate_candidate_file "$node" "$tmp_gate"
+  mv "$tmp_gate" "$gate_path"
+  "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
+  gluerun_append_event "gate_promotion.completed" "evaluation gate promoted (agent review)" \
+    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"evidenceClass\":\"agent-review\",\"reviewer\":\"$r_reviewer_kind/$r_reviewer_id\"}"
+  promoted_total=$((promoted_total + 1))
+  echo "promoted node=$node gate=$gate_path evidenceClass=agent-review reviewer=$r_reviewer_kind/$r_reviewer_id"
+  return 0
+}
+
 process_node() {
   local node="$1" strict="${2:-yes}"
+  # Evaluation nodes route to the governance path BEFORE the registry lookup:
+  # their promotion is an authority decision, never a regression run.
+  local node_kind
+  node_kind="$(node_static_field "$node" kind 2>/dev/null || true)"
+  if [[ "$node_kind" == "evaluation" ]]; then
+    promote_evaluation_node "$node" "$strict"
+    return $?
+  fi
   if gate_promoter_config "$node"; then
     promote_node "$node" "$strict"
     return $?
@@ -1506,7 +1814,7 @@ process_node() {
     return $?
   fi
   if [[ "$strict" == "yes" ]]; then
-    echo "unsupported gate promotion node: $node" >&2
+    unsupported_node_help "$node"
     return 2
   fi
   return 0
@@ -1538,7 +1846,7 @@ PY
   fi
 fi
 
-strict_arg="$([[ "$frontier_mode" == "yes" ]] && echo no || echo yes)"
+strict_arg="$([[ "$frontier_mode" == "yes" || "$if_ready_mode" == "yes" ]] && echo no || echo yes)"
 overall_rc=0
 for node in "${requested_nodes[@]}"; do
   if process_node "$node" "$strict_arg"; then

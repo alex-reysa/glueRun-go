@@ -108,6 +108,18 @@ for _ssl in ${single_slice_layers//,/ }; do
 done
 
 run_id="$(gluerun_worker_run_id)"
+
+# Planner suppression (0.5.0, GLUERUN_SUPPRESS_UNPROMOTED_REPLAN=1): a node
+# whose tasks are all integrated/satisfied but whose gate is unpublished must
+# NOT be re-planned — 0.4.0 kept minting duplicate tasks for such nodes
+# (import-rejected each cycle, feeding the false-quota chokepoint) until an
+# operator manually promoted. Not a failure: exit 0, distinct event.
+if [[ "${GLUERUN_SUPPRESS_UNPROMOTED_REPLAN:-1}" == "1" && -n "$active_node" ]]   && gluerun_node_pending_promotion "$active_node" 2>/dev/null; then
+  gluerun_append_event "planner.suppressed_pending_promotion"     "node tasks complete; awaiting gate promotion — not re-planning"     "{\"node\":\"$active_node\",\"area\":\"$active_area\",\"runId\":\"$run_id\"}"
+  echo "planner-suppressed (pending-promotion node=$active_node)"
+  exit 0
+fi
+
 backoff_json="$(gluerun_planner_backoff_active_json 2>/dev/null || true)"
 if [[ -n "$backoff_json" ]]; then
   event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$backoff_json" <<'PY'

@@ -83,6 +83,7 @@ fi
 
 gate_cmd="${GLUERUN_DEFAULT_GATE_CMD}"
 integrated_this_run=0
+declare -a integrated_nodes=()
 failed_integrations=0
 skipped=0
 eligible=0
@@ -310,6 +311,14 @@ PY
   task_file="$GLUERUN_TASKS_DIR/$task_id.md"
   [[ -f "$task_file" ]] && gluerun_task_set_status "$task_file" "integrated" || true
   integrated_this_run=$((integrated_this_run + 1))
+  # Event-driven promotion (0.5.0): remember the node so the post-loop pass
+  # can promote it the moment its last task lands, instead of waiting for an
+  # empty-queue reconcile cycle that may never coincide (field audit: every
+  # gate needed manual promotion).
+  integrated_node="$(gluerun_task_node "$task_file" 2>/dev/null || true)"
+  if [[ -n "$integrated_node" ]]; then
+    integrated_nodes+=("$integrated_node")
+  fi
 
   # Push the updated target and the worker branch to origin (no-op unless GLUERUN_PUSH=1).
   push_branch "$GLUERUN_TARGET_BRANCH"
@@ -322,9 +331,31 @@ if [[ "$dry_run" == "yes" ]]; then
   exit 0
 fi
 
+# Integrate-time gate promotion (0.5.0, GLUERUN_AUTO_PROMOTE_GATES=1 default):
+# for each node whose tasks all just reached a satisfied state and whose gate
+# is unpublished, run the configured promoter in non-strict named-node mode.
+gates_promoted_this_run=0
+if [[ "${GLUERUN_AUTO_PROMOTE_GATES:-1}" == "1" && ${#integrated_nodes[@]} -gt 0 ]]; then
+  mapfile -t _promo_nodes < <(printf '%s\n' "${integrated_nodes[@]}" | sort -u)
+  for _node in "${_promo_nodes[@]}"; do
+    [[ -n "$_node" ]] || continue
+    if gluerun_node_pending_promotion "$_node" 2>/dev/null; then
+      echo "integration: node $_node pending promotion; invoking promoter..."
+      promo_out="$("$SCRIPT_DIR/promote-gate.sh" --from-reconcile --if-ready "$_node" 2>&1)" || true
+      printf '%s\n' "$promo_out" | sed 's/^/  promotion: /'
+      if grep -q '^promoted node=' <<<"$promo_out"; then
+        gates_promoted_this_run=$((gates_promoted_this_run + 1))
+      fi
+      gluerun_append_event "integration.promotion_attempted" "integrate-time gate promotion attempted" \
+        "{\"runId\":\"$run_id\",\"node\":\"$_node\"}"
+    fi
+  done
+fi
+
 gluerun_write_origin_state "$run_id" 2>/dev/null || true
 echo "integrated_this_run=$integrated_this_run"
 echo "failed_integrations=$failed_integrations"
+echo "gates_promoted_this_run=$gates_promoted_this_run"
 echo "skipped=$skipped"
 gluerun_append_event "integration.completed" "integration run completed" \
   "{\"runId\":\"$run_id\",\"eligible\":$eligible,\"integratedThisRun\":$integrated_this_run,\"failedIntegrations\":$failed_integrations,\"skipped\":$skipped}"

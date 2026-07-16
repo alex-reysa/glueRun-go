@@ -86,6 +86,9 @@ def validate_dag(data):
             fail(f"unknown kind for {node_id}: {kind}")
         if not isinstance(node.get("dependsOn"), list):
             fail(f"dependsOn must be an array for {node_id}")
+        authority = node.get("authority")
+        if authority is not None and authority not in ("operator", "agent-review-allowed"):
+            fail(f"unknown authority for {node_id}: {authority} (operator | agent-review-allowed)")
 
     for req in required_nodes:
         if req not in by_id:
@@ -371,6 +374,7 @@ elif cmd == "node-fields":
     for key in ("id", "stage", "area", "layer", "kind", "requiredCompletion"):
         out_key = "node" if key == "id" else key
         print(f"{out_key}={node[key]}")
+    print(f"authority={node.get('authority', 'operator')}")
 elif cmd == "area-gate":
     if len(args) != 1:
         fail("usage: dag.sh area-gate NODE", 2)

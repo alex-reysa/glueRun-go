@@ -271,13 +271,6 @@ cmd_migrate() {
   echo "gluerun migrate: repo is now at schema $rsv"
 }
 
-cmd_promote_gate() {
-  local home root promoter; home="$(resolve_engine_home)"; root="$(require_repo)"
-  promoter="${GLUERUN_PROMOTER:-$home/gluerun-ext/promote-gate.sh}"
-  [[ -f "$promoter" ]] || die "no gate promoter found ($promoter); set GLUERUN_PROMOTER or enable a project promoter"
-  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" exec bash "$promoter" "$@"
-}
-
 # Read-only metrics: delegate into the integrated engine/ctx-metrics.sh
 # extractor (gluerun_ctx_metrics_json). Adds no metric logic of its own —
 # it only resolves the engine, sources the extractor, and forwards the runs
@@ -435,7 +428,7 @@ main() {
     next-area)     run_engine dag.sh next-area "$@" ;;
     next-areas)    run_engine dag.sh next-areas "$@" ;;
     area-gate)     run_engine dag.sh area-gate "$@" ;;
-    promote-gate)  cmd_promote_gate "$@" ;;
+    promote-gate)  run_engine promote-gate.sh "$@" ;;   # sources lib.sh -> honors config "promoter"
     metrics)       cmd_metrics "$@" ;;
     graph)         [[ "${GLUERUN_CTX_GRAPH:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_graph "$@" ;;
     experiment-report) [[ "${GLUERUN_CTX_EXPERIMENT:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_experiment_report "$@" ;;
