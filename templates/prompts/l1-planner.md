@@ -45,10 +45,15 @@ Required completion: `[REQUIRED-COMPLETION]`
   emit approximately `ceil(N / [SLICE-BUDGET])` tasks, capped by `[COUNT]`.
 - Tasks in the same output batch must be mutually independent: no task may
   depend on another task in the same batch, and owned files must not overlap.
-- `Status: ready`. `Area: [AREA]`. `Worker branch:
-  agent/[AREA]/<task-id>-<kebab-slug>`. `Test policy: strict_test_first`.
+- `Status: ready`. `Area: [AREA]`. `DAG node: [NODE]` (the executable node this
+  task belongs to -- required for duplicate detection and gate promotion).
+  `Worker branch: agent/[AREA]/<task-id>-<kebab-slug>`.
+  `Test policy: strict_test_first`.
   `Gate command: go build ./... && go vet ./... && go test ./...`.
 - `Dispatch mode: canonical`.
+- When a task intentionally replaces an earlier blocked/failed task with the
+  same file scope, add a `Supersedes: TASK-XXXX` header line naming it -- this
+  is the sanctioned way past the duplicate guard (never mutate old task files).
 - `Depends on: []` when there are no task dependencies, otherwise a comma
   separated list of already-integrated `TASK-XXXX` ids only.
 - Owned files: up to `[SLICE-BUDGET]` mutually-independent slices, each slice an
@@ -106,7 +111,7 @@ Output ONLY a JSON object matching
   "tasks": [
     {
       "taskId": "TASK-XXXX",
-      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nTarget branch: `[TARGET]`\nWorker branch: `agent/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `go build ./... && go vet ./... && go test ./...`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
+      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nDAG node: [NODE]\nTarget branch: `[TARGET]`\nWorker branch: `agent/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `go build ./... && go vet ./... && go test ./...`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
     }
   ]
 }

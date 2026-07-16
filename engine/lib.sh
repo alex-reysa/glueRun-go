@@ -262,6 +262,7 @@ EOF
 
 Status: ready
 Area: core
+DAG node: <node-id>
 Target branch: `agent/integration`
 Worker branch: `agent/core/TASK-XXXX-<slug>`
 Test policy: `strict_test_first`
@@ -1562,9 +1563,29 @@ print(json.dumps({
 PY
 }
 
+# Duplicate-candidate guard (v2, 0.5.0). args: candidate_file [node] [mode].
+# mode "create" (default; planner/importer): an existing task blocks the
+#   candidate only while it is OPEN (ready/planned/running/needs-review/
+#   accepted). Terminal tasks (blocked/superseded/integrated/failed/cancelled/
+#   stale) never block — 0.4.0 scanned every task regardless of status, so a
+#   node whose only task was blocked could never re-plan (deadlock -> breaker;
+#   the field workaround was fake "legacy token" lines + file-scope inflation).
+# mode "dispatch" (ready-frontier dedup): integrated also blocks — dispatching
+#   a ready twin of integrated work is wasted compute.
+# Node identity: explicit `DAG node:` header (dagNode) first; the legacy
+# S#/D#-token regex is a fallback only. Both nodes non-empty -> must be equal.
+# Either side missing -> only a FULL signature (title AND objective AND
+# ownedFiles) matches; owned-files-alone no longer matches across unknown
+# nodes (the 0.4.0 empty-node wildcard).
+# A candidate whose `Supersedes:` header names the existing task bypasses the
+# guard (intentional replacement); bypasses are reported on fd 2 as
+# "SUPERSEDES <candidate> <existing>" for the caller to event.
 gluerun_find_duplicate_task_signature() {
-  local candidate="$1" node="${2:-}"
-  local candidate_json task_lines task_input
+  local candidate="$1" node="${2:-}" mode="${3:-create}"
+  # f MUST be local: this helper is called from inside callers' own
+  # while-read-f loops (gluerun_list_ready_tasks) and bash dynamic scoping
+  # would otherwise clobber their loop variable at EOF.
+  local candidate_json task_input f
   candidate_json="$(gluerun_task_json "$candidate")" || return 1
   task_input="$(mktemp)"
   while IFS= read -r f; do
@@ -1572,13 +1593,17 @@ gluerun_find_duplicate_task_signature() {
     case "$(basename "$f")" in TEMPLATE.md) continue ;; esac
     printf '%s\t%s\n' "$f" "$(gluerun_task_json "$f")" >>"$task_input"
   done < <(find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
-  python3 - "$node" "$candidate_json" "$task_input" <<'PY'
+  python3 - "$node" "$candidate_json" "$task_input" "$mode" <<'PY'
 import json
 import re
 import sys
 
-node, candidate_raw, task_input = sys.argv[1:4]
+node, candidate_raw, task_input, mode = sys.argv[1:5]
 candidate = json.loads(candidate_raw)
+
+BLOCKING = {"ready", "planned", "running", "needs-review", "accepted", ""}
+if mode == "dispatch":
+    BLOCKING = BLOCKING | {"integrated"}
 
 def norm_text(value):
     value = str(value or "").replace("`", " ").lower()
@@ -1594,6 +1619,9 @@ def owned_sig(task):
     return sorted({norm_path(item) for item in task.get("ownedFiles", []) if norm_path(item)})
 
 def infer_node(task):
+    explicit = str(task.get("dagNode", "") or "").strip()
+    if explicit:
+        return explicit
     text = " ".join(
         str(task.get(key, ""))
         for key in ("title", "objective")
@@ -1609,33 +1637,45 @@ candidate_sig = {
 }
 if not candidate_sig["title"] or not candidate_sig["objective"] or not candidate_sig["ownedFiles"]:
     sys.exit(1)
+supersedes = {str(t) for t in candidate.get("supersedes", [])}
 
 with open(task_input, "r", encoding="utf-8") as f:
     lines = [line.rstrip("\n") for line in f if line.strip()]
 for raw in lines:
     path, task_raw = raw.split("\t", 1)
     task = json.loads(task_raw)
-    existing_node = infer_node(task)
-    nodes_match = not candidate_sig["node"] or not existing_node or existing_node == candidate_sig["node"]
-    if not nodes_match:
+    status = str(task.get("status", "") or "").strip().lower()
+    if status not in BLOCKING:
         continue
+    existing_id = str(task.get("taskId", "") or "")
+    if existing_id and existing_id in supersedes:
+        print(f"SUPERSEDES {candidate.get('taskId','')} {existing_id}", file=sys.stderr)
+        continue
+    existing_node = infer_node(task)
     existing_owned = owned_sig(task)
     if existing_owned != candidate_sig["ownedFiles"]:
         continue
     existing_title = norm_text(task.get("title"))
     existing_objective = norm_text(task.get("objective"))
     full_match = existing_title == candidate_sig["title"] and existing_objective == candidate_sig["objective"]
-    owned_scope_match = existing_owned == candidate_sig["ownedFiles"]
-    if not (full_match or owned_scope_match):
+    if candidate_sig["node"] and existing_node:
+        if existing_node != candidate_sig["node"]:
+            continue
+        matched = True  # same node + same owned files
+    else:
+        # Unknown node on either side: only a full signature is conclusive.
+        matched = full_match
+    if not matched:
         continue
     print(json.dumps({
         "reason": "duplicate-candidate",
         "match": "full-signature" if full_match else "owned-files",
-        "existingTaskId": task.get("taskId", ""),
+        "existingTaskId": existing_id,
         "existingStatus": task.get("status", ""),
         "existingPath": path,
         "candidateTaskId": candidate.get("taskId", ""),
         "node": candidate_sig["node"],
+        "existingNode": existing_node,
         "title": task.get("title", ""),
     }, separators=(",", ":")))
     sys.exit(0)
@@ -1672,7 +1712,7 @@ gluerun_list_ready_tasks() {
     esac
     status="$(gluerun_task_field "$f" status 2>/dev/null || true)"
     if [[ "$status" == "ready" ]]; then
-      if [[ "${GLUERUN_SKIP_DUPLICATE_READY_TASKS:-1}" == "1" ]] && gluerun_find_duplicate_task_signature "$f" "" >/dev/null 2>&1; then
+      if [[ "${GLUERUN_SKIP_DUPLICATE_READY_TASKS:-1}" == "1" ]] && gluerun_find_duplicate_task_signature "$f" "" dispatch >/dev/null 2>&1; then
         continue
       fi
       echo "$f"
@@ -1755,6 +1795,9 @@ def owned_sig(task):
     return sorted({useful_scope(item) for item in task.get("ownedFiles", []) if useful_scope(item)})
 
 def infer_node(task):
+    explicit = str(task.get("dagNode", "") or "").strip()
+    if explicit:
+        return explicit
     text = " ".join(str(task.get(key, "")) for key in ("title", "objective"))
     matches = re.findall(r"\b[DS]\d+\.[A-Za-z0-9_]+\b", text)
     return matches[0] if matches else ""
@@ -1790,18 +1833,28 @@ for task in sorted(tasks, key=lambda t: t.get("taskId", "")):
     if task.get("status") != "ready":
         continue
     if os.environ.get("GLUERUN_SKIP_DUPLICATE_READY_TASKS", "1") == "1":
+        # v2 (0.5.0): only OPEN non-ready twins and integrated twins suppress a
+        # ready task. Terminal-but-unfinished statuses (blocked/superseded/
+        # failed/cancelled/stale) never do — 0.4.0 blocked here too, so a
+        # legitimate successor of a blocked task sat at frontier=0 forever.
+        # A task whose `Supersedes:` header names the twin bypasses suppression.
         duplicate = False
+        blocking = {"planned", "running", "needs-review", "accepted", "integrated"}
+        supersedes = {str(t) for t in task.get("supersedes", [])}
         task_node = infer_node(task)
         task_owned = owned_sig(task)
         if task_owned:
             for other in tasks:
                 if other is task:
                     continue
-                if other.get("status") == "ready":
+                if str(other.get("status", "")).strip().lower() not in blocking:
+                    continue
+                if str(other.get("taskId", "")) in supersedes:
                     continue
                 other_node = infer_node(other)
-                nodes_match = not task_node or not other_node or task_node == other_node
-                if nodes_match and owned_sig(other) == task_owned:
+                if task_node and other_node and task_node != other_node:
+                    continue
+                if owned_sig(other) == task_owned:
                     duplicate = True
                     break
         if duplicate:

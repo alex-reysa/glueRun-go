@@ -876,10 +876,12 @@ test_import_fails_closed_on_missing_lease() {
 	  assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "failed" "the node lease is marked failed"
 	}
 
-	test_import_rejects_duplicate_candidate_matching_blocked_task_signature() {
+	test_import_rejects_duplicate_candidate_matching_open_task_signature() {
 	  with_fixture
-	  write_signature_task TASK-0099 blocked storage "Staged fixture S0.storage_substrate_base" \
-	    "Original blocked objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
+	  # v2 (0.5.0): only OPEN twins (ready/planned/running/needs-review/accepted)
+	  # reject a candidate at import.
+	  write_signature_task TASK-0099 running storage "Staged fixture S0.storage_substrate_base" \
+	    "Original running objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
 	  gluerun_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-dup abc1234 target
 	  local sdir="$GLUERUN_RUNS_DIR/RUN-dup/l1-staging/S0.storage_substrate_base"
 	  mkdir -p "$sdir"
@@ -894,9 +896,31 @@ test_import_fails_closed_on_missing_lease() {
 	  assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "failed" "duplicate candidate marks node lease failed"
 	}
 
-	test_generate_tasks_direct_rejects_duplicate_candidate_matching_integrated_task_signature() {
+	# The 0.4.0 deadlock regression: a BLOCKED predecessor with the same owned
+	# files must NOT reject its successor -- the node could never re-plan and the
+	# no-progress loop tripped the breaker (field audit: overnight halt).
+	test_import_allows_successor_of_blocked_task() {
 	  with_fixture
-	  write_signature_task TASK-0098 integrated artifact "Stub task" "Stub." "internal/artifact/stub.go"
+	  write_signature_task TASK-0099 blocked storage "Staged fixture S0.storage_substrate_base" \
+	    "Original blocked objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
+	  gluerun_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-succ abc1234 target
+	  local sdir="$GLUERUN_RUNS_DIR/RUN-succ/l1-staging/S0.storage_substrate_base"
+	  mkdir -p "$sdir"
+	  write_signature_task TASK-0001 ready storage "Staged fixture S0.storage_substrate_base" \
+	    "Successor objective with the same owned file set." "internal/storage/staged_S0_storage_substrate_base.go"
+	  mv "$GLUERUN_TASKS_DIR/TASK-0001.md" "$sdir/TASK-0001.candidate.md"
+	  local out
+	  out="$(gluerun_l1_import_staged RUN-succ S0.storage_substrate_base 2>&1 || true)"
+	  assert_contains "$out" "generated:" "successor of a blocked task must import"
+	}
+
+	test_generate_tasks_direct_rejects_duplicate_candidate_matching_open_task_signature() {
+	  with_fixture
+	  # v2 (0.5.0): creation-time rejection applies to OPEN twins. Integrated
+	  # twins no longer reject at creation (recovery work on integrated files is
+	  # legitimate and declares `Supersedes:`); dispatch-time dedup still
+	  # suppresses undeclared ready twins of integrated work.
+	  write_signature_task TASK-0098 running artifact "Stub task" "Stub." "internal/artifact/stub.go"
 	  local stub="$GLUERUN_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
 	  local out rc=0
 	  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node D1.contract --count 1 2>&1)" || rc=$?
@@ -908,12 +932,18 @@ test_import_fails_closed_on_missing_lease() {
 
 test_ready_listing_skips_duplicate_ready_task_by_owned_files() {
   with_fixture
-  write_signature_task TASK-0098 blocked storage "Staged fixture S0.storage_substrate_base" \
-    "Original blocked objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
+  # v2 (0.5.0): an OPEN twin (running) suppresses the ready duplicate at
+  # dispatch; a blocked twin no longer does (successors must be dispatchable).
+  write_signature_task TASK-0098 running storage "Staged fixture S0.storage_substrate_base" \
+    "Original running objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
   write_signature_task TASK-0099 ready storage "Staged fixture S0.storage_substrate_base" \
     "Regenerated objective with different wording but the same owned file set." "internal/storage/staged_S0_storage_substrate_base.go"
   assert_eq "$(gluerun_list_ready_tasks | wc -l | tr -d ' ')" "0" "duplicate ready task must not be returned for dispatch"
   assert_eq "$(gluerun_select_dispatch_frontier 1 | wc -l | tr -d ' ')" "0" "duplicate ready task must not be selected for dispatch"
+  # Successor-of-blocked is dispatchable:
+  write_signature_task TASK-0098 blocked storage "Staged fixture S0.storage_substrate_base" \
+    "Original blocked objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
+  assert_eq "$(gluerun_list_ready_tasks | wc -l | tr -d ' ')" "1" "successor of a blocked twin is dispatchable"
 }
 
 test_active_lease_count_uses_single_json_pass() {
@@ -952,8 +982,9 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_rewrite_task_id_token_is_token_safe
 	test_import_fails_closed_on_missing_lease
 	test_import_rejects_candidate_without_taskid
-	test_import_rejects_duplicate_candidate_matching_blocked_task_signature
-	test_generate_tasks_direct_rejects_duplicate_candidate_matching_integrated_task_signature
+	test_import_rejects_duplicate_candidate_matching_open_task_signature
+	test_import_allows_successor_of_blocked_task
+	test_generate_tasks_direct_rejects_duplicate_candidate_matching_open_task_signature
 	test_ready_listing_skips_duplicate_ready_task_by_owned_files
 	test_active_lease_count_uses_single_json_pass
 	test_import_rolls_back_partial_promotion_on_mv_failure
