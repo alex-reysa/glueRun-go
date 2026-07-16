@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -498,9 +499,67 @@ def collect_processes() -> list[dict[str, Any]]:
     return rows
 
 
+DISK_DU_TTL_SECONDS = 300.0
+
+
+class DiskUsageCache:
+    """Background cache for the `du` walk over the state dir / runs / worktrees.
+
+    With 600+ run dirs the du can take tens of seconds, which used to sit
+    directly on the snapshot path (under the snapshot single-flight lock) and
+    hang /api/state. peek() is strictly non-blocking: it returns the last
+    computed value tagged with ``ageSeconds`` (kicking a daemon-thread refresh
+    when past TTL, at most one in flight) or ``{"computing": true}`` when cold.
+    """
+
+    def __init__(self, ttl: float = DISK_DU_TTL_SECONDS) -> None:
+        self.ttl = ttl
+        self._lock = threading.Lock()
+        self._value: dict[str, Any] | None = None
+        self._stamp: float = 0.0
+        self._key: str = ""
+        self._inflight = False
+
+    def _compute(self, repo: Path, key: str) -> None:
+        try:
+            value = run_command(
+                repo, ["du", "-sh", STATE_DIR_REL, STATE_DIR_REL + "/runs", ".worktrees"],
+                timeout=60)
+        except Exception as exc:  # defensive: a du failure must never surface as a crash
+            value = {"ok": False, "exit": None, "stdout": "", "stderr": str(exc), "cmd": ["du"]}
+        with self._lock:
+            self._value = value
+            self._stamp = time.monotonic()
+            self._key = key
+            self._inflight = False
+
+    def peek(self, repo: Path) -> dict[str, Any]:
+        key = str(repo)
+        with self._lock:
+            have = self._value is not None and self._key == key
+            age = (time.monotonic() - self._stamp) if have else None
+            fresh = have and age < self.ttl
+            start = not fresh and not self._inflight
+            if start:
+                self._inflight = True
+        if start:
+            threading.Thread(target=self._compute, args=(repo, key), daemon=True).start()
+        if have:
+            out = dict(self._value)
+            out["ageSeconds"] = int(age)
+            if not fresh:
+                out["computing"] = True  # refresh in flight; last value still shown
+            return out
+        return {"computing": True}
+
+
+DISK_DU_CACHE = DiskUsageCache()
+
+
 def collect_disk(repo: Path) -> dict[str, Any]:
+    """Disk view: `df` stays inline (fast); the slow `du` comes from the
+    non-blocking background cache above. capacity/watch derive from df only."""
     df = run_command(repo, ["df", "-h", "."], timeout=5)
-    du = run_command(repo, ["du", "-sh", STATE_DIR_REL, STATE_DIR_REL + "/runs", ".worktrees"], timeout=15)
     capacity = None
     free = None
     lines = df.get("stdout", "").splitlines()
@@ -512,9 +571,15 @@ def collect_disk(repo: Path) -> dict[str, Any]:
                 capacity = int(parts[4].rstrip("%"))
             except ValueError:
                 capacity = None
+    runs_dir = state_path(repo, "runs")
+    try:
+        run_dir_count = len(os.listdir(runs_dir))
+    except OSError:
+        run_dir_count = 0
     return {
         "df": df,
-        "du": du,
+        "du": DISK_DU_CACHE.peek(repo),
+        "runDirCount": run_dir_count,
         "capacityPercent": capacity,
         "free": free,
         "watch": capacity is not None and capacity >= WATCH_DISK_CAPACITY,
@@ -986,14 +1051,19 @@ def collect_task_detail(repo: Path, task_id: str) -> dict[str, Any] | None:
 # Snapshot                                                                      #
 # --------------------------------------------------------------------------- #
 
-# Read-only orchestration commands the snapshot runs (and the UI surfaces).
-# Externalizable via the console adapter (commands); these `make orch-*`
-# argv lists remain the built-in fallback. "{node}" is substituted by
-# console_command(..., node=...).
+# Adapter ESCAPE HATCH for the snapshot's orchestration probes. Since 0.5.0 the
+# BUILT-IN probes are computed natively (compute_frontier_native /
+# validate_dag_native / collect_status_native below) — the server already parses
+# the DAG registry, gate files and STATUS.md, so shelling out to `make orch-*`
+# (6 subprocesses x 12s timeout under the snapshot lock) is gone. A console
+# adapter that EXPLICITLY configures a command for a probe (commands.status,
+# commands.validateDag, commands.nextArea, commands.nextAreas) still runs that
+# subprocess exactly as before; only the built-in fallback is native. These
+# `make orch-*` argv lists remain as the reference built-ins so overridden-ness
+# can be detected per key. "{node}" is substituted by console_command(..., node=...).
 CONSOLE_COMMANDS: dict[str, list[str]] = {
     "status": ["make", "orch-status"],
     "validateDag": ["make", "orch-validate-dag"],
-    "areaGate": ["make", "orch-area-gate", "NODE={node}"],
     "nextArea": ["make", "orch-next-area"],
     "nextAreas": ["make", "orch-next-areas"],
 }
@@ -1013,6 +1083,162 @@ def console_command(name: str, **params: str) -> list[str]:
     return out
 
 
+def probe_command_overridden(name: str) -> bool:
+    """True when a console adapter explicitly configured a subprocess for this
+    probe (argv differs from the pristine built-in). Only then does the
+    snapshot shell out; the built-in fallback is native since 0.5.0."""
+    builtin = (_BUILTIN_CONSOLE_ADAPTER.get("commands") or {}).get(name) or []
+    current = CONSOLE_COMMANDS.get(name)
+    if current is None:
+        return False
+    return [str(p) for p in current] != [str(p) for p in builtin]
+
+
+# ---- Native (no-subprocess) built-in probes ---------------------------------- #
+
+def _gate_passed_data(gate: Any) -> bool:
+    return bool(isinstance(gate, dict) and gate.get("status") == "passed"
+                and gate.get("authoritative") is True)
+
+
+def compute_frontier_native(repo: Path) -> dict[str, Any]:
+    """Native replica of `engine/dag.sh next-areas` (the default `make
+    orch-next-areas` probe). Semantics mirror dag.sh exactly: iterate registry
+    nodes in file order; a node with a passed+authoritative gate is done; a
+    node with a blocked+authoritative gate is excluded from the frontier; a
+    node whose dependsOn are ALL gate-passed joins the frontier. Missing or
+    unreadable gate JSON reads as not-passed — fail-closed for the node, never
+    an exception for the snapshot. Returns {"frontier": [...]} plus
+    "allComplete": true when every node is gate-passed (shape-compatible with
+    parse_next_areas output)."""
+    repo = repo.resolve()
+    by_id = load_dag_registry(repo).get("by_id") or {}
+    gates: dict[str, Any] = {}
+
+    def gate(node_id: str) -> Any:
+        if node_id not in gates:
+            try:
+                gates[node_id] = _load_gate_for_node(repo, node_id)
+            except Exception:
+                gates[node_id] = None
+        return gates[node_id]
+
+    def passed(node_id: str) -> bool:
+        return _gate_passed_data(gate(node_id))
+
+    frontier: list[dict[str, Any]] = []
+    all_complete = bool(by_id)
+    for node_id, node in by_id.items():
+        if passed(node_id):
+            continue
+        all_complete = False
+        g = gate(node_id)
+        if isinstance(g, dict) and g.get("status") == "blocked" and g.get("authoritative") is True:
+            continue
+        deps = node.get("dependsOn")
+        deps = deps if isinstance(deps, list) else []
+        if all(passed(str(dep)) for dep in deps):
+            entry: dict[str, Any] = {"node": node_id}
+            for key in ("stage", "area", "layer", "kind", "requiredCompletion"):
+                entry[key] = node.get(key)
+            frontier.append(entry)
+    out: dict[str, Any] = {"frontier": frontier}
+    if all_complete:
+        out["allComplete"] = True
+    return out
+
+
+_DAG_REQUIRED_NODE_FIELDS = ("id", "stage", "area", "layer", "kind", "dependsOn", "requiredCompletion")
+
+
+def validate_dag_native(repo: Path) -> dict[str, Any]:
+    """Native replica of the structural checks in `engine/dag.sh validate-dag`
+    (required node fields present, unique ids, every dependsOn references a
+    known id). Returns a run_command-shaped dict so the UI's `.ok` chip logic
+    is untouched."""
+    errors: list[str] = []
+    data = read_json((repo / DAG_REL), None)
+    nodes: list[Any] = []
+    if not isinstance(data, dict):
+        errors.append(f"dag file missing or unreadable: {DAG_REL}")
+    else:
+        raw_nodes = data.get("nodes")
+        if not isinstance(raw_nodes, list) or not raw_nodes:
+            errors.append("dag.nodes must be a non-empty array")
+        else:
+            nodes = raw_nodes
+    seen: set[str] = set()
+    for idx, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            errors.append(f"node[{idx}] must be an object")
+            continue
+        missing = sorted(set(_DAG_REQUIRED_NODE_FIELDS) - set(node))
+        if missing:
+            errors.append(f"node[{idx}] missing required fields: {', '.join(missing)}")
+        node_id = str(node.get("id") or "")
+        if not node_id:
+            errors.append(f"node[{idx}] has empty id")
+            continue
+        if node_id in seen:
+            errors.append(f"duplicate node id: {node_id}")
+        seen.add(node_id)
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        deps = node.get("dependsOn")
+        for dep in (deps if isinstance(deps, list) else []):
+            if str(dep) not in seen:
+                errors.append(f"unknown dependency for {node.get('id')}: {dep}")
+    ok = not errors
+    return {"ok": ok, "exit": 0 if ok else 1, "stdout": "ok" if ok else "; ".join(errors),
+            "stderr": "", "cmd": ["native:validate-dag"], "native": True}
+
+
+def collect_status_native(repo: Path, origin_state: Any) -> dict[str, Any]:
+    """Native replacement for the default `make orch-status` probe: the parsed
+    operator STATUS.md + circuit breaker + the origin-state already loaded by
+    collect_snapshot, in the same run_command envelope shape (native: True)."""
+    status_path = repo / STATUS_REL
+    try:
+        parsed = parse_status_md(status_path.read_text(errors="replace"))
+    except OSError:
+        parsed = parse_status_md("")
+    circuit = read_json(repo / CIRCUIT_REL, {}) or {}
+    packets = origin_state.get("packets") if isinstance(origin_state, dict) else None
+    lines = [
+        f"branch: {parsed.get('branch') or '?'} @ {parsed.get('headSha') or '?'}",
+        f"iteration: {parsed.get('iteration')}",
+        f"ready tasks: {parsed.get('readyTasks')}",
+        f"active leases: {parsed.get('activeLeases')}",
+        f"imported packets: {parsed.get('importedPackets')}",
+        f"integrations (lifetime): {parsed.get('integrationsLifetime')}",
+        f"consecutive failures: {circuit.get('consecFails')}",
+    ]
+    return {
+        "ok": True, "exit": 0, "stdout": "\n".join(lines), "stderr": "",
+        "cmd": ["native:status"], "native": True,
+        "data": {
+            **parsed,
+            "circuit": circuit if isinstance(circuit, dict) else {},
+            "packets": packets if isinstance(packets, dict) else {},
+        },
+    }
+
+
+def collect_gates_summary(repo: Path) -> dict[str, Any]:
+    """Plan-wide gate progress from the gate files + registry (replaces the
+    hardwired gateD0/gateD1 subprocess probes): passed/total across every
+    registry node plus the per-node gate status ("absent" when no file)."""
+    registry_ids = list(load_dag_registry(repo).get("by_id") or {})
+    statuses = _all_gate_statuses(repo)
+    by_node = {node_id: statuses.get(node_id, "absent") for node_id in registry_ids}
+    return {
+        "passed": sum(1 for s in by_node.values() if s == "passed"),
+        "total": len(registry_ids),
+        "byNode": by_node,
+    }
+
+
 def collect_snapshot(repo: Path) -> dict[str, Any]:
     repo = repo.resolve()
     tasks = collect_tasks(repo)
@@ -1020,13 +1246,36 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
     l1_leases = collect_l1_leases(repo)
     processes = collect_processes()
     origin_state = read_json(state_path(repo, "origin-state.json"), {})
-    status = run_command(repo, console_command("status"))
-    validate_dag = run_command(repo, console_command("validateDag"))
-    gate_d0 = run_command(repo, console_command("areaGate", node="D0.contract"))
-    gate_d1 = run_command(repo, console_command("areaGate", node="D1.contract"))
-    next_area = run_command(repo, console_command("nextArea"))
-    next_areas = run_command(repo, console_command("nextAreas"))
-    next_areas_parsed = parse_next_areas(next_areas.get("stdout", ""))
+    # Built-in probes are NATIVE (no subprocess); an adapter that explicitly
+    # configures a probe command keeps the subprocess path (escape hatch).
+    if probe_command_overridden("status"):
+        status = run_command(repo, console_command("status"))
+    else:
+        status = collect_status_native(repo, origin_state)
+    if probe_command_overridden("validateDag"):
+        validate_dag = run_command(repo, console_command("validateDag"))
+    else:
+        validate_dag = validate_dag_native(repo)
+    next_areas_raw = None
+    if probe_command_overridden("nextAreas"):
+        next_areas_raw = run_command(repo, console_command("nextAreas"))
+        next_areas_parsed = parse_next_areas(next_areas_raw.get("stdout", ""))
+    else:
+        next_areas_parsed = compute_frontier_native(repo)
+    next_area_raw = None
+    if probe_command_overridden("nextArea"):
+        next_area_raw = run_command(repo, console_command("nextArea"))
+        next_area = parse_next_area(next_area_raw.get("stdout", ""))
+    else:
+        # Same dict shape parse_next_area produced: the first frontier entry,
+        # or {"allComplete": true} when every node is gate-passed.
+        frontier = next_areas_parsed.get("frontier") or []
+        if frontier and isinstance(frontier[0], dict):
+            next_area = dict(frontier[0])
+        elif next_areas_parsed.get("allComplete"):
+            next_area = {"allComplete": True}
+        else:
+            next_area = {}
     drift_cmd = run_command(
         repo,
         ["git", "rev-list", "--left-right", "--count", f"origin/{TARGET_BRANCH}...{TARGET_BRANCH}"],
@@ -1081,12 +1330,9 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
         "orchestration": {
             "status": status,
             "validateDag": validate_dag,
-            "gateD0": gate_d0,
-            "gateD1": gate_d1,
-            "nextArea": parse_next_area(next_area.get("stdout", "")),
-            "nextAreaRaw": next_area,
+            "gates": collect_gates_summary(repo),
+            "nextArea": next_area,
             "nextAreas": next_areas_parsed,
-            "nextAreasRaw": next_areas,
             "originState": origin_state_compact,
         },
         "events": parse_events(state_path(repo, EVENTS_LOG_REL), 40),
@@ -1107,6 +1353,12 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
             "frontierCount": len(next_areas_parsed.get("frontier", [])),
         },
     }
+    # Raw subprocess envelopes exist only on the adapter-configured path; the
+    # native path has no subprocess output to carry.
+    if next_area_raw is not None:
+        snapshot["orchestration"]["nextAreaRaw"] = next_area_raw
+    if next_areas_raw is not None:
+        snapshot["orchestration"]["nextAreasRaw"] = next_areas_raw
     snapshot["health"] = classify_health(snapshot)
     return snapshot
 
@@ -3124,7 +3376,13 @@ def apply_console_adapter(adapter: dict[str, Any]) -> None:
 # --------------------------------------------------------------------------- #
 
 class SnapshotCache:
-    """Tiny TTL cache so multiple panels / fast polls do not re-run make targets."""
+    """TTL cache with stale-serve so /api/state never hangs a poll.
+
+    fresh-enough cached -> returned as before. Stale cached (and not ?fresh=1)
+    -> a single background daemon refresh is kicked and the OLD snapshot is
+    returned IMMEDIATELY, marked stale/computing with its age. Cold start and
+    ?fresh=1 keep blocking (single-flight) semantics. Background failures are
+    recorded on ``last_error`` (surfaced by /api/health), never propagated."""
 
     def __init__(self, ttl: float = SNAPSHOT_TTL_SECONDS) -> None:
         self.ttl = ttl
@@ -3133,6 +3391,8 @@ class SnapshotCache:
         self._value: dict[str, Any] | None = None
         self._stamp: float = 0.0
         self._key: str = ""
+        self._refreshing = False
+        self.last_error: str | None = None
 
     def _fresh_enough(self, key: str) -> dict[str, Any] | None:
         with self._lock:
@@ -3140,24 +3400,69 @@ class SnapshotCache:
                 return self._value
         return None
 
+    def _cached(self, key: str) -> tuple[dict[str, Any] | None, float]:
+        with self._lock:
+            if self._value is not None and self._key == key:
+                return self._value, time.monotonic() - self._stamp
+        return None, 0.0
+
+    def _store(self, snapshot: dict[str, Any], key: str) -> None:
+        with self._lock:
+            self._value = snapshot
+            self._stamp = time.monotonic()
+            self._key = key
+            self.last_error = None
+
+    def age_seconds(self) -> float | None:
+        with self._lock:
+            if self._value is None:
+                return None
+            return time.monotonic() - self._stamp
+
+    def _refresh_in_background(self, repo: Path, key: str) -> None:
+        try:
+            with self._compute:
+                if self._fresh_enough(key) is None:
+                    self._store(collect_snapshot(repo), key)
+        except Exception as exc:  # never let a refresh failure escape the daemon thread
+            with self._lock:
+                self.last_error = f"{type(exc).__name__}: {exc}"
+        finally:
+            with self._lock:
+                self._refreshing = False
+
     def get(self, repo: Path, fresh: bool = False) -> dict[str, Any]:
         key = str(repo.resolve())
         if not fresh:
             cached = self._fresh_enough(key)
             if cached is not None:
                 return cached
-        # Single-flight: only one thread computes a given snapshot; others wait and
-        # then reuse the just-computed value instead of stampeding the make/git fan-out.
+            value, age = self._cached(key)
+            if value is not None:
+                # Stale-serve: hand the old snapshot back immediately (marked so
+                # the UI can say so) while at most one daemon thread refreshes.
+                with self._lock:
+                    start = not self._refreshing
+                    if start:
+                        self._refreshing = True
+                if start:
+                    threading.Thread(
+                        target=self._refresh_in_background, args=(repo, key), daemon=True,
+                    ).start()
+                stale = dict(value)
+                stale["stale"] = True
+                stale["computing"] = True
+                stale["snapshotAgeSeconds"] = int(age)
+                return stale
+        # Cold start or explicit ?fresh=1: block and compute (single-flight; the
+        # native probes make this fast).
         with self._compute:
             if not fresh:
                 cached = self._fresh_enough(key)
                 if cached is not None:
                     return cached
             snapshot = collect_snapshot(repo)
-            with self._lock:
-                self._value = snapshot
-                self._stamp = time.monotonic()
-                self._key = key
+            self._store(snapshot, key)
             return snapshot
 
 
@@ -3343,7 +3648,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(ROLE_CATALOG, cache="public, max-age=86400, immutable")
             return
         if route == "/api/health":
-            self.send_json({"ok": True, "generatedAt": utc_now(), "repo": str(self.repo)})
+            # Pure liveness: reports the snapshot cache's age/last error without
+            # computing anything.
+            age = SNAPSHOT_CACHE.age_seconds()
+            self.send_json({
+                "ok": True,
+                "generatedAt": utc_now(),
+                "repo": str(self.repo),
+                "snapshotAgeSeconds": int(age) if age is not None else None,
+                "lastSnapshotError": SNAPSHOT_CACHE.last_error,
+            })
             return
         self.send_json({"error": "not found"}, 404)
 
@@ -3362,6 +3676,33 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--events", action="store_true", help="Print the live event overlay JSON and exit")
     parser.add_argument("--overview", action="store_true", help="Print the plan overview JSON and exit")
     return parser.parse_args(argv)
+
+
+def write_console_state(repo: Path, url: str) -> list[Path]:
+    """Persist the served URL + pid into the repo's state dir so `gluerun
+    console --ensure/--status/--stop` and `gluerun status` can find a running
+    console. Best-effort: failures warn to stderr, never abort serving. Opt
+    out with GLUERUN_CONSOLE_NO_STATE=1."""
+    if os.environ.get("GLUERUN_CONSOLE_NO_STATE") == "1":
+        return []
+    written: list[Path] = []
+    for path, content in ((state_path(repo, "console.url"), url),
+                          (state_path(repo, "console.pid"), str(os.getpid()))):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content + "\n")
+            written.append(path)
+        except OSError as exc:
+            print(f"gluerun console: could not write {path}: {exc}", file=sys.stderr)
+    return written
+
+
+def remove_console_state(paths: list[Path]) -> None:
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"gluerun console: could not remove {path}: {exc}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3418,13 +3759,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     Handler.repo = repo
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    url = f"http://{args.host}:{args.port}"
+    bound_port = server.server_address[1]
+    url = f"http://{args.host}:{bound_port}"
     print(f"gluerun orchestration console serving {repo} at {url}", flush=True)
+    state_files = write_console_state(repo, url)
+
+    def _on_sigterm(signum: int, frame: Any) -> None:
+        # Raise so serve_forever unwinds through the finally block (state files
+        # are removed) instead of the process dying mid-request.
+        raise SystemExit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError):  # non-main thread / restricted env: best-effort
+        pass
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        remove_console_state(state_files)
         server.server_close()
     return 0
 

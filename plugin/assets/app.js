@@ -132,7 +132,9 @@
       if (!res.ok) throw new Error("http " + res.status);
       S.snap = await res.json();
       S.lastOkAt = Date.now();
-      setConn("connected");
+      // A stale-served snapshot (server is recomputing in the background) is
+      // shown, but flagged via the existing stale hint rather than as live.
+      setConn(S.snap && S.snap.stale ? "stale" : "connected");
       seedExpansion();
       seedSelection();
       renderAll();
@@ -244,14 +246,18 @@
     const diskTone = disk.watch ? "stale" : "integrated";
     $("stat-disk").innerHTML = `${toneDot(diskTone)}<span class="num">${disk.capacityPercent != null ? disk.capacityPercent + "%" : "—"}</span> <span class="unit">${esc(disk.free || "?")} free</span>`;
 
-    // gates + dag
-    const gate = (label, run) => {
-      const ok = run && run.ok;
-      const tone = ok ? "integrated" : "blocked";
-      return `<span class="gate-tag" data-tone="${toneOf(tone)}">${toneDot(tone)}<span class="lbl">${label}</span></span>`;
-    };
+    // gates + dag — plan-wide gate progress (orchestration.gates) replaces the
+    // old hardwired per-node D0/D1 probes; the dag chip keeps validateDag.ok.
+    const chip = (label, tone) =>
+      `<span class="gate-tag" data-tone="${toneOf(tone)}">${toneDot(tone)}<span class="lbl">${label}</span></span>`;
+    const g = o.gates || {};
+    const gTotal = g.total != null ? g.total : null;
+    const gPassed = g.passed != null ? g.passed : null;
+    const gatesLabel = `gates ${gPassed != null ? gPassed : "?"}/${gTotal != null ? gTotal : "?"}`;
+    // complete=forest; in-progress=neutral (not a fault); no gates yet=amber
+    const gatesTone = gTotal && gPassed === gTotal ? "integrated" : gPassed > 0 ? "idle" : "stale";
     $("stat-gates").innerHTML =
-      gate("D0", o.gateD0) + gate("D1", o.gateD1) + gate("dag", o.validateDag);
+      chip(gatesLabel, gatesTone) + chip("dag", o.validateDag && o.validateDag.ok ? "integrated" : "blocked");
   }
 
   function setCounter(stat, n, state) {

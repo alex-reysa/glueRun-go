@@ -52,6 +52,16 @@ if [[ "$mode" == "status" ]]; then
   else
     echo "lock: none"
   fi
+  # Console lifecycle (cheap: pid liveness only, no HTTP round trip).
+  if [[ -f "$GLUERUN_STATE_DIR/console.url" ]]; then
+    console_url="$(head -1 "$GLUERUN_STATE_DIR/console.url" 2>/dev/null || true)"
+    console_pid="$(tr -d '[:space:]' < "$GLUERUN_STATE_DIR/console.pid" 2>/dev/null || true)"
+    if [[ -n "$console_pid" ]] && kill -0 "$console_pid" 2>/dev/null; then
+      echo "console: $console_url"
+    else
+      echo "console: stale (not running)"
+    fi
+  fi
   inbox_count="$(gluerun_count_files "$GLUERUN_STATE_DIR/inbox" -maxdepth 1 -name '*.json')"
   imported_count="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
   echo "packets_inbox: $inbox_count"

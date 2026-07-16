@@ -488,15 +488,143 @@ cmd_experiment_report() {
   esac
 }
 
+# --- console lifecycle helpers (used only by cmd_console) ---------------------
+# NB: bash locals are dynamically scoped — these helpers read cmd_console's
+# locals ($server/$root/$home/$url_file/$pid_file/$log_file) when called from it.
+
+# Default port: GLUERUN_CONSOLE_PORT if set; else 8765 when free (stable,
+# bookmarkable); else an ephemeral free port.
+console_pick_port() {
+  if [[ -n "${GLUERUN_CONSOLE_PORT:-}" ]]; then printf '%s' "$GLUERUN_CONSOLE_PORT"; return; fi
+  if python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",8765));s.close()' 2>/dev/null; then
+    printf '8765'; return
+  fi
+  python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'
+}
+
+# console_health_ok URL -> 0 iff GET URL/api/health answers 200 within 2s.
+console_health_ok() {
+  python3 -c 'import sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1].rstrip("/") + "/api/health", timeout=2) as r:
+        sys.exit(0 if r.status == 200 else 1)
+except Exception:
+    sys.exit(1)' "$1" 2>/dev/null
+}
+
+# Idempotent start: reuse a healthy console (print its URL), else clean stale
+# state files and start the server detached (double-fork + setsid, logs to
+# .gluerun-state/console.log), wait for health (<=10s), print the URL.
+console_ensure() {
+  local url=""
+  if [[ -f "$url_file" ]]; then
+    url="$(head -1 "$url_file" 2>/dev/null || true)"
+    if [[ -n "$url" ]] && console_health_ok "$url"; then
+      echo "$url"
+      return 0
+    fi
+    rm -f "$url_file" "$pid_file"   # stale leftovers from a dead console
+  fi
+  mkdir -p "$(dirname "$log_file")"
+  local port; port="$(console_pick_port)"
+  GLUERUN_ENGINE_HOME="$home" python3 - "$server" "$root" "$port" "$log_file" <<'PY'
+import os, sys
+server, root, port, log = sys.argv[1:5]
+# Detach: double-fork + setsid so the console outlives this CLI invocation
+# and never holds its terminal; stdout/stderr append to the console log.
+if os.fork() > 0:
+    sys.exit(0)
+os.setsid()
+if os.fork() > 0:
+    os._exit(0)
+fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+devnull = os.open(os.devnull, os.O_RDONLY)
+os.dup2(devnull, 0)
+os.dup2(fd, 1)
+os.dup2(fd, 2)
+os.execvp(sys.executable, [sys.executable, server,
+                           "--repo", root, "--host", "127.0.0.1", "--port", port])
+PY
+  url="http://127.0.0.1:$port"
+  local i
+  for i in $(seq 1 40); do   # poll /api/health up to 10s at 0.25s
+    if console_health_ok "$url"; then
+      echo "$url"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "gluerun console: server did not become healthy within 10s; last log lines ($log_file):" >&2
+  tail -20 "$log_file" >&2 2>/dev/null || true
+  return 1
+}
+
+# console_status [--json]: exit 0 when a healthy console is running, 1 otherwise.
+console_status() {
+  local json=0; [[ "${1:-}" == "--json" ]] && json=1
+  local url="" pid="" running=0
+  [[ -f "$url_file" ]] && url="$(head -1 "$url_file" 2>/dev/null || true)"
+  [[ -f "$pid_file" ]] && pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$url" ]] && console_health_ok "$url"; then running=1; fi
+  if (( json )); then
+    python3 -c 'import json, sys
+print(json.dumps({"running": sys.argv[1] == "1",
+                  "url": sys.argv[2] or None,
+                  "pid": int(sys.argv[3]) if sys.argv[3].isdigit() else None}))' \
+      "$running" "$url" "$pid"
+  elif (( running )); then
+    echo "console: running at $url (pid ${pid:-?})"
+  else
+    echo "console: not running"
+  fi
+  (( running ))
+}
+
+# console_stop: TERM the recorded pid (KILL fallback after 5s), remove the
+# url/pid files. Idempotent — always exits 0.
+console_stop() {
+  local pid=""
+  [[ -f "$pid_file" ]] && pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    local i
+    for i in $(seq 1 20); do   # wait <=5s for a clean shutdown
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.25
+    done
+    if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+    echo "gluerun console: stopped (pid $pid)" >&2
+  else
+    echo "gluerun console: not running" >&2
+  fi
+  rm -f "$url_file" "$pid_file"
+  return 0
+}
+
 cmd_console() {
   local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
   local server="$home/plugin/scripts/gluerun_graph_server.py"
   [[ -f "$server" ]] || die "console plugin not present in engine $home (plugin/ not vendored yet)"
-  local port="${GLUERUN_CONSOLE_PORT:-0}"
-  if [[ "$port" == "0" ]]; then
-    port="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
-  fi
-  echo "gluerun console -> http://127.0.0.1:$port  (repo: $root)"
+  local state_dir="$root/.gluerun-state"
+  local url_file="$state_dir/console.url" pid_file="$state_dir/console.pid"
+  local log_file="$state_dir/console.log"
+  # One-shot JSON flags: no port selection, no banner — stdout stays pure JSON
+  # so `gluerun console --snapshot | jq` works.
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --snapshot|--sessions|--events|--overview|\
+      --task|--task=*|--session|--session=*|--node|--node=*|--area|--area=*)
+        GLUERUN_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" "$@" ;;
+    esac
+  done
+  case "${1:-}" in
+    --ensure) if console_ensure; then return 0; else return 1; fi ;;
+    --status) shift; if console_status "$@"; then return 0; else return 1; fi ;;
+    --stop)   console_stop; return 0 ;;
+  esac
+  local port; port="$(console_pick_port)"
+  echo "gluerun console -> http://127.0.0.1:$port  (repo: $root)" >&2
   GLUERUN_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" --host 127.0.0.1 --port "$port" "$@"
 }
 
@@ -517,7 +645,8 @@ Run anywhere (operate on the current repo):
   promote-gate NODE [--operator --evidence REF]       gate promotion (project promoter;
                                                       --operator for evaluation nodes)
   metrics [--json] [--runs-dir DIR] [--events-file FILE]   read-only ctx metrics
-  console                                             launch the visualization plugin
+  console [--ensure|--status|--stop]                  visualization console (idempotent start,
+                                                      URL persists at .gluerun-state/console.url)
 
 Operate / recover:
   health [--json]      compact loop-health digest (gates, leases, backoff, breaker, digest hash)

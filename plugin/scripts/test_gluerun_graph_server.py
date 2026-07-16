@@ -17,6 +17,8 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -987,8 +989,11 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             def wire(payload) -> str:  # exactly what send_json serializes
                 return json.dumps(payload, indent=2)
 
-            # /api/state
-            self.assertEqual(wire(srv.collect_snapshot(repo)), wire(head.collect_snapshot(repo)))
+            # /api/state is intentionally NOT compared since 0.5.0: the built-in
+            # probes went native (no make orch-* subprocesses), gateD0/gateD1
+            # were replaced by orchestration.gates, and disk.du became a
+            # non-blocking background peek — see NativeFrontierTests /
+            # ValidateDagNativeTests / SnapshotNoSubprocessTests below.
             # /api/overview (includes settings groups)
             self.assertEqual(wire(srv.collect_overview(repo)), wire(head.collect_overview(repo)))
             self.assertEqual(wire(srv.collect_settings(repo)), wire(head.collect_settings(repo)))
@@ -1022,6 +1027,340 @@ class ProcessMatcherSemanticsTests(unittest.TestCase):
         rows = srv.collect_processes()
         pids = [r["pid"] for r in rows]
         self.assertEqual(pids, ["100", "101", "104"])
+
+
+class NativeFrontierTests(unittest.TestCase):
+    """O1 (0.5.0): compute_frontier_native must replicate `engine/dag.sh
+    next-areas` exactly — file-order iteration, passed+authoritative completes,
+    blocked+authoritative excludes, all-deps-gated joins the frontier."""
+
+    ENTRY_KEYS = {"node", "stage", "area", "layer", "kind", "requiredCompletion"}
+
+    def _node(self, node_id: str, deps: list[str]) -> dict:
+        return {"id": node_id, "stage": node_id.split(".")[0], "area": "core",
+                "layer": "contract", "kind": "build", "dependsOn": deps,
+                "requiredCompletion": "done"}
+
+    def _write_dag(self, repo: Path, nodes: list[dict]) -> None:
+        (repo / "docs/orchestration/gates").mkdir(parents=True, exist_ok=True)
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps(
+            {"schema": "gluerun.orchestration.dag.v0", "nodes": nodes}))
+
+    def _gate(self, repo: Path, node_id: str, status: str, authoritative: bool = True) -> None:
+        (repo / "docs/orchestration/gates" / f"{node_id}.gate-result.json").write_text(
+            json.dumps({"node": node_id, "status": status, "authoritative": authoritative}))
+
+    def test_membership_and_entry_shape(self) -> None:
+        # 4 nodes: passed, ready, dep-blocked, authoritative-blocked.
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            self._write_dag(repo, [
+                self._node("D0.passed", []),
+                self._node("D1.ready", ["D0.passed"]),
+                self._node("D2.depblocked", ["D1.ready"]),
+                self._node("D3.authblocked", []),
+            ])
+            self._gate(repo, "D0.passed", "passed")
+            self._gate(repo, "D3.authblocked", "blocked")
+            out = srv.compute_frontier_native(repo)
+            self.assertEqual([f["node"] for f in out["frontier"]], ["D1.ready"])
+            self.assertNotIn("allComplete", out)
+            entry = out["frontier"][0]
+            self.assertEqual(set(entry), self.ENTRY_KEYS)
+            self.assertEqual(entry["stage"], "D1")
+            self.assertEqual(entry["area"], "core")
+            self.assertEqual(entry["requiredCompletion"], "done")
+
+    def test_non_authoritative_blocked_stays_eligible(self) -> None:
+        # dag.sh only excludes blocked gates that are ALSO authoritative.
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            self._write_dag(repo, [self._node("D0.a", [])])
+            self._gate(repo, "D0.a", "blocked", authoritative=False)
+            out = srv.compute_frontier_native(repo)
+            self.assertEqual([f["node"] for f in out["frontier"]], ["D0.a"])
+
+    def test_all_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            self._write_dag(repo, [self._node("D0.a", []), self._node("D1.b", ["D0.a"])])
+            self._gate(repo, "D0.a", "passed")
+            self._gate(repo, "D1.b", "passed")
+            out = srv.compute_frontier_native(repo)
+            self.assertEqual(out, {"frontier": [], "allComplete": True})
+
+    def test_unreadable_gate_json_reads_not_passed(self) -> None:
+        # A corrupt gate file is not-passed (never raises): the node stays on the
+        # frontier and its dependents stay excluded.
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            self._write_dag(repo, [self._node("D0.a", []), self._node("D1.b", ["D0.a"])])
+            (repo / "docs/orchestration/gates/D0.a.gate-result.json").write_text("{not json")
+            out = srv.compute_frontier_native(repo)
+            self.assertEqual([f["node"] for f in out["frontier"]], ["D0.a"])
+            self.assertNotIn("allComplete", out)
+
+    def test_passed_but_not_authoritative_does_not_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            self._write_dag(repo, [self._node("D0.a", []), self._node("D1.b", ["D0.a"])])
+            self._gate(repo, "D0.a", "passed", authoritative=False)
+            out = srv.compute_frontier_native(repo)
+            # D0.a not complete (stays frontier-eligible); D1.b dep not gated.
+            self.assertEqual([f["node"] for f in out["frontier"]], ["D0.a"])
+
+
+class ValidateDagNativeTests(unittest.TestCase):
+    """O1 (0.5.0): validate_dag_native structural checks + run_command envelope."""
+
+    def _write(self, repo: Path, nodes: list[dict]) -> None:
+        (repo / "docs/orchestration").mkdir(parents=True, exist_ok=True)
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps(
+            {"schema": "gluerun.orchestration.dag.v0", "nodes": nodes}))
+
+    def _node(self, node_id: str, deps: list[str]) -> dict:
+        return {"id": node_id, "stage": "D0", "area": "core", "layer": "contract",
+                "kind": "build", "dependsOn": deps, "requiredCompletion": "done"}
+
+    def test_valid_dag_ok_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            self._write(repo, [self._node("D0.a", []), self._node("D0.b", ["D0.a"])])
+            out = srv.validate_dag_native(repo)
+            self.assertEqual(out, {"ok": True, "exit": 0, "stdout": "ok", "stderr": "",
+                                   "cmd": ["native:validate-dag"], "native": True})
+
+    def test_duplicate_id_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            self._write(repo, [self._node("D0.a", []), self._node("D0.a", [])])
+            out = srv.validate_dag_native(repo)
+            self.assertFalse(out["ok"])
+            self.assertEqual(out["exit"], 1)
+            self.assertIn("duplicate node id: D0.a", out["stdout"])
+
+    def test_unknown_dependency_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            self._write(repo, [self._node("D0.a", ["D9.ghost"])])
+            out = srv.validate_dag_native(repo)
+            self.assertFalse(out["ok"])
+            self.assertIn("unknown dependency for D0.a: D9.ghost", out["stdout"])
+
+    def test_missing_required_fields_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            node = self._node("D0.a", [])
+            del node["layer"], node["kind"]
+            self._write(repo, [node])
+            out = srv.validate_dag_native(repo)
+            self.assertFalse(out["ok"])
+            self.assertIn("missing required fields: kind, layer", out["stdout"])
+
+    def test_missing_dag_file_fails_soft(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            out = srv.validate_dag_native(Path(d))
+            self.assertFalse(out["ok"])
+            self.assertIn("missing or unreadable", out["stdout"])
+
+
+class SnapshotNoSubprocessTests(unittest.TestCase):
+    """O1 (0.5.0) hard guarantee: with the built-in (non-adapter) probe
+    commands, collect_snapshot never shells out to make."""
+
+    def test_collect_snapshot_runs_no_make(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / ".gluerun-state").mkdir()
+            (repo / "docs/orchestration/tasks").mkdir(parents=True)
+            (repo / "docs/orchestration/gates").mkdir(parents=True)
+            (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+                "schema": "gluerun.orchestration.dag.v0",
+                "nodes": [{"id": "D0.a", "stage": "D0", "area": "core", "layer": "contract",
+                           "kind": "build", "dependsOn": [], "requiredCompletion": "done"}]}))
+            calls: list[list[str]] = []
+            real_run = subprocess.run
+
+            def recording_run(cmd, *args, **kwargs):
+                calls.append([str(p) for p in cmd])
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="stubbed")
+
+            saved = srv.subprocess.run
+            self.addCleanup(lambda: setattr(srv.subprocess, "run", saved))
+            srv.subprocess.run = recording_run
+            snap = srv.collect_snapshot(repo)
+            first_argv = [c[0] for c in calls if c]
+            self.assertNotIn("make", first_argv)
+            # sanity: the probes are the native envelopes, not subprocess runs
+            self.assertTrue(snap["orchestration"]["status"].get("native"))
+            self.assertTrue(snap["orchestration"]["validateDag"].get("native"))
+            self.assertEqual(snap["orchestration"]["gates"],
+                             {"passed": 0, "total": 1, "byNode": {"D0.a": "absent"}})
+            self.assertEqual(
+                [f["node"] for f in snap["orchestration"]["nextAreas"]["frontier"]], ["D0.a"])
+            self.assertEqual(snap["orchestration"]["nextArea"]["node"], "D0.a")
+            self.assertNotIn("gateD0", snap["orchestration"])
+            self.assertNotIn("gateD1", snap["orchestration"])
+            del real_run  # only kept for clarity: restoration goes through addCleanup
+
+
+class SnapshotCacheStaleServeTests(unittest.TestCase):
+    """O1 (0.5.0): a stale cache hit returns immediately (marked stale/computing)
+    while one background refresh recomputes; the refreshed value then serves."""
+
+    def test_stale_serve_then_background_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            release = threading.Event()
+            counter = {"n": 0}
+
+            def slow_snapshot(_repo):
+                counter["n"] += 1
+                if counter["n"] > 1:      # only refreshes block; the priming call is instant
+                    release.wait(5)
+                return {"n": counter["n"]}
+
+            saved = srv.collect_snapshot
+            self.addCleanup(lambda: setattr(srv, "collect_snapshot", saved))
+            srv.collect_snapshot = slow_snapshot
+
+            cache = srv.SnapshotCache(ttl=0.05)
+            self.assertEqual(cache.get(repo), {"n": 1})    # cold start blocks + primes
+            time.sleep(0.1)                                # expire the TTL
+
+            t0 = time.monotonic()
+            stale = cache.get(repo)                        # refresh is blocked on `release`
+            self.assertLess(time.monotonic() - t0, 1.0, "stale get must not block")
+            self.assertEqual(stale["n"], 1)
+            self.assertTrue(stale["stale"])
+            self.assertTrue(stale["computing"])
+            self.assertIsInstance(stale["snapshotAgeSeconds"], int)
+
+            release.set()
+            deadline = time.monotonic() + 5
+            current: dict = {}
+            while time.monotonic() < deadline:
+                current = cache.get(repo)
+                if current.get("n", 0) >= 2 and not current.get("stale"):
+                    break
+                time.sleep(0.02)
+            self.assertGreaterEqual(current.get("n", 0), 2, "background refresh never landed")
+            self.assertNotIn("stale", current)
+            self.assertIsNone(cache.last_error)
+
+    def test_background_refresh_failure_recorded_not_raised(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            counter = {"n": 0}
+
+            def flaky_snapshot(_repo):
+                counter["n"] += 1
+                if counter["n"] > 1:
+                    raise RuntimeError("boom")
+                return {"n": 1}
+
+            saved = srv.collect_snapshot
+            self.addCleanup(lambda: setattr(srv, "collect_snapshot", saved))
+            srv.collect_snapshot = flaky_snapshot
+            cache = srv.SnapshotCache(ttl=0.05)
+            cache.get(repo)
+            time.sleep(0.1)
+            stale = cache.get(repo)     # kicks the failing refresh; must not raise
+            self.assertTrue(stale["stale"])
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and cache.last_error is None:
+                time.sleep(0.02)
+            self.assertIn("boom", cache.last_error or "")
+            self.assertIsNotNone(cache.age_seconds())
+
+
+class DiskUsageCacheTests(unittest.TestCase):
+    """O1 (0.5.0): the du walk lives in its own background cache; a cold peek
+    never blocks on it."""
+
+    def test_cold_peek_non_blocking_then_value_lands(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            release = threading.Event()
+
+            def slow_du(_repo, cmd, timeout=60):
+                release.wait(5)
+                return {"ok": True, "exit": 0, "stdout": "du-output", "stderr": "", "cmd": cmd}
+
+            saved = srv.run_command
+            srv.run_command = slow_du
+            try:
+                cache = srv.DiskUsageCache(ttl=300)
+                t0 = time.monotonic()
+                cold = cache.peek(repo)
+                self.assertLess(time.monotonic() - t0, 1.0, "cold peek must not block on du")
+                self.assertEqual(cold, {"computing": True})
+                release.set()
+                deadline = time.monotonic() + 5
+                value: dict = {}
+                while time.monotonic() < deadline:
+                    value = cache.peek(repo)
+                    if "ageSeconds" in value:
+                        break
+                    time.sleep(0.02)
+                self.assertEqual(value.get("stdout"), "du-output")
+                self.assertIsInstance(value.get("ageSeconds"), int)
+                self.assertNotIn("computing", value)  # fresh again after the refresh
+            finally:
+                srv.run_command = saved
+
+    def test_stale_peek_returns_last_value_and_recomputes_once(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            release = threading.Event()
+            counter = {"n": 0}
+
+            def counting_du(_repo, cmd, timeout=60):
+                counter["n"] += 1
+                if counter["n"] > 1:
+                    release.wait(5)
+                return {"ok": True, "exit": 0, "stdout": f"du-{counter['n']}", "stderr": "", "cmd": cmd}
+
+            saved = srv.run_command
+            srv.run_command = counting_du
+            try:
+                cache = srv.DiskUsageCache(ttl=0.05)
+                cache.peek(repo)
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and cache.peek(repo) == {"computing": True}:
+                    time.sleep(0.02)
+                time.sleep(0.1)  # expire the TTL
+                stale = cache.peek(repo)       # second compute blocks on `release`
+                self.assertEqual(stale.get("stdout"), "du-1")
+                self.assertTrue(stale.get("computing"))
+                stale2 = cache.peek(repo)      # refresh already in flight: no second thread
+                self.assertEqual(stale2.get("stdout"), "du-1")
+                release.set()
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and cache.peek(repo).get("stdout") != "du-2":
+                    time.sleep(0.02)
+                self.assertEqual(cache.peek(repo).get("stdout"), "du-2")
+            finally:
+                release.set()
+                srv.run_command = saved
+
+
+class ProbeOverrideEscapeHatchTests(unittest.TestCase):
+    """The adapter escape hatch: an explicitly configured probe command still
+    runs as a subprocess; the pristine built-in resolves to native."""
+
+    def test_builtin_commands_not_overridden(self) -> None:
+        for name in ("status", "validateDag", "nextArea", "nextAreas"):
+            self.assertFalse(srv.probe_command_overridden(name), name)
+
+    def test_adapter_command_marks_probe_overridden(self) -> None:
+        adapter = dict(srv.builtin_console_adapter())
+        adapter["commands"] = {"status": ["gluerun", "status"]}
+        apply_adapter_with_restore(self, adapter)
+        self.assertTrue(srv.probe_command_overridden("status"))
+        # deep-merged untouched keys remain built-in -> still native
+        self.assertFalse(srv.probe_command_overridden("validateDag"))
+        self.assertFalse(srv.probe_command_overridden("nextAreas"))
 
 
 if __name__ == "__main__":
