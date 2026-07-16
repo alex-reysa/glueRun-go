@@ -119,6 +119,7 @@ imported_this_run=0
 failed_imports=0
 dispatched_this_run=0
 failed_dispatches=0
+refused_dispatches=0
 integrations_this_run=0
 integration_failures=0
 planner_failures_this_run=0
@@ -175,12 +176,19 @@ if [[ "$do_import" == "yes" ]]; then
   reap_out="$(gluerun_reap_dispatches "$run_id")" || true
   reaped_ok="$(printf '%s\n' "$reap_out" | sed -n 's/^reaped_ok=//p' | tail -1)"
   reaped_failures="$(printf '%s\n' "$reap_out" | sed -n 's/^reaped_failures=//p' | tail -1)"
+  reaped_refused="$(printf '%s\n' "$reap_out" | sed -n 's/^reaped_refused=//p' | tail -1)"
+  reaped_terminal="$(printf '%s\n' "$reap_out" | sed -n 's/^reaped_terminal=//p' | tail -1)"
   workers_running="$(printf '%s\n' "$reap_out" | sed -n 's/^workers_running=//p' | tail -1)"
   [[ "$reaped_ok" =~ ^[0-9]+$ ]] || reaped_ok=0
   [[ "$reaped_failures" =~ ^[0-9]+$ ]] || reaped_failures=0
+  [[ "$reaped_refused" =~ ^[0-9]+$ ]] || reaped_refused=0
+  [[ "$reaped_terminal" =~ ^[0-9]+$ ]] || reaped_terminal=0
   [[ "$workers_running" =~ ^[0-9]+$ ]] || workers_running=0
-  if [[ $((reaped_ok + reaped_failures + workers_running)) -gt 0 ]]; then
-    echo "reap: ok=$reaped_ok failed=$reaped_failures running=$workers_running"
+  # Decided-terminal reaps count as failures for progress accounting; refusals
+  # never do (exit-code contract, see gluerun_reap_dispatches).
+  reaped_failures=$((reaped_failures + reaped_terminal))
+  if [[ $((reaped_ok + reaped_failures + reaped_refused + workers_running)) -gt 0 ]]; then
+    echo "reap: ok=$reaped_ok failed=$reaped_failures refused=$reaped_refused running=$workers_running"
   fi
 fi
 
@@ -352,7 +360,14 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$SCRIPT_DIR/dispatch-wrap.sh" "$tid" "$l1
       echo "actuation: l1-drive $tid exit=$drive_ec log=$dispatch_log"
       gluerun_append_event "origin.worker_reaped" "worker reaped (in-cycle wait)" \
         "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$drive_ec,\"durationSec\":$(( $(date +%s) - dispatch_starts[i] ))}"
-      if [[ "$drive_ec" -ne 0 ]]; then
+      # Exit-code contract: 2 = refusal (preconditions unmet, no state
+      # consumed) — never a failure/breaker signal; everything else nonzero
+      # (incl. 3 = decided-terminal) counts as a failed dispatch.
+      if [[ "$drive_ec" -eq 2 ]]; then
+        refused_dispatches=$((refused_dispatches + 1))
+        gluerun_append_event "origin.dispatch_refused" "l1 dispatch refused (preconditions)" \
+          "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$drive_ec,\"log\":\"$dispatch_log\"}"
+      elif [[ "$drive_ec" -ne 0 ]]; then
         failed_dispatches=$((failed_dispatches + 1))
         gluerun_append_event "origin.dispatch_failed" "l1 dispatch failed" \
           "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$drive_ec,\"log\":\"$dispatch_log\"}"
@@ -448,9 +463,11 @@ if [[ "$mode" == "actuate" ]]; then
   echo "worker_launch=enabled"
   echo "dispatched_this_run=$dispatched_this_run"
   echo "failed_dispatches=$failed_dispatches"
+  echo "refused_dispatches=$refused_dispatches"
   echo "detached_dispatch=${GLUERUN_DETACHED_DISPATCH:-0}"
   echo "reaped_ok=$reaped_ok"
   echo "reaped_failures=$reaped_failures"
+  echo "reaped_refused=${reaped_refused:-0}"
   echo "workers_running=$workers_running"
   echo "auto_integrate=${GLUERUN_AUTO_INTEGRATE:-1}"
   echo "integrated_this_run=$integrations_this_run"

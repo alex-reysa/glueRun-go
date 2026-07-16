@@ -262,7 +262,10 @@ test_detached_crash_detected_by_pid() {
   sleep 1
 
   local out2
-  out2="$(actuate "$stub" 0 1)"
+  # 0.5.0 tree-liveness treats recent run-dir writes as maybe-alive (bounded
+  # conservatism); disable the mtime window so the simulated hard crash reaps
+  # immediately in this fixture.
+  out2="$(GLUERUN_TREE_ACTIVITY_WINDOW_SEC=0 actuate "$stub" 0 1)"
   assert_eq "1" "$(field_of "$out2" reaped_failures)" "crash counted as a reap failure"
   assert_contains "$(cat "$GLUERUN_STATE_DIR/events.ndjson")" '"outcome":"crashed"' "crash outcome recorded"
   assert_eq "failed" "$(gluerun_json_field "$GLUERUN_LEASES_DIR/TASK-0001.json" status)" "crashed worker's lease marked failed"

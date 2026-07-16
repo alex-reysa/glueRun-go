@@ -86,42 +86,50 @@ PY
       continue
     fi
 
-    # Pid-aware fast-stale: a launched dispatch record whose wrapper pid is
-    # gone (with no exit file pending reap) means the worker crashed -- no need
-    # to wait out the wall-clock staleness window. pidStart defeats pid reuse.
-    # The reconcile reaper normally catches this first; this is the backstop
-    # for standalone recover runs.
+    # Lease age (minutes) feeds both the wall-clock staleness test and the
+    # hard-cap override inside the tree-liveness check.
+    lease_age_min="$(python3 - "$updated" <<'PY'
+import sys
+from datetime import datetime, timezone
+updated = sys.argv[1]
+try:
+    t = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+    print(int((datetime.now(timezone.utc) - t).total_seconds() // 60))
+except Exception:
+    print(999999)
+PY
+)"
+
+    # Tree-aware fast-stale (0.5.0): a launched dispatch record with no exit
+    # file is stale only when the whole process TREE is dead (descendants,
+    # pgroup, run-id command lines, recent run-dir writes). The 0.4.0
+    # root-pid-only check reclaimed leases under live auditors (field audit:
+    # accepted work destroyed, then an infinite re-dispatch loop).
     fast_stale="no"
+    tree_alive="unknown"
     drec="$(gluerun_dispatch_record_path "$task_id")"
     if [[ -f "$drec" && ! -f "$(gluerun_dispatch_exit_path "$task_id")" ]] \
       && [[ "$(gluerun_json_field "$drec" state 2>/dev/null || true)" == "launched" ]]; then
       dpid="$(gluerun_json_field "$drec" pid 2>/dev/null || true)"
       dpid_start="$(gluerun_json_field "$drec" pidStart 2>/dev/null || true)"
-      if ! gluerun_pid_alive "$dpid"; then
-        fast_stale="yes"
-      elif [[ -n "$dpid_start" && "$(gluerun_dispatch_pid_start "$dpid")" != "$dpid_start" ]]; then
+      dpgid="$(gluerun_json_field "$drec" pgid 2>/dev/null || true)"
+      if gluerun_dispatch_tree_alive "$task_id" "$dpid" "$dpid_start" "$run_id" "${dpgid:-0}" "$lease_age_min"; then
+        tree_alive="yes"
+      else
+        tree_alive="no"
         fast_stale="yes"
       fi
     fi
 
+    if [[ "$tree_alive" == "yes" ]]; then
+      echo "recover: skipped $task_id (process tree still alive)"
+      continue
+    fi
     if [[ "$fast_stale" == "yes" ]]; then
       is_stale="yes"
-      echo "recover: dispatch pid gone for $task_id; treating lease as stale now"
+      echo "recover: dispatch tree gone for $task_id; treating lease as stale now"
     else
-      is_stale="$(python3 - "$updated" "$stale_minutes" <<'PY'
-import sys
-from datetime import datetime, timezone
-updated, minutes = sys.argv[1], int(sys.argv[2])
-if not updated:
-    print("yes"); raise SystemExit
-try:
-    t = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-except ValueError:
-    print("yes"); raise SystemExit
-age = (datetime.now(timezone.utc) - t).total_seconds() / 60.0
-print("yes" if age >= minutes else "no")
-PY
-)"
+      is_stale="$([[ "$lease_age_min" -ge "$stale_minutes" ]] && echo yes || echo no)"
     fi
     if [[ "$is_stale" == "yes" ]]; then
       # Ask the autonomous decider what to do with the stale task (AI-native; no

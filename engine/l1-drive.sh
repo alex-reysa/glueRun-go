@@ -256,10 +256,37 @@ if [[ "$reset" == "yes" ]]; then
   gluerun_with_git_lock git -C "$GLUERUN_ROOT" branch -D "$worker_branch" 2>/dev/null || true
 fi
 
+# A deterministic refusal that repeats forever starves the loop (0.4.0: a
+# task-id collision re-dispatched into a preserved worktree every cycle until
+# the breaker halted the run). Count refusals per task; at the threshold,
+# park the task as a DECIDED outcome (exit 3) so the frontier stops
+# re-selecting it and an operator sees exactly why.
+l1_refusals_file="$GLUERUN_DISPATCH_DIR/$task_id.refusals"
+l1_note_refusal_and_maybe_park() {
+  local reason="$1" n=0
+  mkdir -p "$GLUERUN_DISPATCH_DIR"
+  [[ -f "$l1_refusals_file" ]] && n="$(head -1 "$l1_refusals_file" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  n=$((n + 1))
+  printf '%s\n' "$n" >"$l1_refusals_file"
+  if (( n >= ${GLUERUN_REFUSAL_PARK_THRESHOLD:-3} )); then
+    gluerun_task_set_status "$task_file" "blocked" 2>/dev/null || true
+    "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "escalate-parked" \
+      --rationale "repeated dispatch refusal x$n: $reason" --run "$run_id" \
+      --authority "l1-driver" 2>/dev/null || true
+    gluerun_append_event "l1.refusal_parked" "task parked after repeated dispatch refusals" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"refusals\":$n,\"reason\":\"$reason\"}"
+    rm -f "$l1_refusals_file"
+    echo "parked $task_id after $n refusals: $reason" >&2
+    exit 3
+  fi
+}
+
 if gluerun_worktree_registered "$worktree" || [[ -e "$worktree" ]]; then
   existing_lease="$(gluerun_lease_status "$task_id" 2>/dev/null || echo none)"
   case "$existing_lease" in
     running|planned|needs-review|accepted|integrated)
+      l1_note_refusal_and_maybe_park "active/accepted worktree (lease: $existing_lease)"
       echo "active/accepted worktree for $task_id (lease: $existing_lease); refusing (use --reset)" >&2
       exit 2 ;;
     *)
@@ -277,6 +304,7 @@ forbidden_json="$(printf '%s\n' "${forbidden_files[@]}" | python3 -c 'import jso
 gluerun_lease_write "$task_id" "$worker_branch" "$area" "l2-developer" "${owned_files[*]}" \
   "running" "$run_id" "$worktree" "$packet_base_ref" "$dispatch_batch_id" "$owned_json" "$forbidden_json"
 _l1_lease_written="yes"
+rm -f "$l1_refusals_file" 2>/dev/null || true  # a successful dispatch clears refusal history
 gluerun_append_event "l1.dispatch_started" "l1 dispatch started" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$worker_branch\",\"baseSha\":\"$packet_base_ref\",\"batchId\":\"$dispatch_batch_id\"}"
 gluerun_git_lock_acquire
@@ -1061,7 +1089,7 @@ assumptions_attempt_close() {
   local ledger findings updated
   ledger="$(cat "$assumptions_attempt_ledger_file" 2>/dev/null || true)"
   [[ -n "$ledger" ]] || return 0
-  findings="$(python3 - "$audit_record" <<'PY' 2>/dev/null)" || return 0
+  findings="$(python3 - "$audit_record" 2>/dev/null <<'PY'
 import json, sys
 try:
     r = json.load(open(sys.argv[1]))
@@ -1070,6 +1098,7 @@ except Exception:
 f = r.get("findings") if isinstance(r, dict) else None
 sys.stdout.write(json.dumps(f if isinstance(f, list) else []))
 PY
+)" || return 0
   updated="$(gluerun_ctx_assumptions_transition "$ledger" "$findings" 2>/dev/null)" || return 0
   [[ -n "$updated" ]] || return 0
   printf '%s\n' "$updated" > "$assumptions_ledger_sidecar.tmp" 2>/dev/null \

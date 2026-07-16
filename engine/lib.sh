@@ -2284,19 +2284,25 @@ PY
 }
 
 # Reap finished/crashed dispatches. Echoes counter lines for the caller:
-#   reaped_ok=N reaped_failures=N workers_running=N
+#   reaped_ok=N reaped_failures=N reaped_refused=N reaped_terminal=N workers_running=N
+# Exit-code contract (l1-drive): 0 = ok/no-op, 2 = REFUSAL (preconditions
+# unmet, no state consumed — never breaker input), 3 = TERMINAL (a decided
+# outcome: parked/blocked — counts as failure), anything else = crash/infra.
+# 0.4.0 counted every nonzero exit as a failure, so deterministic refusals
+# (e.g. task-id collisions re-dispatching into a preserved worktree) pumped
+# the breaker to a halt.
 # For every record in state=launched:
-#  - .exit file present -> reaped (ok when 0, failed otherwise; mirrors the
-#    legacy wait loop, which counts any nonzero driver exit as a failure)
-#  - no .exit, pid dead (or pidStart mismatch = pid reuse) -> crashed: the
-#    still-active lease is marked failed and the reap counts as a failure
-#  - pid alive -> still running
+#  - .exit file present -> reaped + classified per the contract
+#  - no .exit -> whole-TREE liveness decides (gluerun_dispatch_tree_alive:
+#    descendants, pgroup, run-id command lines, recent run-dir writes). The
+#    0.4.0 root-pid-only check declared a dead wrapper with a live auditor
+#    "crashed" and failed the lease under it (accepted work destroyed).
 # args: run_id  (the CURRENT cycle's run id, for event attribution)
 gluerun_reap_dispatches() {
   local run_id="$1"
-  local reaped_ok=0 reaped_failures=0 workers_running=0
+  local reaped_ok=0 reaped_failures=0 reaped_refused=0 reaped_terminal=0 workers_running=0
   if [[ -d "$GLUERUN_DISPATCH_DIR" ]]; then
-    local record tid state pid pid_start ec now_start lease_status
+    local record tid state pid pid_start pgid rec_run ec lease_status outcome
     for record in "$GLUERUN_DISPATCH_DIR"/*.json; do
       [[ -f "$record" ]] || continue
       state="$(gluerun_json_field "$record" state 2>/dev/null || true)"
@@ -2305,28 +2311,25 @@ gluerun_reap_dispatches() {
       [[ -n "$tid" ]] || continue
       pid="$(gluerun_json_field "$record" pid 2>/dev/null || true)"
       pid_start="$(gluerun_json_field "$record" pidStart 2>/dev/null || true)"
+      pgid="$(gluerun_json_field "$record" pgid 2>/dev/null || true)"
+      rec_run="$(gluerun_json_field "$record" runId 2>/dev/null || true)"
       if [[ -f "$(gluerun_dispatch_exit_path "$tid")" ]]; then
         ec="$(head -1 "$(gluerun_dispatch_exit_path "$tid")" 2>/dev/null | tr -d '[:space:]')"
         [[ "$ec" =~ ^[0-9]+$ ]] || ec=1
-        if [[ "$ec" -eq 0 ]]; then
-          reaped_ok=$((reaped_ok + 1))
-          gluerun_dispatch_record_finalize "$tid" "$ec" "ok"
-        else
-          reaped_failures=$((reaped_failures + 1))
-          gluerun_dispatch_record_finalize "$tid" "$ec" "failed"
-        fi
+        case "$ec" in
+          0) outcome="ok";       reaped_ok=$((reaped_ok + 1)) ;;
+          2) outcome="refused";  reaped_refused=$((reaped_refused + 1)) ;;
+          3) outcome="terminal"; reaped_terminal=$((reaped_terminal + 1)) ;;
+          *) outcome="failed";   reaped_failures=$((reaped_failures + 1)) ;;
+        esac
+        gluerun_dispatch_record_finalize "$tid" "$ec" "$outcome"
         gluerun_append_event "origin.dispatch_reaped" "dispatch reaped" \
-          "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$ec,\"outcome\":\"$([[ "$ec" -eq 0 ]] && echo ok || echo failed)\"}"
+          "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$ec,\"outcome\":\"$outcome\"}"
         continue
       fi
-      if gluerun_pid_alive "$pid"; then
-        now_start="$(gluerun_dispatch_pid_start "$pid")"
-        if [[ -z "$pid_start" || "$now_start" == "$pid_start" ]]; then
-          workers_running=$((workers_running + 1))
-          continue
-        fi
-        # pid alive but start time differs: the worker died and the pid was
-        # reused by an unrelated process -- treat as a crash.
+      if gluerun_dispatch_tree_alive "$tid" "$pid" "$pid_start" "$rec_run" "${pgid:-0}"; then
+        workers_running=$((workers_running + 1))
+        continue
       fi
       lease_status="$(gluerun_lease_status "$tid" 2>/dev/null || true)"
       case "$lease_status" in
@@ -2334,12 +2337,14 @@ gluerun_reap_dispatches() {
       esac
       reaped_failures=$((reaped_failures + 1))
       gluerun_dispatch_record_finalize "$tid" "-1" "crashed"
-      gluerun_append_event "origin.dispatch_reaped" "dispatch crashed (pid gone, no exit file)" \
+      gluerun_append_event "origin.dispatch_reaped" "dispatch crashed (tree dead, no exit file)" \
         "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":-1,\"outcome\":\"crashed\",\"leaseStatus\":\"$lease_status\"}"
     done
   fi
   echo "reaped_ok=$reaped_ok"
   echo "reaped_failures=$reaped_failures"
+  echo "reaped_refused=$reaped_refused"
+  echo "reaped_terminal=$reaped_terminal"
   echo "workers_running=$workers_running"
 }
 
