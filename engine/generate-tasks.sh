@@ -393,7 +393,8 @@ extracted_body="$run_dir/planner-extracted.json"
 if gluerun_extract_json "$body_file" "$extracted_body" 2>/dev/null; then
   parse_src="$extracted_body"
 fi
-if python3 - "$GLUERUN_TASKBATCH_SCHEMA" "$batch_file" "$count" "$parse_src" <<'PY'
+batch_rc=0
+python3 - "$GLUERUN_TASKBATCH_SCHEMA" "$batch_file" "$count" "$parse_src" <<'PY' || batch_rc=$?
 import json
 import sys
 
@@ -415,9 +416,13 @@ if data.get("schema") != "gluerun.orchestration.task-batch.v0":
     print("unsupported task batch schema", file=sys.stderr)
     sys.exit(2)
 tasks = data.get("tasks")
-if not isinstance(tasks, list) or not tasks or len(tasks) > int(count_raw):
+if not isinstance(tasks, list) or len(tasks) > int(count_raw):
     print("invalid task batch size", file=sys.stderr)
     sys.exit(2)
+if not tasks:
+    # A schema-valid EMPTY batch is a legitimate planner statement ("nothing to
+    # plan on this node right now"), not invalid output. rc 4 -> no-op path.
+    sys.exit(4)
 for item in tasks:
     if not isinstance(item, dict) or not item.get("taskId") or not item.get("markdown"):
         print("invalid task batch item", file=sys.stderr)
@@ -426,6 +431,26 @@ with open(out_path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
+
+# Empty batch (rc 4): a valid no-op, NOT a planner failure. 0.4.0 classified
+# {"tasks": []} as invalid-output; the failure then fed the autonomate
+# chokepoint, which armed a false 30-minute quota backoff (field audit, S3
+# accessibility window). No failure event, no backoff, exit 0.
+if [[ "$batch_rc" -eq 4 ]]; then
+  gluerun_append_event "planner.no_tasks" "planner returned a valid empty batch" \
+    "{\"node\":\"$active_node\",\"area\":\"$active_area\",\"runId\":\"$run_id\",\"class\":\"no-tasks\"}"
+  if [[ -n "$stage_dir" ]]; then
+    mkdir -p "$stage_dir"
+    : >"$stage_dir/NO-TASKS"
+  fi
+  echo "planner-no-tasks (node=$active_node)"
+  gluerun_ctx_planner_session_finalize "$active_node" 0 "" "$run_id" \
+    "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
+    "$planner_head_sha" 1 >/dev/null 2>&1 || true
+  exit 0
+fi
+
+if [[ "$batch_rc" -eq 0 ]]
 then
   mapfile -t batch_ids < <(python3 - "$batch_file" <<'PY'
 import json, sys

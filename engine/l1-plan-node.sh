@@ -72,7 +72,13 @@ gluerun_l1_lease_set_status "$node" active || true
 
 planner="${GLUERUN_L1_PLANNER:-$SCRIPT_DIR/generate-tasks.sh}"
 if "$planner" --node "$node" --stage-dir "$stage_dir" --count "$count" >>"$stage_dir/planner.out" 2>&1 \
-   && compgen -G "$stage_dir/"'*.candidate.md' >/dev/null; then
+   && { compgen -G "$stage_dir/"'*.candidate.md' >/dev/null || [[ -f "$stage_dir/NO-TASKS" ]]; }; then
+  # A valid empty batch (NO-TASKS marker, 0.5.0): nothing to critique or
+  # import; leave the lease for L0's importer to release.
+  if [[ -f "$stage_dir/NO-TASKS" ]] && ! compgen -G "$stage_dir/"'*.candidate.md' >/dev/null; then
+    echo "planned-empty:$node"
+    exit 0
+  fi
   # --- plan-revision-loop hook (default-OFF; GLUERUN_PLAN_CRITIQUE=1) ----------
   # The single sanctioned call-site of the integrated bounded revise -> (resume|
   # fresh) -> re-critique -> approve/park orchestrator (engine/ctx-plan-revise-

@@ -779,27 +779,46 @@ run_worker_phase() {
   # Secret-scan staged-to-be content (working changes), then stage owned + commit.
   for f in "${owned_files[@]}"; do [[ -e "$worktree/$f" ]] && git -C "$worktree" add -- "$f"; done
   if git -C "$worktree" diff --cached --quiet; then
-    attempt_failure="no-changes"; attempt_ctx="$run_dir/worker-codex.log"; return 1
+    # Empty staged diff. If the owned files at HEAD already differ from the
+    # base — a PRIOR attempt committed the content — and the gate above just
+    # passed, this is a valid empty-diff retry, not a failure. 0.4.0 raised
+    # `no-changes` here, the decider's revalidate-evidence could not audit a
+    # no-change replay, and fully green work terminally parked (field audit:
+    # TASK-0052/0053). Truly-no-content (HEAD == base on owned paths) still
+    # fails as before.
+    local owned_diff_rc=0
+    git -C "$worktree" diff --quiet "$packet_base_ref"...HEAD -- "${owned_files[@]}" 2>/dev/null \
+      || owned_diff_rc=$?
+    if [[ "$owned_diff_rc" -eq 1 ]]; then
+      gluerun_append_event "l1.no_changes_reconciled" \
+        "gate green and owned content already committed at HEAD; proceeding with empty diff" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"headSha\":\"$(git -C "$worktree" rev-parse HEAD)\"}"
+      head_sha="$(git -C "$worktree" rev-parse HEAD)"
+    else
+      # rc 0 = no content vs base; rc >1 = diff failed — both fail conservatively.
+      attempt_failure="no-changes"; attempt_ctx="$run_dir/worker-codex.log"; return 1
+    fi
+  else
+    if ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$worktree" --staged >"$run_dir/secret-scan.log" 2>&1; then
+      git -C "$worktree" reset -q
+      attempt_failure="secret-detected"; attempt_ctx="$run_dir/secret-scan.log"; return 1
+    fi
+    gluerun_git_lock_acquire
+    local commit_ec=0
+    set +e
+    git -C "$worktree" -c user.name="$GLUERUN_GIT_L1_NAME" -c user.email="$GLUERUN_GIT_L1_EMAIL" \
+      commit -q -m "$task_id: ${test_policy} worker output (run $run_id)" \
+      -m "Driven by L1 from $packet_base_ref. Owned: ${owned_files[*]}."
+    commit_ec=$?
+    set -e
+    gluerun_git_lock_release
+    if [[ "$commit_ec" -ne 0 ]]; then
+      attempt_failure="commit-failed"; attempt_ctx="$run_dir/worker-codex.log"; return 1
+    fi
+    head_sha="$(git -C "$worktree" rev-parse HEAD)"
+    gluerun_append_event "l1.committed" "worker branch committed" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"headSha\":\"$head_sha\"}"
   fi
-  if ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$worktree" --staged >"$run_dir/secret-scan.log" 2>&1; then
-    git -C "$worktree" reset -q
-    attempt_failure="secret-detected"; attempt_ctx="$run_dir/secret-scan.log"; return 1
-  fi
-  gluerun_git_lock_acquire
-  local commit_ec=0
-  set +e
-  git -C "$worktree" -c user.name="$GLUERUN_GIT_L1_NAME" -c user.email="$GLUERUN_GIT_L1_EMAIL" \
-    commit -q -m "$task_id: ${test_policy} worker output (run $run_id)" \
-    -m "Driven by L1 from $packet_base_ref. Owned: ${owned_files[*]}."
-  commit_ec=$?
-  set -e
-  gluerun_git_lock_release
-  if [[ "$commit_ec" -ne 0 ]]; then
-    attempt_failure="commit-failed"; attempt_ctx="$run_dir/worker-codex.log"; return 1
-  fi
-  head_sha="$(git -C "$worktree" rev-parse HEAD)"
-  gluerun_append_event "l1.committed" "worker branch committed" \
-    "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"headSha\":\"$head_sha\"}"
 
   mapfile -t changed_files < <(git -C "$worktree" diff --name-only "$target_branch"...HEAD)
   python3 - "$run_dir/last-message.json" "$packet" "$run_id" "$task_id" "$area" \
@@ -957,7 +976,23 @@ run_audit_phase() {
       infra_reason="unparseable"
       gluerun_append_event "l1.audit_unparseable" "auditor produced no parseable JSON verdict" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
+    elif [[ "${GLUERUN_AUDIT_VERDICT_VALIDATE:-warn}" == "strict" ]] \
+      && ! gluerun_validate_audit_verdict "$audit_record" "$task_id" "$run_id" 2>"$run_dir/audit-validate.err"; then
+      # Central schema validation (0.5.0, decider parity). strict: an invalid
+      # verdict is an auditor-infra failure — re-run the auditor rather than
+      # letting a malformed verdict poison the acceptance decision. Default
+      # "warn" logs below but proceeds (existing consumers' auditors emit
+      # minimal verdicts).
+      infra_reason="invalid-verdict"
+      cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
+      gluerun_append_event "l1.audit_invalid_verdict" "auditor verdict failed schema validation" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}"
     else
+      if [[ "${GLUERUN_AUDIT_VERDICT_VALIDATE:-warn}" == "warn" ]] \
+        && ! gluerun_validate_audit_verdict "$audit_record" "$task_id" "$run_id" 2>"$run_dir/audit-validate.err"; then
+        gluerun_append_event "l1.audit_verdict_warned" "auditor verdict failed schema validation (warn mode; proceeding)" \
+          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}" || true
+      fi
       audit_parsed="yes"
       break
     fi

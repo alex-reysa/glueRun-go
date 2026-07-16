@@ -3113,6 +3113,13 @@ gluerun_l1_import_staged() {
       mapfile -t cands < <(find "$stage_dir" -maxdepth 1 -name '*.candidate.md' -type f 2>/dev/null | sort)
     fi
 	    if [[ "${#cands[@]}" -eq 0 ]]; then
+	      if [[ -f "$stage_dir/NO-TASKS" ]]; then
+	        # Valid empty batch (0.5.0): release the node lease, no rejection.
+	        rm -f "$(gluerun_l1_lease_path "$node")" 2>/dev/null || true
+	        gluerun_append_event "origin.l1_no_tasks" "planner returned a valid empty batch; node lease released" "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
+	        echo "no-tasks:$node"
+	        continue
+	      fi
 	      import_rejections=$((import_rejections + 1))
 	      gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
 	      gluerun_append_event "origin.l1_import_rejected" "no staged candidates" "{\"runId\":\"$run_id\",\"node\":\"$node\"}"

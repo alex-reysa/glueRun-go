@@ -28,12 +28,64 @@ quota_sleep_cap="${GLUERUN_QUOTA_SLEEP_CAP:-300}"       # max seconds per quota-
 quota_wait_budget="${GLUERUN_QUOTA_WAIT_BUDGET:-10800}" # total quota-wait before escalating to STOP (3h)
 quota_waited_total=0
 once="no"
-[[ "${1:-}" == "--once" ]] && once="yes"
+detach="no"
+for arg in "$@"; do
+  case "$arg" in
+    --once) once="yes" ;;
+    --detach) detach="yes" ;;
+    *) echo "autonomate: unknown arg: $arg" >&2; exit 2 ;;
+  esac
+done
 
 gluerun_ensure_state_dirs
 gluerun_require_target_branch
 
 pidfile="$GLUERUN_STATE_DIR/autonomate.pid"
+
+# --detach (0.5.0): supported daemonized launch. The field run hand-rolled
+# python setsid double-forks 6+ times because plain `nohup ... &` dies on
+# shell handoff and launchd is TCC-blocked on user dirs. The child re-execs
+# this script with GLUERUN_AUTONOMATE_DETACHED=1; the parent waits for the
+# pidfile to prove liveness, prints it, and exits.
+if [[ "$detach" == "yes" && "${GLUERUN_AUTONOMATE_DETACHED:-}" != "1" ]]; then
+  if [[ -f "$pidfile" ]]; then
+    oldpid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -n "$oldpid" ]] && kill -0 "$oldpid" 2>/dev/null; then
+      echo "autonomate already running (pid $oldpid)"
+      exit 0
+    fi
+  fi
+  detach_log="$GLUERUN_STATE_DIR/autonomate.log"
+  detach_args=()
+  [[ "$once" == "yes" ]] && detach_args+=("--once")
+  GLUERUN_AUTONOMATE_DETACHED=1 python3 - "$BASH_SOURCE" "$detach_log" ${detach_args[@]+"${detach_args[@]}"} <<'PY'
+import os, sys
+script, log = sys.argv[1], sys.argv[2]
+extra = sys.argv[3:]
+if os.fork() == 0:
+    os.setsid()
+    if os.fork() == 0:
+        fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        devnull = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(devnull, 0)
+        os.dup2(fd, 1)
+        os.dup2(fd, 2)
+        os.execvp("bash", ["bash", script] + extra)
+    os._exit(0)
+os.wait()
+PY
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 0.5
+    newpid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -n "$newpid" && "$newpid" != "$$" ]] && kill -0 "$newpid" 2>/dev/null; then
+      echo "autonomate: detached pid=$newpid log=$detach_log"
+      exit 0
+    fi
+  done
+  echo "autonomate: detached launch FAILED; last log lines:" >&2
+  tail -5 "$detach_log" 2>/dev/null >&2 || true
+  exit 1
+fi
 if [[ -f "$pidfile" ]]; then
   oldpid="$(cat "$pidfile" 2>/dev/null || true)"
   if [[ -n "$oldpid" ]] && kill -0 "$oldpid" 2>/dev/null; then
@@ -113,12 +165,18 @@ PY
         break
       fi
       nap="$bo_remaining"; [[ "$nap" -gt "$quota_sleep_cap" ]] && nap="$quota_sleep_cap"
-      quota_waited_total=$((quota_waited_total + nap))
-      echo "[autonomate] planner quota window open (${bo_remaining}s left); sleeping ${nap}s WITHOUT breaker increment (waited ${quota_waited_total}s)"
+      echo "[autonomate] planner quota window open (${bo_remaining}s left); sleeping up to ${nap}s WITHOUT breaker increment (waited ${quota_waited_total}s)"
       gluerun_append_event "autonomate.quota_wait" "sleeping through planner quota window" "{\"iteration\":$iteration,\"remainingSec\":$bo_remaining,\"napSec\":$nap,\"quotaWaitedTotal\":$quota_waited_total}"
       gluerun_write_status "$iteration" "sleeping through quota window (${bo_remaining}s left, waited ${quota_waited_total}s)"
       [[ "$once" == "yes" ]] && { echo "[autonomate] --once: quota wait detected, single iteration done"; break; }
-      sleep "$nap"
+      # Interruptible (0.5.0): STOP mid-nap ends the loop within
+      # GLUERUN_SLEEP_POLL_SEC; `gluerun wake` / clear-backoff end the nap
+      # early. Only actually-slept seconds count toward the quota budget.
+      nap_started=$SECONDS
+      nap_rc=0
+      gluerun_interruptible_sleep "$nap" 1 || nap_rc=$?
+      quota_waited_total=$((quota_waited_total + SECONDS - nap_started))
+      [[ "$nap_rc" -eq 2 ]] && { echo "[autonomate] STOP during quota wait; halting"; break; }
       gluerun_stop_requested && { echo "[autonomate] STOP during quota wait; halting"; break; }
       iteration=$((iteration - 1))
       continue
@@ -201,7 +259,11 @@ PY
   fi
 
   [[ "$once" == "yes" ]] && { echo "[autonomate] --once: single iteration done"; break; }
-  sleep "$sleep_secs"
+  # Interruptible (0.5.0): STOP is honored mid-nap (0.4.0 checked only at loop
+  # top, so a STOP written during the sleep waited out the full nap); WAKE
+  # ends it early without killing sleep children (which killed the whole loop
+  # in the field).
+  gluerun_interruptible_sleep "$sleep_secs" || true
 done
 
 gluerun_append_event "autonomate.exited" "autonomous loop exited" "{\"iterations\":$iteration}"

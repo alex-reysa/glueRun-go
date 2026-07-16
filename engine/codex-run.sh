@@ -229,14 +229,68 @@ else
 fi
 
 # ---- Run --------------------------------------------------------------------
-# When --session-meta is requested we tee codex's JSONL stdout to a temp file so
-# we can scan it for the session id; exit propagation uses PIPESTATUS[0] (works
-# under bash 3.2). When --session-meta is ABSENT the invocation is byte-identical
-# to HEAD (no tee, no pipe).
+# Guard rails (0.5.0): GLUERUN_CODEX_TIMEOUT_SEC (default 2400; 0 disables)
+# bounds wall clock — the field audit saw codex planners/auditors/workers hang
+# 28-380 minutes with zero output and no engine-side bound (the claude runner
+# has had GLUERUN_CLAUDE_TIMEOUT_SEC since 0.4.0). GLUERUN_CODEX_IDLE_SEC
+# (default 0 = off; 600 recommended) additionally kills a run whose JSONL
+# stream stops growing — codex --json emits an event per action, so byte
+# growth is a faithful liveness signal. Both kill the whole process tree and
+# surface exit 124, which every consumer already classifies as timeout/infra.
+# With BOTH guards off the invocation is byte-identical to 0.4.0 (no tee
+# unless --session-meta asked for one).
+codex_timeout="${GLUERUN_CODEX_TIMEOUT_SEC:-2400}"
+codex_idle="${GLUERUN_CODEX_IDLE_SEC:-0}"
+[[ "$codex_timeout" =~ ^[0-9]+$ ]] || codex_timeout=2400
+[[ "$codex_idle" =~ ^[0-9]+$ ]] || codex_idle=0
+
 exit_code=0
 jsonl_tmp=""
-if [[ -n "$session_meta_path" ]]; then
+if [[ "$codex_timeout" -gt 0 || "$codex_idle" -gt 0 || -n "$session_meta_path" ]]; then
   jsonl_tmp="$(mktemp "${TMPDIR:-/tmp}/gluerun-codex-jsonl.XXXXXX")"
+fi
+
+run_codex_guarded() {
+  # Background + poll: overall deadline and idle-output detection. The tee is
+  # unconditional here so the JSONL file doubles as the liveness signal.
+  local deadline=0 idle_deadline=0 size prev_size now
+  (( codex_timeout > 0 )) && deadline=$(( SECONDS + codex_timeout ))
+  prev_size=0
+  (( codex_idle > 0 )) && idle_deadline=$(( SECONDS + codex_idle ))
+  if [[ -n "$prompt_file" ]]; then
+    ( "${cmd[@]}" <"$prompt_file" | tee "$jsonl_tmp" ; exit "${PIPESTATUS[0]}" ) &
+  else
+    ( "${cmd[@]}" | tee "$jsonl_tmp" ; exit "${PIPESTATUS[0]}" ) &
+  fi
+  local child=$!
+  while kill -0 "$child" 2>/dev/null; do
+    sleep 2
+    now=$SECONDS
+    if (( deadline > 0 && now >= deadline )); then
+      echo "codex-run: TIMED OUT after ${codex_timeout}s; killing process tree" >&2
+      gluerun_kill_tree "$child"
+      wait "$child" 2>/dev/null || true
+      return 124
+    fi
+    if (( codex_idle > 0 )); then
+      size="$(stat -f %z "$jsonl_tmp" 2>/dev/null || stat -c %s "$jsonl_tmp" 2>/dev/null || echo 0)"
+      if [[ "$size" != "$prev_size" ]]; then
+        prev_size="$size"
+        idle_deadline=$(( now + codex_idle ))
+      elif (( now >= idle_deadline )); then
+        echo "codex-run: IDLE (no output for ${codex_idle}s); killing process tree" >&2
+        gluerun_kill_tree "$child"
+        wait "$child" 2>/dev/null || true
+        return 124
+      fi
+    fi
+  done
+  wait "$child"
+}
+
+if [[ "$codex_timeout" -gt 0 || "$codex_idle" -gt 0 ]]; then
+  run_codex_guarded || exit_code=$?
+elif [[ -n "$session_meta_path" ]]; then
   if [[ -n "$prompt_file" ]]; then
     "${cmd[@]}" <"$prompt_file" | tee "$jsonl_tmp"
     exit_code=${PIPESTATUS[0]}
