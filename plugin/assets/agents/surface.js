@@ -13,11 +13,20 @@
    2s shared sessions feed (core/sessions-feed.js). The grid re-render is
    signature-gated and does zero work while the surface is hidden. */
 
-import { S, esc, escAttr, icon, relTime } from "../app.js";
+import { S, esc, escAttr, icon, relTime, toast, viewRaw } from "../app.js";
 import { subscribe as subscribeSessions, feedState } from "../core/sessions-feed.js";
 import { writeRoute } from "../core/router.js";
 
 const shortRun = (r) => String(r || "").replace(/^ORIGIN-|^RUN-/, "").slice(0, 16);
+
+// Free-text model input still gets a datalist of the common families.
+const KNOWN_MODELS = ["claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5", "gpt-5.5", "gpt-5", "gpt-5-codex", "o4-mini"];
+const REASONING_ALL = ["minimal", "low", "medium", "high", "xhigh"];
+// enum option domains keyed by env key (the settings API doesn't ship choices)
+const ENUM_OPTIONS = { GLUERUN_CODEX_SERVICE_TIER: ["default", "flex", "priority"] };
+const effortOptions = (model) => /codex|gpt/i.test(model || "") ? ["minimal", "low", "medium", "high"]
+  : /claude/i.test(model || "") ? ["low", "medium", "high", "xhigh"] : REASONING_ALL;
+const shortEnv = (k) => String(k || "").replace(/^GLUERUN_/, "").toLowerCase();
 
 // The eight cards with runtime evidence, in grid order. eyebrow layer follows the
 // operating model (planner/integration/auditor are L1; the rest L2). configRole maps
@@ -40,11 +49,14 @@ const AG = {
   started: false,
   visible: false,
   config: null, configInflight: false,
+  settings: null, settingsInflight: false, settingsUnavailable: false, settingsProbed: false,
   roles: null, rolesInflight: false,
   sessions: [], byId: new Map(), generatedAt: null,
   level: 1,               // 1 = grid, 2 = detail
   roleId: null,           // detail role
   highlightSession: null, // deep-link process highlight
+  editing: false,         // a settings editor has unsaved edits → freeze re-renders
+  sysOpen: false,         // System settings panel open
   sig: null,
 };
 
@@ -55,6 +67,36 @@ async function fetchConfig(force) {
   try { const r = await fetch("/api/config", { cache: "no-store" }); if (r.ok) AG.config = await r.json(); }
   catch (e) { /* leave last good */ } finally { AG.configInflight = false; render(); }
 }
+// Feature-probe + fetch the typed settings envelope (23 knobs, 4 groups). A 404
+// flips settingsUnavailable so both editors fall back to read-only.
+async function fetchSettings(force) {
+  if (AG.settingsInflight || (AG.settings && !force) || AG.settingsUnavailable) return;
+  AG.settingsInflight = true;
+  try {
+    const r = await fetch("/api/settings", { cache: "no-store" });
+    if (r.status === 404 || r.status === 501) { AG.settingsUnavailable = true; }
+    else if (r.ok) { AG.settings = await r.json(); }
+  } catch (e) { /* leave last good */ }
+  finally { AG.settingsProbed = true; AG.settingsInflight = false; if (AG.sysOpen) renderSysPanel(); }
+}
+
+// POST changes to /api/settings; refresh config+settings, toast appliesAt notes.
+async function postSettings(changes, done) {
+  try {
+    const res = await fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ changes }) });
+    if (res.status === 404 || res.status === 405 || res.status === 501) { AG.settingsUnavailable = true; toast("settings are read-only on this server"); done && done(false); return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { toast(data.error ? String(data.error) : "save failed · " + res.status); done && done(false); return; }
+    if (data.config) AG.config = data.config;
+    if (data.settings) AG.settings = data.settings;
+    const at = data.appliesAt || {};
+    const note = Object.keys(changes).map((k) => `${shortEnv(k)} → ${at[k] || "applied"}`).join(" · ");
+    toast(note || "settings saved");
+    AG.editing = false; AG.sig = null;
+    done && done(true);
+  } catch (e) { toast("save failed"); done && done(false); }
+}
+
 function ensureRoles() {
   if (AG.roles) return;
   if (S.roleCatalog) { AG.roles = S.roleCatalog; return; }
@@ -176,7 +218,14 @@ function renderGrid() {
   const host = document.getElementById("ag-body");
   if (!host) return;
   host.innerHTML =
-    `<div class="ag-grid" id="ag-grid">${CARDS.map(cardHtml).join("")}</div>
+    `<div class="ag-surface-head">
+       <span class="co-eyebrow">agent roles</span>
+       <span class="ag-head-actions">
+         <button class="insp-raw-btn" data-ag-rawconfig="1" title="view source · gluerun.config.json">{ }<span class="irb-label">config</span></button>
+         <button class="ag-sys-btn" id="ag-sys-btn" title="Edit all orchestration settings">${icon("i-cpu")}System settings</button>
+       </span>
+     </div>
+     <div class="ag-grid" id="ag-grid">${CARDS.map(cardHtml).join("")}</div>
      <div class="ag-declared">
        <div class="co-eyebrow">declared roles</div>
        <div class="ag-declared-row">${DECLARED_ONLY.map(declaredHtml).join("")}</div>
@@ -231,25 +280,153 @@ function detailHtml(card) {
     <section class="ag-section"><div class="co-eyebrow">settings</div>${settings}</section>`;
 }
 
-function settingsHtml(card) {
-  const role = cardConfigRole(card);
+// The role's editable knobs: model + effort (from /api/config source env keys),
+// plus its limits for cards that own them. maxDispatch is derived (read-only).
+function roleSettingRows(card) {
   const rows = [];
+  const role = cardConfigRole(card);
   if (role && AG.config && AG.config.roles && AG.config.roles[role]) {
-    const r = AG.config.roles[role];
-    const src = r.source || {};
-    if (r.model) rows.push(["model", r.model, src.model, src.modelTier]);
-    if (r.effort) rows.push(["effort", r.effort, src.effort, src.effortTier]);
+    const r = AG.config.roles[role]; const src = r.source || {};
+    if (src.model) rows.push({ envKey: src.model, label: "model", value: r.model || "", kind: "model" });
+    if (src.effort) rows.push({ envKey: src.effort, label: "effort", value: r.effort || "", kind: "reasoning", options: effortOptions(r.model) });
   }
   if (card.limits && AG.config && AG.config.limits) {
     const L = AG.config.limits;
-    const lim = [["max concurrent", L.maxConcurrent], ["dispatch / cycle", L.maxDispatch], ["l1 parallel", L.l1Parallel]];
-    for (const [k, v] of lim) if (v != null) rows.push([k, String(v), null, "config"]);
+    if (L.maxConcurrent != null) rows.push({ envKey: "GLUERUN_MAX_CONCURRENT", label: "max concurrent", value: String(L.maxConcurrent), kind: "count" });
+    if (L.l1Parallel != null) rows.push({ envKey: "GLUERUN_MAX_L1_CONCURRENT", label: "l1 parallel", value: String(L.l1Parallel), kind: "count" });
+    if (L.maxDispatch != null) rows.push({ envKey: "GLUERUN_MAX_DISPATCH", label: "dispatch / cycle", value: String(L.maxDispatch), kind: "derived", meaning: "follows max concurrent" });
   }
-  const body = rows.map(([k, v, key, tier]) =>
-    `<div class="ag-set-row"><span class="ag-set-key">${esc(k)}</span><span class="ag-set-val mono">${esc(v)}</span>${key ? `<span class="ag-set-src mono" title="${esc(tier || "")}">${esc(key)}</span>` : `<span class="ag-set-src mono">${esc(tier || "")}</span>`}</div>`).join("");
-  if (!rows.length) return `<div class="section-empty">no model settings for this role</div>`;
-  return `<div class="ag-settings">${body}</div><div class="ag-set-foot">read-only · configured in gluerun.config.json — edit the file to change</div>`;
+  return rows.filter((r) => r.envKey);
 }
+
+// The role-detail Settings section: editable editor, or a read-only fallback +
+// copy-command affordance when the server has no writable settings API.
+function settingsHtml(card) {
+  const rows = roleSettingRows(card);
+  if (!rows.length) return `<div class="section-empty">no model settings for this role</div>`;
+  if (AG.settingsUnavailable) return settingsReadOnlyHtml(rows);
+  return renderSettingEditor(rows, { editorId: "role-" + card.id });
+}
+
+// Read-only fallback (old servers): value + env key + copy-the-line button.
+function settingsReadOnlyHtml(rows) {
+  const body = rows.map((r) =>
+    `<div class="ag-set-row"><span class="ag-set-key">${esc(r.label)}</span><span class="ag-set-val mono">${esc(r.value)}</span>
+      <button class="ag-set-copy" data-ag-copy="${escAttr(r.envKey + "=" + r.value)}" title="copy ${escAttr(r.envKey)}"><code class="ag-set-src mono">${esc(r.envKey)}</code>${icon("i-copy")}</button></div>`).join("");
+  return `<div class="ag-settings">${body}</div><div class="ag-set-foot">read-only · export the env line or edit gluerun.config.json</div>`;
+}
+
+// ---- shared typed settings editor (role detail + System panel) ----------------
+function settingFieldHtml(row) {
+  const dv = row.value == null ? "" : String(row.value);
+  const common = `data-envkey="${escAttr(row.envKey)}" data-kind="${escAttr(row.kind)}" data-baseline="${escAttr(dv)}"`;
+  if (row.kind === "derived") return `<input class="ag-set-input" disabled value="${escAttr(dv)}" ${common}>`;
+  if (row.kind === "bool") { const on = dv === "1" || dv === "on" || dv === "true"; return `<button type="button" class="ag-set-toggle" role="switch" aria-checked="${on}" data-value="${on ? "1" : "0"}" ${common}><span class="ag-toggle-knob"></span></button>`; }
+  if (row.kind === "reasoning" || row.kind === "enum") {
+    let opts = row.options || (row.kind === "reasoning" ? REASONING_ALL : (ENUM_OPTIONS[row.envKey] || []));
+    if (dv && !opts.includes(dv)) opts = [dv, ...opts];
+    return `<span class="select-wrap"><select class="ag-set-input filter" ${common}>${opts.map((o) => `<option value="${escAttr(o)}"${o === dv ? " selected" : ""}>${esc(o)}</option>`).join("")}</select><span class="chev">${icon("i-chev")}</span></span>`;
+  }
+  if (row.kind === "model") return `<input class="ag-set-input" list="ag-model-list" value="${escAttr(dv)}" placeholder="model" ${common}>`;
+  if (row.kind === "count" || row.kind === "duration" || row.kind === "bytes")
+    return `<span class="ag-set-num"><input class="ag-set-input" type="number" min="0" step="1" value="${escAttr(dv)}" ${common}>${row.unit ? `<span class="ag-set-unit">${esc(row.unit)}</span>` : ""}</span>`;
+  return `<input class="ag-set-input" value="${escAttr(dv)}" ${common}>`;   // identifier / other
+}
+
+function renderSettingEditor(rows, opts) {
+  opts = opts || {};
+  if (!rows.length) return `<div class="section-empty">no editable settings</div>`;
+  const body = rows.map((row) => {
+    const meaning = row.meaning ? `<span class="ag-set-meaning">${esc(row.meaning)}</span>` : "";
+    const derived = row.kind === "derived" ? ' data-derived="1"' : "";
+    return `<div class="ag-set-erow"${derived}>
+      <div class="ag-set-erow-key"><span class="ag-set-elabel">${esc(row.label)}</span>${meaning}<code class="ag-set-env mono">${esc(row.envKey)}</code></div>
+      <div class="ag-set-erow-val">${settingFieldHtml(row)}<span class="ag-set-dirty" title="unsaved" hidden></span></div>
+    </div>`;
+  }).join("");
+  return `<div class="ag-set-editor" data-editor="${escAttr(opts.editorId || "ed")}">
+    <datalist id="ag-model-list">${KNOWN_MODELS.map((m) => `<option value="${escAttr(m)}"></option>`).join("")}</datalist>
+    ${body}
+    <div class="ag-set-editor-foot"><span class="ag-set-hint" hidden>unsaved changes</span><button class="ag-set-save" type="button" data-ag-save="${escAttr(opts.editorId || "ed")}" disabled>Save</button></div>
+  </div>`;
+}
+
+// value read helper (input/select vs toggle button)
+function fieldValue(el) { return el.classList.contains("ag-set-toggle") ? el.dataset.value : el.value; }
+
+// Recompute dirty state for one editor: toggle per-row dots, the Save button, the
+// unsaved hint, and the global AG.editing freeze.
+function refreshEditor(editorEl) {
+  if (!editorEl) return;
+  let dirty = 0;
+  editorEl.querySelectorAll(".ag-set-input, .ag-set-toggle").forEach((el) => {
+    if (el.disabled) return;
+    const changed = fieldValue(el) !== (el.dataset.baseline || "");
+    const dot = el.closest(".ag-set-erow-val") && el.closest(".ag-set-erow-val").querySelector(".ag-set-dirty");
+    if (dot) dot.hidden = !changed;
+    const invalid = changed && !validField(el);
+    el.classList.toggle("is-invalid", invalid);
+    if (changed && !invalid) dirty++;
+  });
+  const save = editorEl.querySelector(".ag-set-save"); if (save) save.disabled = dirty === 0;
+  const hint = editorEl.querySelector(".ag-set-hint"); if (hint) hint.hidden = dirty === 0;
+  // Any editor with a change freezes the signature-gated re-render (protects input).
+  AG.editing = anyEditorDirty();
+}
+
+function anyEditorDirty() {
+  for (const el of document.querySelectorAll(".ag-set-input, .ag-set-toggle")) {
+    if (!el.disabled && fieldValue(el) !== (el.dataset.baseline || "")) return true;
+  }
+  return false;
+}
+
+function validField(el) {
+  const kind = el.dataset.kind, v = fieldValue(el);
+  if (kind === "count") return /^\d+$/.test(v) && Number(v) >= 0;
+  if (kind === "duration" || kind === "bytes") return v === "" || (/^\d+$/.test(v) && Number(v) >= 0);
+  if (kind === "model") return v.trim().length > 0;
+  return true;   // enum/reasoning/bool/identifier
+}
+
+function saveEditor(editorEl) {
+  if (!editorEl) return;
+  const changes = {};
+  let bad = false;
+  editorEl.querySelectorAll(".ag-set-input, .ag-set-toggle").forEach((el) => {
+    if (el.disabled) return;
+    const v = fieldValue(el);
+    if (v === (el.dataset.baseline || "")) return;
+    if (!validField(el)) { bad = true; el.classList.add("is-invalid"); return; }
+    changes[el.dataset.envkey] = v;
+  });
+  if (bad) { toast("fix invalid fields before saving"); return; }
+  if (!Object.keys(changes).length) return;
+  const save = editorEl.querySelector(".ag-set-save"); if (save) { save.disabled = true; save.textContent = "Saving…"; }
+  postSettings(changes, (ok) => {
+    if (ok) { if (AG.sysOpen) renderSysPanel(); render(); }
+    else if (save) { save.disabled = false; save.textContent = "Save"; }
+  });
+}
+
+// ---- System settings panel (all 23 knobs, 4 groups) -------------------------
+function renderSysPanel() {
+  const body = document.getElementById("ag-sys-body");
+  if (!body) return;
+  if (AG.settingsUnavailable) { body.innerHTML = `<div class="section-empty">the settings API is unavailable on this server — settings are read-only.</div>`; return; }
+  const s = AG.settings;
+  if (!s) { body.innerHTML = `<div class="section-empty">loading settings…</div>`; fetchSettings(); return; }
+  body.innerHTML = (s.groups || []).map((g) => {
+    const rows = (g.items || []).map((it) => ({
+      envKey: it.envKey || it.key, label: it.label, value: it.value, kind: it.kind, unit: it.unit, meaning: it.meaning,
+      options: it.kind === "reasoning" ? REASONING_ALL : (ENUM_OPTIONS[it.envKey || it.key] || null),
+    }));
+    return `<section class="ag-sys-group"><div class="co-eyebrow">${esc(g.title || g.category)}</div>${renderSettingEditor(rows, { editorId: "sys-" + String(g.title || "g").replace(/\W+/g, "") })}</section>`;
+  }).join("") || `<div class="section-empty">no settings</div>`;
+}
+
+function openSysPanel() { AG.sysOpen = true; const p = document.getElementById("ag-sys-panel"); if (p) p.hidden = false; fetchSettings(); renderSysPanel(); }
+function closeSysPanel() { AG.sysOpen = false; AG.editing = false; const p = document.getElementById("ag-sys-panel"); if (p) p.hidden = true; }
 
 // ------------------------------------------------------------- render ---------
 function signature() {
@@ -261,6 +438,7 @@ function signature() {
 
 function render() {
   if (!AG.visible) return;
+  if (AG.editing) return;   // never wipe an in-progress settings edit under a poll
   const sig = signature();
   if (sig === AG.sig) return;
   AG.sig = sig;
@@ -307,15 +485,35 @@ function mount() {
   if (!surf) return;
   surf.innerHTML = "";
   surf.classList.add("ag-surface");
-  surf.innerHTML = `<div class="ag-body" id="ag-body"></div>`;
+  surf.innerHTML = `<div class="ag-body" id="ag-body"></div>
+    <div class="ag-sys-panel" id="ag-sys-panel" hidden>
+      <div class="ag-sys-scrim" data-ag-sys-close="1"></div>
+      <div class="ag-sys-sheet" role="dialog" aria-label="System settings">
+        <div class="ag-sys-head"><span class="ag-sys-title">System settings</span><span class="ag-sys-sub">all orchestration knobs · POST /api/settings</span>
+          <button class="ag-sys-x" data-ag-sys-close="1" title="Close">${icon("i-stop")}</button></div>
+        <div class="ag-sys-body" id="ag-sys-body"></div>
+      </div>
+    </div>`;
   surf.addEventListener("click", (e) => {
     const back = e.target.closest("[data-ag-back]");
     if (back) { backToGrid(); return; }
+    if (e.target.closest("[data-ag-sys-close]")) { closeSysPanel(); return; }
+    if (e.target.closest("#ag-sys-btn")) { openSysPanel(); return; }
+    if (e.target.closest("[data-ag-rawconfig]")) { viewRaw("config", "gluerun.config.json", "gluerun.config.json"); return; }
+    const copyBtn = e.target.closest("[data-ag-copy]");
+    if (copyBtn) { try { navigator.clipboard.writeText(copyBtn.dataset.agCopy); toast("copied " + copyBtn.dataset.agCopy); } catch (x) { toast("copy unavailable"); } return; }
+    const save = e.target.closest("[data-ag-save]");
+    if (save) { saveEditor(save.closest(".ag-set-editor")); return; }
+    const tgl = e.target.closest(".ag-set-toggle");
+    if (tgl) { const on = tgl.dataset.value === "1"; tgl.dataset.value = on ? "0" : "1"; tgl.setAttribute("aria-checked", String(!on)); refreshEditor(tgl.closest(".ag-set-editor")); return; }
     const proc = e.target.closest("[data-ag-proc]");
     if (proc) { jumpToConsole(proc.dataset.agProc); return; }
     const card = e.target.closest(".ag-card");
     if (card && card.dataset.active !== undefined) { openRole(card.dataset.role); return; }
   });
+  // typed inputs (text/number/select) → recompute dirty on every edit
+  surf.addEventListener("input", (e) => { const ed = e.target.closest && e.target.closest(".ag-set-editor"); if (ed) refreshEditor(ed); });
+  surf.addEventListener("change", (e) => { const ed = e.target.closest && e.target.closest(".ag-set-editor"); if (ed) refreshEditor(ed); });
 }
 
 // ------------------------------------------------------------- exports --------
@@ -330,6 +528,7 @@ export function setAgentsActive(on) {
   if (on) {
     ensureRoles();
     fetchConfig(false);
+    if (!AG.settingsProbed) fetchSettings(false);   // feature-probe once
     AG.sig = null;
     onFeed(feedState());
     render();
