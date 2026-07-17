@@ -408,6 +408,18 @@ import { startFeed } from "./core/sessions-feed.js";
     } catch (e) { toast("could not load " + name); }
   }
 
+  // Fetch the EXACT rendered prompt for one run (session file reader) and show it
+  // in the file-view — the real prompt that ran, not just the template.
+  async function viewSessionPrompt(sessionId, name, label) {
+    try {
+      const res = await fetch("/api/session/" + encodeURIComponent(sessionId) + "?file=" + encodeURIComponent(name) + "&raw=1&limit=5000", { cache: "no-store" });
+      if (!res.ok) throw new Error("http " + res.status);
+      const r = await res.json();
+      const content = (r.lines || []).map((l) => typeof l === "string" ? l : (l.text != null ? l.text : (l.raw || ""))).join("\n");
+      viewFile({ title: "prompt · " + (label || name), path: name, content, language: "md", size: r.size });
+    } catch (e) { toast("could not load prompt"); }
+  }
+
   // Fetch a role prompt template (/api/prompt/<name>) and show it in the file-view.
   async function viewPrompt(name) {
     try {
@@ -1599,7 +1611,7 @@ import { startFeed } from "./core/sessions-feed.js";
     tasksFiltered, sortExceptionsFirst, load, setConn, select, navigateToTask,
     setAreaFilter, applyDeepLink, gateBlock,
     // developer primitives — inspector file-view + raw/prompt helpers (E)
-    viewFile, viewRaw, viewPrompt,
+    viewFile, viewRaw, viewPrompt, viewSessionPrompt,
     // activity feed (relocated to Home; Home remounts + repaints it)
     overlayTick, renderActivityFeed,
     // entry

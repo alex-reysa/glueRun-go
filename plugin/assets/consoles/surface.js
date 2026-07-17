@@ -13,7 +13,7 @@
    C1 = skeleton (L0 + dynamic panes + global bar + idle card + dock hide).
    C2 = lifecycle (pop-in, linger, recent rail, overflow queue, pins, solo, deep link). */
 
-import { S, esc, escAttr, icon, toneOf, relTime } from "../app.js";
+import { S, esc, escAttr, icon, toneOf, relTime, viewSessionPrompt } from "../app.js";
 import { makePaneState, fetchPaneLines, scrollPaneToBottom, resetPane } from "../core/term-core.js";
 import { subscribe as subscribeSessions, feedState, pokeFeed } from "../core/sessions-feed.js";
 import { writeRoute } from "../core/router.js";
@@ -85,6 +85,8 @@ function paneDotTone(s) {
 }
 const GATE_PHASES = new Set(["gate", "audit", "gate-done"]);
 function ident(s) { return s.taskId || s.node || s.area || (s.kind === "origin" ? "origin" : shortRun(s.runId) || s.id); }
+// The rendered prompt this run actually used (session.logFiles kind:"prompt").
+function promptFile(s) { const lf = ((s && s.logFiles) || []).find((f) => f.kind === "prompt"); return lf ? lf.name : null; }
 
 // ---------------------------------------------------------------- L0 header ---
 function originSession() { return CO.byId.get("origin") || CO.sessions.find((s) => s.kind === "origin") || null; }
@@ -175,10 +177,12 @@ function renderPaneHead(rec) {
   const phase = s.phase ? `<span class="co-phase${GATE_PHASES.has(s.phase) ? " co-phase-gate" : ""}">${esc(s.phase)}</span>` : "";
   const model = s.model ? `<span class="co-model mono">${esc(s.model)}${s.effort ? " · " + esc(s.effort) : ""}</span>` : "";
   const age = relTime(s.updatedAt, CO.generatedAt);
+  const pf = promptFile(s);
+  const promptChip = pf ? `<button class="co-prompt-chip" data-co-prompt="${escAttr(rec.el.dataset.id)}" data-co-prompt-file="${escAttr(pf)}" title="view the rendered prompt for this run">${icon("i-file")}prompt</button>` : "";
   rec.head.innerHTML =
     `<span class="co-badge" data-layer="${b.layer}">${esc(b.txt)}<span class="tone-dot" data-tone="${dot}"></span></span>
      <span class="co-ident mono">${esc(ident(s))}</span>
-     ${phase}${model}
+     ${phase}${model}${promptChip}
      <span class="co-age mono">${esc(age)}</span>
      <span class="co-pane-ctls">
        <button class="co-ctl" data-co-pin="${escAttr(rec.el.dataset.id)}" aria-pressed="${rec.pinned}" title="Pin pane">${icon("i-pin")}</button>
@@ -465,6 +469,8 @@ function wireEvents() {
   });
   // pane controls + rail chips (delegated)
   if (surf) surf.addEventListener("click", (e) => {
+    const prompt = e.target.closest("[data-co-prompt]");
+    if (prompt) { const s = CO.byId.get(prompt.dataset.coPrompt) || {}; viewSessionPrompt(prompt.dataset.coPrompt, prompt.dataset.coPromptFile, ident(s)); return; }
     const pin = e.target.closest("[data-co-pin]");
     if (pin) { togglePin(pin.dataset.coPin); return; }
     const raw = e.target.closest("[data-co-raw]");

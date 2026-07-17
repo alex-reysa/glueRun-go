@@ -118,6 +118,14 @@
 .co-phase { flex: 0 0 auto; font-size: 10px; padding: 1px 6px; border-radius: var(--radius-pill); background: var(--surface-soft); color: var(--text-muted); }
 .co-phase-gate { background: var(--tone-coral-bg); color: var(--tone-coral-fg); }
 .co-model { flex: 0 0 auto; font-size: 9.5px; color: var(--text-faint); }
+.co-prompt-chip {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-pill);
+  background: var(--surface-page); color: var(--text-muted); font-size: 10px; cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.co-prompt-chip:hover { border-color: var(--tone-coral-border); color: var(--tone-coral-fg); }
+.co-prompt-chip .icon { width: 11px; height: 11px; }
 .co-age { flex: 0 0 auto; font-size: 10px; color: var(--text-faint); }
 .co-pane-ctls { display: inline-flex; gap: 2px; flex: 0 0 auto; }
 .co-ctl {

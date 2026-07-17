@@ -13,7 +13,7 @@
    2s shared sessions feed (core/sessions-feed.js). The grid re-render is
    signature-gated and does zero work while the surface is hidden. */
 
-import { S, esc, escAttr, icon, relTime, toast, viewRaw } from "../app.js";
+import { S, esc, escAttr, icon, relTime, toast, viewRaw, viewPrompt, viewSessionPrompt } from "../app.js";
 import { subscribe as subscribeSessions, feedState } from "../core/sessions-feed.js";
 import { writeRoute } from "../core/router.js";
 
@@ -27,6 +27,15 @@ const ENUM_OPTIONS = { GLUERUN_CODEX_SERVICE_TIER: ["default", "flex", "priority
 const effortOptions = (model) => /codex|gpt/i.test(model || "") ? ["minimal", "low", "medium", "high"]
   : /claude/i.test(model || "") ? ["low", "medium", "high", "xhigh"] : REASONING_ALL;
 const shortEnv = (k) => String(k || "").replace(/^GLUERUN_/, "").toLowerCase();
+// card → prompt-library role (the template a role runs); resolved to a file name
+// via /api/prompts' role field.
+const PROMPT_ROLE = { origin: "origin", planner: "planner", developer: "developer", auditor: "auditor", reviewer: "reviewer", decider: "decider", "recovery-worker": "developer" };
+const promptFileForCard = (card) => {
+  const role = PROMPT_ROLE[card.id]; if (!role || !AG.prompts) return null;
+  const p = (AG.prompts.prompts || []).find((x) => x.role === role); return p ? p.name : null;
+};
+// the rendered prompt this run actually used (session.logFiles kind:"prompt")
+const runPromptFile = (s) => { const lf = ((s && s.logFiles) || []).find((f) => f.kind === "prompt"); return lf ? lf.name : null; };
 
 // The eight cards with runtime evidence, in grid order. eyebrow layer follows the
 // operating model (planner/integration/auditor are L1; the rest L2). configRole maps
@@ -50,6 +59,7 @@ const AG = {
   visible: false,
   config: null, configInflight: false,
   settings: null, settingsInflight: false, settingsUnavailable: false, settingsProbed: false,
+  prompts: null, promptsInflight: false,
   roles: null, rolesInflight: false,
   sessions: [], byId: new Map(), generatedAt: null,
   level: 1,               // 1 = grid, 2 = detail
@@ -95,6 +105,15 @@ async function postSettings(changes, done) {
     AG.editing = false; AG.sig = null;
     done && done(true);
   } catch (e) { toast("save failed"); done && done(false); }
+}
+
+// The prompt library (/api/prompts) — role→template names for the role prompt section.
+async function fetchPrompts() {
+  if (AG.prompts || AG.promptsInflight) return;
+  AG.promptsInflight = true;
+  try { const r = await fetch("/api/prompts", { cache: "no-store" }); if (r.ok) AG.prompts = await r.json(); }
+  catch (e) { /* prompt section just hides without the library */ }
+  finally { AG.promptsInflight = false; if (AG.visible) { AG.sig = null; render(); } }
 }
 
 function ensureRoles() {
@@ -249,18 +268,28 @@ function detailHtml(card) {
     const model = s.model ? `<span class="ag-proc-model mono">${esc(s.model)}${s.effort ? " · " + esc(s.effort) : ""}</span>` : "";
     const tail = s.exitCode != null ? `exit ${esc(s.exitCode)}` : relTime(s.updatedAt, AG.generatedAt) + " ago";
     const hi = AG.highlightSession && AG.highlightSession === s.id ? " ag-proc-hi" : "";
-    return `<button class="ag-proc-row${hi}" data-ag-proc="${escAttr(s.id)}" aria-label="open console for ${escAttr(s.taskId || shortRun(s.runId) || s.id)}">
+    const rpf = runPromptFile(s);
+    const promptChip = rpf ? `<span class="ag-proc-prompt" data-ag-run-prompt="${escAttr(s.id)}" data-ag-run-promptfile="${escAttr(rpf)}" role="button" tabindex="0" title="view the rendered prompt for this run">${icon("i-file")}prompt</span>` : "";
+    return `<div class="ag-proc-row${hi}" data-ag-proc="${escAttr(s.id)}" role="button" tabindex="0" aria-label="open console for ${escAttr(s.taskId || shortRun(s.runId) || s.id)}">
       ${glyph}
       <span class="mono ag-proc-id">${esc(s.taskId || s.node || s.area || shortRun(s.runId) || s.id)}</span>
       ${s.phase ? `<span class="ag-proc-phase">${esc(s.phase)}</span>` : ""}
       ${model}
+      ${promptChip}
       <span class="ag-proc-tail mono">${esc(tail)}</span>
       ${icon("i-chev", "ag-proc-chev")}
-    </button>`;
+    </div>`;
   }).join("") || `<div class="section-empty">no processes recorded</div>`;
 
-  // settings — read-only, with env-key provenance
+  // settings editor (or read-only fallback)
   const settings = settingsHtml(card);
+
+  // role prompt template (from the prompt library)
+  const pf = promptFileForCard(card);
+  const promptSection = pf
+    ? `<section class="ag-section"><div class="co-eyebrow">prompt</div>
+        <button class="ag-prompt-btn" data-ag-role-prompt="${escAttr(pf)}">${icon("i-file")}view role prompt<span class="ag-prompt-name mono">${esc(pf)}</span></button></section>`
+    : "";
 
   return `
     <nav class="ag-breadcrumb"><button class="ag-crumb" data-ag-back="1">Agents</button><span class="ag-crumb-sep">/</span><span class="ag-crumb-cur">${esc(card.name)}</span></nav>
@@ -277,6 +306,7 @@ function detailHtml(card) {
       </div>
     </div>
     <section class="ag-section"><div class="co-eyebrow">processes · ${procs.length}</div><div class="ag-procs">${procRows}</div></section>
+    ${promptSection}
     <section class="ag-section"><div class="co-eyebrow">settings</div>${settings}</section>`;
 }
 
@@ -433,7 +463,7 @@ function signature() {
   const sessSig = AG.sessions.map((s) => [s.id, s.state, s.live, s.updatedAt, s.model]).join("|");
   const snapSig = JSON.stringify((S.snap && S.snap.agents) ? { l0: (S.snap.agents.l0 || {}).state, l1: (S.snap.agents.l1 || []).map((a) => [a.area, a.l1Active]), l2: (S.snap.agents.l2 || []).length } : null);
   const cfgSig = AG.config ? AG.config.generatedAt : "nc";
-  return [AG.level, AG.roleId, AG.highlightSession, sessSig, snapSig, cfgSig, AG.roles ? 1 : 0].join("::");
+  return [AG.level, AG.roleId, AG.highlightSession, sessSig, snapSig, cfgSig, AG.roles ? 1 : 0, AG.prompts ? 1 : 0].join("::");
 }
 
 function render() {
@@ -506,6 +536,10 @@ function mount() {
     if (save) { saveEditor(save.closest(".ag-set-editor")); return; }
     const tgl = e.target.closest(".ag-set-toggle");
     if (tgl) { const on = tgl.dataset.value === "1"; tgl.dataset.value = on ? "0" : "1"; tgl.setAttribute("aria-checked", String(!on)); refreshEditor(tgl.closest(".ag-set-editor")); return; }
+    const rolePrompt = e.target.closest("[data-ag-role-prompt]");
+    if (rolePrompt) { viewPrompt(rolePrompt.dataset.agRolePrompt); return; }
+    const runPrompt = e.target.closest("[data-ag-run-prompt]");
+    if (runPrompt) { e.stopPropagation(); viewSessionPrompt(runPrompt.dataset.agRunPrompt, runPrompt.dataset.agRunPromptfile, runPrompt.dataset.agRunPrompt); return; }
     const proc = e.target.closest("[data-ag-proc]");
     if (proc) { jumpToConsole(proc.dataset.agProc); return; }
     const card = e.target.closest(".ag-card");
@@ -514,6 +548,12 @@ function mount() {
   // typed inputs (text/number/select) → recompute dirty on every edit
   surf.addEventListener("input", (e) => { const ed = e.target.closest && e.target.closest(".ag-set-editor"); if (ed) refreshEditor(ed); });
   surf.addEventListener("change", (e) => { const ed = e.target.closest && e.target.closest(".ag-set-editor"); if (ed) refreshEditor(ed); });
+  // keyboard activation for role="button" rows/chips (a11y)
+  surf.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const t = e.target.closest && e.target.closest("[data-ag-run-prompt], [data-ag-proc]");
+    if (t) { e.preventDefault(); t.click(); }
+  });
 }
 
 // ------------------------------------------------------------- exports --------
@@ -528,6 +568,7 @@ export function setAgentsActive(on) {
   if (on) {
     ensureRoles();
     fetchConfig(false);
+    fetchPrompts();
     if (!AG.settingsProbed) fetchSettings(false);   // feature-probe once
     AG.sig = null;
     onFeed(feedState());
