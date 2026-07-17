@@ -211,9 +211,8 @@ function reconcileDynPanes() {
 
   // idle empty state when there is nothing live/pinned to show
   const idleCard = document.getElementById("co-idle");
-  const anyLive = liveDynamicSessions().length > 0;
   if (idleCard) {
-    if (!ids.length) {
+    if (!ids.length && CO.panes.size === 0) {
       idleCard.hidden = false;
       const newest = CO.sessions.filter((s) => s.id !== "origin").sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
       const when = newest ? relTime(newest.updatedAt, CO.generatedAt) : "—";
@@ -223,12 +222,19 @@ function reconcileDynPanes() {
     }
   }
 
-  // drop panes no longer targeted (unless lingering)
-  for (const [id, rec] of [...CO.panes]) {
-    if (ids.includes(id)) continue;
-    if (rec.linger) continue;                 // still lingering → keep until timeout (C2)
-    rec.el.remove();
-    CO.panes.delete(id);
+  // Lifecycle: a pane that leaves the target set (its session flipped not-live and
+  // isn't pinned) does NOT vanish — it lingers (dimmed, terminal-state band, polling
+  // stopped) for LINGER_MS (45s if it failed/blocked) then collapses into the rail.
+  // While soloed we keep every pane (the non-soloed ones are hidden by CSS) so exiting
+  // solo restores them without a linger storm.
+  if (!CO.soloId) {
+    for (const [id, rec] of [...CO.panes]) {
+      rec.pinned = CO.pins.includes(id);        // refresh against current pins (may have just been unpinned)
+      if (ids.includes(id)) { if (rec.linger) { clearTimeout(rec.linger); rec.linger = null; rec.finished = false; } continue; }
+      if (rec.linger || rec.pinned) continue;   // already lingering / pinned stays
+      paneClasses(rec);
+      startLinger(rec);
+    }
   }
   // create/update targeted panes
   for (const id of ids) {
@@ -239,7 +245,7 @@ function reconcileDynPanes() {
     rec.pinned = CO.pins.includes(id);
     // a pinned/soloed historical pane that isn't live stops polling once loaded
     rec.polling = s.live || !rec.pane.loaded || rec.pinned && !rec.pane.loaded;
-    if (s.live) { rec.finished = false; rec.linger = null; }
+    if (s.live) { rec.finished = false; if (rec.linger) { clearTimeout(rec.linger); rec.linger = null; } }
     paneClasses(rec);
     renderPaneHead(rec);
     renderLingerBand(rec);
@@ -251,6 +257,30 @@ function reconcileDynPanes() {
   });
   renderRail();
   renderSolo();
+}
+
+// Begin the linger phase for a pane whose session just finished/left the list.
+function startLinger(rec) {
+  if (rec.linger) return;
+  const s = rec.sess;
+  const fail = s.state === "failed" || s.state === "blocked";
+  rec.finished = true;
+  rec.polling = false;
+  paneClasses(rec);
+  renderPaneHead(rec);
+  renderLingerBand(rec);
+  rec.linger = setTimeout(() => collapseToRail(rec), fail ? LINGER_FAIL_MS : LINGER_MS);
+}
+
+// After the linger timeout, collapse the pane into the recent rail (the rail is
+// pulled from the sessions feed, so the finished session already shows there).
+function collapseToRail(rec) {
+  if (rec.pinned) { clearTimeout(rec.linger); rec.linger = null; rec.finished = false; paneClasses(rec); renderLingerBand(rec); return; }
+  const id = rec.el.dataset.id;
+  clearTimeout(rec.linger); rec.linger = null;
+  rec.el.remove();
+  CO.panes.delete(id);
+  if (CO.visible) reconcileDynPanes();
 }
 
 // ------------------------------------------------------------- global bar -----
