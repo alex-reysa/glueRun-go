@@ -238,6 +238,46 @@
 .plan-fade.right { right: 0; background: linear-gradient(to left, var(--surface-panel), rgba(255,255,255,0)); }
 .plan-fade[data-show="true"] { opacity: 1; }
 
+/* ---- DAG lens (ported PlanGraphLarge, stage axis) ---- */
+@keyframes pm-plan-ring {
+  0% { box-shadow: 0 0 0 0 rgba(47,111,208,0.34); }
+  70% { box-shadow: 0 0 0 6px rgba(47,111,208,0); }
+  100% { box-shadow: 0 0 0 0 rgba(47,111,208,0); }
+}
+.plan-scroll-host { position: relative; height: 100%; }
+.plan-dag-scroll { height: 100%; overflow: auto; }
+.plan-dag-stage { position: relative; margin: 0 auto; }
+.plan-dag-tint { position: absolute; background: var(--surface-sunken); opacity: 0.4; border-radius: var(--radius-lg); z-index: 0; }
+.plan-dag-ribbon {
+  position: absolute; height: 30px; display: flex; align-items: center; gap: 8px;
+  padding: 0 12px; border-radius: var(--radius-md); background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle); cursor: pointer; z-index: 2; text-align: left;
+}
+.plan-dag-ribbon .pdr-chev { width: 11px; height: 11px; color: var(--n-500); display: inline-flex; transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease-out); flex: none; }
+.plan-dag-ribbon[aria-expanded="false"] .pdr-chev { transform: rotate(0deg); }
+.plan-dag-ribbon .pdr-id { font: 700 9px var(--font-sans); letter-spacing: 0.07em; color: var(--text-secondary); }
+.plan-dag-ribbon .pdr-name { font: 500 11px var(--font-sans); color: var(--text-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-dag-edges { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+.plan-dag-label { position: absolute; width: 100px; text-align: center; pointer-events: none; z-index: 3; font: 400 10px var(--font-mono); color: var(--text-secondary); transition: opacity var(--dur-fast) var(--ease-out); }
+.plan-dag-nodewrap { position: absolute; width: 38px; height: 38px; z-index: 3; }
+.plan-dag-node {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-pill); cursor: pointer; padding: 0; outline-offset: 2px;
+  transition: opacity var(--dur-fast) var(--ease-out), outline-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+.plan-dag-node.is-active { animation: pm-plan-ring 1.9s ease-out infinite; }
+.plan-dag-node .pdn-dot { width: 16px; height: 16px; border-radius: var(--radius-pill); }
+.plan-dag-node .pdn-check { color: #fff; display: inline-flex; }
+.plan-dag-node .pdn-check .icon { width: 15px; height: 15px; }
+.plan-dag-summary {
+  position: absolute; height: 80px; background: var(--surface-panel); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); display: flex; flex-direction: column;
+  justify-content: center; padding: 0 16px; cursor: pointer; z-index: 4; text-align: left; gap: 2px;
+}
+.plan-dag-summary .pds-eyebrow { font: 700 9px var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-meta); }
+.plan-dag-summary .pds-name { font: 600 13px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-dag-summary .pds-meta { font: 400 10px var(--font-mono); color: var(--text-faint); }
+
 /* responsive — collapse the aside first, then the lens nav */
 @media (max-width: 1100px) {
   #plan-aside { width: 300px; flex-basis: 300px; }

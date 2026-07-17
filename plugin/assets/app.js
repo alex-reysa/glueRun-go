@@ -156,7 +156,8 @@ import { bus } from "./core/bus.js";
   function tasksFiltered() {
     const q = S.query;
     const out = [];
-    for (const t of S.snap.l2Tasks || []) {
+    // The Tasks lens can render before the first snapshot (mounted at boot).
+    for (const t of (S.snap && S.snap.l2Tasks) || []) {
       if (S.areaFilter && t.area !== S.areaFilter) continue;
       if (S.statusFilter && t.state !== S.statusFilter) continue;
       if (q) {
