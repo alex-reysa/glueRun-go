@@ -39,7 +39,7 @@ function labelWidth(text) {
   if (_lw.has(text)) return _lw.get(text);
   let w;
   try {
-    if (!_ctx) { _ctx = document.createElement("canvas").getContext("2d"); _ctx.font = "500 10.5px Inter, sans-serif"; }
+    if (!_ctx) { _ctx = document.createElement("canvas").getContext("2d"); _ctx.font = "500 10px ui-monospace, SFMono-Regular, Menlo, monospace"; }
     w = _ctx.measureText(text).width;
   } catch (e) { w = String(text).length * 6.2; }
   _lw.set(text, w); return w;
@@ -216,9 +216,10 @@ function build() {
           taskX0 = Math.min(taskX0, pc.left); taskX1 = Math.max(taskX1, pc.left + pc.width);
           (rowBars[row] = rowBars[row] || []).push({ left: pc.left, right: pc.left + pc.width });
         });
-        const text = t.taskId + (title ? " · " + title : "");
+        const text = t.taskId + (title ? " · " + title : "");   // full "id · title" for title attr + detail card only
         if (merged.length) {
-          labelCands.push({ taskId: t.taskId, row, barLeft: merged[0].left, barRight: merged[0].left + merged[0].width, barWidth: merged[0].width, barTop, text, labelW: labelWidth(text), mode: "hidden" });
+          // visible label is the TASK ID ONLY — measure with the mono glyph metrics.
+          labelCands.push({ taskId: t.taskId, row, barLeft: merged[0].left, barRight: merged[0].left + merged[0].width, barWidth: merged[0].width, barTop, labelW: labelWidth(t.taskId), mode: "hidden" });
         }
         const retries = t.retryCount != null ? t.retryCount : Math.max(0, t.intervals.length - 1);
         laneTasks.push({ t, row, barTop, st2, merged, retries, taskX0, taskX1, text });
@@ -238,7 +239,7 @@ function build() {
         lt.merged.forEach((pc, mi) => {
           const isFirst = mi === 0;
           const inner = (isFirst && inlineLabel)
-            ? `<span class="tl-bar-label">${esc(lt.text)}</span>` : "";
+            ? `<span class="tl-bar-label">${esc(lt.t.taskId)}</span>` : "";
           bars += `<div class="tl-bar tl-s-${lt.st2}${pc.amber ? " tl-amber" : ""}${pc.live ? " tl-live" : ""}" data-task="${escAttr(lt.t.taskId)}" data-node="${escAttr(nkey)}" data-live="${pc.live ? 1 : 0}" title="${escAttr(lt.text)}" style="left:${pc.left}px;top:${lt.barTop}px;width:${pc.width}px">${inner}</div>`;
           if (mi > 0) {
             const a2 = lt.merged[mi - 1], gapL = a2.left + a2.width, gapR = pc.left;
@@ -246,7 +247,7 @@ function build() {
           }
         });
         if (cand && cand.mode === "out") {
-          bars += `<span class="tl-bar-label tl-label-out" style="left:${cand.barRight + 6}px;top:${lt.barTop}px;height:${BAR_H}px">${esc(lt.text)}</span>`;
+          bars += `<span class="tl-bar-label tl-label-out" style="left:${cand.barRight + 6}px;top:${lt.barTop}px;height:${BAR_H}px" title="${escAttr(lt.text)}">${esc(lt.t.taskId)}</span>`;
         }
         if (lt.retries > 0 && isFinite(lt.taskX1)) {
           bars += `<span class="tl-retry" style="left:${lt.taskX1 + 6}px;top:${lt.barTop}px;height:${BAR_H}px" title="${lt.retries} retries">↻${lt.retries}</span>`;
@@ -290,11 +291,11 @@ function build() {
       else bg += `<div class="tl-hourline" style="left:${x}px;height:${contentH}px"></div>`;
     }
   }
+  // Track BODY: a break is a quiet full-height band only (translucent fill +
+  // dotted edges). The slash glyphs + elided-duration label live in the axis
+  // header band alone (buildAxisLabels), so nothing floats mid-track.
   for (const b of axis.breaks) {
-    const mins = (b.toS - b.fromE) / M;
-    const txt = fmtDur(mins);
-    const horiz = labelWidth(txt) <= BREAK_W - 6;   // "2h" fits horizontally, "1h 20m" doesn't
-    bg += `<div class="tl-break" style="left:${b.x}px;width:${BREAK_W}px;height:${contentH}px"><span class="tl-break-l1"></span><span class="tl-break-l2"></span><span class="tl-break-lbl${horiz ? " horiz" : ""}">${esc(txt)}</span></div>`;
+    bg += `<div class="tl-break" style="left:${b.x}px;width:${BREAK_W}px;height:${contentH}px"></div>`;
   }
   const nowX = axis.xOf(axis.nowMs);
   bg += `<div class="tl-now" style="left:${nowX}px;height:${contentH}px"></div>`;
@@ -325,6 +326,13 @@ function buildAxisLabels(data, totalW) {
       const d = new Date(t);
       if (d.getUTCHours() === 0) out += `<div class="tl-daylabel" style="left:${axis.xOf(t) + 4}px">${MON[d.getUTCMonth()]} ${d.getUTCDate()}</div>`;
     }
+  }
+  // break glyphs (⫽ + elided-duration label) live ONLY here, inside the AXIS_H
+  // band; the track body renders each break as a quiet band with no glyphs/text.
+  for (const b of axis.breaks) {
+    const txt = fmtDur((b.toS - b.fromE) / M);
+    const horiz = labelWidth(txt) <= BREAK_W - 6;   // "2h" fits horizontally, "1h 20m" rotates
+    out += `<div class="tl-break-axis" style="left:${b.x}px;width:${BREAK_W}px"><span class="tl-break-l1"></span><span class="tl-break-l2"></span><span class="tl-break-lbl${horiz ? " horiz" : ""}">${esc(txt)}</span></div>`;
   }
   out += `<div class="tl-now-cap" style="left:${axis.xOf(axis.nowMs) + 2}px">NOW</div>`;
   return out;
