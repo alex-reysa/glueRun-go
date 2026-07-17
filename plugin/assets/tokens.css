@@ -1,0 +1,188 @@
+/* glueRun console — design tokens (0.6.0).
+   Warm-neutral "printer's grid" language adopted from the pm-go token system:
+   every structural surface, border, and most text is a warm grey; color is a
+   signal, never decoration. Coral is the one accent (attention, gates, the
+   human's voice); green/blue/amber/red are reserved status tones. No violet.
+   Loaded BEFORE styles.css; the legacy alias block at the bottom re-points the
+   0.5.x token names so retained chrome restyles without markup edits. */
+
+:root {
+  color-scheme: light;
+
+  /* ---- 1 · Warm neutral ramp (paper → ink) ---- */
+  --n-0:    #ffffff;   /* panel / card surface                  */
+  --n-25:   #fbfaf8;   /* app canvas                            */
+  --n-50:   #faf9f6;   /* sunken inset surface                  */
+  --n-100:  #f4f2ee;   /* soft fill (chips, wells)              */
+  --n-150:  #f3f1ec;   /* hover fill on ghost surfaces          */
+  --n-200:  #f1efea;   /* divider, progress track               */
+  --n-250:  #e9e6e1;   /* default border                        */
+  --n-300:  #e2ded7;   /* strong border, scrollbar thumb        */
+  --n-400:  #cfc9bf;   /* disabled text, faint icon             */
+  --n-500:  #b8b2a8;   /* faint meta, placeholder, idle dot     */
+  --n-600:  #9b958c;   /* meta label, secondary icon            */
+  --n-700:  #8a857d;   /* muted UI icon                         */
+  --n-800:  #6f6a62;   /* muted body text                       */
+  --n-850:  #4a443c;   /* strong body / secondary text          */
+  --n-900:  #332e28;   /* deep text on tinted surfaces          */
+  --ink:    #1c1b19;   /* primary ink, primary action surface   */
+
+  /* ---- 2 · Semantic tones: fg / bg / border / dot / solid ---- */
+
+  /* coral — THE accent: attention, gates, frontier, needs-human */
+  --tone-coral-fg:     #bf5526;
+  --tone-coral-bg:     #fbeee6;
+  --tone-coral-border: #f3e0d4;
+  --tone-coral-dot:    #e0682f;
+  --tone-coral-solid:  #e0682f;
+  --tone-coral-ink:    #7a4a33;
+
+  /* green — live, healthy, passed, integrated */
+  --tone-green-fg:     #1f9d57;
+  --tone-green-bg:     #e7f4ec;
+  --tone-green-border: #c9e6d4;
+  --tone-green-dot:    #1f9d57;
+  --tone-green-solid:  #33853d;
+  --tone-green-pulse:  #22c55e;
+
+  /* blue — in-progress, running, deps/upstream, links */
+  --tone-blue-fg:      #2f6fd0;
+  --tone-blue-bg:      #e8effb;
+  --tone-blue-border:  #d4e2f7;
+  --tone-blue-dot:     #2f6fd0;
+  --tone-blue-solid:   #2563eb;
+  --tone-blue-ink:     #3d5a8a;
+
+  /* amber — warnings, stale (warm, never yellow) */
+  --tone-amber-fg:     #a95711;
+  --tone-amber-bg:     #fbf1e7;
+  --tone-amber-border: #f1ddc6;
+  --tone-amber-dot:    #d17018;
+
+  /* red — error / blocked / failed (distinct from coral accent) */
+  --tone-red-fg:       #cf4b3f;
+  --tone-red-bg:       #fcecea;
+  --tone-red-border:   #f5d6d1;
+  --tone-red-dot:      #ef4444;
+
+  /* ---- 3 · Semantic aliases ---- */
+  --text-primary:   var(--ink);
+  --text-secondary: var(--n-850);
+  --text-muted:     var(--n-800);
+  --text-meta:      var(--n-600);
+  --text-faint:     var(--n-500);
+  --text-disabled:  var(--n-400);
+  --text-inverse:   #ffffff;
+  --text-accent:    var(--tone-coral-fg);
+  --text-link:      var(--tone-blue-fg);
+
+  --surface-page:   var(--n-25);
+  --surface-panel:  var(--n-0);
+  --surface-sunken: var(--n-50);
+  --surface-soft:   var(--n-100);
+  --surface-hover:  var(--n-150);
+
+  --border-subtle:  var(--n-200);
+  --border-default: var(--n-250);
+  --border-strong:  var(--n-300);
+  --hairline:       rgba(28, 27, 25, 0.06);
+
+  --action-bg:        var(--ink);
+  --action-bg-hover:  #2b2a27;
+  --action-bg-active: #000000;
+  --action-fg:        #ffffff;
+
+  --focus-ring: rgba(47, 111, 208, 0.45);
+
+  /* ---- 4 · Typography ---- */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --tracking-tight: -0.011em;
+
+  --t-title-size: 22px;   --t-title-weight: 700;  --t-title-tracking: -0.02em;
+  --t-h2-size: 18px;      --t-h2-weight: 700;     --t-h2-tracking: -0.02em;
+  --t-h3-size: 15px;      --t-h3-weight: 600;     --t-h3-tracking: -0.01em;
+  --t-card-size: 14px;    --t-card-weight: 600;   --t-card-tracking: -0.012em;
+  --t-label-size: 13px;   --t-label-weight: 600;
+  --t-body-size: 13.5px;  --t-body-sm-size: 12.5px;
+  --t-meta-size: 11px;    --t-meta-weight: 600;   --t-meta-tracking: 0.12em;
+  --t-meta-sm-size: 10px; --t-meta-sm-tracking: 0.1em;
+  --t-mono-size: 11.5px;  --t-mono-sm-size: 10px;
+  --t-mono-stat-size: 18px; --t-mono-stat-weight: 500;
+
+  /* ---- 5 · Spacing & shape (4px base; corners never sharp) ---- */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+
+  --radius-xs:   5px;
+  --radius-sm:   7px;
+  --radius-md:   9px;
+  --radius-lg:   11px;
+  --radius-xl:   14px;
+  --radius-2xl:  20px;
+  --radius-pill: 999px;
+
+  /* ---- 6 · Elevation & motion (near-flat; lifts, never looms) ---- */
+  --shadow-xs:   0 1px 2px rgba(28, 27, 25, 0.04);
+  --shadow-sm:   0 1px 3px rgba(28, 27, 25, 0.06);
+  --shadow-md:   0 4px 16px rgba(28, 27, 25, 0.08);
+  --shadow-lg:   0 12px 32px rgba(28, 27, 25, 0.12);
+  --shadow-xl:   0 24px 56px rgba(28, 27, 25, 0.18);
+  --shadow-inset: inset 0 1px 2px rgba(28, 27, 25, 0.05);
+
+  --ease-settle: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-inout:  cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast:   120ms;
+  --dur-base:   180ms;
+  --dur-slow:   260ms;
+  --dur-slower: 500ms;
+
+  /* The 24px printer's-grid line color (body backgrounds) */
+  --grid-line: rgba(28, 27, 25, 0.022);
+}
+
+/* ---- Legacy aliases (0.5.x styles.css names) ----
+   Retained chrome references these; each resolves to a pm-go token. Violet is
+   retired: the "integration/frontier" tone maps to coral (= attention). Glass
+   is retired: panels are flat white with hairline borders and resting shadows. */
+:root {
+  --bg: var(--surface-page);
+  --grid: var(--grid-line);
+  --text: var(--text-primary);
+  --muted: var(--text-muted);
+  --faint: var(--text-meta);
+  --ink-90: rgba(28, 27, 25, 0.9);
+
+  --hair: var(--hairline);
+  --rule: var(--border-subtle);
+  --rule-strong: var(--border-strong);
+
+  --glass: var(--surface-panel);
+  --glass-solid: var(--surface-panel);
+  --glass-border: var(--border-default);
+  --glass-shadow: var(--shadow-xs);
+  --glass-shadow-lift: var(--shadow-md);
+
+  --tone-gray: var(--n-500);
+  --tone-cobalt: var(--tone-blue-dot);
+  --tone-amber: var(--tone-amber-dot);
+  --tone-forest: var(--tone-green-dot);
+  --tone-violet: var(--tone-coral-dot);
+  --tone-red: var(--tone-red-dot);
+
+  --r-chip: var(--radius-sm);
+  --r-btn: var(--radius-md);
+  --r-12: var(--radius-lg);
+  --r-card: var(--radius-xl);
+  --r-hero: var(--radius-2xl);
+
+  --ease: var(--ease-out);
+  --d-color: var(--dur-fast);
+  --d-base: var(--dur-base);
+  --d-struct: var(--dur-slow);
+  --d-reveal: var(--dur-slower);
+
+  --sans: var(--font-sans);
+  --mono: var(--font-mono);
+}

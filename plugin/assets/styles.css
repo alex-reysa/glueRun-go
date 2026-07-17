@@ -1,69 +1,18 @@
-/* glueRun-go orchestration console — app shell design system.
-   Warm off-white + 24px dotted grid, glass panels, six-tone signal language,
-   Inter for prose, JetBrains Mono for every numeric. Calm, dense, trustworthy. */
+/* glueRun-go orchestration console — retained app chrome.
+   Tokens live in tokens.css (warm-neutral pm-go language + legacy aliases);
+   this file styles the shell: top bar, dock, terminal, overlay, inspector.
+   Flat white panels on warm paper with a 24px printer's grid; six-tone
+   signal language; Inter for prose, mono for every numeric. */
 
-:root {
-  color-scheme: light;
-
-  /* Surface */
-  --bg: #f8f9fa;
-  --grid: rgba(23, 24, 28, 0.055);
-  --text: #1b1d21;
-  --muted: #5d616a;
-  --faint: #6f747d;
-  --ink: #171717;
-  --ink-90: rgba(23, 23, 23, 0.9);
-
-  /* Hairlines — rgba black, never solid gray */
-  --hair: rgba(0, 0, 0, 0.04);
-  --rule: rgba(0, 0, 0, 0.06);
-  --rule-strong: rgba(0, 0, 0, 0.085);
-
-  /* Glass */
-  --glass: rgba(255, 255, 255, 0.7);
-  --glass-solid: rgba(255, 255, 255, 0.82);
-  --glass-border: rgba(255, 255, 255, 0.85);
-  --glass-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset,
-    0 0.5px 0 rgba(0, 0, 0, 0.04),
-    0 18px 48px -18px rgba(20, 22, 28, 0.22);
-  --glass-shadow-lift: 0 1px 0 rgba(255, 255, 255, 0.9) inset,
-    0 0.5px 0 rgba(0, 0, 0, 0.05),
-    0 26px 56px -20px rgba(20, 22, 28, 0.3);
-
-  /* Six tones — six meanings, never a seventh */
-  --tone-gray: #8b9099;
-  --tone-cobalt: #2f64df;
-  --tone-amber: #d9822b;
-  --tone-forest: #1f9457;
-  --tone-violet: #6d49e0;
-  --tone-red: #d23f43;
-
-  /* Radii ladder */
-  --r-chip: 6px;
-  --r-btn: 8px;
-  --r-12: 12px;
-  --r-card: 16px;
-  --r-hero: 24px;
-
-  /* Motion */
-  --ease: cubic-bezier(0.16, 1, 0.3, 1);
-  --d-color: 150ms;
-  --d-base: 200ms;
-  --d-struct: 300ms;
-  --d-reveal: 500ms;
-
-  /* Type */
-  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
-}
-
-/* Tone token resolver — set data-tone on any dot/chip/node */
+/* Tone token resolver — set data-tone on any dot/chip/node.
+   gray idle · blue active · amber warn · green success · coral attention
+   (integration/frontier) · red error. Never a seventh meaning. */
 [data-tone="idle"], [data-tone="default"] { --tone: var(--tone-gray); }
 [data-tone="active"] { --tone: var(--tone-cobalt); }
 [data-tone="awaiting"] { --tone: var(--tone-cobalt); }
 [data-tone="warn"], [data-tone="stale"] { --tone: var(--tone-amber); }
 [data-tone="success"], [data-tone="integrated"] { --tone: var(--tone-forest); }
-[data-tone="integration"] { --tone: var(--tone-violet); }
+[data-tone="integration"] { --tone: var(--tone-coral-dot); }
 [data-tone="error"], [data-tone="blocked"], [data-tone="failed"] { --tone: var(--tone-red); }
 
 * { box-sizing: border-box; }
@@ -82,9 +31,10 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   background-color: var(--bg);
-  background-image: radial-gradient(var(--grid) 1px, transparent 1.2px);
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: 24px 24px;
-  background-position: -1px -1px;
 }
 
 button, input, select { font: inherit; color: inherit; }
@@ -128,8 +78,6 @@ h1, h2, h3 { letter-spacing: -0.015em; font-weight: 600; margin: 0; }
 
 .glass {
   background: var(--glass);
-  backdrop-filter: blur(16px) saturate(1.2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
 }
@@ -466,8 +414,6 @@ select.filter:hover { border-color: var(--rule-strong); }
   padding: 0 11px;
   border-radius: var(--r-12);
   background: var(--glass);
-  backdrop-filter: blur(16px) saturate(1.2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2);
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
   text-align: left; overflow: hidden; z-index: 1; cursor: pointer;
@@ -530,7 +476,7 @@ select.filter:hover { border-color: var(--rule-strong); }
 .zoom-btn {
   width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
   border-radius: var(--r-btn); border: 1px solid var(--rule);
-  background: var(--glass-solid); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  background: var(--glass-solid);
   box-shadow: var(--glass-shadow); color: var(--muted);
   transition: color var(--d-color) var(--ease), border-color var(--d-color) var(--ease);
 }
@@ -562,7 +508,6 @@ select.filter:hover { border-color: var(--rule-strong); }
   text-align: left; padding: 9px 12px;
   font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 600;
   background: var(--glass-solid);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--rule);
 }
 .task-table tbody tr { border-bottom: 1px solid var(--hair); transition: background var(--d-color) var(--ease); }
@@ -709,7 +654,6 @@ select.filter:hover { border-color: var(--rule-strong); }
   flex-direction: column;
   overflow: hidden;
   background: var(--glass-solid);
-  -webkit-backdrop-filter: blur(20px) saturate(1.3); backdrop-filter: blur(20px) saturate(1.3);
   border: 1px solid var(--glass-border); border-bottom: 0;
   border-radius: var(--r-hero) var(--r-hero) 0 0;
   box-shadow: 0 -26px 72px -28px rgba(20, 22, 28, 0.5);
