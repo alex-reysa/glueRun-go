@@ -10,8 +10,7 @@
 // on. Body indentation preserved from the IIFE to keep the diff reviewable.
 
 import { bus } from "./core/bus.js";
-import { fetchPaneLines, resetPane, scrollPaneToBottom } from "./core/term-core.js";
-import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sessions-feed.js";
+import { startFeed } from "./core/sessions-feed.js";
 
   const POLL_MS = 10000;
   const $ = (id) => document.getElementById(id);
@@ -181,74 +180,43 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
   const numId = (id) => { const m = /(\d+)/.exec(id || ""); return m ? +m[1] : -1; };
 
   // ============================================================ TOP BAR =====
+  // The slimmed header carries only the always-visible system signals: the
+  // health flag + the hard-stop presence chip. Every stat pill moved to Home;
+  // the actionable status filters moved into the Plan workbench header.
   function renderTop() {
     const d = S.snap;
-    const o = d.orchestration || {};
-    const na = o.nextArea || {};
-    const drift = (d.git && d.git.drift) || { left: 0, right: 0 };
-    const disk = d.disk || {};
-    const sc = (d.summary && d.summary.stateCounts) || {};
 
     // health flag
     const healthTone = d.health === "healthy" ? "success" : d.health === "blocker" ? "error" : "warn";
-    const hf = $("health-flag"); hf.dataset.tone = healthTone;
-    $("health-text").textContent = d.health || "—";
+    const hf = $("health-flag"); if (hf) hf.dataset.tone = healthTone;
+    const ht = $("health-text"); if (ht) ht.textContent = d.health || "—";
 
     // stop chip — amber when present (an intentional hold, not a fault)
     const stopPresent = !!(d.stop && d.stop.present);
     const stopChip = $("stop-chip");
-    stopChip.dataset.present = String(stopPresent);
-    stopChip.dataset.tone = stopPresent ? "warn" : "idle";
-    $("stop-text").textContent = stopPresent ? "stop present" : "stop clear";
+    if (stopChip) {
+      stopChip.dataset.present = String(stopPresent);
+      stopChip.dataset.tone = stopPresent ? "warn" : "idle";
+      const st = $("stop-text"); if (st) st.textContent = stopPresent ? "stop present" : "stop clear";
+    }
 
-    // drift
-    const driftTone = drift.left ? "error" : drift.right ? "warn" : "idle";
-    $("stat-drift").innerHTML = `${toneDot(driftTone === "error" ? "blocked" : driftTone === "warn" ? "stale" : "idle")}<span class="num">${drift.left} · ${drift.right}</span>`;
-
-    // frontier — plural ready-node count (violet), plus active L1 planners (cobalt)
-    const frontierNodes = (o.nextAreas && Array.isArray(o.nextAreas.frontier)) ? o.nextAreas.frontier : [];
-    const frCount = (d.summary && d.summary.frontierCount != null) ? d.summary.frontierCount
-      : (frontierNodes.length || (na.node ? 1 : 0));
-    const planners = (d.summary && d.summary.l1PlannersActive) || 0;
-    const frTxt = frCount ? `${frCount} ready` : "none";
-    const plannerSeg = planners
-      ? ` <span class="tone-dot" data-tone="active" title="active L1 planners"></span><span class="num" title="active L1 planners">${planners}</span>`
-      : "";
-    $("stat-frontier").innerHTML =
-      `<span class="tone-dot" data-tone="integration"></span><span class="num">${frTxt}</span>${plannerSeg}`;
-
-    // active / awaiting / blocked counters (filter pills)
-    setCounter("active", sc.active || 0, "active");
-    setCounter("awaiting", sc.awaiting || 0, "awaiting");
-    setCounter("blocked", (sc.blocked || 0) + (sc.failed || 0), "blocked");
-
-    // disk
-    const diskTone = disk.watch ? "stale" : "integrated";
-    $("stat-disk").innerHTML = `${toneDot(diskTone)}<span class="num">${disk.capacityPercent != null ? disk.capacityPercent + "%" : "—"}</span> <span class="unit">${esc(disk.free || "?")} free</span>`;
-
-    // gates + dag — plan-wide gate progress (orchestration.gates) replaces the
-    // old hardwired per-node D0/D1 probes; the dag chip keeps validateDag.ok.
-    const chip = (label, tone) =>
-      `<span class="gate-tag" data-tone="${toneOf(tone)}">${toneDot(tone)}<span class="lbl">${label}</span></span>`;
-    const g = o.gates || {};
-    const gTotal = g.total != null ? g.total : null;
-    const gPassed = g.passed != null ? g.passed : null;
-    const gatesLabel = `gates ${gPassed != null ? gPassed : "?"}/${gTotal != null ? gTotal : "?"}`;
-    // complete=forest; in-progress=neutral (not a fault); no gates yet=amber
-    const gatesTone = gTotal && gPassed === gTotal ? "integrated" : gPassed > 0 ? "idle" : "stale";
-    $("stat-gates").innerHTML =
-      chip(gatesLabel, gatesTone) + chip("dag", o.validateDag && o.validateDag.ok ? "integrated" : "blocked");
+    renderPlanFilters();
   }
 
-  function setCounter(stat, n, state) {
-    const el = $("stat-" + stat);
-    const tone = n > 0 ? toneOf(state) : "idle";
-    el.innerHTML = `<span class="tone-dot" data-tone="${tone}"></span><span class="num">${n}</span>`;
-    const pill = document.querySelector(`.stat-pill[data-stat="${stat}"]`);
-    if (pill) {
-      pill.style.setProperty("--tone", `var(--tone-${tone === "idle" ? "gray" : tone === "warn" ? "amber" : tone === "error" ? "red" : tone === "success" ? "forest" : tone === "awaiting" || tone === "active" ? "cobalt" : "gray"})`);
-      pill.setAttribute("aria-pressed", String(S.statusFilter === stat || (stat === "blocked" && (S.statusFilter === "blocked" || S.statusFilter === "failed"))));
+  // Plan workbench header: the three status-filter pills (live counts + pressed
+  // state) and the slim gates X/Y readout that opens the overview inspector.
+  function renderPlanFilters() {
+    const d = S.snap; if (!d) return;
+    const sc = (d.summary && d.summary.stateCounts) || {};
+    const counts = { active: sc.active || 0, awaiting: sc.awaiting || 0, blocked: (sc.blocked || 0) + (sc.failed || 0) };
+    for (const stat of ["active", "awaiting", "blocked"]) {
+      const c = $("qf-" + stat); if (c) c.textContent = counts[stat];
+      const pill = document.querySelector(`.qf-pill[data-qf="${stat}"]`);
+      if (pill) pill.setAttribute("aria-pressed", String(S.statusFilter === stat || (stat === "blocked" && S.statusFilter === "failed")));
     }
+    const g = (d.orchestration && d.orchestration.gates) || {};
+    const val = $("plan-gates-val");
+    if (val) val.textContent = `${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}`;
   }
 
   const shortRun = (r) => String(r || "").replace(/^ORIGIN-|^RUN-/, "").slice(0, 16);
@@ -340,13 +308,6 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     }
     applyMarkers();
     renderInspector();
-  }
-
-  // Bottom dock (terminal) height presets — the resize handle drives this.
-  function setDockSize(size) {
-    const dock = $("dock");
-    dock.style.height = ""; // clear any drag override
-    dock.dataset.size = size;
   }
 
   // If an L2 inspector is open, drop its cached detail and refetch when the live
@@ -647,20 +608,12 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
       const res = await fetch("/api/overview", { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       S.overview = await res.json();
-      renderPlanPill();
       if (S.selectedKind === "overview") renderInspectorOverview();
     } catch (e) {
       /* pill keeps its last value; overview is optional chrome */
     } finally {
       S.overviewInflight = false;
     }
-  }
-
-  function renderPlanPill() {
-    const o = S.overview;
-    const pct = o && o.progress ? o.progress.pct : null;
-    $("plan-pct").textContent = pct == null ? "—" : pct + "%";
-    $("plan-fill").style.width = (pct || 0) + "%";
   }
 
   function renderTaskDetail(d) {
@@ -1352,249 +1305,6 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     });
   }
 
-  // ------------------------------------------------------------ dock resize
-  function initResize() {
-    const handle = $("dock-resize-handle");
-    const dock = $("dock");
-    let dragging = false;
-    const onMove = (ev) => {
-      if (!dragging) return;
-      const appPad = 10;
-      // Keep a floor tall enough that the always-on terminal stays usable.
-      const h = Math.max(150, Math.min(window.innerHeight * 0.92, window.innerHeight - ev.clientY - appPad));
-      dock.style.height = h + "px";
-      dock.dataset.size = "custom";
-    };
-    const stop = () => {
-      dragging = false;
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", stop);
-      document.removeEventListener("pointercancel", stop);
-    };
-    handle.addEventListener("pointerdown", (ev) => {
-      dragging = true; ev.preventDefault();
-      document.addEventListener("pointermove", onMove);
-      document.addEventListener("pointerup", stop);
-      document.addEventListener("pointercancel", stop);
-    });
-    handle.addEventListener("dblclick", () => setDockSize(dock.dataset.size === "full" ? "half" : "full"));
-  }
-
-  // ========================================================== TERMINAL ======
-  // Always-on session terminal in the work dock. Polls /api/sessions every 2s
-  // (independent of the 10s graph snapshot) and incrementally tails each visible
-  // pane's log via a byte cursor. Strict read-only observer — it never writes.
-  // Per-pane streaming (ring-buffer caps, byte-cursor fetch, row rendering) now
-  // lives in core/term-core.js; the /api/sessions poll lives in core/sessions-feed.js.
-  // This dock is one subscriber of the shared feed.
-
-  const T = {
-    sessions: [],
-    auto: { mode: "origin", sessionIds: ["origin"] },
-    autoOn: localStorage.getItem("gluerun.term.auto") !== "0",
-    follow: localStorage.getItem("gluerun.term.follow") !== "0",
-    raw: localStorage.getItem("gluerun.term.raw") === "1",
-    solo: localStorage.getItem("gluerun.term.solo") === "1",
-    manualIds: safeParse(localStorage.getItem("gluerun.term.manual"), []),
-    sessById: new Map(),
-    panes: new Map(),  // id -> pane state
-    visible: [],
-    generatedAt: null, // generatedAt of the latest /api/sessions payload (2s cadence)
-    _chipSig: null,    // signature gate for the chip strip
-    fetchingSessions: false,
-    started: false,
-  };
-  function safeParse(s, fb) { try { return JSON.parse(s) || fb; } catch { return fb; } }
-  function persistTerm() {
-    localStorage.setItem("gluerun.term.auto", T.autoOn ? "1" : "0");
-    localStorage.setItem("gluerun.term.follow", T.follow ? "1" : "0");
-    localStorage.setItem("gluerun.term.raw", T.raw ? "1" : "0");
-    localStorage.setItem("gluerun.term.solo", T.solo ? "1" : "0");
-    localStorage.setItem("gluerun.term.manual", JSON.stringify(T.manualIds));
-  }
-
-  function termVisibleIds() {
-    let ids;
-    if (T.autoOn || !T.manualIds.length) {
-      // Auto: only show sessions the server currently lists; fall back to origin.
-      ids = (T.auto.sessionIds || []).filter((id) => T.sessById.has(id));
-      if (!ids.length) ids = ["origin"];
-    } else {
-      // Pinned/manual: honor explicit pins even if a session briefly drops out of the
-      // capped /api/sessions list — the server resolves any valid id directly, so the
-      // pane keeps streaming instead of collapsing to origin and losing its scrollback.
-      ids = T.manualIds.slice();
-    }
-    return T.solo ? ids.slice(0, 1) : ids.slice(0, 3);
-  }
-
-  // Feed subscriber: the shared 2s /api/sessions poller pushes state here. We mirror
-  // it into T (so the rest of the dock reads the same fields as before), re-render the
-  // bar/chips/panes, then poll each visible pane's tail — the old termTick cadence,
-  // now driven by one poller instead of the dock's own fetch.
-  function termOnFeed(state) {
-    T.sessions = state.sessions || [];
-    T.auto = state.auto || T.auto;
-    T.generatedAt = state.generatedAt || null; // drive age display off the 2s feed, not the 10s snapshot
-    T.sessById = state.byId || new Map(T.sessions.map((s) => [s.id, s]));
-    renderTermBar();
-    renderTermChips();
-    reconcilePanes();
-    termPollLines();
-  }
-
-  function renderTermBar() {
-    $("term-mode").textContent = T.autoOn ? ("auto · " + (T.auto.mode || "—")) : "manual";
-    const set = (n, on) => { const b = document.querySelector('.term-ctl[data-ctl="' + n + '"]'); if (b) b.setAttribute("aria-pressed", String(on)); };
-    set("auto", T.autoOn); set("pin", !T.autoOn); set("follow", T.follow); set("raw", T.raw); set("solo", T.solo);
-  }
-
-  // Chip-worthy sessions only: origin + currently-live work, plus whatever is on
-  // screen or pinned. Finished/quiet sessions (idle/integrated/stale) are dropped
-  // so the strip stays short and relevant rather than listing every task.
-  const LIVE_CHIP_STATES = new Set(["active", "awaiting", "blocked", "failed", "running", "dispatched"]);
-  function chipSessions(visible) {
-    const keep = new Set(visible);
-    (T.manualIds || []).forEach((id) => keep.add(id));
-    return T.sessions.filter((s) =>
-      s.kind === "origin" || LIVE_CHIP_STATES.has(s.state) || keep.has(s.id));
-  }
-
-  function renderTermChips() {
-    const visible = termVisibleIds();
-    const shown = chipSessions(visible);
-    // Signature-gate the rebuild (mirrors renderCurrentView): a quiet 2s poll must
-    // not churn the chip DOM or drop hover/:active state mid-interaction.
-    const sig = JSON.stringify([shown.map((s) => [s.id, s.state, s.role, s.taskId || s.node || s.runId]), visible]);
-    if (sig === T._chipSig) return;
-    T._chipSig = sig;
-    const sel = new Set(visible);
-    $("term-chips").innerHTML = shown.map((s) => {
-      const label = s.taskId || s.node || (s.kind === "origin" ? "origin" : (shortRun(s.runId) || s.id));
-      return `<button class="term-chip" data-term-chip="${escAttr(s.id)}" aria-pressed="${sel.has(s.id)}" title="${escAttr(s.id)}">
-        ${toneDot(s.state)}<span class="term-chip-role">${esc(s.role || s.kind)}</span><span class="term-chip-id">${esc(label)}</span></button>`;
-    }).join("");
-  }
-
-  function reconcilePanes() {
-    const ids = termVisibleIds();
-    T.visible = ids;
-    const host = $("term-panes");
-    $("session-terminal").dataset.empty = String(ids.length === 0);
-    for (const [id, pane] of [...T.panes]) {
-      if (!ids.includes(id)) { pane.el.remove(); T.panes.delete(id); }
-    }
-    if (!ids.length) {
-      host.innerHTML = `<div class="term-empty">${icon("i-terminal")}<div>no active sessions</div></div>`;
-      return;
-    }
-    const empty = host.querySelector(".term-empty"); if (empty) empty.remove();
-    for (const id of ids) {
-      if (!T.panes.has(id)) T.panes.set(id, createPane(id));
-      updatePaneHead(id);
-    }
-    // Insert/move panes ONLY when their DOM position is actually wrong. Re-appending
-    // an already-attached pane every poll would reset its scrollTop to 0 (and fire a
-    // scroll event that flips atBottom=false), which breaks Follow and sticks the view
-    // at the top. In steady state this loop touches nothing, so scroll is preserved.
-    ids.forEach((id, i) => {
-      const el = T.panes.get(id).el;
-      if (host.children[i] !== el) host.insertBefore(el, host.children[i] || null);
-    });
-  }
-
-  function createPane(id) {
-    const el = document.createElement("div");
-    el.className = "term-pane";
-    el.dataset.id = id;
-    el.innerHTML = `<div class="term-pane-head"></div><div class="term-pane-body"><div class="term-pane-loading">connecting…</div></div>`;
-    const body = el.querySelector(".term-pane-body");
-    const pane = { el, body, cursor: null, raw: T.raw, lineEls: new Map(), count: 0, atBottom: true, inflight: false, loaded: false };
-    body.addEventListener("scroll", () => {
-      pane.atBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 6;
-    });
-    return pane;
-  }
-
-  function updatePaneHead(id) {
-    const pane = T.panes.get(id); if (!pane) return;
-    // A pinned session can briefly be absent from the capped list — show it as
-    // reconnecting (it keeps streaming) rather than mislabeling it.
-    const s = T.sessById.get(id) || { id, kind: "session", role: "session", state: "idle", phase: "reconnecting…" };
-    const ident = s.taskId || s.node || (s.kind === "origin" ? "origin" : (shortRun(s.runId) || s.id));
-    const age = relTime(s.updatedAt, T.generatedAt || (S.snap && S.snap.generatedAt));
-    const hint = s.branch ? shortBranch(s.branch) : (s.area || (s.runId ? shortRun(s.runId) : ""));
-    pane.el.querySelector(".term-pane-head").innerHTML =
-      `<span class="term-pane-role" data-tone="${toneOf(s.state)}">${toneDot(s.state)}${esc(s.role || s.kind)}</span>
-       <span class="term-pane-id">${esc(ident)}</span>
-       <span class="term-pane-meta">${s.phase ? `<span class="tp-phase">${esc(s.phase)}</span>` : ""}<span>${esc(age)}</span>${hint ? `<span>${esc(hint)}</span>` : ""}</span>`;
-  }
-
-  function termPollLines() { for (const id of T.visible) termFetchLines(id); }
-
-  function termFetchLines(id) {
-    const pane = T.panes.get(id); if (!pane) return;
-    // Row rendering, cursor management, ring-buffer trimming, and scroll-retention
-    // all live in core/term-core.js now — byte-identical to the old inline engine.
-    fetchPaneLines(id, pane, { raw: T.raw, follow: T.follow, now: T.generatedAt || (S.snap && S.snap.generatedAt) });
-  }
-
-  function termRefresh() { renderTermBar(); renderTermChips(); reconcilePanes(); termPollLines(); }
-
-  // Nudge the shared feed to poll now (visibility resume). The feed callback
-  // (termOnFeed) does the render + line poll.
-  function termTick() { if (!document.hidden) pokeFeed(); }
-
-  function termInit() {
-    if (T.started) return;
-    T.started = true;
-    renderTermBar();
-
-    $("term-controls").addEventListener("click", (e) => {
-      const b = e.target.closest(".term-ctl"); if (!b) return;
-      const ctl = b.dataset.ctl;
-      if (ctl === "auto") { T.autoOn = true; T.manualIds = []; }
-      else if (ctl === "pin") { T.autoOn = false; T.manualIds = termVisibleIds().slice(); }
-      else if (ctl === "follow") {
-        T.follow = !T.follow;
-        if (T.follow) for (const p of T.panes.values()) scrollPaneToBottom(p);
-      } else if (ctl === "raw") {
-        T.raw = !T.raw;
-        for (const p of T.panes.values()) resetPane(p);
-      } else if (ctl === "solo") { T.solo = !T.solo; }
-      persistTerm();
-      termRefresh();
-    });
-
-    $("term-chips").addEventListener("click", (e) => {
-      const c = e.target.closest("[data-term-chip]"); if (!c) return;
-      const id = c.dataset.termChip;
-      const cur = (!T.autoOn && T.manualIds.length) ? T.manualIds : termVisibleIds();
-      const set = new Set(cur);
-      if (set.has(id)) set.delete(id);
-      else set.add(id);
-      let ids = [...set];
-      if (!T.solo && ids.length > 3) ids = ids.slice(-3);
-      T.manualIds = ids;
-      T.autoOn = ids.length === 0; // emptied selection -> resume auto
-      persistTerm();
-      termRefresh();
-    });
-
-    // Subscribe to the shared session feed; it polls while the dock is on-screen
-    // (Plan surface) or the Consoles surface is up. The dock is hidden on the
-    // Consoles/Agents surfaces, so its predicate is "the dock element is shown".
-    subscribeSessions(termOnFeed, () => { const d = $("dock"); return !!d && !d.hidden; });
-    startFeed();
-  }
-
-  // The router (via main.js) hides the dock on the Consoles/Agents surfaces — it
-  // duplicates the L0 streams there — and restores it on Plan.
-  function setDockVisible(on) {
-    const d = $("dock");
-    if (d) d.hidden = !on;
-  }
-
   // =========================================================== OVERLAY ======
   // Live event overlay: a semantic, system-wide activity feed projected from
   // events.ndjson (/api/events, 2s cursor poll). Complementary to — never a
@@ -1615,8 +1325,6 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     seen: new Set(),     // dedup by row signature
     cursor: null,        // byte cursor into events.ndjson
     feedSig: null,       // signature gate for the feed DOM
-    collapsed: localStorage.getItem("gluerun.overlay.collapsed") === "1",
-    unread: 0,
     inflight: false,
     started: false,
   };
@@ -1653,7 +1361,6 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
       O.seen.add(sig);
       r._sig = sig;
       O.rows.unshift(r);                  // newest-first
-      if (O.collapsed) O.unread++;
     }
     if (O.rows.length > OVERLAY_MAX_ROWS) {
       for (const r of O.rows.splice(OVERLAY_MAX_ROWS)) O.seen.delete(r._sig);
@@ -1687,23 +1394,27 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     return { state: "idle", text: "idle", tone: "idle", rate };
   }
 
+  // The pulse + feed now live on the Home surface (#home-activity-*). Both
+  // renderers no-op when their host is absent (any non-Home surface), while the
+  // poll keeps filling O.rows so a Home visit paints instantly.
   function renderOverlayPulse() {
+    const pulse = $("home-activity-pulse");
+    if (!pulse) return;
     const p = resolvePulse();
-    const pulse = $("ov-pulse");
     pulse.dataset.state = p.state;
-    pulse.querySelector(".tone-dot").dataset.tone = p.tone;
-    $("ov-pulse-text").textContent = p.text;
-    $("ov-rate").textContent = p.rate ? p.rate + "/min" : "";
-    $("ov-spine-dot").dataset.tone = p.tone;
-    $("ov-unread").textContent = O.unread ? String(O.unread) : "";
+    const dot = pulse.querySelector(".tone-dot"); if (dot) dot.dataset.tone = p.tone;
+    const txt = $("home-activity-pulse-text"); if (txt) txt.textContent = p.text;
+    const rate = $("home-activity-rate"); if (rate) rate.textContent = p.rate ? p.rate + "/min" : "";
   }
 
   function renderOverlay() {
     renderOverlayPulse();   // cheap; refresh every tick so the pulse stays live
-    const sig = JSON.stringify([O.rows.slice(0, 60).map((r) => r._sig), O.collapsed]);
+    const feed = $("home-activity-feed");
+    if (!feed) return;
+    const sig = JSON.stringify(O.rows.slice(0, 60).map((r) => r._sig));
     if (sig === O.feedSig) return;       // signature-gate the feed DOM rebuild
     O.feedSig = sig;
-    $("overlay-feed").innerHTML = O.rows.map((r) => {
+    feed.innerHTML = O.rows.map((r) => {
       const tone = OV_TONE[r.tone] || "idle";
       const ref = r.taskId || r.nodeId;
       return `<button class="ov-row" data-tone="${tone}" data-task="${escAttr(r.taskId || "")}" data-node="${escAttr(r.nodeId || "")}" data-area="${escAttr(r.areaId || "")}">
@@ -1716,12 +1427,9 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     }).join("");
   }
 
-  function setOverlayCollapsed(v) {
-    O.collapsed = v;
-    localStorage.setItem("gluerun.overlay.collapsed", v ? "1" : "0");
-    $("event-overlay").dataset.collapsed = String(v);
-    if (!v) { O.unread = 0; renderOverlayPulse(); }
-  }
+  // Force a repaint of the relocated feed (Home calls this when it mounts so the
+  // buffered rows render without waiting for the next 2s poll).
+  function renderActivityFeed() { O.feedSig = null; renderOverlay(); }
 
   async function overlayTick() {
     if (document.hidden) return;
@@ -1731,11 +1439,9 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
   function overlayInit() {
     if (O.started) return;
     O.started = true;
-    setOverlayCollapsed(O.collapsed);
-    $("ov-collapse").addEventListener("click", () => setOverlayCollapsed(!O.collapsed));
-    $("ov-spine").addEventListener("click", () => setOverlayCollapsed(false));
-    // Clicking a row is the entry ramp into the provenance inspector.
-    $("overlay-feed").addEventListener("click", (e) => {
+    // Clicking a row is the entry ramp into the provenance inspector. Delegated
+    // on document so it survives the feed being (re)mounted by the Home surface.
+    document.addEventListener("click", (e) => {
       const row = e.target.closest(".ov-row"); if (!row) return;
       if (!S.snap) return; // overlay polls independently; ignore clicks until the graph snapshot is in
       const task = row.dataset.task, node = row.dataset.node, area = row.dataset.area;
@@ -1753,7 +1459,8 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     document.addEventListener("click", onClick);
 
     $("btn-refresh").addEventListener("click", () => load(true));
-    $("plan-pill").addEventListener("click", () => select("overview", "plan"));
+    const gatesReadout = $("plan-gates-readout");
+    if (gatesReadout) gatesReadout.addEventListener("click", () => select("overview", "plan"));
 
     let qt;
     $("search-input").addEventListener("input", (e) => {
@@ -1764,23 +1471,13 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     $("filter-area").addEventListener("change", (e) => setAreaFilter(e.target.value));
     $("filter-status").addEventListener("change", (e) => { S.statusFilter = e.target.value; renderTop(); renderShowing(); planRefresh(); });
 
-    document.querySelectorAll('.stat-pill[role="button"]').forEach((p) => {
-      const act = () => {
-        const stat = p.dataset.stat;
-        if (stat === "frontier") {
-          // Focus the first ready frontier node in the DAG lens aside (if any).
-          const o = (S.snap && S.snap.orchestration) || {};
-          const fr = (o.nextAreas && Array.isArray(o.nextAreas.frontier)) ? o.nextAreas.frontier : [];
-          const nodeId = (fr[0] && (fr[0].node || fr[0].id)) || (o.nextArea && o.nextArea.node);
-          if (nodeId && bus.onNodeSelect) bus.onNodeSelect(nodeId);
-        } else if (stat === "blocked") {
-          setStatusFilter(S.statusFilter === "blocked" ? "" : "blocked");
-        } else {
-          setStatusFilter(stat);
-        }
-      };
-      p.addEventListener("click", act);
-      p.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); } });
+    // Plan workbench quick status-filter pills (relocated from the header strip).
+    const qf = $("plan-quickfilters");
+    if (qf) qf.addEventListener("click", (e) => {
+      const b = e.target.closest(".qf-pill"); if (!b) return;
+      const stat = b.dataset.qf;
+      if (stat === "blocked") setStatusFilter(S.statusFilter === "blocked" ? "" : "blocked");
+      else setStatusFilter(stat);
     });
 
     $("inspector-tabs").addEventListener("click", (e) => {
@@ -1794,9 +1491,8 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     $("insp-close").addEventListener("click", () => select("none", null));
     $("inspector-scrim").addEventListener("click", () => select("none", null));
     initInspectorSheet();
-    initResize();
-    termInit();
     overlayInit();
+    startFeed();   // start the single /api/sessions poller (Consoles/Agents subscribers)
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "/" && document.activeElement !== $("search-input")) { e.preventDefault(); $("search-input").focus(); }
@@ -1804,7 +1500,7 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
         const onSearch = document.activeElement === $("search-input");
         if (onSearch && S.query) { $("search-input").value = ""; S.query = ""; renderShowing(); planRefresh(); }
         else if (onSearch) { $("search-input").blur(); }
-        else if (S.selectedKind !== "none") { select("none", null); } // keep dock height; terminal owns it
+        else if (S.selectedKind !== "none") { select("none", null); }
       }
     });
 
@@ -1815,7 +1511,7 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
     // Pause polling in backgrounded tabs; refresh immediately on return so a
     // re-shown dashboard is never stale.
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) { load(false); termTick(); overlayTick(); }
+      if (!document.hidden) { load(false); overlayTick(); }
     });
   }
 
@@ -1826,16 +1522,14 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
 
   export {
     // state + vocab
-    S, T, O, POLL_MS, STATE_TONE, STATE_LABEL, STATE_ORDER, toneOf, labelOf, gateTone,
+    S, O, POLL_MS, STATE_TONE, STATE_LABEL, STATE_ORDER, toneOf, labelOf, gateTone,
     // dom + format helpers
     $, esc, escAttr, icon, relTime, toast, kvGrid, statusChip, highlight, shortBranch,
     // filtering + selection + navigation seams (used by the plan surface + router)
     tasksFiltered, sortExceptionsFirst, load, setConn, select, navigateToTask,
     setAreaFilter, applyDeepLink, gateBlock,
-    // pollers (visibility resume)
-    termTick, overlayTick,
-    // dock visibility (router toggles it per surface via main.js)
-    setDockVisible,
+    // activity feed (relocated to Home; Home remounts + repaints it)
+    overlayTick, renderActivityFeed,
     // entry
     start, init,
   };

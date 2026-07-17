@@ -112,34 +112,20 @@
         <span>gluerun</span>
       </div>
       <nav id="surface-nav" aria-label="Surface switcher">
-        <button type="button" data-surface="plan" aria-pressed="true">Plan</button>
+        <button type="button" data-surface="home" aria-pressed="true">Home</button>
+        <button type="button" data-surface="plan" aria-pressed="false">Plan</button>
         <button type="button" data-surface="consoles" aria-pressed="false">Consoles</button>
         <button type="button" data-surface="agents" aria-pressed="false">Agents</button>
       </nav>
       <span id="health-flag" class="health-flag" data-tone="idle"><span class="tone-dot"></span><span id="health-text">loading</span></span>
       <span id="stop-chip" class="status-chip" data-tone="idle" data-present="false"><svg class="icon" style="width:13px;height:13px"><use href="#i-stop"/></svg><span id="stop-text">stop —</span></span>
-      <div class="stat-strip" id="stat-strip">
-        <div class="stat-pill" data-stat="drift" title="git drift (behind · ahead)"><span class="stat-label">drift</span><span class="stat-value" id="stat-drift">—</span></div>
-        <div class="stat-pill frontier" data-stat="frontier" role="button" tabindex="0" title="Focus frontier area"><span class="stat-label">frontier</span><span class="stat-value" id="stat-frontier"><span class="tone-dot" data-tone="integration"></span>—</span></div>
-        <div class="stat-pill" data-stat="active" role="button" tabindex="0" title="Filter: active"><span class="stat-label">active</span><span class="stat-value" id="stat-active">—</span></div>
-        <div class="stat-pill" data-stat="awaiting" role="button" tabindex="0" title="Filter: awaiting release"><span class="stat-label">await</span><span class="stat-value" id="stat-awaiting">—</span></div>
-        <div class="stat-pill" data-stat="blocked" role="button" tabindex="0" title="Filter: blocked"><span class="stat-label">blocked</span><span class="stat-value" id="stat-blocked">—</span></div>
-        <div class="stat-pill" data-stat="disk" title="disk capacity · free"><span class="stat-label">disk</span><span class="stat-value" id="stat-disk">—</span></div>
-        <div class="stat-pill" data-stat="gates" title="area gates · dag validation"><span class="stat-label">gates</span><span class="stat-value gate-row" id="stat-gates">—</span></div>
-      </div>
-      <button id="plan-pill" title="Plan overview — progress, inputs, settings, status">
-        <span class="pp-label">plan</span>
-        <span class="pp-bar"><span class="pp-fill" id="plan-fill"></span></span>
-        <span class="pp-pct" id="plan-pct">—</span>
-        <svg class="icon"><use href="#i-chev"/></svg>
-      </button>
       <span class="top-spacer"></span>
       <span class="conn"><span id="conn-dot" data-state="down"></span><span>updated</span><span id="refresh-age">—</span></span>
       <button id="btn-refresh" class="btn primary" title="Reload snapshot"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button>
     </header>
 
     <!-- MAIN VIEWPORT — three surface roots; the router shows exactly one. -->
-    <section id="surface-plan" class="surface glass" data-active="true">
+    <section id="surface-plan" class="surface" data-active="false" hidden>
       <div id="plan-workbench-header">
         <label class="search-wrap"><svg class="icon"><use href="#i-search"/></svg>
           <input id="search-input" type="search" placeholder="search id · title · branch" autocomplete="off" spellcheck="false">
@@ -161,6 +147,12 @@
           </select>
           <span class="chev"><svg class="icon" style="width:13px;height:13px"><use href="#i-chev"/></svg></span>
         </span>
+        <div class="plan-quickfilters" id="plan-quickfilters" role="group" aria-label="Quick status filters">
+          <button type="button" class="qf-pill" data-qf="active" aria-pressed="false"><span class="tone-dot" data-tone="active"></span>active<span class="qf-count" id="qf-active">—</span></button>
+          <button type="button" class="qf-pill" data-qf="awaiting" aria-pressed="false"><span class="tone-dot" data-tone="awaiting"></span>await<span class="qf-count" id="qf-awaiting">—</span></button>
+          <button type="button" class="qf-pill" data-qf="blocked" aria-pressed="false"><span class="tone-dot" data-tone="error"></span>blocked<span class="qf-count" id="qf-blocked">—</span></button>
+        </div>
+        <button type="button" class="plan-gates-readout" id="plan-gates-readout" title="Plan overview — progress, inputs, settings, status">gates <b id="plan-gates-val">—</b></button>
         <span id="showing-count"></span>
       </div>
       <div id="plan-body">
@@ -169,47 +161,14 @@
         <aside id="plan-aside" data-open="true" aria-label="Node drilldown"></aside>
       </div>
     </section>
-    <section id="surface-consoles" class="surface glass" data-active="false" hidden>
+    <section id="surface-consoles" class="surface" data-active="false" hidden>
       <span class="surface-stub">Consoles — coming in this release</span>
     </section>
-    <section id="surface-agents" class="surface glass" data-active="false" hidden>
+    <section id="surface-agents" class="surface" data-active="false" hidden>
       <span class="surface-stub">Agents — coming in this release</span>
     </section>
-
-    <!-- BOTTOM DOCK — unified live-activity zone: semantic event feed (left sidebar)
-         + raw session terminal (right). -->
-    <section id="dock" class="glass" data-size="half">
-      <div id="dock-resize-handle" title="Drag to resize"></div>
-      <div class="dock-body">
-        <!-- Live event feed — system-wide semantic activity (distinct from the raw tails). -->
-        <aside id="event-overlay" data-collapsed="false" aria-label="Live event feed">
-          <div class="ov-head">
-            <span class="ov-pulse" id="ov-pulse" data-state="idle"><span class="tone-dot" data-tone="idle"></span><span id="ov-pulse-text">—</span></span>
-            <span class="ov-rate" id="ov-rate"></span>
-            <span class="ov-head-spacer"></span>
-            <button class="ov-ctl" id="ov-collapse" title="Collapse / expand event feed"><svg class="icon"><use href="#i-cols"/></svg></button>
-          </div>
-          <div class="ov-feed" id="overlay-feed" role="log" aria-live="polite" aria-label="Live orchestration events"></div>
-          <div class="ov-spine" id="ov-spine" title="Expand event feed"><span class="tone-dot" id="ov-spine-dot" data-tone="idle"></span><span class="ov-unread" id="ov-unread"></span></div>
-        </aside>
-        <!-- Raw session terminal -->
-        <div id="session-terminal" data-empty="true">
-          <div class="term-bar">
-            <span class="term-brand"><svg class="icon"><use href="#i-terminal"/></svg><span>sessions</span></span>
-            <span class="term-mode" id="term-mode" title="auto pane mode">—</span>
-            <span class="term-bar-spacer"></span>
-            <div class="term-controls" id="term-controls">
-              <button class="term-ctl" data-ctl="auto" aria-pressed="true" title="Auto — follow smart pane selection"><svg class="icon"><use href="#i-bolt"/></svg>Auto</button>
-              <button class="term-ctl" data-ctl="pin" aria-pressed="false" title="Pin — lock the current panes"><svg class="icon"><use href="#i-pin"/></svg>Pin</button>
-              <button class="term-ctl" data-ctl="follow" aria-pressed="true" title="Follow — auto-scroll to newest output"><svg class="icon"><use href="#i-arrowdown"/></svg>Follow</button>
-              <button class="term-ctl" data-ctl="raw" aria-pressed="false" title="Raw — show underlying log lines"><svg class="icon"><use href="#i-file"/></svg>Raw</button>
-              <button class="term-ctl" data-ctl="solo" aria-pressed="false" title="Solo — show a single pane"><svg class="icon"><use href="#i-cols"/></svg>Solo</button>
-            </div>
-          </div>
-          <div class="term-chips" id="term-chips" aria-label="Available sessions"></div>
-          <div class="term-panes" id="term-panes"></div>
-        </div>
-      </div>
+    <section id="surface-home" class="surface" data-active="false" hidden>
+      <div class="home-body" id="home-body"></div>
     </section>
   </main>
 

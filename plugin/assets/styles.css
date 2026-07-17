@@ -187,32 +187,34 @@ h1, h2, h3 { letter-spacing: -0.015em; font-weight: 600; margin: 0; }
   position: fixed;
   inset: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: 44px minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:
     "top"
-    "main"
-    "dock";
-  gap: 10px;
-  padding: 10px;
+    "main";
+  gap: 0;
+  padding: 0;
 }
 
 #top-bar { grid-area: top; }
-#dock { grid-area: dock; }
 
 /* ----------------------------------------------------------------------- */
 /* Top status / control bar                                                 */
 /* ----------------------------------------------------------------------- */
 
 #top-bar {
-  border-radius: var(--r-card);
-  padding: 8px 14px;
+  border-radius: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border-default);
+  box-shadow: none;
+  background: var(--glass);
+  padding: 0 14px;
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 10px;
-  row-gap: 7px;
-  flex-wrap: wrap;
-  min-height: 26px;
+  gap: 12px;
+  height: 44px;
+  min-height: 44px;
 }
 .brand {
   display: flex;
@@ -433,46 +435,7 @@ select.filter:hover { border-color: var(--rule-strong); }
 /* Inspector drawer                                                         */
 /* ----------------------------------------------------------------------- */
 
-/* Bottom dock — the always-on smart session terminal (full width) */
-#dock {
-  border-radius: var(--r-hero) var(--r-hero) var(--r-card) var(--r-card);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-  padding-top: 8px; /* clears the resize handle */
-  transition: height var(--d-struct) var(--ease);
-}
-#dock[data-size="peek"] { height: 150px; }
-#dock[data-size="half"] { height: 38vh; }
-#dock[data-size="full"] { height: 84vh; }
-
-#dock-resize-handle {
-  position: absolute; top: 0; left: 0; right: 0; height: 8px;
-  cursor: ns-resize; z-index: 3;
-  display: flex; align-items: center; justify-content: center;
-}
-#dock-resize-handle::after {
-  content: ""; width: 34px; height: 3px; border-radius: 999px;
-  background: rgba(0, 0, 0, 0.14);
-  transition: background var(--d-color) var(--ease);
-}
-#dock-resize-handle:hover::after { background: rgba(0, 0, 0, 0.28); }
-
-/* ----------------------------------------------------------------------- */
-/* Dock = unified live-activity zone: event feed (left) + terminal (right)  */
-/* ----------------------------------------------------------------------- */
-.dock-body { flex: 1 1 auto; min-height: 0; display: flex; }
-.dock-body > #session-terminal { flex: 1 1 auto; min-width: 0; }
-
-/* Live event feed — left sidebar inside the dock (collapsible). */
-#event-overlay {
-  flex: 0 0 300px; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
-  border-right: 1px solid var(--rule);
-  transition: flex-basis var(--d-struct) var(--ease);
-}
-#event-overlay[data-collapsed="true"] { flex-basis: 34px; }
-.ov-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--rule); flex: 0 0 auto; }
+/* Live event feed — relocated to the Home Activity section (row styling reused). */
 .ov-pulse { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
 .ov-pulse[data-state="progressing"] { color: color-mix(in srgb, var(--tone-forest) 80%, #000 20%); }
 .ov-pulse[data-state="spinning"] { color: color-mix(in srgb, var(--tone-amber) 82%, #000 18%); }
@@ -983,11 +946,7 @@ select.filter:hover { border-color: var(--rule-strong); }
   .term-panes { flex-direction: column; }
 }
 @media (max-width: 560px) {
-  #app { padding: 7px; gap: 7px; }
-  #top-bar { padding: 10px 12px; }
+  #top-bar { padding: 0 10px; gap: 8px; }
   .brand .sub { display: none; }
-  .stat-pill { flex: 1 1 calc(33% - 8px); }
-  .stat-pill.frontier { flex: 1 1 100%; }
   #inspector { height: 92vh; }
-  #dock[data-size="half"] { height: 46vh; }
 }

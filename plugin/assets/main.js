@@ -3,14 +3,14 @@
 // hash router. main.js is the ONLY module that imports app.js AND the surface
 // modules AND the router, so the composition lives here and no static import cycle
 // forms (app.js imports only bus + the two dependency-free core streamers).
-import { start, setDockVisible } from "./app.js";
+import { start } from "./app.js";
 import { bus } from "./core/bus.js";
 import { initRouter, tick as routerTick } from "./core/router.js";
 import { initWorkbench, setLens, getLens, planTick } from "./plan/workbench.js";
 import { initConsoles, setConsolesActive, consolesRoute, consolesLiveCount } from "./consoles/surface.js";
 import { initAgents, setAgentsActive, agentsRoute, agentsTick } from "./agents/surface.js";
 
-start();               // boot the core console (top bar, dock, inspector, polling)
+start();               // boot the core console (top bar, inspector, polling)
 initWorkbench();       // mount the stored Plan lens + register the plan bus seams
 initConsoles();        // build the Consoles surface (idle until shown)
 initAgents();          // build the Agents surface (idle until shown)
@@ -34,7 +34,6 @@ initRouter({
   // L0 streams there). Activate/deactivate the surface modules so a backgrounded
   // surface does no polling or DOM work.
   onSurface: (surface) => {
-    setDockVisible(surface === "plan");
     setConsolesActive(surface === "consoles");
     setAgentsActive(surface === "agents");
   },
