@@ -1651,6 +1651,76 @@ class SessionEnrichmentTests(unittest.TestCase):
                          data["sessions"])  # clamped to hard max (31 here < 40)
 
 
+class ConfigEndpointTests(unittest.TestCase):
+    """/api/config: .env override > config env{} > runner-script default."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state").mkdir()
+        return repo
+
+    def test_precedence(self) -> None:
+        repo = self._repo()
+        (repo / "gluerun.config.json").write_text(json.dumps({
+            "runner": "claude-run.sh",
+            "env": {"GLUERUN_CLAUDE_MODEL": "claude-opus-4-8",
+                    "GLUERUN_CLAUDE_PLANNER_EFFORT": "high",
+                    "GLUERUN_MAX_CONCURRENT": "3"}}))
+        (repo / ".gluerun-state/.env").write_text(
+            "GLUERUN_CLAUDE_PLANNER_EFFORT=xhigh\nDATABASE_URL=secret://never\n")
+        cfg = srv.collect_config(repo)
+        self.assertEqual(cfg["provider"], "claude")
+        self.assertEqual(cfg["roles"]["planner"]["model"], "claude-opus-4-8")   # config fallback key
+        self.assertEqual(cfg["roles"]["planner"]["effort"], "xhigh")            # .env wins
+        self.assertEqual(cfg["roles"]["planner"]["source"]["effortTier"], "env")
+        self.assertEqual(cfg["roles"]["implementer"]["effort"], "medium")       # runner default
+        self.assertEqual(cfg["roles"]["implementer"]["source"]["effortTier"], "runner-default")
+        self.assertEqual(cfg["limits"]["maxConcurrent"], "3")
+        self.assertNotIn("secret", json.dumps(cfg))
+
+    def test_codex_defaults(self) -> None:
+        repo = self._repo()
+        (repo / "gluerun.config.json").write_text(json.dumps({"runner": "codex-run.sh", "env": {}}))
+        cfg = srv.collect_config(repo)
+        self.assertEqual(cfg["provider"], "codex")
+        self.assertEqual(cfg["roles"]["implementer"]["model"], "gpt-5.5")
+        self.assertEqual(cfg["roles"]["auditor"]["effort"], "high")
+
+    def test_empty_repo(self) -> None:
+        cfg = srv.collect_config(self._repo())
+        self.assertEqual(cfg["provider"], "codex")   # engine default runner
+        self.assertIsNone(cfg["limits"]["maxConcurrent"])
+
+
+class NewCollectorsNoSubprocessTests(unittest.TestCase):
+    """The 0.6.0 collectors must stay pure-filesystem (mirror of
+    SnapshotNoSubprocessTests for dag/timeline/config)."""
+
+    def test_no_subprocess(self) -> None:
+        calls: list = []
+        real_run = subprocess.run
+
+        def record(*args, **kwargs):
+            calls.append(args)
+            return real_run(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".gluerun-state").mkdir()
+            (repo / "docs/orchestration/tasks").mkdir(parents=True)
+            saved = subprocess.run
+            subprocess.run = record
+            try:
+                srv.collect_dag_view(repo)
+                srv.collect_timeline(repo)
+                srv.collect_config(repo)
+            finally:
+                subprocess.run = saved
+        self.assertEqual(calls, [])
+
+
 class AutonomateLogResolutionTests(unittest.TestCase):
     """The engine's --detach loop writes autonomate.log; the legacy name is
     autonomate.out.log. The server follows whichever exists (newest wins)."""

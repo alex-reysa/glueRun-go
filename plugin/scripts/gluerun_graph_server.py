@@ -3648,6 +3648,122 @@ def load_timeline(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# /api/config — resolved per-role runner config (gluerun.codex.config.v0)     #
+# --------------------------------------------------------------------------- #
+# Key families mirror engine/claude-run.sh + engine/codex-run.sh resolution;
+# the trailing literal is the runner script's own fallback default.
+
+_CONFIG_ROLE_KEYS = {
+    "claude": {
+        "planner":     ("GLUERUN_CLAUDE_PLANNER_MODEL", "GLUERUN_CLAUDE_PLANNER_EFFORT", "xhigh"),
+        "implementer": ("GLUERUN_CLAUDE_L2_MODEL", "GLUERUN_CLAUDE_L2_EFFORT", "medium"),
+        "auditor":     ("GLUERUN_CLAUDE_AUDITOR_MODEL", "GLUERUN_CLAUDE_AUDITOR_EFFORT", "xhigh"),
+        "decider":     ("GLUERUN_CLAUDE_DECIDER_MODEL", "GLUERUN_CLAUDE_DECIDER_EFFORT", None),
+    },
+    "codex": {
+        "planner":     ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_PLANNER_REASONING_EFFORT", "high"),
+        "implementer": ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_L2_REASONING_EFFORT", "medium"),
+        "auditor":     ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_AUDITOR_REASONING_EFFORT", "high"),
+        "decider":     ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_DECIDER_REASONING_EFFORT", "high"),
+    },
+}
+_CONFIG_MODEL_FALLBACK = {"claude": ("GLUERUN_CLAUDE_MODEL", "claude-opus-4-8"),
+                          "codex": ("GLUERUN_CODEX_MODEL", "gpt-5.5")}
+_CONFIG_EFFORT_FALLBACK = {"claude": "GLUERUN_CLAUDE_EFFORT", "codex": None}
+_CONFIG_LIMIT_KEYS = (("maxConcurrent", "GLUERUN_MAX_CONCURRENT"),
+                      ("maxDispatch", "GLUERUN_MAX_DISPATCH"),
+                      ("l1Parallel", "GLUERUN_ENABLE_L1_PARALLEL"),
+                      ("sliceBudget", "GLUERUN_L2_SLICE_BUDGET"),
+                      ("pairedAuditPct", "GLUERUN_PAIRED_AUDIT_PCT"))
+_CONFIG_FLAG_KEYS = (("ctxPacket", "GLUERUN_CTX_PACKET"),
+                     ("ctxRouting", "GLUERUN_CTX_ROUTING"),
+                     ("ctxArtifactScan", "GLUERUN_CTX_ARTIFACT_SCAN"),
+                     ("planCritique", "GLUERUN_PLAN_CRITIQUE"),
+                     ("plannerSession", "GLUERUN_PLANNER_SESSION"))
+
+
+def collect_config(repo: Path) -> dict[str, Any]:
+    """Resolved per-role model/effort + limits/flags for the Agents surface.
+    Precedence mirrors the engine: .gluerun-state/.env override (whitelisted
+    keys only — secrets are never read) > gluerun.config.json env{} > the
+    runner script's fallback default. Read-only."""
+    repo = repo.resolve()
+    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    cfg_env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+    runner = str(cfg.get("runner") or "codex-run.sh")
+    provider = "claude" if "claude" in runner else "codex"
+
+    role_keys = _CONFIG_ROLE_KEYS[provider]
+    fallback_model_key, fallback_model = _CONFIG_MODEL_FALLBACK[provider]
+    fallback_effort_key = _CONFIG_EFFORT_FALLBACK[provider]
+    wanted: set[str] = {fallback_model_key}
+    if fallback_effort_key:
+        wanted.add(fallback_effort_key)
+    for model_key, effort_key, _default in role_keys.values():
+        wanted.update((model_key, effort_key))
+    wanted.update(key for _name, key in _CONFIG_LIMIT_KEYS)
+    wanted.update(key for _name, key in _CONFIG_FLAG_KEYS)
+    overrides = parse_env_overrides(repo, wanted)
+
+    def resolve(key: str | None) -> tuple[str | None, str | None]:
+        """(value, tier) for one env key: env > config > None."""
+        if not key:
+            return None, None
+        if key in overrides and overrides[key] != "":
+            return overrides[key], "env"
+        val = cfg_env.get(key)
+        if isinstance(val, (str, int, float)) and str(val) != "":
+            return str(val), "config"
+        return None, None
+
+    roles: dict[str, Any] = {}
+    for role, (model_key, effort_key, effort_default) in role_keys.items():
+        model, model_src = resolve(model_key)
+        src_key = model_key
+        if model is None:
+            model, model_src = resolve(fallback_model_key)
+            src_key = fallback_model_key
+        if model is None:
+            model, model_src, src_key = fallback_model, "runner-default", fallback_model_key
+        effort, effort_src = resolve(effort_key)
+        effort_src_key = effort_key
+        if effort is None and fallback_effort_key:
+            effort, effort_src = resolve(fallback_effort_key)
+            effort_src_key = fallback_effort_key
+        if effort is None and effort_default is not None:
+            effort, effort_src, effort_src_key = effort_default, "runner-default", effort_key
+        roles[role] = {"model": model, "effort": effort,
+                       "source": {"model": src_key, "modelTier": model_src,
+                                  "effort": effort_src_key, "effortTier": effort_src}}
+
+    def bag(pairs: tuple) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for name, key in pairs:
+            val, _tier = resolve(key)
+            out[name] = val
+        return out
+
+    return {
+        "schema": "gluerun.codex.config.v0",
+        "generatedAt": utc_now(),
+        "runner": runner,
+        "provider": provider,
+        "roles": roles,
+        "limits": bag(_CONFIG_LIMIT_KEYS),
+        "flags": bag(_CONFIG_FLAG_KEYS),
+    }
+
+
+_CONFIG_CACHE = _ComputeCache(collect_config, 30.0)
+
+
+def load_config_view(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    return _CONFIG_CACHE.get(str(repo), repo)
+
+
+# --------------------------------------------------------------------------- #
 # Console adapter (gluerun.console-adapter.v0)                                     #
 # --------------------------------------------------------------------------- #
 #
@@ -4131,6 +4247,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/dag":
             self.send_json(load_dag_view(self.repo))
             return
+        if route == "/api/config":
+            self.send_json(load_config_view(self.repo))
+            return
         if route == "/api/timeline":
             query = parse_qs(parsed.query)
             since = (query.get("since", [""])[0] or "").strip()
@@ -4190,6 +4309,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--overview", action="store_true", help="Print the plan overview JSON and exit")
     parser.add_argument("--dag", action="store_true", help="Print the full DAG view JSON (nodes+gates+tasks+edges) and exit")
     parser.add_argument("--timeline", action="store_true", help="Print the execution timeline JSON (task intervals+gates+cycles) and exit")
+    parser.add_argument("--config", action="store_true", help="Print the resolved per-role runner config JSON and exit")
     return parser.parse_args(argv)
 
 
@@ -4277,6 +4397,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.timeline:
         print(json.dumps(collect_timeline(repo), indent=2))
+        return 0
+    if args.config:
+        print(json.dumps(collect_config(repo), indent=2))
         return 0
     Handler.repo = repo
     server = ThreadingHTTPServer((args.host, args.port), Handler)
