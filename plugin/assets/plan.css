@@ -29,6 +29,17 @@
   background: var(--action-bg);
   color: var(--action-fg);
 }
+/* Consoles nav button carries a small live-session count badge (C4). */
+#surface-nav button[data-surface="consoles"] { position: relative; }
+#surface-nav button[data-live]:not([data-live=""])::after {
+  content: attr(data-live);
+  position: absolute; top: -4px; right: -4px;
+  min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 600 9px var(--font-mono); line-height: 1;
+  color: #fff; background: var(--tone-green-solid);
+  border-radius: var(--radius-pill); border: 1px solid var(--surface-page);
+}
 
 /* ---- surfaces occupy the main grid cell; only the active one shows ---- */
 .surface { grid-area: main; min-height: 0; min-width: 0; }

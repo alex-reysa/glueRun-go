@@ -385,6 +385,9 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
       ? `<span>${esc(sub)}</span>${mono ? `<span class="mono">${esc(mono)}</span>` : ""}`
       : "";
     $("insp-pin").setAttribute("aria-pressed", String(S.pinnedId && S.pinnedId === id));
+    // "open console" is an L2-task-with-runId affordance only; renderTaskDetail
+    // re-shows it after this. Hide it for every other subject.
+    const cb = $("insp-console"); if (cb) { cb.hidden = true; cb.dataset.runid = ""; }
   }
 
   function renderInspector() {
@@ -662,6 +665,10 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
 
   function renderTaskDetail(d) {
     setInspHeader(d.id, d.title, `${d.area} · ${labelOf(d.state)}`, d.state, shortBranch(d.workerBranch));
+    // Task detail carries a runId → surface an "open console" jump to the Consoles
+    // surface (pinned + soloed on that run).
+    const cb = $("insp-console");
+    if (cb) { if (d.runId) { cb.hidden = false; cb.dataset.runid = d.runId; } else { cb.hidden = true; cb.dataset.runid = ""; } }
 
     // overview
     const deps = (d.dependsOn || []).map((dep) => {
@@ -1783,6 +1790,7 @@ import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sess
       if (S.selectedKind === "l1" && S.inspTab === "nodes") fetchAreaNodes(S.selectedId.replace(/^L1:/, ""));
     });
     $("insp-pin").addEventListener("click", () => { if (S.selectedKind === "l2") togglePin(S.selectedId); });
+    $("insp-console").addEventListener("click", () => { const r = $("insp-console").dataset.runid; if (r) location.hash = "#consoles/" + r; });
     $("insp-close").addEventListener("click", () => select("none", null));
     $("inspector-scrim").addEventListener("click", () => select("none", null));
     initInspectorSheet();
