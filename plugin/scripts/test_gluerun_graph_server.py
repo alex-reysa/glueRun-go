@@ -1768,6 +1768,37 @@ class AutonomateLogResolutionTests(unittest.TestCase):
         self.assertIn({"name": "autonomate.log", "kind": "plain"}, files)
 
 
+class SettingsOverlayTests(unittest.TestCase):
+    """/api/settings rows overlay gluerun.config.json env{} (the layer POST
+    writes to) so the System panel reflects config-set values and saves."""
+
+    def test_config_env_overlays_defaults_but_not_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".gluerun-state").mkdir()
+            (repo / "gluerun.config.json").write_text(json.dumps(
+                {"env": {"GLUERUN_MAX_CONCURRENT": "7", "GLUERUN_SLEEP": "45"}}))
+            (repo / ".gluerun-state/.env").write_text("GLUERUN_SLEEP=9\n")
+            view = srv.collect_settings_view(repo)
+            items = {it["envKey"]: it for g in view["groups"] for it in g["items"]}
+            conc = items["GLUERUN_MAX_CONCURRENT"]
+            self.assertEqual((conc["value"], conc["source"], conc["overridden"]),
+                             ("7", "config", True))
+            sleep = items["GLUERUN_SLEEP"]     # .env row keeps its env source
+            self.assertEqual((sleep["value"], sleep["source"]), ("9", "env"))
+
+    def test_post_response_settings_reflect_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".gluerun-state").mkdir()
+            (repo / "gluerun.config.json").write_text(json.dumps({"env": {}}))
+            status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "4"})
+            self.assertEqual(status, 200)
+            items = {it["envKey"]: it for g in payload["settings"] for it in g["items"]}
+            self.assertEqual(items["GLUERUN_MAX_CONCURRENT"]["value"], "4")
+            self.assertEqual(items["GLUERUN_MAX_CONCURRENT"]["source"], "config")
+
+
 class SettingsWriteTests(unittest.TestCase):
     """W1: apply_settings_changes validates + applies to gluerun.config.json env{}
     without touching any other key. collect_settings stays read-only."""

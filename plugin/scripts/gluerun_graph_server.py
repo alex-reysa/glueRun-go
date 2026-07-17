@@ -3956,18 +3956,42 @@ def apply_settings_changes(repo: Path, changes: Any) -> tuple[int, dict[str, Any
         "applied": normalized,
         "appliesAt": {k: _settings_applies_at(k) for k in normalized},
         "config": collect_config(repo),
-        "settings": collect_settings(repo),
+        "settings": _overlay_config_env(repo, collect_settings(repo)),
     }
 
 
+def _overlay_config_env(repo: Path, groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Overlay gluerun.config.json env{} onto collect_settings rows.
+
+    collect_settings (byte-pinned; untouched) only knows .env + shell defaults,
+    but the engine's authoritative layer — and the target POST /api/settings
+    writes to — is config env{}. Without this overlay the System panel shows
+    stale defaults for keys the config actually sets, and saved edits never
+    appear to land. A .env row keeps source "env"; otherwise a config-set key
+    wins over the shell default and reads source "config"."""
+    cfg = read_json(repo / "gluerun.config.json", None)
+    env = cfg.get("env") if isinstance(cfg, dict) and isinstance(cfg.get("env"), dict) else {}
+    if not env:
+        return groups
+    for group in groups:
+        for item in group.get("items") or []:
+            key = item.get("envKey")
+            if key in env and item.get("source") != "env":
+                item["value"] = str(env[key])
+                item["source"] = "config"
+                item["overridden"] = True
+    return groups
+
+
 def collect_settings_view(repo: Path) -> dict[str, Any]:
-    """GET /api/settings envelope: the read-only groups plus an appliesAt map for
-    every whitelisted (writable) key, so the UI can label when a change lands."""
+    """GET /api/settings envelope: the read-only groups (with config env{}
+    overlaid) plus an appliesAt map for every whitelisted (writable) key, so
+    the UI can label when a change lands."""
     whitelist, _kinds = _settings_write_spec()
     return {
         "schema": "gluerun.codex.settings.v0",
         "generatedAt": utc_now(),
-        "groups": collect_settings(repo),
+        "groups": _overlay_config_env(repo, collect_settings(repo)),
         "appliesAt": {k: _settings_applies_at(k) for k in sorted(whitelist)},
     }
 
