@@ -133,12 +133,17 @@ PY
 }
 
 run_ec=0
+# Decider runner output + session-meta are durable (0.6.0): the console
+# streams the log as a labeled pane; previously both went to /dev/null.
+decider_log="$run_dir/decider-codex.log"
+decider_meta="$run_dir/session-decider.json"
 (
   "$GLUERUN_RUNNER_BIN" --level readonly -C "$worktree" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \
-    --output-last-message "$verdict"
-) >/dev/null 2>&1 &
+    --output-last-message "$verdict" \
+    --session-meta "$decider_meta"
+) >>"$decider_log" 2>&1 &
 decider_pid=$!
 deadline=$((SECONDS + decider_timeout_sec))
 while kill -0 "$decider_pid" 2>/dev/null; do
@@ -154,6 +159,8 @@ done
 if [[ "$timed_out" != "yes" ]]; then
   wait "$decider_pid" || run_ec=$?
 fi
+gluerun_session_meta_finalize "$decider_meta" "decider" "$task_id" "$run_id" \
+  "$(basename "$GLUERUN_RUNNER_BIN")" "$(gluerun_prompt_sha "$prompt_file")" "" 1 || true
 
 if [[ "$timed_out" == "yes" ]]; then
   gluerun_decider_timeout_action

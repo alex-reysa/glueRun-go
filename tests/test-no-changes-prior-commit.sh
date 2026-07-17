@@ -114,6 +114,9 @@ out="$(run_drive env WRITE_MODE=fixed)" || fail "drive should accept (out: $out)
 events="$(cat "$root/.gluerun-state/events.ndjson")"
 assert_contains "$events" '"type":"l1.no_changes_reconciled"' "empty-diff retry reconciled"
 assert_contains "$events" '"type":"l1.task_accepted"' "task accepted after reconciled retry"
+# 0.6.0: the auditor's runner output must be durable in the run dir.
+ls "$root"/.gluerun-state/runs/*/auditor-codex.log >/dev/null 2>&1 \
+  || fail "auditor-codex.log not written by audit phase"
 
 # 2. Regression: a worker that writes nothing on a FRESH task still fails
 #    no-changes (truly no content vs base).

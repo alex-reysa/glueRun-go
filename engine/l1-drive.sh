@@ -933,6 +933,9 @@ run_audit_phase() {
   local reviewer_resume_failed="no"
 
   local audit_parsed="no" audit_try infra_reason
+  # Auditor runner output is durable (0.6.0): the console streams it as a
+  # labeled session pane; previously it went to /dev/null.
+  local auditor_log="$run_dir/auditor-codex.log"
   for ((audit_try=0; audit_try<=audit_infra_max; audit_try++)); do
     if [[ "$audit_try" -gt 0 ]]; then
       gluerun_append_event "audit.infra_retry" "auditor infra failure; re-running auditor only" \
@@ -950,7 +953,8 @@ run_audit_phase() {
       echo "  running auditor via $audit_runner_basename (read-only)..."
     fi
     audit_rc=0
-    "$GLUERUN_RUNNER_BIN" "${audit_run_args[@]}" >/dev/null 2>&1 || audit_rc=$?
+    printf -- '--- auditor try %s (attempt %s) ---\n' "$audit_try" "$n" >>"$auditor_log" || true
+    "$GLUERUN_RUNNER_BIN" "${audit_run_args[@]}" >>"$auditor_log" 2>&1 || audit_rc=$?
 
     # Resume-refused/failure (86): fall back to FRESH within the SAME try (don't
     # consume an infra retry on a resume miss). Pure optimization miss.
@@ -961,9 +965,10 @@ run_audit_phase() {
       reviewer_strategy="fresh"; reviewer_strategy_reason="resume-failed"
       echo "  auditor resume failed; falling back to fresh run..."
       audit_rc=0
+      printf -- '--- auditor resume-fallback (attempt %s) ---\n' "$n" >>"$auditor_log" || true
       "$GLUERUN_RUNNER_BIN" --level readonly -C "$worktree" --run-id "$run_id" \
         --prompt-file "$active_audit_prompt" --output-last-message "$audit_record" \
-        --session-meta "$session_meta_reviewer" >/dev/null 2>&1 || audit_rc=$?
+        --session-meta "$session_meta_reviewer" >>"$auditor_log" 2>&1 || audit_rc=$?
     fi
     # Classify this try. rc 124 = runner timeout (claude-run kills the tree).
     if [[ "$audit_rc" -eq 124 ]]; then
