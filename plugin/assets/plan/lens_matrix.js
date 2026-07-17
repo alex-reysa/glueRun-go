@@ -12,16 +12,28 @@ import { esc, escAttr, icon } from "../app.js";
 import { bus } from "../core/bus.js";
 import { getDag } from "./data.js";
 
-const CELL = 27;
 const LABEL_W = 178;
 const TOP_HEADER = 78;
+const PAD = 24;             // grid padding + scrollbar allowance
+const CELL_MIN = 22, CELL_MAX = 44;
 const TONE = { ink: "var(--n-800)", blue: "var(--tone-blue-dot)", green: "var(--tone-green-dot)" };
 
+const clamp = (lo, hi, v) => Math.max(lo, Math.min(hi, v));
+
 let pane = null, sigLast = null, selectedId = null;
+let CELL = 27;              // computed per build from the pane width
 let order = [], nodesById = {}, depSets = {}, dependentsMap = {};
 let depCellEls = [], rowEls = {}, colHeadEls = {}, diagEls = {}, detailEl = null;
+let resizeObs = null, resizeTimer = null;
 
 function stageIndexMap(dag) { const m = {}; (dag.stages || []).forEach((s, i) => { m[s.id] = i; }); return m; }
+
+// Adaptive cell size: fill the pane width, clamped to [22, 44]. Below 22 marks
+// become invisible; above 44 the grid stops feeling like a matrix.
+function computeCell(n) {
+  const paneW = (pane && pane.clientWidth) || 1200;
+  return clamp(CELL_MIN, CELL_MAX, Math.floor((paneW - LABEL_W - PAD) / Math.max(1, n)));
+}
 
 function build() {
   const dag = getDag();
@@ -34,8 +46,13 @@ function build() {
   for (const n of dag.nodes) depSets[n.id] = new Set(n.dependsOn || []);
   for (const n of dag.nodes) for (const d of n.dependsOn || []) (dependentsMap[d] = dependentsMap[d] || []).push(n.id);
 
+  CELL = computeCell(order.length);
   const stageStart = (i) => i === 0 || order[i].stage !== order[i - 1].stage;
   const width = LABEL_W + order.length * CELL + 2;
+  const paneW = (pane && pane.clientWidth) || width;
+  // center only when the grid is narrower than the pane (small N); otherwise
+  // left-align and let the container scroll horizontally.
+  const centered = width < paneW - 2;
 
   // column header row
   let head = `<div class="pm-colhead" style="width:${LABEL_W}px;flex:none"></div>`;
@@ -73,7 +90,7 @@ function build() {
     ? `<div class="pm-footer"><span>All marks fall below the diagonal — every dependency points to an earlier node, so the plan is provably acyclic.</span></div>`
     : `<div class="pm-footer pm-footer-warn"><span>${icon("i-alert")} a dependency cycle was detected — the plan is not a DAG.</span></div>`;
 
-  pane.innerHTML = `<div class="plan-matrix"><div class="pm-grid" style="width:${width}px">
+  pane.innerHTML = `<div class="plan-matrix"><div class="pm-grid${centered ? " pm-centered" : ""}" style="width:${width}px;--pm-cell:${CELL}px">
     <div class="pm-colhead-row" style="height:${TOP_HEADER}px">${head}</div>
     ${rows}
     ${footer}
@@ -169,18 +186,37 @@ function wire() {
   grid.addEventListener("pointerleave", () => repaint(null));
 }
 
+// The computed CELL folds into the signature so a width-band crossing rebuilds
+// (a live 10s poll at the same width — same CELL — does not).
 function currentSig() {
   const dag = getDag();
   if (!dag) return "nodag";
-  return JSON.stringify(dag.nodes.map((n) => [n.id, (n.gate || {}).status, (n.tasks && n.tasks.counts && n.tasks.counts.active) || 0, n.kind]));
+  const cell = computeCell(dag.nodes.length);
+  return JSON.stringify([cell, dag.nodes.map((n) => [n.id, (n.gate || {}).status, (n.tasks && n.tasks.counts && n.tasks.counts.active) || 0, n.kind])]);
+}
+
+function observeResize() {
+  if (resizeObs || typeof ResizeObserver === "undefined" || !pane) return;
+  resizeObs = new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const dag = getDag(); if (!dag || !pane) return;
+      if (computeCell(dag.nodes.length) !== CELL) { build(); sigLast = currentSig(); }
+    }, 120);
+  });
+  resizeObs.observe(pane);
 }
 
 export const lens = {
-  mount(p) { pane = p; sigLast = null; build(); },
+  mount(p) { pane = p; sigLast = null; build(); observeResize(); },
   update() { if (!pane) return; const sig = currentSig(); if (sig !== sigLast) { build(); sigLast = sig; } },
   applySelection(id) {
     selectedId = id; repaint(null);
     const el = diagEls[id]; if (el) el.scrollIntoView({ block: "center", inline: "center" });
   },
-  unmount() { pane = null; sigLast = null; depCellEls = []; },
+  unmount() {
+    if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+    clearTimeout(resizeTimer);
+    pane = null; sigLast = null; depCellEls = [];
+  },
 };

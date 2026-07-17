@@ -314,7 +314,8 @@
 
 /* ---- Matrix lens (ported PlanDependencyMatrix) ---- */
 .plan-matrix { position: relative; padding: 20px 26px 24px; }
-.pm-grid { margin: 0 auto; }
+.pm-grid { --pm-cell: 27px; margin: 0; }
+.pm-grid.pm-centered { margin: 0 auto; }
 .pm-colhead-row { display: flex; align-items: flex-end; }
 .pm-colhead-cell {
   flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px;
@@ -328,7 +329,7 @@
 .pm-colhead-cell[data-hover="true"] .pmch-id { color: var(--text-primary); font-weight: 600; }
 .pm-row { display: flex; align-items: stretch; }
 .pm-rowlabel {
-  flex: none; display: flex; align-items: center; gap: 9px; height: 27px;
+  flex: none; display: flex; align-items: center; gap: 9px; height: var(--pm-cell);
   padding: 0 10px 0 8px; cursor: pointer; border: none; background: transparent; text-align: left;
 }
 .pm-rowlabel .pmrl-id { font-size: 9.5px; color: var(--text-faint); width: 26px; flex: none; }
@@ -337,8 +338,8 @@
 .pm-rowlabel .pmrl-gate { margin-left: auto; flex: none; }
 .pm-cell { flex: none; display: flex; align-items: center; justify-content: center; padding: 0; }
 .pm-cell.pm-diag { cursor: pointer; background: var(--surface-panel); border-top: 0; }
-.pm-mark { width: 13px; height: 13px; border-radius: 3.5px; background: var(--n-800); opacity: 0.82; transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
-.pm-diagpill { width: 19px; height: 19px; border-radius: var(--radius-pill); display: flex; align-items: center; justify-content: center; outline-offset: 2px; }
+.pm-mark { width: calc(var(--pm-cell) * 0.5); height: calc(var(--pm-cell) * 0.5); border-radius: 3.5px; background: var(--n-800); opacity: 0.82; transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+.pm-diagpill { width: calc(var(--pm-cell) * 0.72); height: calc(var(--pm-cell) * 0.72); border-radius: var(--radius-pill); display: flex; align-items: center; justify-content: center; outline-offset: 2px; }
 .pm-diagpill.is-failed { outline: 2px solid var(--tone-red-dot); }
 .pm-diag[data-selected="true"] .pm-diagpill { outline: 2px solid var(--ink); }
 .pm-diagpill .pmd-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); }
