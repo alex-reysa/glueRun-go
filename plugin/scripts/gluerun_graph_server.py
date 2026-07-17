@@ -1966,7 +1966,9 @@ OVERLAY_ROW_LIMIT_MAX = 400
 OVERLAY_ROW_LIMIT_DEFAULT = 120
 # A DAG node id (e.g. "D6.storage_spec", "S0.storage_substrate_base"). Traversal
 # safety is enforced by registry membership in collect_node_detail, not the regex.
-NODE_ID_RE = re.compile(r"^[A-Z][0-9]+\.[A-Za-z0-9_]+$")
+# Accepts both legacy "D1.contract"-style ids and slug ids ("ctx-loader") —
+# real consumer DAGs use hyphenated slugs; the old pattern 400'd them.
+NODE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,64}$")
 AREA_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 DAG_REL = "docs/orchestration/dag.v0.json"
 STAGE_DOC_REL = "docs/plan-and-dag.md"
@@ -3194,6 +3196,184 @@ def load_overview(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# /api/dag — full DAG view for the Plan surface (gluerun.codex.dag.v0)        #
+# --------------------------------------------------------------------------- #
+
+_DAG_TASK_BUCKETS = ("integrated", "active", "ready", "blocked", "failed", "other")
+_DAG_ACTIVE_STATUSES = {"running", "planned", "dispatched", "needs-review",
+                        "accepted", "in-progress", "active"}
+_DAG_NODE_LINE_RE = re.compile(r"^dag node:\s*(\S+)", re.IGNORECASE)
+
+
+def _dag_task_bucket(status: str | None) -> str:
+    s = (status or "").lower()
+    if s in DONE_STATUSES:
+        return "integrated"
+    if s in _DAG_ACTIVE_STATUSES:
+        return "active"
+    if s == "ready":
+        return "ready"
+    if s in BLOCKED_STATUSES:
+        return "blocked"
+    if s in FAILED_STATUSES:
+        return "failed"
+    return "other"
+
+
+def _task_header_node(path_str: str) -> str | None:
+    """`DAG node:` header from a task file head (0.5.0+ tasks carry it)."""
+    try:
+        with open(path_str, encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i > 40:
+                    break
+                m = _DAG_NODE_LINE_RE.match(line)
+                if m:
+                    return strip_ticks(m.group(1))
+    except OSError:
+        pass
+    return None
+
+
+def collect_dag_view(repo: Path) -> dict[str, Any]:
+    """Full DAG for the Plan surface lenses: registry nodes merged with gate
+    results, per-node task rollups, L1 leases, the live frontier, and stage/
+    area swimlane metadata. Task->node attribution comes from events (the
+    newest event carrying data.node wins) with the `DAG node:` task header as
+    fallback. Pure filesystem; no subprocesses. Empty repo -> empty arrays."""
+    repo = repo.resolve()
+    raw = read_json(repo / DAG_REL, {}) or {}
+    by_id = (load_dag_registry(repo).get("by_id") or {})
+    validate_env = validate_dag_native(repo)
+    validate = {"ok": bool(validate_env.get("ok")),
+                "errors": ([] if validate_env.get("ok")
+                           else [e for e in str(validate_env.get("stdout") or "").split("; ") if e])}
+
+    events_idx = load_events_index(repo)
+    task_node: dict[str, str] = {}
+    for tid, evs in (events_idx.get("by_task") or {}).items():
+        for ev in evs:
+            node = _ev_data(ev).get("node")
+            if node:
+                task_node[tid] = str(node)
+
+    tasks = collect_tasks(repo)
+    leases = collect_leases(repo)
+    lease_status = {str(l.get("taskId")): str(l.get("status") or "") for l in leases if l.get("taskId")}
+    lease_area = {str(l.get("taskId")): str(l.get("area") or "") for l in leases if l.get("taskId")}
+
+    status_by_task: dict[str, str] = {}
+    area_by_task: dict[str, str] = {}
+    for t in tasks:
+        tid = str(t.get("id"))
+        status_by_task[tid] = lease_status.get(tid) or str(t.get("status") or "unknown")
+        area_by_task[tid] = str(t.get("area") or "") or lease_area.get(tid, "")
+        if tid not in task_node:
+            node = _task_header_node(str(t.get("path") or ""))
+            if node:
+                task_node[tid] = node
+    for tid, status in lease_status.items():
+        status_by_task.setdefault(tid, status)
+        area_by_task.setdefault(tid, lease_area.get(tid, ""))
+
+    node_tasks: dict[str, list[str]] = {}
+    for tid, node in task_node.items():
+        if tid in status_by_task and node in by_id:
+            node_tasks.setdefault(node, []).append(tid)
+
+    def counts_of(tids: list[str]) -> dict[str, int]:
+        counts = {bucket: 0 for bucket in _DAG_TASK_BUCKETS}
+        counts["total"] = len(tids)
+        for tid in tids:
+            counts[_dag_task_bucket(status_by_task.get(tid))] += 1
+        return counts
+
+    l1_by_node = {str(l.get("node")): l for l in collect_l1_leases(repo)}
+    frontier_ids = {str(e.get("node")) for e in (compute_frontier_native(repo).get("frontier") or [])}
+
+    nodes_out: list[dict[str, Any]] = []
+    node_out_by_id: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, str]] = []
+    stage_nodes: dict[str, list[str]] = {}
+    area_nodes: dict[str, list[str]] = {}
+    for nid, node in by_id.items():
+        try:
+            gate = _load_gate_for_node(repo, nid)
+        except Exception:
+            gate = None
+        if isinstance(gate, dict):
+            gate_out: dict[str, Any] = {"status": str(gate.get("status") or "unknown"),
+                                        "recordedAt": gate.get("recordedAt"),
+                                        "evidenceClass": gate.get("evidenceClass"),
+                                        "authoritative": gate.get("authoritative")}
+        else:
+            gate_out = {"status": "absent"}
+        tids = sorted(node_tasks.get(nid, []))
+        entry: dict[str, Any] = {
+            "id": nid,
+            "stage": node.get("stage"), "area": node.get("area"),
+            "layer": node.get("layer"), "kind": node.get("kind"),
+            "dependsOn": [str(d) for d in (node.get("dependsOn") or []) if str(d)],
+            "requiredCompletion": node.get("requiredCompletion"),
+            "description": node.get("description"),
+            "gate": gate_out,
+            "tasks": {"taskIds": tids, "counts": counts_of(tids)},
+            "frontier": nid in frontier_ids,
+        }
+        lease = l1_by_node.get(nid)
+        if isinstance(lease, dict):
+            entry["l1Lease"] = {"status": lease.get("status"),
+                                "active": bool(lease.get("active")),
+                                "updatedAt": lease.get("updatedAt")}
+        nodes_out.append(entry)
+        node_out_by_id[nid] = entry
+        for dep in entry["dependsOn"]:
+            edges.append({"from": dep, "to": nid})
+        if entry["stage"]:
+            stage_nodes.setdefault(str(entry["stage"]), []).append(nid)
+        if entry["area"]:
+            area_nodes.setdefault(str(entry["area"]), []).append(nid)
+
+    stages = []
+    for sid in sorted(stage_nodes, key=_stage_sort_key):
+        ids = sorted(stage_nodes[sid])
+        passed = sum(1 for i in ids if node_out_by_id[i]["gate"]["status"] == "passed")
+        has_active = any(node_out_by_id[i]["tasks"]["counts"]["active"] for i in ids)
+        status = ("complete" if passed == len(ids)
+                  else "in-progress" if (passed or has_active) else "pending")
+        stages.append({"id": sid, "nodes": ids, "total": len(ids), "passed": passed,
+                       "status": status})
+
+    area_task_ids: dict[str, list[str]] = {}
+    for tid, area in area_by_task.items():
+        if area:
+            area_task_ids.setdefault(area, []).append(tid)
+    areas = [{"id": aid, "nodes": sorted(area_nodes[aid]),
+              "taskCounts": counts_of(area_task_ids.get(aid, []))}
+             for aid in sorted(area_nodes)]
+
+    return {
+        "schema": "gluerun.codex.dag.v0",
+        "generatedAt": utc_now(),
+        "validate": validate,
+        "layers": [str(x) for x in raw.get("layers")] if isinstance(raw.get("layers"), list) else [],
+        "kinds": [str(x) for x in raw.get("kinds")] if isinstance(raw.get("kinds"), list) else [],
+        "stages": stages,
+        "areas": areas,
+        "nodes": nodes_out,
+        "edges": edges,
+    }
+
+
+_DAG_VIEW_CACHE = _ComputeCache(collect_dag_view, 6.0)
+
+
+def load_dag_view(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    return _DAG_VIEW_CACHE.get(str(repo), repo)
+
+
+# --------------------------------------------------------------------------- #
 # Console adapter (gluerun.console-adapter.v0)                                     #
 # --------------------------------------------------------------------------- #
 #
@@ -3672,6 +3852,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(detail)
             return
+        if route == "/api/dag":
+            self.send_json(load_dag_view(self.repo))
+            return
         if route == "/api/overview":
             self.send_json(load_overview(self.repo))
             return
@@ -3723,6 +3906,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--area", help="Print one area's nodes JSON (e.g. artifact) and exit")
     parser.add_argument("--events", action="store_true", help="Print the live event overlay JSON and exit")
     parser.add_argument("--overview", action="store_true", help="Print the plan overview JSON and exit")
+    parser.add_argument("--dag", action="store_true", help="Print the full DAG view JSON (nodes+gates+tasks+edges) and exit")
     return parser.parse_args(argv)
 
 
@@ -3804,6 +3988,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.overview:
         print(json.dumps(collect_overview(repo), indent=2))
+        return 0
+    if args.dag:
+        print(json.dumps(collect_dag_view(repo), indent=2))
         return 0
     Handler.repo = repo
     server = ThreadingHTTPServer((args.host, args.port), Handler)

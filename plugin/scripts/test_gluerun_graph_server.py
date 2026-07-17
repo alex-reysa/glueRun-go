@@ -1397,6 +1397,89 @@ class AssetRouteTests(unittest.TestCase):
             self.assertIsNone(srv.resolve_asset(name), name)
 
 
+class CollectDagViewTests(unittest.TestCase):
+    """/api/dag (0.6.0): registry + gates + task rollups + edges + swimlanes."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / "docs/orchestration/tasks").mkdir(parents=True)
+        (repo / "docs/orchestration/gates").mkdir(parents=True)
+        (repo / ".gluerun-state/leases").mkdir(parents=True)
+        (repo / ".gluerun-state/l1-leases").mkdir(parents=True)
+        return repo
+
+    def _write_dag(self, repo: Path) -> None:
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+            "schema": "gluerun.orchestration.dag.v0",
+            "layers": ["contract", "runtime"], "kinds": ["contract", "runtime"],
+            "nodes": [
+                {"id": "alpha", "stage": "S0-base", "area": "core", "layer": "contract",
+                 "kind": "contract", "dependsOn": [], "requiredCompletion": "x"},
+                {"id": "beta", "stage": "S1-next", "area": "core", "layer": "runtime",
+                 "kind": "runtime", "dependsOn": ["alpha"], "requiredCompletion": "y"},
+            ],
+        }))
+
+    def test_full_view(self) -> None:
+        repo = self._repo()
+        self._write_dag(repo)
+        (repo / "docs/orchestration/gates/alpha.gate-result.json").write_text(json.dumps(
+            {"node": "alpha", "status": "passed", "authoritative": True,
+             "evidenceClass": "deterministic-proof", "recordedAt": "2026-07-11T00:00:00Z"}))
+        # TASK-0001 attributed via events; TASK-0002 via the DAG node: header.
+        (repo / "docs/orchestration/tasks/TASK-0001.md").write_text(
+            "# TASK-0001: first\n\nStatus: integrated\nArea: core\n")
+        (repo / "docs/orchestration/tasks/TASK-0002.md").write_text(
+            "# TASK-0002: second\n\nStatus: ready\nArea: core\nDAG node: beta\n")
+        (repo / ".gluerun-state/leases/TASK-0001.json").write_text(json.dumps(
+            {"taskId": "TASK-0001", "area": "core", "status": "integrated"}))
+        (repo / ".gluerun-state/events.ndjson").write_text(json.dumps(
+            {"ts": "2026-07-10T00:00:00Z", "type": "planner.staged",
+             "data": {"taskId": "TASK-0001", "node": "alpha", "area": "core"}}) + "\n")
+        (repo / ".gluerun-state/l1-leases/beta.json").write_text(json.dumps(
+            {"node": "beta", "status": "planning", "updatedAt": "2026-07-10T01:00:00Z"}))
+
+        view = srv.collect_dag_view(repo)
+        self.assertEqual(view["schema"], "gluerun.codex.dag.v0")
+        self.assertTrue(view["validate"]["ok"])
+        self.assertEqual(view["edges"], [{"from": "alpha", "to": "beta"}])
+        by_id = {n["id"]: n for n in view["nodes"]}
+        self.assertEqual(by_id["alpha"]["gate"]["status"], "passed")
+        self.assertEqual(by_id["alpha"]["gate"]["evidenceClass"], "deterministic-proof")
+        self.assertEqual(by_id["alpha"]["tasks"]["taskIds"], ["TASK-0001"])
+        self.assertEqual(by_id["alpha"]["tasks"]["counts"]["integrated"], 1)
+        self.assertEqual(by_id["beta"]["gate"]["status"], "absent")
+        self.assertEqual(by_id["beta"]["tasks"]["taskIds"], ["TASK-0002"])
+        self.assertEqual(by_id["beta"]["tasks"]["counts"]["ready"], 1)
+        self.assertTrue(by_id["beta"]["frontier"])   # alpha passed -> beta on frontier
+        self.assertFalse(by_id["alpha"]["frontier"])
+        self.assertEqual(by_id["beta"]["l1Lease"]["status"], "planning")
+        self.assertTrue(by_id["beta"]["l1Lease"]["active"])
+        stages = {s["id"]: s for s in view["stages"]}
+        self.assertEqual(stages["S0-base"]["status"], "complete")
+        self.assertEqual(stages["S1-next"]["passed"], 0)
+        self.assertEqual(view["areas"][0]["id"], "core")
+        self.assertEqual(view["areas"][0]["taskCounts"]["total"], 2)
+        self.assertEqual(view["layers"], ["contract", "runtime"])
+
+    def test_empty_repo(self) -> None:
+        repo = self._repo()
+        view = srv.collect_dag_view(repo)
+        self.assertEqual(view["nodes"], [])
+        self.assertEqual(view["edges"], [])
+        self.assertEqual(view["stages"], [])
+        self.assertEqual(view["areas"], [])
+        self.assertFalse(view["validate"]["ok"])
+
+    def test_node_id_re_accepts_slugs(self) -> None:
+        for nid in ("ctx-loader", "D1.contract", "planner-store", "s7.eval-x"):
+            self.assertTrue(srv.NODE_ID_RE.match(nid), nid)
+        for bad in ("", "-lead", "a/b", "a b"):
+            self.assertFalse(srv.NODE_ID_RE.match(bad), bad)
+
+
 class AutonomateLogResolutionTests(unittest.TestCase):
     """The engine's --detach loop writes autonomate.log; the legacy name is
     autonomate.out.log. The server follows whichever exists (newest wins)."""
