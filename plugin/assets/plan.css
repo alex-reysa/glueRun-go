@@ -313,6 +313,73 @@
 .pm-footer-warn .icon { width: 14px; height: 14px; }
 .pm-detail { right: 26px; bottom: 22px; }
 
+/* ---- Timeline lens (flagship) ---- */
+.plan-tl-scroll { height: 100%; overflow: auto; }
+.plan-tl { position: relative; }
+.tl-bg { position: absolute; top: 0; z-index: 0; }
+.tl-overlay { position: absolute; top: 0; pointer-events: none; z-index: 6; overflow: visible; }
+.tl-flow { position: relative; z-index: 1; }
+.tl-row { display: flex; align-items: stretch; }
+.tl-gutter {
+  position: sticky; left: 0; flex: 0 0 210px; width: 210px; z-index: 5;
+  background: var(--surface-panel); border-right: 1px solid var(--border-subtle);
+  display: flex; align-items: center; gap: 8px; padding: 0 10px; overflow: hidden;
+}
+.tl-track { position: relative; flex: 1 1 auto; min-width: 0; }
+.tl-axis-spacer .tl-gutter, .tl-corner { border-bottom: 1px solid var(--border-default); background: var(--surface-panel); }
+.tl-axis-spacer .tl-track { border-bottom: 1px solid var(--border-default); }
+.tl-arearow .tl-gutter { border-top: 1px solid var(--border-default); }
+.tl-area-head { cursor: pointer; border: 0; background: var(--surface-soft); text-align: left; }
+.tl-area-head .tl-area-chev { width: 12px; height: 12px; display: inline-flex; color: var(--text-muted); transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease-out); flex: none; }
+.tl-area-head[aria-expanded="false"] .tl-area-chev { transform: rotate(0deg); }
+.tl-area-head .tl-area-name { font: 600 12px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-area-head .tl-area-meta { font-size: 10px; color: var(--text-meta); margin-left: auto; flex: none; }
+.tl-arearow .tl-area-band { background: var(--surface-soft); border-top: 1px solid var(--border-default); }
+.tl-node-gutter { cursor: pointer; border: 0; background: transparent; text-align: left; }
+.tl-node-gutter:hover { background: var(--surface-hover); }
+.tl-node-gutter .tl-node-id { font-size: 10.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-heat-gutter { font-size: 10px; color: var(--text-faint); font-family: var(--font-mono); }
+.tl-lane, .tl-heatline { overflow: visible; }
+.tl-heat { position: absolute; top: 13px; height: 3px; background: var(--n-400); border-radius: 2px; }
+
+.tl-bar {
+  position: absolute; height: 22px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; gap: 5px; padding: 0 7px; overflow: visible;
+  background: var(--ink); color: #fff; cursor: pointer; box-shadow: var(--shadow-xs);
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.tl-bar .tl-bar-label { font: 500 10.5px var(--font-sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-bar .tl-bar-label.tl-label-out { position: absolute; left: calc(100% + 6px); color: var(--text-muted); overflow: visible; }
+.tl-bar .tl-retry { font: 600 8px var(--font-mono); opacity: 0.8; flex: none; }
+.tl-s-integrated { background: var(--ink); color: #fff; }
+.tl-s-active { background: var(--ink); color: #fff; }
+.tl-s-live { background: var(--ink); color: #fff; animation: pm-plan-ring 1.9s ease-out infinite; }
+.tl-s-failed { background: var(--tone-red-bg); color: var(--tone-red-fg); border-left: 3px solid var(--tone-red-dot); box-shadow: none; }
+.tl-s-awaiting { background: var(--ink); color: #fff; opacity: 0.7; border-bottom: 2px solid var(--tone-blue-dot); }
+.tl-bar.tl-amber { border-left: 3px solid var(--tone-amber-dot); }
+.tl-retry-link { position: absolute; height: 0; border-top: 1px dotted var(--n-400); }
+.tl-gate {
+  position: absolute; width: 12px; height: 12px; transform: rotate(45deg);
+  background: var(--surface-panel); border: 1.5px solid var(--tone-coral-dot); border-radius: 2px;
+  display: flex; align-items: center; justify-content: center;
+}
+.tl-gate.passed { background: var(--tone-coral-dot); }
+.tl-gate .icon { width: 9px; height: 9px; color: #fff; transform: rotate(-45deg); }
+
+/* axis background */
+.tl-hourline { position: absolute; top: 0; width: 1px; background: var(--border-subtle); }
+.tl-dayrule { position: absolute; top: 0; width: 1px; background: var(--border-strong); }
+.tl-daylabel { position: absolute; top: 24px; font: 700 9px var(--font-sans); letter-spacing: 0.08em; color: var(--text-meta); }
+.tl-break { position: absolute; top: 0; overflow: hidden; border-left: 1px dotted var(--n-300); border-right: 1px dotted var(--n-300); }
+.tl-break .tl-break-l1, .tl-break .tl-break-l2 { position: absolute; top: 0; bottom: 0; left: 8px; width: 1.5px; background: var(--n-300); transform: skewX(-18deg); }
+.tl-break .tl-break-l2 { left: 15px; }
+.tl-break .tl-break-lbl { position: absolute; top: 40px; left: 50%; transform: translateX(-50%) rotate(90deg); font: 400 8.5px var(--font-mono); color: var(--text-faint); white-space: nowrap; }
+.tl-now { position: absolute; top: 0; width: 0; border-left: 1.5px dashed var(--ink); z-index: 3; }
+.tl-now .tl-now-cap { position: absolute; top: 4px; left: 2px; font: 700 8.5px var(--font-sans); letter-spacing: 0.06em; color: var(--ink); }
+.tl-cycle-strip { position: absolute; top: 0; left: 0; height: 4px; }
+.tl-cycle { position: absolute; top: 0; height: 4px; background: var(--n-100); }
+.tl-detail { right: 26px; bottom: 22px; }
+
 /* responsive — collapse the aside first, then the lens nav */
 @media (max-width: 1100px) {
   #plan-aside { width: 300px; flex-basis: 300px; }
