@@ -10,6 +10,8 @@
 // on. Body indentation preserved from the IIFE to keep the diff reviewable.
 
 import { bus } from "./core/bus.js";
+import { fetchPaneLines, resetPane, scrollPaneToBottom } from "./core/term-core.js";
+import { subscribe as subscribeSessions, startFeed, pokeFeed } from "./core/sessions-feed.js";
 
   const POLL_MS = 10000;
   const $ = (id) => document.getElementById(id);
@@ -1375,10 +1377,9 @@ import { bus } from "./core/bus.js";
   // Always-on session terminal in the work dock. Polls /api/sessions every 2s
   // (independent of the 10s graph snapshot) and incrementally tails each visible
   // pane's log via a byte cursor. Strict read-only observer — it never writes.
-  const TERM_POLL_MS = 2000;
-  const TERM_MAX_LINES = 600;        // per-pane ring-buffer cap (DOM nodes)
-  const TERM_LINE_LIMIT = 500;       // initial tail size requested from the server
-  const TERM_BACKLOG_SNAP = 1000000; // bytes behind EOF before we snap to the live tail
+  // Per-pane streaming (ring-buffer caps, byte-cursor fetch, row rendering) now
+  // lives in core/term-core.js; the /api/sessions poll lives in core/sessions-feed.js.
+  // This dock is one subscriber of the shared feed.
 
   const T = {
     sessions: [],
@@ -1420,25 +1421,19 @@ import { bus } from "./core/bus.js";
     return T.solo ? ids.slice(0, 1) : ids.slice(0, 3);
   }
 
-  async function termFetchSessions() {
-    if (T.fetchingSessions) return;
-    T.fetchingSessions = true;
-    try {
-      const res = await fetch("/api/sessions", { cache: "no-store" });
-      if (!res.ok) throw new Error("http " + res.status);
-      const data = await res.json();
-      T.sessions = data.sessions || [];
-      T.auto = data.auto || T.auto;
-      T.generatedAt = data.generatedAt || null; // drive age display off the 2s feed, not the 10s snapshot
-      T.sessById = new Map(T.sessions.map((s) => [s.id, s]));
-      renderTermBar();
-      renderTermChips();
-      reconcilePanes();
-    } catch (e) {
-      /* keep last good session list; a transient poll miss must not blank the dock */
-    } finally {
-      T.fetchingSessions = false;
-    }
+  // Feed subscriber: the shared 2s /api/sessions poller pushes state here. We mirror
+  // it into T (so the rest of the dock reads the same fields as before), re-render the
+  // bar/chips/panes, then poll each visible pane's tail — the old termTick cadence,
+  // now driven by one poller instead of the dock's own fetch.
+  function termOnFeed(state) {
+    T.sessions = state.sessions || [];
+    T.auto = state.auto || T.auto;
+    T.generatedAt = state.generatedAt || null; // drive age display off the 2s feed, not the 10s snapshot
+    T.sessById = state.byId || new Map(T.sessions.map((s) => [s.id, s]));
+    renderTermBar();
+    renderTermChips();
+    reconcilePanes();
+    termPollLines();
   }
 
   function renderTermBar() {
@@ -1530,121 +1525,18 @@ import { bus } from "./core/bus.js";
 
   function termPollLines() { for (const id of T.visible) termFetchLines(id); }
 
-  async function termFetchLines(id) {
-    const pane = T.panes.get(id); if (!pane || pane.inflight) return;
-    if (pane.raw !== T.raw) { resetPane(pane); pane.raw = T.raw; } // raw toggled — reload
-    pane.inflight = true;
-    try {
-      const p = new URLSearchParams();
-      if (pane.cursor != null) p.set("cursor", String(pane.cursor));
-      p.set("limit", String(TERM_LINE_LIMIT));
-      if (T.raw) p.set("raw", "1");
-      const res = await fetch("/api/session/" + encodeURIComponent(id) + "?" + p.toString(), { cache: "no-store" });
-      if (!res.ok) throw new Error("http " + res.status);
-      const data = await res.json();
-      const fresh = data.reset || pane.cursor == null;
-      if (fresh) clearPaneBody(pane);
-      appendLines(pane, data.lines || [], fresh);
-      pane.cursor = data.cursor;
-      pane.loaded = true;
-      // Far behind a bursty writer (forward reads advance one window at a time)?
-      // Snap to the live tail next poll instead of crawling — show "now", not history.
-      if (data.size != null && data.size - data.cursor > TERM_BACKLOG_SNAP) pane.cursor = null;
-    } catch (e) {
-      if (!pane.loaded) pane.body.innerHTML = `<div class="term-pane-loading">could not load session</div>`;
-    } finally {
-      pane.inflight = false;
-    }
-  }
-
-  function resetPane(pane) { pane.cursor = null; clearPaneBody(pane); }
-  function clearPaneBody(pane) { pane.body.innerHTML = ""; pane.lineEls.clear(); pane.count = 0; pane.atBottom = true; }
-
-  function makeNode(html) {
-    const t = document.createElement("template");
-    t.innerHTML = html.trim();
-    return t.content.firstElementChild;
-  }
-
-  function appendLines(pane, lines, isInitial) {
-    if (!lines.length) return;
-    const wasBottom = pane.atBottom;
-    const loading = pane.body.querySelector(".term-pane-loading"); if (loading) loading.remove();
-    for (const ln of lines) {
-      const node = makeNode(termLineHtml(ln));
-      if (!node) continue;
-      // command/file lines carry an item id — replace the in-progress row in place
-      // when its completion arrives, instead of stacking a duplicate.
-      if (ln.id && pane.lineEls.has(ln.id)) {
-        pane.body.replaceChild(node, pane.lineEls.get(ln.id));
-        pane.lineEls.set(ln.id, node);
-      } else {
-        pane.body.appendChild(node);
-        pane.count++;
-        if (ln.id) pane.lineEls.set(ln.id, node);
-      }
-    }
-    while (pane.count > TERM_MAX_LINES && pane.body.firstElementChild) {
-      const first = pane.body.firstElementChild;
-      for (const [k, v] of pane.lineEls) if (v === first) pane.lineEls.delete(k);
-      first.remove(); pane.count--;
-    }
-    if (T.follow && (wasBottom || isInitial)) scrollPaneToBottom(pane);
-    else pane.atBottom = pane.body.scrollTop + pane.body.clientHeight >= pane.body.scrollHeight - 6;
-  }
-
-  // Pin a pane to the newest output. The rAF re-pin handles the case where flex
-  // layout settles a frame after the lines are inserted (scrollHeight not final yet).
-  function scrollPaneToBottom(pane) {
-    const stick = () => {
-      pane.body.scrollTop = pane.body.scrollHeight;
-      pane.atBottom = true;
-    };
-    stick();
-    requestAnimationFrame(stick);
-  }
-
-  function termLineHtml(ln) {
-    switch (ln.kind) {
-      case "message":
-        return `<div class="term-line tl-message"><span class="tl-gutter">agent</span><span class="tl-text">${esc(ln.text)}${ln.truncated ? " …" : ""}</span></div>`;
-      case "reasoning":
-        return `<div class="term-line tl-message tl-reasoning"><span class="tl-gutter">think</span><span class="tl-text">${esc(ln.text)}</span></div>`;
-      case "command": {
-        const running = ln.status !== "completed" && ln.exitCode == null;
-        const tail = running
-          ? `<span class="tl-running">running…</span>`
-          : (ln.exitCode != null
-            ? `<span class="tl-exit gate-tag" data-tone="${toneOf(ln.exitCode === 0 ? "integrated" : "blocked")}">${toneDot(ln.exitCode === 0 ? "integrated" : "blocked")}<span class="lbl">exit ${esc(ln.exitCode)}</span></span>`
-            : "");
-        const out = (ln.output && ln.output.trim())
-          ? `<div class="tl-output">${esc(ln.output)}${ln.outputTruncated ? "\n…" : ""}</div>` : "";
-        return `<div class="term-line tl-command"><div class="tl-cmd-line"><span class="tl-prompt">$</span><span class="tl-cmd-text">${esc(ln.command)}</span>${tail}</div>${out}</div>`;
-      }
-      case "file": {
-        const items = (ln.changes || []).map((c) =>
-          `<span class="tl-fkind">${esc(c.kind || "edit")}</span> ${esc(String(c.path || "").split("/").slice(-2).join("/"))}`).join(" · ");
-        return `<div class="term-line tl-file">✎ ${items || "file change"}</div>`;
-      }
-      case "event":
-        return `<div class="term-line tl-event"><span class="tl-ev-ts">${esc(relTime(ln.ts, T.generatedAt || (S.snap && S.snap.generatedAt)))}</span><span class="tl-ev-type" data-tone="${eventTone(ln.eventType)}">${esc(ln.eventType)}</span><span class="tl-ev-msg">${esc(ln.text)}</span></div>`;
-      case "meta":
-        return `<div class="term-line tl-meta">${esc(ln.text)}</div>`;
-      case "log":
-      default: {
-        const lvl = ln.level ? `<span class="tl-lvl">${esc(ln.level)}</span>` : "";
-        return `<div class="term-line tl-log${ln.level ? " lvl-" + esc(ln.level) : ""}">${lvl}${esc(ln.text || "")}</div>`;
-      }
-    }
+  function termFetchLines(id) {
+    const pane = T.panes.get(id); if (!pane) return;
+    // Row rendering, cursor management, ring-buffer trimming, and scroll-retention
+    // all live in core/term-core.js now — byte-identical to the old inline engine.
+    fetchPaneLines(id, pane, { raw: T.raw, follow: T.follow, now: T.generatedAt || (S.snap && S.snap.generatedAt) });
   }
 
   function termRefresh() { renderTermBar(); renderTermChips(); reconcilePanes(); termPollLines(); }
 
-  async function termTick() {
-    if (document.hidden) return; // don't poll a backgrounded tab
-    await termFetchSessions();
-    termPollLines();
-  }
+  // Nudge the shared feed to poll now (visibility resume). The feed callback
+  // (termOnFeed) does the render + line poll.
+  function termTick() { if (!document.hidden) pokeFeed(); }
 
   function termInit() {
     if (T.started) return;
@@ -1682,8 +1574,18 @@ import { bus } from "./core/bus.js";
       termRefresh();
     });
 
-    termTick();
-    setInterval(termTick, TERM_POLL_MS);
+    // Subscribe to the shared session feed; it polls while the dock is on-screen
+    // (Plan surface) or the Consoles surface is up. The dock is hidden on the
+    // Consoles/Agents surfaces, so its predicate is "the dock element is shown".
+    subscribeSessions(termOnFeed, () => { const d = $("dock"); return !!d && !d.hidden; });
+    startFeed();
+  }
+
+  // The router (via main.js) hides the dock on the Consoles/Agents surfaces — it
+  // duplicates the L0 streams there — and restores it on Plan.
+  function setDockVisible(on) {
+    const d = $("dock");
+    if (d) d.hidden = !on;
   }
 
   // =========================================================== OVERLAY ======
@@ -1924,6 +1826,8 @@ import { bus } from "./core/bus.js";
     setAreaFilter, applyDeepLink, gateBlock,
     // pollers (visibility resume)
     termTick, overlayTick,
+    // dock visibility (router toggles it per surface via main.js)
+    setDockVisible,
     // entry
     start, init,
   };

@@ -76,6 +76,13 @@ export function writeRoute(surface, lens, selId, tab) {
   if (surface === "plan") {
     if (lens) h += "/" + lens;
     if (selId) { h += "/" + selId; if (tab) h += ":" + tab; }
+  } else if (surface === "consoles") {
+    // #consoles[/<sessionId>]
+    if (selId) h += "/" + selId;
+  } else if (surface === "agents") {
+    // #agents[/<roleId>[/<sessionId>]] — lens carries the roleId, selId the session
+    if (lens) h += "/" + lens;
+    if (selId) h += "/" + selId;
   }
   try { history.replaceState(null, "", h); } catch (e) {}
 }
@@ -130,6 +137,11 @@ function applyRoute(route, initial) {
     showSurface(route.surface);
     if (cfg.onSurface) cfg.onSurface(route.surface);
     if (route.surface === "plan" && route.lens && cfg.onLens) cfg.onLens(route.lens);
+    // Consoles/Agents own their own sub-route (session / role+session). They are
+    // feed-driven, not snapshot-gated, so they resolve immediately on load and on
+    // every hashchange — no deferral like the plan selection below.
+    if (route.surface === "consoles" && cfg.onConsole) cfg.onConsole(route);
+    if (route.surface === "agents" && cfg.onAgents) cfg.onAgents(route);
   } finally { applying = false; }
   // Normalize a legacy/implicit hash to the canonical form.
   if (route._migrate || !location.hash) {
@@ -149,7 +161,7 @@ export function tick() {
 
 // -------------------------------------------------------------- init -------
 export function initRouter(options) {
-  cfg = Object.assign({ onSurface: null, onLens: null, getLens: null }, options || {});
+  cfg = Object.assign({ onSurface: null, onLens: null, getLens: null, onConsole: null, onAgents: null }, options || {});
 
   bus.writeRoute = (kind, id, tab) => {
     const r = currentRoute();
@@ -166,7 +178,9 @@ export function initRouter(options) {
     const b = e.target.closest("[data-surface]");
     if (!b) return;
     const name = b.dataset.surface;
-    const lens = cfg.getLens ? cfg.getLens() : "timeline";
+    // Only the Plan surface carries a lens in its hash; Consoles/Agents must not
+    // inherit a plan lens id as a session/role segment.
+    const lens = name === "plan" ? (cfg.getLens ? cfg.getLens() : "timeline") : null;
     writeRoute(name, lens, null, null);
     applyRoute(currentRoute(), false);
   });
