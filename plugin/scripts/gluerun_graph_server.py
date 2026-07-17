@@ -1418,8 +1418,9 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
 # and stays well under the 2s client poll cadence even with hundreds of run dirs.
 
 SESSIONS_TTL_SECONDS = 2.0
-SESSION_SCAN_LIMIT = 80          # most-recent run dirs classified per discovery
-SESSION_RETURN_LIMIT = 16        # sessions returned to the client (origin always included)
+SESSION_SCAN_LIMIT = 120         # most-recent run dirs classified per discovery
+SESSION_RETURN_LIMIT = 16        # default sessions returned (origin always included)
+SESSION_RETURN_HARD_MAX = 40     # ?limit= ceiling; discovery builds up to this many
 SESSION_LIVE_WINDOW = 90.0       # log mtime within N s => the stream is "live"
 SESSION_PEEK_BYTES = 16384       # tail bytes read to summarize a session's last line
 SESSION_LOG_MAX_BYTES = 262144   # cap per /api/session read (tail or forward window)
@@ -1441,8 +1442,8 @@ WORKER_ACTIVE_LEASE = {"running", "dispatched", "active"}
 # Plain (non-Codex) per-run logs worth streaming as secondary panes.
 PLAIN_LOG_NAMES = ("gate-check.log", "scope-check.log", "secret-scan.log")
 # Codex thread logs, in role-priority order (primary stream first).
-CODEX_LOG_NAMES = (("worker-codex.log", "worker"), ("planner-codex.log", "planner"),
-                   ("decider-codex.log", "decider"))
+CODEX_LOG_NAMES = (("worker-codex.log", "worker"), ("auditor-codex.log", "auditor"),
+                   ("planner-codex.log", "planner"), ("decider-codex.log", "decider"))
 # "<iso>  LEVEL  message" — the shape Codex emits for its plain stderr lines.
 ISO_LEVEL_LINE_RE = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+([A-Z]+)\s+(.*)$")
 # Codex plugin/skill loader chatter — hundreds of identical WARN lines per run that
@@ -1680,10 +1681,42 @@ def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float) -> dict[s
     if "worker-codex.log" in names:
         return _worker_session(repo, path, name, mtime, fresh, names)
     if "planner-codex.log" in names:
-        return _planner_session(path, name, mtime, fresh, names)
-    if "gate-check.log" in names or "audit.json" in names:
+        return _planner_session(repo, path, name, mtime, fresh, names)
+    if "gate-check.log" in names or "audit.json" in names or "auditor-codex.log" in names:
         return _gate_session(path, name, mtime, fresh, names)
     return None
+
+
+def _session_meta_compact(meta: dict[str, Any]) -> dict[str, Any]:
+    return {k: meta.get(k) for k in ("provider", "model", "effort", "exitCode")
+            if meta.get(k) is not None}
+
+
+def _attach_session_meta(sess: dict[str, Any], path: Path) -> None:
+    """Merge durable session-meta (gluerun.orchestration.session-meta.v0) into
+    a session row. Flat fields mirror the implementer — the pane's primary
+    agent; sessionMeta carries the per-role split for the Agents surface.
+    No-op when the run wrote no meta (graceful degradation)."""
+    impl = read_json(path / "session-implementer.json", None)
+    rev = read_json(path / "session-reviewer.json", None)
+    impl = impl if isinstance(impl, dict) else None
+    rev = rev if isinstance(rev, dict) else None
+    primary = impl or rev
+    if primary:
+        for key in ("provider", "model", "effort", "runner"):
+            if primary.get(key) is not None:
+                sess[key] = primary[key]
+        if primary.get("exitCode") is not None:
+            sess["exitCode"] = primary["exitCode"]
+        if primary.get("lastUsedAttempt") is not None:
+            sess["attempt"] = primary["lastUsedAttempt"]
+    meta: dict[str, Any] = {}
+    if impl:
+        meta["implementer"] = _session_meta_compact(impl)
+    if rev:
+        meta["reviewer"] = _session_meta_compact(rev)
+    if meta:
+        sess["sessionMeta"] = meta
 
 
 def _worker_session(repo: Path, path: Path, name: str, mtime: float, fresh: bool, names: set[str]) -> dict[str, Any]:
@@ -1699,7 +1732,7 @@ def _worker_session(repo: Path, path: Path, name: str, mtime: float, fresh: bool
     worktree = lease.get("worktree")
     worktree_exists = bool(worktree and Path(str(worktree)).exists())
     state = _worker_state(lease_status, pkt_status, fresh, worktree_exists)
-    return {
+    sess = {
         "id": name, "kind": "worker", "layer": "L2",
         "role": lease.get("owner") or packet.get("role") or "l2-developer",
         "taskId": task_id, "area": lease.get("area") or packet.get("area"),
@@ -1714,14 +1747,16 @@ def _worker_session(repo: Path, path: Path, name: str, mtime: float, fresh: bool
         "live": state == "active",
         "_mtime": mtime, "_dir": str(path),
     }
+    _attach_session_meta(sess, path)
+    return sess
 
 
-def _planner_session(path: Path, name: str, mtime: float, fresh: bool, names: set[str]) -> dict[str, Any]:
+def _planner_session(repo: Path, path: Path, name: str, mtime: float, fresh: bool, names: set[str]) -> dict[str, Any]:
     info = _parse_planner_prompt(_read_head(path / "planner-prompt.md", 4096)) if "planner-prompt.md" in names else {}
     batch = read_json(path / "planner-batch.json", None) if "planner-batch.json" in names else None
     n_tasks = len(batch.get("tasks", [])) if isinstance(batch, dict) else None
     state = "active" if fresh else ("integrated" if n_tasks is not None else "idle")
-    return {
+    sess = {
         "id": name, "kind": "planner", "layer": "L1", "role": "planner",
         "node": info.get("node"), "area": info.get("area"),
         "stage": info.get("stage"), "planLayer": info.get("layer"),
@@ -1731,6 +1766,19 @@ def _planner_session(path: Path, name: str, mtime: float, fresh: bool, names: se
         "logFiles": _session_log_files(path),
         "live": fresh, "_mtime": mtime, "_dir": str(path),
     }
+    # Planner session-meta is durable under sessions/planner/<node>.json,
+    # keyed by node with the runId it belongs to.
+    node = info.get("node")
+    if node:
+        meta = read_json(state_path(repo, "sessions", "planner", f"{node}.json"), None)
+        if isinstance(meta, dict) and (not meta.get("runId") or meta.get("runId") == name):
+            for key in ("provider", "model", "effort", "runner"):
+                if meta.get(key) is not None:
+                    sess[key] = meta[key]
+            if meta.get("exitCode") is not None:
+                sess["exitCode"] = meta["exitCode"]
+    _attach_session_meta(sess, path)
+    return sess
 
 
 def _integration_session(path: Path, name: str, mtime: float, fresh: bool, task_id: str) -> dict[str, Any]:
@@ -1755,7 +1803,7 @@ def _gate_session(path: Path, name: str, mtime: float, fresh: bool, names: set[s
     audit = read_json(path / "audit.json", None) if "audit.json" in names else None
     task_id = audit.get("taskId") if isinstance(audit, dict) else _task_id_from_prompt(path, names)
     verdict = audit.get("verdict") if isinstance(audit, dict) else None
-    return {
+    sess = {
         "id": name, "kind": "audit", "layer": "L1", "role": "auditor",
         "taskId": task_id, "area": None, "runId": name, "verdict": verdict,
         "state": "active" if fresh else "idle", "phase": "audit",
@@ -1763,6 +1811,8 @@ def _gate_session(path: Path, name: str, mtime: float, fresh: bool, names: set[s
         "logFiles": _session_log_files(path),
         "live": fresh, "_mtime": mtime, "_dir": str(path),
     }
+    _attach_session_meta(sess, path)
+    return sess
 
 
 def _origin_session(repo: Path) -> dict[str, Any]:
@@ -1846,7 +1896,7 @@ def discover_sessions(repo: Path) -> list[dict[str, Any]]:
     # Live first, then most-recent. Cap the run-dir set, then always append the
     # origin feed so the L0 fallback is never trimmed away.
     sessions.sort(key=lambda s: (0 if s.get("live") else 1, -(s.get("_mtime") or 0.0)))
-    trimmed = sessions[:max(0, SESSION_RETURN_LIMIT - 1)]
+    trimmed = sessions[:max(0, SESSION_RETURN_HARD_MAX - 1)]
     trimmed.append(_origin_session(repo))
     for sess in trimmed:
         _attach_summary(repo, sess)
@@ -1882,6 +1932,23 @@ def collect_sessions(repo: Path) -> dict[str, Any]:
         "sessions": sessions,
         "auto": recommend_auto(sessions),
     }
+
+
+def slice_sessions(data: dict[str, Any], limit: int) -> dict[str, Any]:
+    """Post-cache ?limit= slice: keep the first N-1 run-dir sessions + origin.
+    The cache always holds the hard-max set; slicing is per request."""
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = SESSION_RETURN_LIMIT
+    limit = max(1, min(limit, SESSION_RETURN_HARD_MAX))
+    sessions = data.get("sessions") or []
+    if len(sessions) <= limit:
+        return data
+    out = dict(data)
+    out["sessions"] = ([s for s in sessions if s.get("id") != "origin"][:limit - 1]
+                       + [s for s in sessions if s.get("id") == "origin"])
+    return out
 
 
 def _resolve_session_log(repo: Path, session_id: str, file_name: str | None) -> tuple[Path | None, list[dict[str, str]]]:
@@ -4011,7 +4078,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(detail)
             return
         if route == "/api/sessions":
-            self.send_json(SESSIONS_CACHE.get(self.repo))
+            query = parse_qs(parsed.query)
+            limit = query.get("limit", [SESSION_RETURN_LIMIT])[0]
+            self.send_json(slice_sessions(SESSIONS_CACHE.get(self.repo), limit))
             return
         if route.startswith("/api/session/"):
             session_id = unquote(route[len("/api/session/"):]).strip("/")
@@ -4174,7 +4243,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(collect_snapshot(repo), indent=2))
         return 0
     if args.sessions:
-        print(json.dumps(collect_sessions(repo), indent=2))
+        print(json.dumps(slice_sessions(collect_sessions(repo), SESSION_RETURN_LIMIT), indent=2))
         return 0
     if args.session:
         data = read_session(repo, args.session.strip("/"), None, SESSION_LINE_LIMIT_DEFAULT, None, False)

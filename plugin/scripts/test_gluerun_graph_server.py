@@ -1592,6 +1592,65 @@ class CollectTimelineTests(unittest.TestCase):
         self.assertEqual(filtered["counts"]["tasks"], 1)
 
 
+class SessionEnrichmentTests(unittest.TestCase):
+    """0.6.0 sessions: durable session-meta merged into rows; auditor log
+    discoverable; ?limit= slice keeps origin."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state/runs").mkdir(parents=True)
+        (repo / ".gluerun-state/leases").mkdir(parents=True)
+        return repo
+
+    def test_worker_meta_merge(self) -> None:
+        repo = self._repo()
+        run = repo / ".gluerun-state/runs/RUN-x"
+        run.mkdir()
+        (run / "worker-codex.log").write_text("claude-run: level=l2\n")
+        (run / "last-message.json").write_text(json.dumps(
+            {"taskId": "TASK-0001", "area": "core", "status": "accepted"}))
+        (run / "session-implementer.json").write_text(json.dumps(
+            {"provider": "claude", "model": "claude-opus-4-8", "effort": "medium",
+             "exitCode": 0, "runner": "claude-run.sh", "lastUsedAttempt": 2}))
+        (run / "session-reviewer.json").write_text(json.dumps(
+            {"provider": "claude", "model": "claude-opus-4-8", "effort": "xhigh", "exitCode": 0}))
+        sessions = srv.discover_sessions(repo)
+        worker = next(s for s in sessions if s["id"] == "RUN-x")
+        self.assertEqual(worker["model"], "claude-opus-4-8")
+        self.assertEqual(worker["effort"], "medium")
+        self.assertEqual(worker["exitCode"], 0)
+        self.assertEqual(worker["attempt"], 2)
+        self.assertEqual(worker["sessionMeta"]["reviewer"]["effort"], "xhigh")
+
+    def test_auditor_log_discoverable(self) -> None:
+        repo = self._repo()
+        run = repo / ".gluerun-state/runs/RUN-audit"
+        run.mkdir()
+        (run / "auditor-codex.log").write_text("{}\n")
+        sessions = srv.discover_sessions(repo)
+        audit = next(s for s in sessions if s["id"] == "RUN-audit")
+        self.assertEqual(audit["kind"], "audit")
+        self.assertIn("auditor-codex.log", [f["name"] for f in audit["logFiles"]])
+
+    def test_limit_slice(self) -> None:
+        repo = self._repo()
+        for i in range(30):
+            run = repo / f".gluerun-state/runs/RUN-{i:03d}"
+            run.mkdir()
+            (run / "gate-check.log").write_text("x\n")
+        data = srv.collect_sessions(repo)
+        self.assertGreater(len(data["sessions"]), 16)   # cache holds the hard-max set
+        sliced = srv.slice_sessions(data, 16)
+        self.assertEqual(len(sliced["sessions"]), 16)
+        self.assertEqual(sliced["sessions"][-1]["id"], "origin")
+        sliced24 = srv.slice_sessions(data, 24)
+        self.assertEqual(len(sliced24["sessions"]), 24)
+        self.assertEqual(srv.slice_sessions(data, 9999)["sessions"],
+                         data["sessions"])  # clamped to hard max (31 here < 40)
+
+
 class AutonomateLogResolutionTests(unittest.TestCase):
     """The engine's --detach loop writes autonomate.log; the legacy name is
     autonomate.out.log. The server follows whichever exists (newest wins)."""
