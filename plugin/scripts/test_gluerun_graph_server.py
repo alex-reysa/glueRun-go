@@ -1927,5 +1927,77 @@ class PromptEndpointTests(unittest.TestCase):
         self.assertIn("do the thing", joined)
 
 
+class RawEndpointTests(unittest.TestCase):
+    """W3: /api/raw/<root>/<name> view-source over durable records. Each root is
+    traversal-guarded by regex/allowlist + resolved-path containment."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        for rel in ("docs/orchestration/tasks/superseded", "docs/orchestration/gates/evidence",
+                    ".gluerun-state/leases", ".gluerun-state/l1-leases",
+                    ".gluerun-state/dispatch", ".gluerun-state/inbox"):
+            (repo / rel).mkdir(parents=True)
+        return repo
+
+    def test_happy_path_each_root(self) -> None:
+        repo = self._repo()
+        (repo / "gluerun.config.json").write_text('{"schemaVersion":"v0"}')
+        (repo / "docs/orchestration/dag.v0.json").write_text('{"nodes":[]}')
+        (repo / "docs/orchestration/tasks/TASK-0007.md").write_text("# TASK-0007\n")
+        (repo / "docs/orchestration/gates/D0.contract.gate-result.json").write_text('{"node":"D0.contract"}')
+        (repo / "docs/orchestration/gates/evidence/ev-1.json").write_text('{"ev":1}')
+        (repo / ".gluerun-state/leases/TASK-0007.json").write_text('{"taskId":"TASK-0007"}')
+        (repo / ".gluerun-state/l1-leases/D0.contract.json").write_text('{"node":"D0.contract"}')
+        (repo / ".gluerun-state/dispatch/TASK-0007.json").write_text('{"state":"launched"}')
+        (repo / ".gluerun-state/inbox/pkt-1.json").write_text('{"pkt":1}')
+        (repo / ".gluerun-state/circuit.json").write_text('{"consecFails":0}')
+        cases = [
+            ("config", "gluerun.config.json"), ("dag", "dag.v0.json"),
+            ("task", "TASK-0007.md"), ("gate", "D0.contract.gate-result.json"),
+            ("gate-review", "ev-1.json"), ("lease", "TASK-0007.json"),
+            ("l1-lease", "D0.contract.json"), ("dispatch", "TASK-0007.json"),
+            ("inbox", "pkt-1.json"), ("state", "circuit.json"),
+        ]
+        for root, name in cases:
+            data = srv.collect_raw(repo, root, name)
+            self.assertIsNotNone(data, f"{root}/{name}")
+            self.assertEqual(data["schema"], "gluerun.codex.raw.v0")
+            self.assertEqual(data["root"], root)
+            self.assertEqual(data["name"], name)
+            self.assertTrue(data["content"])
+            self.assertNotIn("truncated", data)
+
+    def test_superseded_task_fallback(self) -> None:
+        repo = self._repo()
+        (repo / "docs/orchestration/tasks/superseded/TASK-0009.md").write_text("# old\n")
+        data = srv.collect_raw(repo, "task", "TASK-0009.md")
+        self.assertIsNotNone(data)
+        self.assertTrue(data["path"].endswith("superseded/TASK-0009.md"))
+
+    def test_traversal_and_bad_names_rejected(self) -> None:
+        repo = self._repo()
+        (repo / ".gluerun-state/.env").write_text("SECRET=1\n")
+        self.assertIsNone(srv.collect_raw(repo, "task", "../../etc/passwd"))
+        self.assertIsNone(srv.collect_raw(repo, "gate", "../evidence/ev.json"))
+        self.assertIsNone(srv.collect_raw(repo, "state", ".env"))          # not in allowlist
+        self.assertIsNone(srv.collect_raw(repo, "state", "leases"))        # dir, not allowlisted
+        self.assertIsNone(srv.collect_raw(repo, "config", "other.json"))   # wrong singleton name
+        self.assertIsNone(srv.collect_raw(repo, "task", "TASK-0007.txt"))  # wrong extension
+
+    def test_unknown_root_none(self) -> None:
+        self.assertIsNone(srv.collect_raw(self._repo(), "bogus", "x.json"))
+
+    def test_oversize_truncation(self) -> None:
+        repo = self._repo()
+        big = "y" * (srv.RAW_MAX_BYTES + 500)
+        (repo / "docs/orchestration/tasks/TASK-0011.md").write_text(big)
+        data = srv.collect_raw(repo, "task", "TASK-0011.md")
+        self.assertTrue(data["truncated"])
+        self.assertEqual(len(data["content"]), srv.RAW_MAX_BYTES)
+        self.assertEqual(data["size"], len(big))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

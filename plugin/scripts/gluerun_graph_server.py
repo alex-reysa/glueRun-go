@@ -4036,6 +4036,90 @@ def collect_prompt(repo: Path, name: str) -> dict[str, Any] | None:
 
 
 # --------------------------------------------------------------------------- #
+# Raw primitives (gluerun.codex.raw.v0)                                        #
+# --------------------------------------------------------------------------- #
+#
+# A read-only "view source" for the durable records behind the console — task
+# markdown, gate results, leases, dispatch/inbox records, singleton config/dag.
+# Each root pins a base dir + an allowed-name rule (regex or explicit allowlist);
+# resolve() + parent-containment is the traversal guard. 256 KB read cap.
+
+RAW_MAX_BYTES = 262144
+
+RAW_ROOTS: dict[str, dict[str, Any]] = {
+    # dir roots: base + a filename regex; "superseded" adds a tasks/superseded fallback
+    "task": {"base": "docs/orchestration/tasks", "re": r"^TASK-\d+\.md$", "superseded": True},
+    "gate": {"base": "docs/orchestration/gates", "re": r"^[A-Za-z0-9._-]+\.gate-result\.json$"},
+    "gate-review": {"base": "docs/orchestration/gates/evidence", "re": r"^[A-Za-z0-9._-]+\.json$"},
+    "lease": {"base": ".gluerun-state/leases", "re": r"^TASK-\d+\.json$"},
+    "l1-lease": {"base": ".gluerun-state/l1-leases", "re": r"^[A-Za-z0-9._-]+\.json$"},
+    "dispatch": {"base": ".gluerun-state/dispatch", "re": r"^TASK-\d+\.json$"},
+    "inbox": {"base": ".gluerun-state/inbox", "re": r"^[A-Za-z0-9._-]+\.json$"},
+    # explicit-name allowlist under the state dir
+    "state": {"base": ".gluerun-state",
+              "allow": {"origin-state.json", "circuit.json", "planner-backoff.json",
+                        "STATUS.md", "task-id-counter"}},
+    # singletons: the request name must equal the file's basename
+    "config": {"singleton": "gluerun.config.json"},
+    "dag": {"singleton": "docs/orchestration/dag.v0.json"},
+}
+
+
+def collect_raw(repo: Path, root: str, name: str) -> dict[str, Any] | None:
+    """Serve one raw record by (root, name), traversal-guarded. Returns None for
+    an unknown root/name or a missing file. Over-cap content is truncated with a
+    ``truncated`` flag. Read-only; pure filesystem."""
+    spec = RAW_ROOTS.get(root)
+    if spec is None:
+        return None
+    repo = repo.resolve()
+    if "singleton" in spec:
+        rel = spec["singleton"]
+        if name != PurePosixPath(rel).name:
+            return None
+        base_root = repo
+        path = (repo / rel).resolve()
+    else:
+        base_root = (repo / spec["base"]).resolve()
+        if "re" in spec:
+            if not re.match(spec["re"], name):
+                return None
+        elif name not in spec["allow"]:
+            return None
+        path = (base_root / name).resolve()
+    if base_root != path and base_root not in path.parents:  # containment guard
+        return None
+    if not path.is_file():
+        if spec.get("superseded"):
+            sup_root = (repo / spec["base"] / "superseded").resolve()
+            alt = (sup_root / name).resolve()
+            if sup_root in alt.parents and alt.is_file():
+                path = alt
+            else:
+                return None
+        else:
+            return None
+    try:
+        st = path.stat()
+        data = path.read_bytes()
+    except OSError:
+        return None
+    truncated = len(data) > RAW_MAX_BYTES
+    out: dict[str, Any] = {
+        "schema": "gluerun.codex.raw.v0",
+        "root": root,
+        "name": name,
+        "path": str(path),
+        "size": st.st_size,
+        "mtime": int(st.st_mtime),
+        "content": data[:RAW_MAX_BYTES].decode("utf-8", errors="replace"),
+    }
+    if truncated:
+        out["truncated"] = True
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Console adapter (gluerun.console-adapter.v0)                                     #
 # --------------------------------------------------------------------------- #
 #
@@ -4536,6 +4620,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(data)
             return
+        if route.startswith("/api/raw/"):
+            rest = unquote(route[len("/api/raw/"):]).strip("/")
+            raw_root, sep, raw_name = rest.partition("/")
+            if not sep or not raw_name:
+                self.send_json({"error": "raw request must be /api/raw/<root>/<name>"}, 400)
+                return
+            data = collect_raw(self.repo, raw_root, raw_name)
+            if data is None:
+                self.send_json({"error": f"raw not found: {raw_root}/{raw_name}"}, 404)
+                return
+            self.send_json(data)
+            return
         if route == "/api/timeline":
             query = parse_qs(parsed.query)
             since = (query.get("since", [""])[0] or "").strip()
@@ -4628,6 +4724,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--config", action="store_true", help="Print the resolved per-role runner config JSON and exit")
     parser.add_argument("--prompts", action="store_true", help="Print the role prompt library JSON and exit")
     parser.add_argument("--prompt", help="Print one prompt's content JSON (e.g. auditor.md) and exit")
+    parser.add_argument("--raw", help="Print one raw record JSON (e.g. config/gluerun.config.json) and exit")
     return parser.parse_args(argv)
 
 
@@ -4726,6 +4823,14 @@ def main(argv: list[str] | None = None) -> int:
         data = collect_prompt(repo, args.prompt.strip("/"))
         if data is None:
             print(f"prompt not found: {args.prompt}", file=sys.stderr)
+            return 3
+        print(json.dumps(data, indent=2))
+        return 0
+    if args.raw:
+        raw_root, sep, raw_name = args.raw.strip("/").partition("/")
+        data = collect_raw(repo, raw_root, raw_name) if sep and raw_name else None
+        if data is None:
+            print(f"raw not found: {args.raw}", file=sys.stderr)
             return 3
         print(json.dumps(data, indent=2))
         return 0
