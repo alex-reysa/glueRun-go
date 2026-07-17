@@ -5,8 +5,9 @@
    re-rendered only when their inputs actually change (signature-gated), so a
    quiet snapshot produces zero rebuilds and zero scroll/selection loss. */
 
-(() => {
-  "use strict";
+// ES module (0.6.0): loaded via main.js. Module scope replaces the old IIFE;
+// the exported seams at the bottom are the contract the surface modules build
+// on. Body indentation preserved from the IIFE to keep the diff reviewable.
 
   const POLL_MS = 10000;
   const LANE_BUDGET = 40;  // max non-terminal L2 nodes shown per lane in the graph
@@ -2339,6 +2340,20 @@
     });
   }
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-  else init();
-})();
+  function start() {
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+    else init();
+  }
+
+  export {
+    // state + vocab
+    S, T, O, POLL_MS, STATE_TONE, STATE_LABEL, STATE_ORDER, toneOf, labelOf,
+    // dom + format helpers
+    $, esc, escAttr, icon, relTime, toast, kvGrid,
+    // data + selection + navigation
+    load, setConn, select, navigateToTask, applyDeepLink, gateBlock,
+    // pollers (visibility resume)
+    termTick, overlayTick,
+    // entry
+    start, init,
+  };
