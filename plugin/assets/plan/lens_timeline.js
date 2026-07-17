@@ -2,27 +2,48 @@
    onto a compressed real-time axis: activity segments padded ±10min, gaps >45min
    collapsed to fixed break cells, hour gridlines + day rules with sticky date
    labels, and a NOW line. Lanes are area groups (collapsible) over node lanes
-   whose bars are greedy row-packed on real ms. Bars carry the shared state
-   vocabulary; retries chain with dotted connectors; gate marks are coral
-   diamonds; L0 cycles a strip up top. Hover dims unrelated lanes and traces the
-   task's node dependencies (blue) / dependents (green) to their bar hulls.
+   whose bars are interval-packed on real ms. Bars carry the shared state
+   vocabulary; retries chain with dotted connectors and a row-end ↻ chip; gate
+   marks are coral diamonds; L0 cycles a strip up top. Hover dims unrelated lanes
+   and traces the task's node dependencies (blue) / dependents (green).
 
-   Built once per signature (task count · max end · live ids · gates · cycles);
-   live bars get a width-only patch each tick — never an innerHTML rebuild. */
+   Labels are placed by a per-lane, per-row pass after bars are positioned:
+   canvas measureText decides inline / right-outside / hidden so no two labels
+   overlap and none bleed across a (clipped) lane. Built once per signature; live
+   bars get a width-only patch each tick — never an innerHTML rebuild. */
 
 import { S, esc, escAttr, icon, gateTone, select } from "../app.js";
 import { bus } from "../core/bus.js";
 import { getDag, dagIndex, fetchTimeline, getTimeline } from "./data.js";
 
-const GUTTER = 210, BAR_H = 22, GAP = 6, LANE_PAD = 8;
-const BREAK_W = 28, AREA_HEAD_H = 30, HEATLINE_H = 30, AXIS_H = 46, CYCLE_H = 4;
+const BAR_H = 20, GAP = 5, LANE_PAD = 8;
+const BREAK_W = 28, AREA_HEAD_H = 30, AXIS_H = 46, CYCLE_H = 4;
 const M = 60000;
 const MON = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+// --tl-gutter is the single source of truth (CSS var + JS), read once at load.
+const GUTTER = (() => {
+  try { const v = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--tl-gutter"), 10); return isFinite(v) && v > 0 ? v : 210; }
+  catch (e) { return 210; }
+})();
 
 let pane = null, sigLast = null, selectedTask = null;
 let openAreas = null;        // Set<area>
 let axis = null, barIndex = {}, nodeHull = {}, laneY = {};
 let hostEl = null, scrollEl = null, overlayEl = null, detailEl = null;
+
+// ------------------------------------------------- label width measurement --
+// One offscreen 2d context measures label widths exactly (proportional glyphs);
+// results cached per string since task ids repeat across rebuilds.
+let _ctx = null; const _lw = new Map();
+function labelWidth(text) {
+  if (_lw.has(text)) return _lw.get(text);
+  let w;
+  try {
+    if (!_ctx) { _ctx = document.createElement("canvas").getContext("2d"); _ctx.font = "500 10.5px Inter, sans-serif"; }
+    w = _ctx.measureText(text).width;
+  } catch (e) { w = String(text).length * 6.2; }
+  _lw.set(text, w); return w;
+}
 
 // ------------------------------------------------------------- axis --------
 function buildAxis(data, paneW) {
@@ -48,8 +69,10 @@ function buildAxis(data, paneW) {
   raw.push([segS, prev]);
   const segs = raw.map(([s, e]) => ({ s: s - PAD, e: e + PAD, rawS: s, rawE: e }));
   const activeMin = segs.reduce((a, g) => a + (g.e - g.s) / M, 0);
-  const targetW = Math.max(2600, 3 * paneW);
-  const SCALE = Math.max(0.5, Math.min(2.0, targetW / Math.max(1, activeMin)));
+  // Wider typical bars: 0.8px/min floor + 3.2×pane basis so more bars clear the
+  // label/measure thresholds; 2.5 ceiling keeps short runs from ballooning.
+  const targetW = Math.max(3200, 3.2 * paneW);
+  const SCALE = Math.max(0.8, Math.min(2.5, targetW / Math.max(1, activeMin)));
   let run = 0; const breaks = [];
   segs.forEach((g, i) => {
     g.x0 = run; g.w = (g.e - g.s) / M * SCALE; run += g.w;
@@ -76,6 +99,16 @@ function pieces(s, e) {
   return out.length ? out : [[s, Math.max(e, s + M)]];
 }
 
+// per-task busy intervals in real ms (for interval-based row packing)
+function taskBusy(t) {
+  return t.intervals.map((iv) => {
+    const s = Date.parse(iv.startedAt); let e = iv.endedAt ? Date.parse(iv.endedAt) : axis.nowMs;
+    if (isNaN(e) || e < s) e = s + M;
+    return [s, e];
+  });
+}
+function busyOverlaps(a, b) { for (const [as, ae] of a) for (const [bs, be] of b) if (as < be && bs < ae) return true; return false; }
+
 // ------------------------------------------------------------- build -------
 function build() {
   const data = getTimeline();
@@ -88,6 +121,7 @@ function build() {
   const idx = dagIndex();
   const stageOf = (nid) => (idx && idx.nodeById[nid] ? idx.nodeById[nid].stage : "");
   const gateByNode = {}; for (const g of data.gates) gateByNode[g.node] = g;
+  const totalW = axis.totalWidth;
 
   // group tasks: area -> node(or "(unattributed)") -> [tasks]
   const areas = {};
@@ -108,79 +142,117 @@ function build() {
 
   barIndex = {}; nodeHull = {}; laneY = {};
   let y = AXIS_H;
-  let rowsHtml = `<div class="tl-row tl-axis-spacer" style="height:${AXIS_H}px"><div class="tl-gutter tl-corner"></div><div class="tl-track"></div></div>`;
+  let rowsHtml = `<div class="tl-row tl-axis-spacer" style="height:${AXIS_H}px"><div class="tl-gutter tl-corner"></div><div class="tl-track tl-axis-track">${buildAxisLabels(data, totalW)}</div></div>`;
 
   for (const a of areaOrder) {
     const nodesInArea = Object.keys(areas[a]).sort((x, y2) => (stageOf(x) || "").localeCompare(stageOf(y2) || "") || x.localeCompare(y2));
     const allTasks = Object.values(areas[a]).flat();
     const gatesPassed = nodesInArea.filter((n) => (gateByNode[n] || {}).status === "passed").length;
     const open = openAreas.has(a);
+
+    // collapsed → the heat strip renders INSIDE the 30px area header's band track
+    let bandHeat = "";
+    if (!open) {
+      for (const t of allTasks) for (const iv of t.intervals) {
+        const s = Date.parse(iv.startedAt); let e = iv.endedAt ? Date.parse(iv.endedAt) : axis.nowMs; if (e < s) e = s + M;
+        for (const [ps, pe] of pieces(s, e)) bandHeat += `<span class="tl-heat" style="left:${axis.xOf(ps)}px;width:${Math.max(2, axis.xOf(pe) - axis.xOf(ps))}px"></span>`;
+      }
+    }
     rowsHtml += `<div class="tl-row tl-arearow" style="height:${AREA_HEAD_H}px">
       <button class="tl-gutter tl-area-head" data-area="${escAttr(a)}" aria-expanded="${open}">
         <span class="tl-area-chev">${icon("i-chev")}</span><span class="tl-area-name">${esc(a)}</span>
-        <span class="tl-area-meta mono">${nodesInArea.length}n · ${gatesPassed}/${nodesInArea.length}</span></button>
-      <div class="tl-track tl-area-band"></div></div>`;
+        <span class="tl-area-meta mono">${nodesInArea.length}n · ${gatesPassed}/${nodesInArea.length} · ${allTasks.length} tasks</span></button>
+      <div class="tl-track tl-area-band">${bandHeat}</div></div>`;
     y += AREA_HEAD_H;
-
-    if (!open) {
-      // collapsed → single heatline row of micro-bars
-      let micro = "";
-      for (const t of allTasks) for (const iv of t.intervals) {
-        const s = Date.parse(iv.startedAt); let e = iv.endedAt ? Date.parse(iv.endedAt) : axis.nowMs; if (e < s) e = s + M;
-        for (const [ps, pe] of pieces(s, e)) micro += `<span class="tl-heat" style="left:${axis.xOf(ps)}px;width:${Math.max(2, axis.xOf(pe) - axis.xOf(ps))}px"></span>`;
-      }
-      rowsHtml += `<div class="tl-row" style="height:${HEATLINE_H}px">
-        <div class="tl-gutter tl-heat-gutter">${allTasks.length} tasks · collapsed</div>
-        <div class="tl-track tl-heatline">${micro}</div></div>`;
-      y += HEATLINE_H;
-      continue;
-    }
+    if (!open) continue;
 
     for (const nkey of nodesInArea) {
       const tasks = areas[a][nkey].slice().sort((t1, t2) => taskStart(t1) - taskStart(t2));
-      // greedy row packing on task span
-      const rowEnds = []; const place = {};
+
+      // interval-based row packing: a task fits a row iff its busy intervals don't
+      // overlap any interval already placed there (keeps task-per-row + connectors).
+      const rowIntervals = []; const place = {};
       for (const t of tasks) {
-        const st = taskStart(t); let ri = rowEnds.findIndex((e) => st >= e);
-        if (ri < 0) { ri = rowEnds.length; rowEnds.push(0); }
-        rowEnds[ri] = taskEnd(t); place[t.taskId] = ri;
+        const busy = taskBusy(t);
+        let ri = rowIntervals.findIndex((r) => !busyOverlaps(r, busy));
+        if (ri < 0) { ri = rowIntervals.length; rowIntervals.push([]); }
+        rowIntervals[ri] = rowIntervals[ri].concat(busy);
+        place[t.taskId] = ri;
       }
-      const nRows = Math.max(1, rowEnds.length);
+      const nRows = Math.max(1, rowIntervals.length);
       const laneH = nRows * (BAR_H + GAP) - GAP + LANE_PAD * 2;
       const laneTop = y;
       laneY[nkey] = laneTop + laneH / 2;
 
-      let bars = "";
+      // Phase A: place bars (merge <4px pieces), record rects; collect label cands.
+      const laneTasks = []; const rowBars = {}; const labelCands = [];
       let nodeX0 = Infinity, nodeX1 = -Infinity;
       for (const t of tasks) {
         const row = place[t.taskId];
         const barTop = LANE_PAD + row * (BAR_H + GAP);
         const st2 = barState(t);
         const title = titleOf(t.taskId);
-        let prevRight = null, taskX0 = Infinity, taskX1 = -Infinity;
+        const raw = [];
         t.intervals.forEach((iv, ii) => {
           let s = Date.parse(iv.startedAt); let e = iv.endedAt ? Date.parse(iv.endedAt) : axis.nowMs;
           const amber = e < s; if (amber) e = s + M;
-          pieces(s, e).forEach(([ps, pe], pi) => {
-            const left = axis.xOf(ps); let width = Math.max(18, axis.xOf(pe) - left);
-            if (t.liveNow && !iv.endedAt) width = Math.max(18, axis.xOf(axis.nowMs) - left);
-            taskX0 = Math.min(taskX0, left); taskX1 = Math.max(taskX1, left + width);
-            const first = ii === 0 && pi === 0;
-            const retryChip = ii > 0 && pi === 0 ? `<span class="tl-retry">↻${ii}</span>` : "";
-            const labelOut = width < 90 ? " tl-label-out" : "";
-            const lab = first ? `<span class="tl-bar-label${labelOut}">${esc(t.taskId)}${title ? " · " + esc(title) : ""}</span>` : "";
-            bars += `<div class="tl-bar tl-s-${st2}${amber ? " tl-amber" : ""}${t.liveNow && !iv.endedAt ? " tl-live" : ""}" data-task="${escAttr(t.taskId)}" data-node="${escAttr(nkey)}" data-live="${t.liveNow && !iv.endedAt ? 1 : 0}"
-              style="left:${left}px;top:${barTop}px;width:${width}px">${retryChip}${lab}</div>`;
+          const live = t.liveNow && !iv.endedAt; if (live) e = axis.nowMs;
+          pieces(s, e).forEach(([ps, pe]) => {
+            const left = axis.xOf(ps); const width = Math.max(6, axis.xOf(pe) - left);
+            raw.push({ left, width, amber, live });
           });
-          if (prevRight != null) {
-            const cx = axis.xOf(Date.parse(iv.startedAt));
-            bars += `<span class="tl-retry-link" style="left:${prevRight}px;top:${barTop + BAR_H / 2}px;width:${Math.max(0, cx - prevRight)}px"></span>`;
-          }
-          prevRight = axis.xOf(e);
         });
+        raw.sort((p, q) => p.left - q.left);
+        const merged = [];
+        for (const pc of raw) {
+          const last = merged[merged.length - 1];
+          if (last && pc.left - (last.left + last.width) < 4) {
+            last.width = Math.max(last.width, pc.left + pc.width - last.left);
+            last.live = last.live || pc.live; last.amber = last.amber || pc.amber;
+          } else merged.push({ ...pc });
+        }
+        let taskX0 = Infinity, taskX1 = -Infinity;
+        merged.forEach((pc) => {
+          taskX0 = Math.min(taskX0, pc.left); taskX1 = Math.max(taskX1, pc.left + pc.width);
+          (rowBars[row] = rowBars[row] || []).push({ left: pc.left, right: pc.left + pc.width });
+        });
+        const text = t.taskId + (title ? " · " + title : "");
+        if (merged.length) {
+          labelCands.push({ taskId: t.taskId, row, barLeft: merged[0].left, barRight: merged[0].left + merged[0].width, barWidth: merged[0].width, barTop, text, labelW: labelWidth(text), mode: "hidden" });
+        }
+        const retries = t.retryCount != null ? t.retryCount : Math.max(0, t.intervals.length - 1);
+        laneTasks.push({ t, row, barTop, st2, merged, retries, taskX0, taskX1, text });
         nodeX0 = Math.min(nodeX0, taskX0); nodeX1 = Math.max(nodeX1, taskX1);
         barIndex[t.taskId] = { node: nkey, x0: isFinite(taskX0) ? taskX0 : 0, x1: isFinite(taskX1) ? taskX1 : 0, y: laneTop + barTop + BAR_H / 2 };
       }
+
+      // Phase B: resolve label modes (inline / right-outside / hidden) per row.
+      resolveLabels(labelCands, rowBars, totalW);
+      const labelByTask = {}; for (const c of labelCands) labelByTask[c.taskId] = c;
+
+      // Phase C: emit bars + labels + retry chips + connectors.
+      let bars = "";
+      for (const lt of laneTasks) {
+        const cand = labelByTask[lt.t.taskId];
+        const inlineLabel = cand && cand.mode === "inline";
+        lt.merged.forEach((pc, mi) => {
+          const isFirst = mi === 0;
+          const inner = (isFirst && inlineLabel)
+            ? `<span class="tl-bar-label">${esc(lt.text)}</span>` : "";
+          bars += `<div class="tl-bar tl-s-${lt.st2}${pc.amber ? " tl-amber" : ""}${pc.live ? " tl-live" : ""}" data-task="${escAttr(lt.t.taskId)}" data-node="${escAttr(nkey)}" data-live="${pc.live ? 1 : 0}" title="${escAttr(lt.text)}" style="left:${pc.left}px;top:${lt.barTop}px;width:${pc.width}px">${inner}</div>`;
+          if (mi > 0) {
+            const a2 = lt.merged[mi - 1], gapL = a2.left + a2.width, gapR = pc.left;
+            if (gapR > gapL) bars += `<span class="tl-retry-link" style="left:${gapL}px;top:${lt.barTop + BAR_H / 2}px;width:${gapR - gapL}px"></span>`;
+          }
+        });
+        if (cand && cand.mode === "out") {
+          bars += `<span class="tl-bar-label tl-label-out" style="left:${cand.barRight + 6}px;top:${lt.barTop}px;height:${BAR_H}px">${esc(lt.text)}</span>`;
+        }
+        if (lt.retries > 0 && isFinite(lt.taskX1)) {
+          bars += `<span class="tl-retry" style="left:${lt.taskX1 + 6}px;top:${lt.barTop}px;height:${BAR_H}px" title="${lt.retries} retries">↻${lt.retries}</span>`;
+        }
+      }
+
       const g = gateByNode[nkey];
       let gate = "";
       if (g && g.recordedAt) {
@@ -198,11 +270,10 @@ function build() {
   }
 
   const contentH = y + 20;
-  const totalW = axis.totalWidth;
 
-  // background: hour/day gridlines, break cells, day labels, NOW, cycles strip
+  // background: hour/day gridlines, break cells, NOW line, cycles strip (labels
+  // live in the sticky axis strip, built above).
   let bg = "";
-  // cycles strip
   let cyc = "";
   data.cycles.forEach((c, i) => {
     const s = Date.parse(c.startedAt), e = c.endedAt ? Date.parse(c.endedAt) : s;
@@ -210,29 +281,23 @@ function build() {
     cyc += `<span class="tl-cycle" style="left:${x}px;width:${w}px;${i % 2 ? "opacity:0.5" : ""}"></span>`;
   });
   bg += `<div class="tl-cycle-strip" style="width:${totalW}px">${cyc}</div>`;
-  // gridlines per segment
   for (const g of axis.segs) {
     let t = Math.ceil(g.rawS / 3600000) * 3600000;
     for (; t <= g.rawE; t += 3600000) {
       const x = axis.xOf(t);
       const d = new Date(t);
-      const midnight = d.getUTCHours() === 0;
-      if (midnight) {
-        bg += `<div class="tl-dayrule" style="left:${x}px;height:${contentH}px"></div>`;
-        bg += `<div class="tl-daylabel" style="left:${x + 4}px">${MON[d.getUTCMonth()]} ${d.getUTCDate()}</div>`;
-      } else {
-        bg += `<div class="tl-hourline" style="left:${x}px;height:${contentH}px"></div>`;
-      }
+      if (d.getUTCHours() === 0) bg += `<div class="tl-dayrule" style="left:${x}px;height:${contentH}px"></div>`;
+      else bg += `<div class="tl-hourline" style="left:${x}px;height:${contentH}px"></div>`;
     }
   }
-  // break cells
   for (const b of axis.breaks) {
     const mins = (b.toS - b.fromE) / M;
-    bg += `<div class="tl-break" style="left:${b.x}px;width:${BREAK_W}px;height:${contentH}px"><span class="tl-break-l1"></span><span class="tl-break-l2"></span><span class="tl-break-lbl">${esc(fmtDur(mins))}</span></div>`;
+    const txt = fmtDur(mins);
+    const horiz = labelWidth(txt) <= BREAK_W - 6;   // "2h" fits horizontally, "1h 20m" doesn't
+    bg += `<div class="tl-break" style="left:${b.x}px;width:${BREAK_W}px;height:${contentH}px"><span class="tl-break-l1"></span><span class="tl-break-l2"></span><span class="tl-break-lbl${horiz ? " horiz" : ""}">${esc(txt)}</span></div>`;
   }
-  // NOW line
   const nowX = axis.xOf(axis.nowMs);
-  bg += `<div class="tl-now" style="left:${nowX}px;height:${contentH}px"><span class="tl-now-cap">NOW</span></div>`;
+  bg += `<div class="tl-now" style="left:${nowX}px;height:${contentH}px"></div>`;
 
   pane.style.overflow = "hidden";
   pane.innerHTML =
@@ -241,13 +306,45 @@ function build() {
        <svg class="tl-overlay" style="left:${GUTTER}px;width:${totalW}px;height:${contentH}px"></svg>
        <div class="tl-flow">${rowsHtml}</div>
        <div class="plan-detail-card tl-detail" hidden></div>
-     </div></div>`;
+     </div><div class="tl-fade" aria-hidden="true"></div></div>`;
 
   scrollEl = pane.querySelector(".plan-tl-scroll");
   overlayEl = pane.querySelector(".tl-overlay");
   detailEl = pane.querySelector(".tl-detail");
   wire();
   sigLast = sigOf(data);
+}
+
+// The sticky top axis strip: day labels + a NOW cap, positioned in the same x as
+// the lanes (the strip itself is offset by the gutter via CSS).
+function buildAxisLabels(data, totalW) {
+  let out = "";
+  for (const g of axis.segs) {
+    let t = Math.ceil(g.rawS / 3600000) * 3600000;
+    for (; t <= g.rawE; t += 3600000) {
+      const d = new Date(t);
+      if (d.getUTCHours() === 0) out += `<div class="tl-daylabel" style="left:${axis.xOf(t) + 4}px">${MON[d.getUTCMonth()]} ${d.getUTCDate()}</div>`;
+    }
+  }
+  out += `<div class="tl-now-cap" style="left:${axis.xOf(axis.nowMs) + 2}px">NOW</div>`;
+  return out;
+}
+
+// Per-lane label placement: inline if it fits inside the bar; else right-outside
+// if it fits before the next bar on the same row (8px safety); else hidden.
+function resolveLabels(cands, rowBars, totalW) {
+  const byRow = {};
+  for (const c of cands) (byRow[c.row] = byRow[c.row] || []).push(c);
+  for (const row in byRow) {
+    const allBars = (rowBars[row] || []).slice().sort((a, b) => a.left - b.left);
+    for (const c of byRow[row]) {
+      if (c.labelW + 12 <= c.barWidth) { c.mode = "inline"; continue; }
+      let nextLeft = null;
+      for (const bb of allBars) { if (bb.left > c.barRight + 0.5) { nextLeft = bb.left; break; } }
+      const ceiling = (nextLeft != null ? nextLeft : totalW) - c.barRight;
+      c.mode = (c.labelW + 14 <= ceiling) ? "out" : "hidden";
+    }
+  }
 }
 
 function taskStart(t) { return Math.min(...t.intervals.map((iv) => Date.parse(iv.startedAt) || Infinity)); }
@@ -273,7 +370,6 @@ function applyHover(taskId) {
   const dependents = idx ? (idx.dependents[node] || []) : [];
   const related = new Set([node, ...deps, ...dependents]);
   bars.forEach((b) => { b.style.opacity = related.has(b.dataset.node) ? "1" : "0.28"; });
-  // connectors from this bar to dep/dependent node hulls
   const from = info;
   let paths = "";
   const orth = (x1, y1, x2, y2, color) => { const mx = (x1 + x2) / 2; return `<path d="M${x1},${y1} L${mx},${y1} L${mx},${y2} L${x2},${y2}" fill="none" stroke="${color}" stroke-width="1.5" opacity="0.85"/>`; };
@@ -310,7 +406,7 @@ function patchLive() {
   if (!pane || !axis) return;
   const nowX = axis.xOf(axis.nowMs);
   pane.querySelectorAll('.tl-bar[data-live="1"]').forEach((b) => {
-    const left = parseFloat(b.style.left) || 0; b.style.width = Math.max(18, nowX - left) + "px";
+    const left = parseFloat(b.style.left) || 0; b.style.width = Math.max(6, nowX - left) + "px";
   });
 }
 

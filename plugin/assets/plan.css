@@ -348,20 +348,26 @@
 .pm-detail { right: 26px; bottom: 22px; }
 
 /* ---- Timeline lens (flagship) ---- */
-.plan-tl-scroll { height: 100%; overflow: auto; }
+:root { --tl-gutter: 210px; }
+.plan-tl-scroll { height: 100%; overflow: auto; position: relative; }
 .plan-tl { position: relative; }
 .tl-bg { position: absolute; top: 0; z-index: 0; }
 .tl-overlay { position: absolute; top: 0; pointer-events: none; z-index: 6; overflow: visible; }
 .tl-flow { position: relative; z-index: 1; }
 .tl-row { display: flex; align-items: stretch; }
 .tl-gutter {
-  position: sticky; left: 0; flex: 0 0 210px; width: 210px; z-index: 5;
+  position: sticky; left: 0; flex: 0 0 var(--tl-gutter); width: var(--tl-gutter); z-index: 5;
   background: var(--surface-panel); border-right: 1px solid var(--border-subtle);
   display: flex; align-items: center; gap: 8px; padding: 0 10px; overflow: hidden;
 }
 .tl-track { position: relative; flex: 1 1 auto; min-width: 0; }
-.tl-axis-spacer .tl-gutter, .tl-corner { border-bottom: 1px solid var(--border-default); background: var(--surface-panel); }
-.tl-axis-spacer .tl-track { border-bottom: 1px solid var(--border-default); }
+/* sticky top axis strip: day labels + NOW cap stay pinned while lanes scroll */
+.tl-axis-spacer { position: sticky; top: 0; z-index: 7; }
+.tl-axis-spacer .tl-gutter, .tl-corner { border-bottom: 1px solid var(--border-default); background: var(--surface-panel); z-index: 8; }
+.tl-axis-spacer .tl-track, .tl-axis-track { border-bottom: 1px solid var(--border-default); background: var(--surface-panel); }
+/* bottom fade — signals "nothing below" without stretching lanes to fill */
+.tl-fade { position: sticky; bottom: 0; left: 0; height: 24px; margin-top: -24px; pointer-events: none; z-index: 6;
+  background: linear-gradient(to top, var(--surface-page), rgba(255,255,255,0)); }
 .tl-arearow .tl-gutter { border-top: 1px solid var(--border-default); }
 .tl-area-head { cursor: pointer; border: 0; background: var(--surface-soft); text-align: left; }
 .tl-area-head .tl-area-chev { width: 12px; height: 12px; display: inline-flex; color: var(--text-muted); transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease-out); flex: none; }
@@ -372,19 +378,23 @@
 .tl-node-gutter { cursor: pointer; border: 0; background: transparent; text-align: left; }
 .tl-node-gutter:hover { background: var(--surface-hover); }
 .tl-node-gutter .tl-node-id { font-size: 10.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tl-heat-gutter { font-size: 10px; color: var(--text-faint); font-family: var(--font-mono); }
-.tl-lane, .tl-heatline { overflow: visible; }
-.tl-heat { position: absolute; top: 13px; height: 3px; background: var(--n-400); border-radius: 2px; }
+/* the single most important fix: lanes clip so labels never bleed across rows */
+.tl-lane { overflow: hidden; }
+/* collapsed-area heat strip lives inside the 30px area header band, centered */
+.tl-heat { position: absolute; top: 50%; transform: translateY(-50%); height: 3px; background: var(--n-400); border-radius: 2px; }
 
 .tl-bar {
-  position: absolute; height: 22px; border-radius: var(--radius-sm);
-  display: flex; align-items: center; gap: 5px; padding: 0 7px; overflow: visible;
+  position: absolute; height: 20px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; gap: 5px; padding: 0 6px; overflow: hidden;
   background: var(--ink); color: #fff; cursor: pointer; box-shadow: var(--shadow-xs);
   transition: opacity var(--dur-fast) var(--ease-out);
 }
 .tl-bar .tl-bar-label { font: 500 10.5px var(--font-sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tl-bar .tl-bar-label.tl-label-out { position: absolute; left: calc(100% + 6px); color: var(--text-muted); overflow: visible; }
-.tl-bar .tl-retry { font: 600 8px var(--font-mono); opacity: 0.8; flex: none; }
+/* right-outside label: a lane child positioned in its bar's row band (JS sets
+   left/top/height inline); the clipped lane cuts it at the right edge */
+.tl-label-out { position: absolute; display: flex; align-items: center; font: 500 10.5px var(--font-sans); white-space: nowrap; color: var(--text-muted); pointer-events: none; }
+/* retry chip: one per task at the row's right end, inside the clipped lane */
+.tl-retry { position: absolute; display: flex; align-items: center; font: 600 8.5px var(--font-mono); color: var(--text-meta); pointer-events: none; }
 .tl-s-integrated { background: var(--ink); color: #fff; }
 .tl-s-active { background: var(--ink); color: #fff; }
 .tl-s-live { background: var(--ink); color: #fff; animation: pm-plan-ring 1.9s ease-out infinite; }
@@ -403,13 +413,15 @@
 /* axis background */
 .tl-hourline { position: absolute; top: 0; width: 1px; background: var(--border-subtle); }
 .tl-dayrule { position: absolute; top: 0; width: 1px; background: var(--border-strong); }
-.tl-daylabel { position: absolute; top: 24px; font: 700 9px var(--font-sans); letter-spacing: 0.08em; color: var(--text-meta); }
+/* day labels + NOW cap live in the sticky .tl-axis-track (positioned by JS x) */
+.tl-daylabel { position: absolute; top: 24px; font: 700 9px var(--font-sans); letter-spacing: 0.08em; color: var(--text-meta); white-space: nowrap; }
+.tl-axis-track .tl-now-cap { position: absolute; top: 6px; font: 700 8.5px var(--font-sans); letter-spacing: 0.06em; color: var(--ink); }
 .tl-break { position: absolute; top: 0; overflow: hidden; border-left: 1px dotted var(--n-300); border-right: 1px dotted var(--n-300); }
 .tl-break .tl-break-l1, .tl-break .tl-break-l2 { position: absolute; top: 0; bottom: 0; left: 8px; width: 1.5px; background: var(--n-300); transform: skewX(-18deg); }
 .tl-break .tl-break-l2 { left: 15px; }
 .tl-break .tl-break-lbl { position: absolute; top: 40px; left: 50%; transform: translateX(-50%) rotate(90deg); font: 400 8.5px var(--font-mono); color: var(--text-faint); white-space: nowrap; }
+.tl-break .tl-break-lbl.horiz { top: 6px; transform: translateX(-50%); }
 .tl-now { position: absolute; top: 0; width: 0; border-left: 1.5px dashed var(--ink); z-index: 3; }
-.tl-now .tl-now-cap { position: absolute; top: 4px; left: 2px; font: 700 8.5px var(--font-sans); letter-spacing: 0.06em; color: var(--ink); }
 .tl-cycle-strip { position: absolute; top: 0; left: 0; height: 4px; }
 .tl-cycle { position: absolute; top: 0; height: 4px; background: var(--n-100); }
 .tl-detail { right: 26px; bottom: 22px; }
