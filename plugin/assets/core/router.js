@@ -22,7 +22,7 @@
 import { select, navigateToTask, setAreaFilter, S } from "../app.js";
 import { bus } from "./bus.js";
 
-const SURFACES = ["plan", "consoles", "agents"];
+const SURFACES = ["home", "plan", "consoles", "agents"];
 const LENSES = ["timeline", "matrix", "dag", "tasks"];
 
 let cfg = { onSurface: null, onLens: null };
@@ -35,7 +35,8 @@ export function currentRoute() {
   const legacy = migrateLegacy(raw);
   if (legacy) return legacy;
   const parts = raw.split("/").filter(Boolean);
-  const surface = SURFACES.includes(parts[0]) ? parts[0] : "plan";
+  const surface = SURFACES.includes(parts[0]) ? parts[0] : "home";
+  if (surface === "home") return { surface };
   if (surface === "plan") {
     const lens = LENSES.includes(parts[1]) ? parts[1] : null;
     let sel = parts[2] != null ? parts.slice(2).join("/") : null;
@@ -55,7 +56,7 @@ export function currentRoute() {
 function migrateLegacy(raw) {
   if (!raw) {
     if (new URLSearchParams(location.search).get("list") === "1") return { surface: "plan", lens: "tasks", sel: null, tab: null, _migrate: true };
-    return null;
+    return { surface: "home", _migrate: true };
   }
   if (/^TASK-\d+(:|$)/.test(raw)) {
     const i = raw.indexOf(":");
@@ -73,7 +74,9 @@ function migrateLegacy(raw) {
 export function writeRoute(surface, lens, selId, tab) {
   if (applying) return;
   let h = "#" + surface;
-  if (surface === "plan") {
+  if (surface === "home") {
+    // no sub-route in v2
+  } else if (surface === "plan") {
     if (lens) h += "/" + lens;
     if (selId) { h += "/" + selId; if (tab) h += ":" + tab; }
   } else if (surface === "consoles") {
@@ -142,6 +145,7 @@ function applyRoute(route, initial) {
     // every hashchange — no deferral like the plan selection below.
     if (route.surface === "consoles" && cfg.onConsole) cfg.onConsole(route);
     if (route.surface === "agents" && cfg.onAgents) cfg.onAgents(route);
+    if (route.surface === "home" && cfg.onHome) cfg.onHome(route);
   } finally { applying = false; }
   // Normalize a legacy/implicit hash to the canonical form.
   if (route._migrate || !location.hash) {
@@ -161,7 +165,7 @@ export function tick() {
 
 // -------------------------------------------------------------- init -------
 export function initRouter(options) {
-  cfg = Object.assign({ onSurface: null, onLens: null, getLens: null, onConsole: null, onAgents: null }, options || {});
+  cfg = Object.assign({ onSurface: null, onLens: null, getLens: null, onConsole: null, onAgents: null, onHome: null }, options || {});
 
   bus.writeRoute = (kind, id, tab) => {
     const r = currentRoute();
