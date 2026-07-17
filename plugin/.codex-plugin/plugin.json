@@ -1,6 +1,6 @@
 {
   "name": "singular-orchestration",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Operate Singular (CLI: gluerun) multi-agent orchestration \u2014 author DAG plans, run autonomous parallel agent loops, and monitor L0/L1/L2 state through the read-only console/dashboard.",
   "author": {
     "name": "Singular local tools"
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Singular Orchestration",
     "shortDescription": "Operate Singular (gluerun) agents, plans, tasks, gates \u2014 with a live dashboard/console viewer.",
-    "longDescription": "An operator skill plus read-only local console (dashboard/viewer/visualization UI, started idempotently with `gluerun console --ensure`) for Singular (formerly glueRun-go) orchestration. The skill teaches an agent to set up a repo, author parallel DAG plans and planner contracts, run the autonomous loop at maximum parallelization, promote gates, and recover stuck runs. The bundled console shows a top status/control bar (health, STOP, drift, frontier, active counts, disk, gates), a main L0 to L1 to L2 graph viewport with agents and list views, and an inspector drawer that drills into any task \u2014 objective, owned and forbidden files, acceptance criteria, required evidence, lease metadata, run id, worktree existence, packets, integration audit, and task-scoped events. Deployed sub-agents are derived from durable facts only.",
+    "longDescription": "An operator skill plus read-only local console (dashboard/viewer/visualization UI, started idempotently with `gluerun console --ensure`) for Singular (formerly glueRun-go) orchestration. The skill teaches an agent to set up a repo, author parallel DAG plans and planner contracts, run the autonomous loop at maximum parallelization, promote gates, and recover stuck runs. The console (0.6.0) has three surfaces: a Plan workbench over the DAG (execution-timeline Gantt with real per-attempt bars and gate marks, dependency matrix, layered stage graph, task table, node drilldown aside), a Consoles operations room (persistent L0 supervisor stream plus dynamic role/task-labeled agent consoles that pop in live and collapse to a recent rail), and an Agents role grid (live glyphs, current work, resolved model/effort with env-key provenance). A bottom-sheet inspector drills into any task \u2014 objective, owned and forbidden files, acceptance criteria, required evidence, lease metadata, run id, worktree existence, packets, integration audit, and task-scoped events. Deployed sub-agents are derived from durable facts only.",
     "developerName": "Singular local tools",
     "category": "Productivity",
     "capabilities": [

@@ -7,6 +7,94 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.6.0] — 2026-07-17 — Three-surface console redesign (Plan · Consoles · Agents)
+
+A full information-architecture redesign of the read-only console, replacing
+the static L0→L1→L2 column canvas with three purpose-built surfaces, plus the
+server/engine data layer to power them. `schemaVersion` stays **v1** — every
+API change is additive (three new endpoints, new fields on existing ones);
+`gluerun migrate` is a no-op for 0.5.0 consumers.
+
+### Plan surface (workbench over the DAG)
+- Four lenses behind a vertical lens nav: **Timeline** (execution Gantt on
+  compressed real time — per-attempt task bars with retry chains, gap-break
+  glyphs for idle hours, hour/day gridlines, NOW line, coral gate diamonds,
+  L0 reconcile-cycle strip, dependency hover tracing, CPM-projected region
+  for ungated future nodes), **Matrix** (N×N dependency matrix, gate-status
+  diagonal pills, blue-deps/green-dependents hover tracing, real topo-sort
+  acyclicity footer), **DAG** (layered stage graph: collapsible S-stage
+  ribbons, bezier edges, transitive ancestor/descendant tracing), and
+  **Tasks** (the sortable task table, now with a DAG-node column).
+- Right-hand node drilldown aside (gate, requiredCompletion, deps as chips,
+  task rollup); the bottom-sheet inspector still owns full task detail.
+- Hash router `#<surface>/<lens>/<selection>[:tab]`; all legacy deep links
+  (`#TASK-…`, `#NODE:…`, `#L1:…`, `#PLAN`, `?list=1`) migrate automatically.
+
+### Consoles surface (live operations room)
+- Persistent **L0 supervisor pane** (semantic events stream + raw
+  autonomate log, collapsible) with the highest visual weight; a dynamic
+  region where role/task/area/phase/model-labeled agent consoles pop in as
+  sessions go live (L1 panes span full width, L2 tile 2-up, cap 4), linger
+  with their final state on completion (45s for failures), then collapse
+  into a **recent rail** — which doubles as the idle/historical browser
+  (finished sessions reopen with full parsed scrollback). Pin/solo/raw per
+  pane; single 2s poll scheduler with an in-flight cap; `#consoles/<id>`
+  deep links.
+
+### Agents surface (role grid)
+- Cards per runtime role (avatar + live glyph, active pill, current
+  tasks/areas, model · effort chip, last-activity age) + a dimmed
+  declared-roles strip; role detail with processes (jump to their console)
+  and **read-only** settings showing env-key provenance
+  (`model → claude-opus-4-8 (GLUERUN_CLAUDE_L2_MODEL)`) plus concurrency
+  limits — the console observes, it never writes.
+
+### Design system
+- Adopted the warm-neutral **pm-go token layer** (`tokens.css`): warm paper
+  + 24px printer's line grid, flat white panels (glass/backdrop-blur
+  retired), six-tone signal language with **coral replacing violet** as the
+  attention accent, Inter + Roboto Mono. Legacy token names alias to the new
+  system, so retained chrome re-skinned without markup churn.
+- Client rebuilt as ES modules (`main.js` + `core/` + `plan/` + `consoles/`
+  + `agents/`), served by an extension-allowlisted asset route with
+  resolved-path containment (subdirectories supported, no per-file registry).
+
+### Server API (all additive)
+- **`/api/dag`** (`gluerun.codex.dag.v0`, `--dag`): registry nodes merged
+  with gate results, per-node task rollups (events-attributed with the
+  `DAG node:` header fallback), L1 leases, frontier flags, `edges[]`, and
+  stage/area swimlane metadata.
+- **`/api/timeline`** (`gluerun.codex.timeline.v0`, `--timeline`,
+  `?since=`): per-task attempt intervals reconstructed from events
+  (dispatch records are overwritten per attempt — history lives in the
+  journal), `liveNow` for running bars, gate marks, L0 reconcile cycle
+  spans.
+- **`/api/config`** (`gluerun.codex.config.v0`, `--config`): per-role
+  model/effort resolved with the engine's own precedence (`.env` override >
+  config `env{}` > runner default) with source-key provenance, plus limits
+  and flags. Secrets in `.env` are never read (whitelisted parser).
+- `/api/sessions`: rows gain durable `provider/model/effort/exitCode/
+  attempt` + `sessionMeta{implementer,reviewer}` from session-meta files;
+  `?limit=` (default 16, max 40); auditor logs discoverable.
+- L0 supervisor log resolution: the server now follows whichever of
+  `autonomate.out.log` / `autonomate.log` (the engine's actual `--detach`
+  output) exists — the supervisor stream was previously invisible.
+- `NODE_ID_RE` accepts slug node ids (`ctx-loader`) — `/api/node` 400'd
+  every real consumer DAG id.
+
+### Engine
+- Auditor runner output → `$run_dir/auditor-codex.log` and decider output →
+  `$run_dir/decider-codex.log` + `session-decider.json` (both previously
+  `/dev/null`), so the two most watch-worthy roles stream in the console.
+
+### Migrating from 0.5.0
+- No action required. The old L0→L1→L2 graph canvas and the task-list
+  drawer are gone; the task table lives at `#plan/tasks` and old deep links
+  redirect. `?view=graph|list` is retired (hash routes replace it). The
+  client is now ES-module based under `/assets/`.
+
+---
+
 ## [0.5.0] — 2026-07-17 — Field-hardening from the first external consumer run
 
 Every change in this release traces to the singular-frontend V1 field run

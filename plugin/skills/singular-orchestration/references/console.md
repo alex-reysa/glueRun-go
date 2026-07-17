@@ -1,10 +1,24 @@
 # Orchestration console — monitoring UI, JSON API, snapshot modes
 
-A read-only local web console over Singular's durable state: a top
-status/control bar, a main L0 → L1 → L2 node-edge graph (nodes carry deployed
-agent state) with a list view, and an inspector drawer for drilling into a
-single task. The graph pans/zooms; click a node to inspect it; dependency
-edges highlight on selection.
+A read-only local web console over Singular's durable state. Since 0.6.0 it
+has three top-level surfaces (switcher in the top bar):
+
+- **Plan** — a workbench over the orchestration DAG with four lenses:
+  Timeline (real execution Gantt: per-task attempt bars on compressed real
+  time, gate diamonds, L0 cycle strip, retry chains), Matrix (N×N dependency
+  matrix with gate-status diagonal and an acyclicity proof), DAG (layered
+  stage graph with collapse + upstream/downstream hover tracing), and Tasks
+  (the sortable task table). A right-hand aside drills into the selected DAG
+  node; the bottom-sheet inspector still owns full task detail.
+- **Consoles** — a live operations room: the L0 supervisor as a persistent
+  left pane (semantic events + raw supervisor log), and a dynamic region
+  where labeled agent consoles (role · task/area · phase · model) pop in as
+  the system spawns planners/workers/auditors and linger→collapse into a
+  recent rail when they finish. Finished sessions reopen with full parsed
+  scrollback — the rail is the idle/historical experience.
+- **Agents** — a role card grid (avatar, live glyph, current work, model ·
+  effort from resolved config) with a per-role detail view: processes
+  (jump to their console) and read-only settings with env-key provenance.
 
 ## Start it
 
@@ -31,9 +45,12 @@ python3 ~/.gluerun/current/plugin/scripts/gluerun_graph_server.py \
 ```
 
 The page auto-refreshes every 10 seconds without losing selection, pin,
-filters, lane expansion, or graph pan/zoom. Deep links: `#TASK-0309` opens a
-task in the inspector, `#TASK-0309:work` (or `#L0:roles`) opens a specific
-inspector tab, and `?view=graph|list` selects the main view.
+filters, or lane expansion. Deep links (0.6.0 grammar
+`#<surface>/<lens>/<selection>[:tab]`): `#plan/timeline`, `#plan/matrix`,
+`#plan/dag/NODE:<node-id>`, `#plan/tasks/TASK-0309:work`,
+`#consoles/<session-id>` (pins + solos that console), `#agents/<role-id>`.
+Legacy hashes (`#TASK-0309[:tab]`, `#NODE:<id>`, `#L1:<area>`, `#PLAN`,
+`?list=1`) are migrated automatically.
 
 ## One-shot modes (no browser)
 
@@ -49,6 +66,9 @@ gluerun console --area <area>         # all DAG nodes for one area
 gluerun console --sessions            # live session inventory
 gluerun console --session <run-id>    # one session's terminal lines
 gluerun console --events              # live event overlay
+gluerun console --dag                 # full DAG view: nodes+gates+task rollups+edges (0.6.0)
+gluerun console --timeline            # execution timeline: task intervals+gates+cycles (0.6.0)
+gluerun console --config              # resolved per-role model/effort + limits (0.6.0)
 ```
 
 Use these to summarize orchestration health or inspect one task from a
@@ -89,11 +109,11 @@ steers:
 ## L1 parallelism surfacing
 
 When the L1 fanout runs (`GLUERUN_ENABLE_L1_PARALLEL=1`), the console shows
-it from durable facts only: the plural DAG frontier marks every ready node's
-area with the violet ◆ (not just the first); the top-bar frontier pill reads
+it from durable facts only: the plural DAG frontier marks every ready node
+with the coral ◆ (not just the first); the top-bar frontier pill reads
 `N ready · M` (M = live planners); an area with an *active*
 `.gluerun-state/l1-leases/<node>.json` (status `proposed|planning|active`)
-gets a cobalt **L1** badge + ring and an **L1-lease** inspector tab
+gets a blue **L1** badge and an **L1-lease** inspector tab
 (node/status/runId/baseSha/scopes). A `released`/`failed` lease is history —
 never a live agent, never "complete"; gate-result.v0 remains the sole
 completion authority.
@@ -107,8 +127,7 @@ commands/tools they actually ran.
 
 ```text
 /                       → console UI
-/assets/styles.css      → stylesheet
-/assets/app.js          → client
+/assets/**              → client modules (extension-allowlisted: .css/.js/.mjs/.svg)
 /api/state              → full orchestration snapshot (?fresh=1 forces a blocking
                           recompute; otherwise a stale snapshot is served instantly
                           with stale/computing/snapshotAgeSeconds set while a
@@ -125,10 +144,19 @@ commands/tools they actually ran.
 /api/area/<area>/nodes  → all DAG nodes for one area
 /api/events?cursor=N    → paged reader over .gluerun-state/events.ndjson
                           (returns a next cursor; poll-friendly)
-/api/sessions           → runtime session inventory (planner/worker session-meta
-                          discovered from durable records; cached)
+/api/sessions?limit=N   → runtime session inventory (planner/worker/auditor rows
+                          incl. durable model/effort/exitCode session-meta;
+                          default 16, max 40; origin always included)
 /api/session/<id>       → paged session transcript reader
                           (?cursor=N&limit=N&file=<name>&raw=1)
+/api/dag                → full DAG view (0.6.0): nodes merged with gate results,
+                          per-node task rollups, L1 leases, frontier flags,
+                          edges[], stage/area swimlane metadata
+/api/timeline?since=T   → execution history (0.6.0): per-task attempt intervals
+                          (reconstructed from events; liveNow for running bars),
+                          gate marks, L0 reconcile cycle spans
+/api/config             → resolved per-role model/effort with env-key provenance
+                          + limits/flags (0.6.0; .env > config env{} > defaults)
 ```
 
 Snapshot extras: `orchestration.gates` `{passed,total,byNode}` (replaces the
