@@ -281,10 +281,14 @@
 .plan-scroll-host { position: relative; height: 100%; }
 .plan-dag-scroll {
   height: 100%; overflow: auto;
+  display: flex; align-items: center; justify-content: center;
   background-image: radial-gradient(var(--grid-line) 1px, transparent 1px);
   background-size: 16px 16px;
 }
-.plan-dag-stagewrap { position: relative; margin: 0 auto; }
+/* flex: none so the wrapper keeps its natural (scaled) size and overflows the
+   scroller — otherwise flex-shrink would squeeze it and defeat scrolling.
+   align/justify on the scroller centre it when it fits (set from JS). */
+.plan-dag-stagewrap { position: relative; flex: none; margin: 0; }
 .plan-dag-stage { position: relative; margin: 0 auto; }
 .plan-dag-tint { position: absolute; background: var(--surface-sunken); opacity: 0.5; border-radius: var(--radius-lg); z-index: 0; }
 

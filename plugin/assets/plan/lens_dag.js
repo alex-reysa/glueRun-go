@@ -255,10 +255,10 @@ function build() {
          <div class="plan-dag-stagewrap">
            <div class="plan-dag-stage" style="width:${stageNatW}px;height:${stageNatH}px">
              ${tints}${ribbons}${svg}${cards}${summaries}
-             <div class="plan-detail-card plan-dag-detail" hidden></div>
            </div>
          </div>
        </div>
+       <div class="plan-detail-card plan-dag-detail" hidden></div>
        <div class="plan-fade left"></div>
        <div class="plan-fade right"></div>
        <button class="plan-dag-fit" aria-pressed="${fitOn}" title="Fit to width">${icon("i-expand")}</button>
@@ -279,7 +279,18 @@ function build() {
   wire();
   applyFit();
   repaint(null);
-  if (window.ResizeObserver) { ro = new ResizeObserver(() => { if (fitOn) applyFit(); measureFades(); }); ro.observe(pane); }
+  if (window.ResizeObserver) { ro = new ResizeObserver(() => { if (fitOn) applyFit(); else centerStage(); measureFades(); }); ro.observe(pane); }
+}
+
+// Centre the (scaled) stage in the scroller on each axis when it fits, but fall
+// back to flex-start on any axis where content overflows — centering an
+// overflowing axis would push its top/left origin out of reach of the scrollbar.
+function centerStage() {
+  if (!scrollEl || !wrapEl) return;
+  const paneW = scrollEl.clientWidth, paneH = scrollEl.clientHeight;
+  const contentW = wrapEl.offsetWidth, contentH = wrapEl.offsetHeight;
+  scrollEl.style.justifyContent = contentW <= paneW ? "center" : "flex-start";
+  scrollEl.style.alignItems = contentH <= paneH ? "center" : "flex-start";
 }
 
 // --------------------------------------------------------------- fit -------
@@ -299,6 +310,7 @@ function applyFit() {
   wrapEl.style.width = stageNatW * k + "px";
   wrapEl.style.height = stageNatH * k + "px";
   if (fitBtn) fitBtn.setAttribute("aria-pressed", String(fitOn));
+  centerStage();
   measureFades();
 }
 
@@ -340,7 +352,8 @@ function repaint(focusId) {
 
 function showDetail(id) {
   const n = nodesById[id]; if (!n || !detailEl) return;
-  const p = positions[id]; if (!p || collapsed.has(n.stage)) { detailEl.hidden = true; return; }
+  const p = positions[id], el = nodeEls[id];
+  if (!p || !el || collapsed.has(n.stage)) { detailEl.hidden = true; return; }
   const g = n.gate || {}; const c = (n.tasks && n.tasks.counts) || {};
   const deps = (n.dependsOn || []).join(" · ") || "—";
   detailEl.innerHTML =
@@ -352,10 +365,27 @@ function showDetail(id) {
      <div class="plan-detail-row"><span class="pdl">Depends on</span><span class="pdv mono" style="color:var(--tone-blue-fg)">${esc(deps)}</span></div>
      <div class="plan-detail-row"><span class="pdl">Unblocks</span><span class="pdv" style="color:var(--tone-green-fg)">${(descendants[id] || new Set()).size} downstream</span></div>
      <div class="plan-detail-row"><span class="pdl">Tasks</span><span class="pdv mono">${c.integrated || 0}/${c.total || 0}</span></div>`;
-  const left = Math.min(Math.max(p.x - 40, 8), stageNatW - 272);
-  detailEl.style.left = left + "px";
-  detailEl.style.top = (p.cy > stageNatH / 2 ? p.cy - NODE_H / 2 - 12 - 176 : p.cy + NODE_H / 2 + ATTR_H + 12) + "px";
-  detailEl.hidden = false;
+  // The card now lives in the (unscaled) scroll-host, not inside the scaled
+  // stage, so we place it against real post-transform screen rects. Prefer
+  // below the node (8px gap), flip above only when below overflows the pane,
+  // then clamp both axes fully inside the scroller's visible rect (8px pad).
+  detailEl.hidden = false;                        // reveal so it can be measured
+  const host = detailEl.offsetParent || scrollEl;
+  const hostRect = host.getBoundingClientRect();
+  const paneRect = scrollEl.getBoundingClientRect();
+  const nodeRect = el.getBoundingClientRect();
+  const cw = detailEl.offsetWidth, ch = detailEl.offsetHeight;
+  const pad = 8, gap = 8;
+  let top = nodeRect.bottom + gap;                 // prefer below
+  if (top + ch > paneRect.bottom - pad) {          // ...unless it clips the bottom
+    const above = nodeRect.top - gap - ch;
+    if (above >= paneRect.top + pad) top = above;  // flip above only if it fits
+  }
+  let left = nodeRect.left;                         // left-align to the node card
+  left = Math.min(Math.max(left, paneRect.left + pad), paneRect.right - pad - cw);
+  top = Math.min(Math.max(top, paneRect.top + pad), paneRect.bottom - pad - ch);
+  detailEl.style.left = (left - hostRect.left) + "px";
+  detailEl.style.top = (top - hostRect.top) + "px";
 }
 
 // --------------------------------------------------------------- wire ------
