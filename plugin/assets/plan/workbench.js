@@ -5,7 +5,7 @@
    PlanGraphWorkbench.tsx (196px tablist · center pane · 360px aside). */
 
 import { S, esc, escAttr, icon, toneOf, labelOf, gateTone, select, relTime } from "../app.js";
-import { writeRoute } from "../core/router.js";
+import { writeRoute, currentRoute } from "../core/router.js";
 import { bus } from "../core/bus.js";
 import { fetchDag, getDag, dagIndex, dagMaybeRefetch, onDag } from "./data.js";
 import { lens as timelineLens } from "./lens_timeline.js";
@@ -59,7 +59,13 @@ export function setLens(id, opts) {
     if (mounted && mounted.mount) mounted.mount(pane);
   }
   renderNav();
-  if (!opts || opts.route !== false) writeRoute("plan", id, selectedNodeId ? "NODE:" + selectedNodeId : null, null);
+  if (!opts || opts.route !== false) {
+    // Switching lenses must keep whatever selection is on the route (a TASK-xxxx
+    // bottom-sheet or a NODE aside) so a copied URL still reopens it.
+    const r = currentRoute();
+    const sel = r.surface === "plan" && r.sel ? r.sel : (selectedNodeId ? "NODE:" + selectedNodeId : null);
+    writeRoute("plan", id, sel, r.surface === "plan" ? r.tab : null);
+  }
   if (selectedNodeId && mounted && mounted.applySelection) mounted.applySelection(selectedNodeId);
 }
 
