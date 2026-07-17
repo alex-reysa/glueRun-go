@@ -11,6 +11,7 @@ and the byte-cursor read_log_window — with no orchestration repo required. Run
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
 import importlib.util
 import io
 import json
@@ -1716,6 +1717,12 @@ class NewCollectorsNoSubprocessTests(unittest.TestCase):
                 srv.collect_dag_view(repo)
                 srv.collect_timeline(repo)
                 srv.collect_config(repo)
+                # 0.7.0 read collectors (the W1 settings WRITE fn is excluded)
+                srv.collect_home(repo)
+                srv.collect_prompts(repo)
+                srv.collect_prompt(repo, "auditor.md")
+                srv.collect_raw(repo, "config", "gluerun.config.json")
+                srv.collect_settings_view(repo)
             finally:
                 subprocess.run = saved
         self.assertEqual(calls, [])
@@ -1997,6 +2004,110 @@ class RawEndpointTests(unittest.TestCase):
         self.assertTrue(data["truncated"])
         self.assertEqual(len(data["content"]), srv.RAW_MAX_BYTES)
         self.assertEqual(data["size"], len(big))
+
+
+class CollectHomeTests(unittest.TestCase):
+    """W4: the landing digest — attention triggers, activity rollup, empty-repo
+    zeros. Pure filesystem."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state").mkdir()
+        (repo / "docs/orchestration/tasks").mkdir(parents=True)
+        return repo
+
+    def test_empty_repo_zeros_ok(self) -> None:
+        home = srv.collect_home(self._repo())
+        self.assertEqual(home["schema"], "gluerun.codex.home.v0")
+        self.assertEqual(home["health"], "ok")
+        self.assertEqual(home["attention"], [])
+        self.assertEqual(home["gates"], {"passed": 0, "total": 0})
+        self.assertEqual(home["frontier"], {"count": 0, "nodes": []})
+        self.assertEqual(home["taskCounts"]["total"], 0)
+        self.assertEqual(home["dispatch"], {"launched": 0, "pidAlive": 0})
+        self.assertEqual(home["autonomate"], {"pid": None, "alive": False})
+        self.assertFalse(home["stop"])
+        self.assertIsNone(home["backoff"])
+        self.assertIsNone(home["lastActivityAt"])
+        self.assertEqual(len(home["activityByDay"]), 14)
+
+    def test_stop_attention(self) -> None:
+        repo = self._repo()
+        (repo / ".gluerun-state/STOP").write_text("")
+        home = srv.collect_home(repo)
+        self.assertTrue(home["stop"])
+        self.assertTrue(any(a["severity"] == "watch" and "STOP" in a["text"]
+                            for a in home["attention"]))
+        self.assertEqual(home["health"], "watch")
+
+    def test_breaker_blocker_and_near(self) -> None:
+        repo = self._repo()
+        (repo / "scripts/orchestration").mkdir(parents=True)
+        (repo / "scripts/orchestration/lib.sh").write_text(
+            'GLUERUN_MAX_CONSEC_FAILS="${GLUERUN_MAX_CONSEC_FAILS:-4}"\n')
+        (repo / ".gluerun-state/circuit.json").write_text(json.dumps({"consecFails": 4}))
+        home = srv.collect_home(repo)
+        self.assertEqual(home["breaker"], {"consecFails": 4, "threshold": 4})
+        self.assertEqual(home["health"], "blocker")
+        self.assertTrue(any(a["severity"] == "blocker" for a in home["attention"]))
+        # one below threshold -> watch
+        (repo / ".gluerun-state/circuit.json").write_text(json.dumps({"consecFails": 3}))
+        srv._HOME_CACHE.invalidate()
+        home = srv.collect_home(repo)
+        self.assertTrue(any(a["severity"] == "watch" and "near trip" in a["text"]
+                            for a in home["attention"]))
+
+    def test_backoff_active_attention(self) -> None:
+        repo = self._repo()
+        future = (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+        (repo / ".gluerun-state/planner-backoff.json").write_text(
+            json.dumps({"until": future, "failureClass": "quota"}))
+        home = srv.collect_home(repo)
+        self.assertTrue(home["backoff"]["active"])
+        self.assertTrue(any("quota" in a["text"] for a in home["attention"]))
+
+    def test_stale_l1_lease_attention(self) -> None:
+        repo = self._repo()
+        (repo / ".gluerun-state/l1-leases").mkdir()
+        old = (dt.datetime.now(dt.UTC) - dt.timedelta(minutes=200)).isoformat().replace("+00:00", "Z")
+        (repo / ".gluerun-state/l1-leases/D0.contract.json").write_text(
+            json.dumps({"node": "D0.contract", "status": "active", "updatedAt": old}))
+        home = srv.collect_home(repo)
+        self.assertTrue(any("idle" in a["text"] for a in home["attention"]))
+
+    def test_stale_autonomate_pidfile_attention(self) -> None:
+        repo = self._repo()
+        (repo / ".gluerun-state/autonomate.pid").write_text("999999999\n")
+        home = srv.collect_home(repo)
+        self.assertFalse(home["autonomate"]["alive"])
+        self.assertTrue(any("pidfile is stale" in a["text"] for a in home["attention"]))
+
+    def test_activity_rollup_across_days(self) -> None:
+        repo = self._repo()
+        now = dt.datetime.now(dt.UTC)
+
+        def iso(days_ago: int) -> str:
+            return (now - dt.timedelta(days=days_ago)).isoformat().replace("+00:00", "Z")
+
+        events = [
+            _ev("l1.dispatch_started", iso(2), taskId="TASK-1", branch="agent/task-1"),
+            _ev("l1.dispatch_started", iso(1), taskId="TASK-2", branch="agent/task-2"),
+            _ev("integration.integrated", iso(1), taskId="TASK-2", branch="agent/task-2",
+                mergeCommit="abc1234"),
+            _ev("l1.task_failed", iso(0), taskId="TASK-3"),
+        ]
+        (repo / ".gluerun-state/events.ndjson").write_text(
+            "\n".join(json.dumps(e) for e in events) + "\n")
+        home = srv.collect_home(repo)
+        by_date = {d["date"]: d for d in home["activityByDay"]}
+        self.assertEqual(by_date[(now.date() - dt.timedelta(days=2)).isoformat()]["dispatches"], 1)
+        self.assertEqual(by_date[(now.date() - dt.timedelta(days=1)).isoformat()]["dispatches"], 1)
+        self.assertEqual(by_date[(now.date() - dt.timedelta(days=1)).isoformat()]["integrations"], 1)
+        self.assertEqual(by_date[now.date().isoformat()]["failures"], 1)
+        self.assertIsNotNone(home["lastActivityAt"])
+        self.assertLessEqual(len(home["notable"]), 12)
 
 
 if __name__ == "__main__":

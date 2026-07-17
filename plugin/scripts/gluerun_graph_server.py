@@ -4120,6 +4120,234 @@ def collect_raw(repo: Path, root: str, name: str) -> dict[str, Any] | None:
 
 
 # --------------------------------------------------------------------------- #
+# Home (gluerun.codex.home.v0)                                                 #
+# --------------------------------------------------------------------------- #
+#
+# The console's landing digest: one glanceable health verdict, an attention feed
+# (what needs an operator's eyes), plan/gate/task rollups, live loop state
+# (dispatch, autonomate pid, breaker, backoff), and a 14-day activity sparkline.
+# Pure filesystem: os.kill(pid, 0) liveness probes and shutil.disk_usage (a
+# syscall, not a subprocess) are the only "live" reads — collect_disk's df/du is
+# deliberately avoided so collect_home stays subprocess-free.
+
+HOME_L1_STALE_MINUTES = 120
+
+
+def _pid_alive(pid: Any) -> bool:
+    """True when a signal-0 probe reaches a live process. os.kill(pid, 0) is a
+    liveness check, not a subprocess."""
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid_int <= 0:
+        return False
+    try:
+        os.kill(pid_int, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _parse_ts(value: Any) -> dt.datetime | None:
+    """Parse an ISO-8601 or epoch timestamp to an aware UTC datetime, else None."""
+    if isinstance(value, (int, float)):
+        try:
+            return dt.datetime.fromtimestamp(float(value), dt.UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str) and value:
+        try:
+            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
+    return None
+
+
+def _breaker_threshold(repo: Path) -> int:
+    """Circuit-breaker trip count = the GLUERUN_MAX_CONSEC_FAILS shell default
+    parsed from the settings-dir files (fallback 3)."""
+    text = ""
+    settings_dir = resolve_settings_dir(repo)
+    for name in SETTINGS_FILE_NAMES:
+        try:
+            text += "\n" + (settings_dir / name).read_text(errors="replace")
+        except OSError:
+            pass
+    raw = parse_shell_default(text, "GLUERUN_MAX_CONSEC_FAILS")
+    try:
+        return int(raw) if raw is not None else 3
+    except ValueError:
+        return 3
+
+
+def collect_home(repo: Path) -> dict[str, Any]:
+    """The landing digest. Read-only; pure filesystem (no subprocesses)."""
+    repo = repo.resolve()
+    now = dt.datetime.now(dt.UTC)
+
+    # --- activity rollup + last-activity from the shared events index ---------
+    tail = load_events_index(repo).get("tail_rows") or []
+    days = [(now.date() - dt.timedelta(days=i)).isoformat() for i in range(13, -1, -1)]
+    day_index = {d: {"date": d, "dispatches": 0, "integrations": 0, "failures": 0} for d in days}
+    last_activity: str | None = None
+    for row in tail:
+        ts = row.get("ts")
+        if isinstance(ts, str) and ts:
+            last_activity = ts  # rows are in file order; the last non-empty ts is newest
+        day = ts[:10] if isinstance(ts, str) else None
+        etype = row.get("type")
+        bucket = day_index.get(day) if day else None
+        if bucket is None:
+            continue
+        if etype == "l1.dispatch_started":
+            bucket["dispatches"] += 1
+        elif etype == "integration.integrated":
+            bucket["integrations"] += 1
+        # project_event marks failures with tone "red" (the six-tone system has no
+        # "error" tone); count task failures + red-toned dispatch reaps as failures.
+        if etype == "l1.task_failed" or (etype == "origin.dispatch_reaped" and row.get("tone") == "red"):
+            bucket["failures"] += 1
+    activity_by_day = [day_index[d] for d in days]
+
+    # --- plan / gate / frontier rollups ---------------------------------------
+    gates = collect_gates_summary(repo)
+    gates_out = {"passed": gates.get("passed", 0), "total": gates.get("total", 0)}
+    frontier_nodes = [str(e.get("node")) for e in (compute_frontier_native(repo).get("frontier") or [])]
+    frontier = {"count": len(frontier_nodes), "nodes": frontier_nodes}
+
+    # --- task counts (lease status first, task-file status fallback) ----------
+    tasks = collect_tasks(repo)
+    leases = collect_leases(repo)
+    lease_status = {str(l.get("taskId")): str(l.get("status") or "")
+                    for l in leases if l.get("taskId")}
+    status_by_task: dict[str, str] = {}
+    for t in tasks:
+        tid = str(t.get("id"))
+        status_by_task[tid] = lease_status.get(tid) or str(t.get("status") or "unknown")
+    for tid, status in lease_status.items():
+        status_by_task.setdefault(tid, status)
+    task_counts = {bucket: 0 for bucket in _DAG_TASK_BUCKETS}
+    task_counts["total"] = len(status_by_task)
+    for status in status_by_task.values():
+        task_counts[_dag_task_bucket(status)] += 1
+
+    # --- live loop state ------------------------------------------------------
+    launched = pid_alive = 0
+    dispatch_dir = state_path(repo, "dispatch")
+    if dispatch_dir.is_dir():
+        for path in sorted(dispatch_dir.glob("TASK-*.json")):
+            rec = read_json(path, {})
+            if not isinstance(rec, dict) or str(rec.get("state")) != "launched":
+                continue
+            launched += 1
+            if _pid_alive(rec.get("pid")):
+                pid_alive += 1
+    dispatch = {"launched": launched, "pidAlive": pid_alive}
+
+    auto_pid_path = state_path(repo, "autonomate.pid")
+    auto_pid: int | None = None
+    auto_alive = False
+    auto_pidfile_present = auto_pid_path.is_file()
+    if auto_pidfile_present:
+        m = re.search(r"\d+", auto_pid_path.read_text(errors="replace"))
+        auto_pid = int(m.group(0)) if m else None
+        auto_alive = _pid_alive(auto_pid)
+    autonomate = {"pid": auto_pid, "alive": auto_alive}
+
+    stop_present = (repo / STOP_REL).exists()
+
+    circuit = read_json(repo / CIRCUIT_REL, {}) or {}
+    try:
+        consec = int(circuit.get("consecFails") or 0)
+    except (TypeError, ValueError):
+        consec = 0
+    threshold = _breaker_threshold(repo)
+    breaker = {"consecFails": consec, "threshold": threshold}
+
+    backoff_raw = read_json(state_path(repo, "planner-backoff.json"), None)
+    backoff: dict[str, Any] | None = None
+    if isinstance(backoff_raw, dict):
+        until = _parse_ts(backoff_raw.get("until"))
+        backoff = dict(backoff_raw)
+        backoff["active"] = bool(until and until > now)
+
+    # --- disk watch via a pure syscall (no df subprocess) ---------------------
+    disk_watch = False
+    capacity_pct: int | None = None
+    try:
+        usage = shutil.disk_usage(str(repo))
+        if usage.total:
+            capacity_pct = int(round(100 * usage.used / usage.total))
+            disk_watch = capacity_pct >= WATCH_DISK_CAPACITY
+    except OSError:
+        pass
+
+    # --- attention feed -------------------------------------------------------
+    attention: list[dict[str, Any]] = []
+    if stop_present:
+        attention.append({"severity": "watch", "text": "STOP sentinel present — the loop is halted",
+                          "link": "/api/raw/state/STATUS.md"})
+    if threshold and consec >= threshold:
+        attention.append({"severity": "blocker",
+                          "text": f"circuit breaker tripped ({consec}/{threshold} consecutive failures)",
+                          "link": "/api/raw/state/circuit.json"})
+    elif threshold and consec == threshold - 1:
+        attention.append({"severity": "watch",
+                          "text": f"circuit breaker near trip ({consec}/{threshold} consecutive failures)",
+                          "link": "/api/raw/state/circuit.json"})
+    if backoff and backoff.get("active"):
+        failure_class = backoff.get("failureClass") or "error"
+        attention.append({"severity": "watch",
+                          "text": f"planner backing off ({failure_class}) until {backoff.get('until')}",
+                          "link": "/api/raw/state/planner-backoff.json"})
+    for lease in collect_l1_leases(repo):
+        if not lease.get("active"):
+            continue
+        updated = _parse_ts(lease.get("updatedAt"))
+        if updated is None:
+            continue
+        idle_min = (now - updated).total_seconds() / 60.0
+        if idle_min > HOME_L1_STALE_MINUTES:
+            attention.append({"severity": "watch",
+                              "text": f"L1 lease {lease.get('node')} idle {int(idle_min)} min"})
+    if disk_watch:
+        attention.append({"severity": "watch", "text": f"disk at {capacity_pct}% capacity"})
+    if auto_pidfile_present and not auto_alive:
+        attention.append({"severity": "watch", "text": "loop pidfile is stale"})
+
+    severities = {a["severity"] for a in attention}
+    health = "blocker" if "blocker" in severities else ("watch" if "watch" in severities else "ok")
+
+    return {
+        "schema": "gluerun.codex.home.v0",
+        "generatedAt": utc_now(),
+        "health": health,
+        "attention": attention,
+        "gates": gates_out,
+        "frontier": frontier,
+        "taskCounts": task_counts,
+        "dispatch": dispatch,
+        "autonomate": autonomate,
+        "stop": stop_present,
+        "breaker": breaker,
+        "backoff": backoff,
+        "lastActivityAt": last_activity,
+        "activityByDay": activity_by_day,
+        "notable": tail[-12:],
+    }
+
+
+_HOME_CACHE = _ComputeCache(collect_home, 6.0)
+
+
+def load_home(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    return _HOME_CACHE.get(str(repo), repo)
+
+
+# --------------------------------------------------------------------------- #
 # Console adapter (gluerun.console-adapter.v0)                                     #
 # --------------------------------------------------------------------------- #
 #
@@ -4641,6 +4869,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/overview":
             self.send_json(load_overview(self.repo))
             return
+        if route == "/api/home":
+            self.send_json(load_home(self.repo))
+            return
         if route == "/api/events":
             query = parse_qs(parsed.query)
             raw_cursor = query.get("cursor", [None])[0]
@@ -4725,6 +4956,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--prompts", action="store_true", help="Print the role prompt library JSON and exit")
     parser.add_argument("--prompt", help="Print one prompt's content JSON (e.g. auditor.md) and exit")
     parser.add_argument("--raw", help="Print one raw record JSON (e.g. config/gluerun.config.json) and exit")
+    parser.add_argument("--home", action="store_true", help="Print the home landing digest JSON and exit")
     return parser.parse_args(argv)
 
 
@@ -4833,6 +5065,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"raw not found: {args.raw}", file=sys.stderr)
             return 3
         print(json.dumps(data, indent=2))
+        return 0
+    if args.home:
+        print(json.dumps(collect_home(repo), indent=2))
         return 0
     Handler.repo = repo
     server = ThreadingHTTPServer((args.host, args.port), Handler)
