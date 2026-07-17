@@ -9,9 +9,9 @@
 // the exported seams at the bottom are the contract the surface modules build
 // on. Body indentation preserved from the IIFE to keep the diff reviewable.
 
+import { bus } from "./core/bus.js";
+
   const POLL_MS = 10000;
-  const LANE_BUDGET = 40;  // max non-terminal L2 nodes shown per lane in the graph
-  const MORE_STEP = 24;    // integrated tasks revealed per "+ more" click in the graph
   const $ = (id) => document.getElementById(id);
 
   // ---- pure state engine (tone + label) ----
@@ -32,12 +32,9 @@
   // ---- app state ----
   const S = {
     snap: null,
-    listOpen: localStorage.getItem("gluerun.listOpen") === "1", // task-list drawer expanded?
-    listHeight: parseInt(localStorage.getItem("gluerun.listH"), 10) || 260,
     query: "",
     areaFilter: "",
     statusFilter: "",
-    expanded: null,        // Set<area>; seeded once from auto-expand heuristic
     selectedId: null,      // node id (TASK-xxxx | L0 | L1:area)
     selectedKind: "none",  // none | l0 | l1 | l2
     pinnedId: localStorage.getItem("gluerun.pinnedId") || null,
@@ -50,20 +47,12 @@
     areaNodesInflight: new Set(),
     overview: null,            // /api/overview (plan progress + inputs + settings + status)
     overviewInflight: false,
-    budgets: new Map(),    // area -> graph lane render budget (durable across polls)
     roleCatalog: null,     // /api/roles (declared reference), fetched once
     roleInflight: false,
-    transform: { x: 0, y: 0, z: 1 }, // graph canvas pan/zoom (survives polls)
-    graphBBox: null,
-    _nodeIndex: null,      // id -> laid-out node (for panToNode / edge highlight)
-    _graphFitted: false,
-    _userPanned: false,
-    _suppressClick: false, // set after a pan-drag so the trailing click doesn't select
     lastSig: {},
     lastOkAt: 0,
     connState: "down",
   };
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   // ---------------------------------------------------------------- utils ---
   const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) =>
@@ -136,12 +125,10 @@
       // A stale-served snapshot (server is recomputing in the background) is
       // shown, but flagged via the existing stale hint rather than as live.
       setConn(S.snap && S.snap.stale ? "stale" : "connected");
-      seedExpansion();
       seedSelection();
       renderAll();
       maybeRefreshOpenTask();
       fetchOverview(); // refresh the plan pill + overview panel (own cheap cached endpoint)
-      if (!S.deepLinkApplied) { S.deepLinkApplied = true; applyDeepLink(); }
     } catch (err) {
       setConn("down");
       console.error("[gluerun] load failed:", err && err.stack ? err.stack : err);
@@ -155,17 +142,6 @@
     }
     S.connState = state;
     $("conn-dot").dataset.state = state;
-  }
-
-  function seedExpansion() {
-    if (S.expanded) return;
-    S.expanded = new Set();
-    const areas = (S.snap.agents && S.snap.agents.l1) || [];
-    for (const a of areas) {
-      const sc = a.stateCounts || {};
-      const hot = (sc.active || 0) + (sc.awaiting || 0) + (sc.blocked || 0) + (sc.failed || 0) + (sc.stale || 0);
-      if (hot > 0) S.expanded.add(a.area);
-    }
   }
 
   function seedSelection() {
@@ -274,352 +250,33 @@
 
   const shortRun = (r) => String(r || "").replace(/^ORIGIN-|^RUN-/, "").slice(0, 16);
 
-  // ============================================================= GRAPH ======
-  function graphSig() {
-    const ag = S.snap.agents || {};
-    return JSON.stringify({
-      v: "graph",
-      // include l1Active + the active lease node so the planner overlay repaints
-      l1: (ag.l1 || []).map((a) => [a.area, a.state, a.taskCount, a.stateCounts, a.l1Active, (a.l1Lease || {}).node, (a.l1Lease || {}).status]),
-      l0: ag.l0 && [ag.l0.state, ag.l0.runId, ag.l0.processes, ag.l0.activeOriginLock],
-      fr: [...frontierAreaSet()].sort(),
-      exp: [...(S.expanded || [])].sort(),
-      bud: [...S.budgets].sort(),
-      q: S.query, af: S.areaFilter, sf: S.statusFilter,
-      // transform + selection are applied separately (never rebuild on pan/select)
-      tasks: (S.snap.l2Tasks || []).map((t) => [t.id, t.state, t.area, (t.dependsOn || []).length]),
-    });
-  }
-
-  // Layout geometry (left -> right): L0 column, L1 areas column, L2 tasks column.
-  const GL = { PAD: 24, X0: 24, W0: 280, X1: 394, W1: 250, X2: 714, W2: 320,
-    H0: 78, H1: 52, H2: 46, VGAP: 10, BANDGAP: 26 };
-
-  // Pure deterministic layout -> {nodes, bbox, index}. Single vertical cursor packs
-  // each area into a contiguous band (bandH = max(L1, budgeted L2 stack)); advancing
-  // by bandH+gap is collision-free by construction. L0 is centered on the L1 column.
-  // The set of areas with a ready DAG frontier node (plural). Falls back to the
-  // singular next-area when the plural frontier is unavailable.
-  function frontierAreaSet() {
-    const o = (S.snap && S.snap.orchestration) || {};
-    const list = (o.nextAreas && Array.isArray(o.nextAreas.frontier)) ? o.nextAreas.frontier : [];
-    const set = new Set(list.map((f) => f && f.area).filter(Boolean));
-    if (set.size === 0 && o.nextArea && o.nextArea.area) set.add(o.nextArea.area);
-    return set;
-  }
-
-  function layoutGraph() {
-    const ag = S.snap.agents || {};
-    const frontierAreas = frontierAreaSet();
-    const byArea = groupTasks();
-    const areas = (ag.l1 || []).filter((a) => !S.areaFilter || a.area === S.areaFilter);
-    const nodes = [];
-    let y = GL.PAD, anyExpanded = false;
-    for (const a of areas) {
-      const laneTasks = byArea.get(a.area) || [];
-      const matchOpen = !!S.query && laneTasks.some((t) =>
-        [t.id, t.title, t.workerBranch].join(" ").toLowerCase().includes(S.query));
-      const expanded = (S.expanded.has(a.area) || matchOpen) && laneTasks.length > 0;
-      const frontier = frontierAreas.has(a.area);
-      if (expanded) {
-        anyExpanded = true;
-        // Spatial graph shows the exceptions: all non-terminal tasks, plus however
-        // many integrated the operator has revealed via "load more". The integrated
-        // majority stays collapsed behind a single "+N more" node (use the list view
-        // to scan them all) — keeps the canvas compact and attention on what's live.
-        const sorted = sortExceptionsFirst(laneTasks);
-        const nonTerminal = sorted.filter((t) => t.state !== "integrated");
-        const integrated = sorted.filter((t) => t.state === "integrated");
-        const reveal = S.budgets.get(a.area) || 0;
-        const ntShown = nonTerminal.slice(0, LANE_BUDGET);
-        const shown = ntShown.concat(integrated.slice(0, reveal));
-        const hidden = (nonTerminal.length - ntShown.length) + Math.max(0, integrated.length - reveal);
-        const count = Math.max(1, shown.length + (hidden > 0 ? 1 : 0));
-        const bandH = Math.max(GL.H1, count * GL.H2 + (count - 1) * GL.VGAP);
-        nodes.push({ kind: "l1", area: a, frontier, expanded: true, x: GL.X1, y: y + (bandH - GL.H1) / 2, w: GL.W1, h: GL.H1 });
-        let ty = y;
-        for (const t of shown) { nodes.push({ kind: "l2", task: t, x: GL.X2, y: ty, w: GL.W2, h: GL.H2 }); ty += GL.H2 + GL.VGAP; }
-        if (hidden > 0) nodes.push({ kind: "more", area: a.area, remaining: hidden, x: GL.X2, y: ty, w: GL.W2, h: GL.H2 });
-        y += bandH + GL.BANDGAP;
-      } else {
-        nodes.push({ kind: "l1", area: a, frontier, expanded: false, empty: laneTasks.length === 0, x: GL.X1, y, w: GL.W1, h: GL.H1 });
-        y += GL.H1 + GL.BANDGAP;
-      }
-    }
-    const bandsH = Math.max(0, y - GL.BANDGAP - GL.PAD);
-    const l0y = GL.PAD + Math.max(0, (bandsH - GL.H0) / 2);
-    nodes.unshift({ kind: "l0", l0: ag.l0 || {}, x: GL.X0, y: l0y, w: GL.W0, h: GL.H0 });
-    const W = (anyExpanded ? GL.X2 + GL.W2 : GL.X1 + GL.W1) + GL.PAD;
-    const H = Math.max(y, l0y + GL.H0 + GL.PAD);
-    const index = {};
-    for (const n of nodes) {
-      const id = n.kind === "l0" ? "L0" : n.kind === "l1" ? n.area.id : n.kind === "l2" ? n.task.id : null;
-      if (id) index[id] = n;
-    }
-    return { nodes, bbox: { W, H }, index };
-  }
-
-  function renderGraph() {
-    const root = $("view-graph");
-    const { nodes, bbox, index } = layoutGraph();
-    S.graphBBox = bbox; S._nodeIndex = index;
-    const q = S.query;
-    let nh = "";
-    for (const n of nodes) {
-      if (n.kind === "l0") nh += l0NodeHtml(n);
-      else if (n.kind === "l1") nh += l1NodeHtml(n);
-      else if (n.kind === "l2") nh += l2NodeHtml(n, q);
-      else if (n.kind === "more") nh += moreNodeHtml(n);
-    }
-    root.innerHTML =
-      `<div class="canvas" style="width:${bbox.W}px;height:${bbox.H}px">` +
-      `<svg class="edge-layer" width="${bbox.W}" height="${bbox.H}" viewBox="0 0 ${bbox.W} ${bbox.H}">${renderEdges(nodes)}</svg>` +
-      nh + `</div>` + canvasControlsHtml();
-    if (!S._graphFitted) { S._graphFitted = true; fitGraph(); } else { applyTransform(); }
-    applyMarkers();
-  }
-
-  const pos = (n) => `left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px`;
-
-  function l0NodeHtml(n) {
-    const l0 = n.l0 || {};
-    return `<button class="gnode l0" style="${pos(n)}" data-id="L0" data-layer="l0" data-state="${escAttr(l0.state)}" data-tone="${toneOf(l0.state)}" data-selected="false">
-      <span class="bezel" data-tone="${toneOf(l0.state)}">${icon("i-hub")}</span>
-      <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
-        <div class="gn-title">L0 origin ${statusChip(l0.state)}</div>
-        <div class="gn-meta">${esc(shortRun(l0.runId) || "—")} · leases ${esc(l0.activeLeases != null ? l0.activeLeases : "—")}</div>
-      </div></button>`;
-  }
-
-  function l1NodeHtml(n) {
-    const a = n.area;
-    const lease = a.l1Lease || null;
-    // A live L1 planner is a durable fact (an active l1-lease) — surfaced as a
-    // distinct cobalt "L1" badge, separate from the area's L2-task state tone.
-    const plannerBadge = a.l1Active
-      ? `<span class="l1-planner" title="L1 planner active${lease ? ": " + escAttr(lease.node) + " (" + escAttr(lease.status) + ")" : ""}">L1</span>`
-      : "";
-    return `<button class="gnode l1${n.frontier ? " has-frontier" : ""}${a.l1Active ? " has-l1" : ""}" style="${pos(n)}" data-id="${escAttr(a.id)}" data-area="${escAttr(a.area)}" data-layer="l1" data-state="${escAttr(a.state)}" data-tone="${toneOf(a.state)}" data-expanded="${n.expanded}" data-selected="false" aria-expanded="${n.expanded}">
-      <span class="chevron">${icon("i-chev")}</span>
-      ${toneDot(a.state)}
-      <span class="gn-title">${esc(a.area)}</span>
-      ${plannerBadge}
-      ${n.frontier ? `<span class="fdiamond" title="frontier"></span>` : ""}
-      ${laneCountBadge(a)}
-    </button>`;
-  }
-
-  function l2NodeHtml(n, q) {
-    const t = n.task;
-    const dim = q && ![t.id, t.title, t.workerBranch].join(" ").toLowerCase().includes(q) ? " search-dim" : "";
-    return `<button class="gnode l2${dim}" style="${pos(n)}" data-task-id="${escAttr(t.id)}" data-layer="l2" data-state="${escAttr(t.state)}" data-area="${escAttr(t.area)}" data-tone="${toneOf(t.state)}" data-selected="false" data-pinned="false">
-      ${toneDot(t.state)}
-      <span class="gn-id">${highlight(t.id, q)}</span>
-      <span class="gn-title">${highlight(t.title || "", q)}</span>
-      <span class="gn-chip">${statusChip(t.state)}</span>
-      <span class="pin-glyph">${icon("i-pin")}</span>
-    </button>`;
-  }
-
-  function moreNodeHtml(n) {
-    return `<button class="gnode more" style="${pos(n)}" data-area="${escAttr(n.area)}" data-remaining="${n.remaining}">+ ${n.remaining} more integrated · load ${Math.min(MORE_STEP, n.remaining)}</button>`;
-  }
-
-  function canvasControlsHtml() {
-    return `<div class="canvas-controls">
-      <div class="cc-row">
-        <button class="zoom-btn" data-zoom="out" title="Zoom out" aria-label="Zoom out">−</button>
-        <button class="zoom-btn" data-zoom="in" title="Zoom in" aria-label="Zoom in">+</button>
-      </div>
-      <button class="zoom-btn wide" data-zoom="fit" title="Fit graph">${icon("i-expand")}fit</button>
-    </div>`;
-  }
-
-  function laneCountBadge(a) {
-    const sc = a.stateCounts || {};
-    const integ = sc.integrated || 0;
-    let mk = "";
-    if (sc.awaiting) mk += ` <span class="mk awaiting">▲${sc.awaiting}</span>`;
-    if (sc.blocked) mk += ` <span class="mk blocked">▢${sc.blocked}</span>`;
-    if (sc.failed) mk += ` <span class="mk failed">✕${sc.failed}</span>`;
-    if (sc.active) mk += ` <span class="mk active">●${sc.active}</span>`;
-    if (sc.stale) mk += ` <span class="mk stale">◌${sc.stale}</span>`;
-    return `<span class="count-badge"><span class="pos">${integ}</span>/${a.taskCount}${mk}</span>`;
-  }
-
-  function groupTasks() {
-    const m = new Map();
-    for (const t of S.snap.l2Tasks || []) {
-      if (S.statusFilter && t.state !== S.statusFilter) continue;
-      if (!m.has(t.area)) m.set(t.area, []);
-      m.get(t.area).push(t);
-    }
-    return m;
-  }
-
-  // ---- edges (svg, in canvas coordinate space) ----
-  function renderEdges(nodes) {
-    const l0 = nodes.find((n) => n.kind === "l0");
-    const l1s = nodes.filter((n) => n.kind === "l1");
-    const areaL1 = {}; l1s.forEach((n) => { areaL1[n.area.area] = n; });
-    let p = "";
-    if (l0) for (const n of l1s) p += edgePath(l0, n, "edge", "L0", n.area.id);
-    for (const n of nodes) {
-      if (n.kind === "l2" || n.kind === "more") {
-        const par = areaL1[n.kind === "l2" ? n.task.area : n.area];
-        if (par) p += edgePath(par, n, "edge", par.area.id, n.kind === "l2" ? n.task.id : "");
-      }
-    }
-    return p;
-  }
-  function edgePath(a, b, cls, from, to) {
-    const px = a.x + a.w, py = a.y + a.h / 2, cx = b.x, cy = b.y + b.h / 2;
-    const dx = Math.max(40, (cx - px) * 0.5);
-    const d = `M ${px} ${py} C ${px + dx} ${py}, ${cx - dx} ${cy}, ${cx} ${cy}`;
-    return `<path class="${cls}" data-from="${escAttr(from)}" data-to="${escAttr(to)}" d="${d}"/>`;
-  }
-  // dependency edge between two L2 nodes (same column) — bow out to the right
-  function depEdge(a, b) {
-    const ax = a.x + a.w, ay = a.y + a.h / 2, bx = b.x + b.w, by = b.y + b.h / 2;
-    const off = 56 + Math.abs(by - ay) * 0.12;
-    return `<path class="edge dep" d="M ${ax} ${ay} C ${ax + off} ${ay}, ${bx + off} ${by}, ${bx} ${by}"/>`;
-  }
-
-  // ---- pan / zoom (CSS transform on .canvas; never triggers a rebuild) ----
-  function applyTransform() {
-    const c = document.querySelector("#view-graph .canvas");
-    if (c) c.style.transform = `translate(${S.transform.x}px, ${S.transform.y}px) scale(${S.transform.z})`;
-  }
-  function zoomAt(factor, ev) {
-    const r = $("view-graph").getBoundingClientRect();
-    const mx = (ev ? ev.clientX : r.left + r.width / 2) - r.left;
-    const my = (ev ? ev.clientY : r.top + r.height / 2) - r.top;
-    const z = clamp(S.transform.z * factor, 0.3, 2.5);
-    S.transform.x = mx - (mx - S.transform.x) * (z / S.transform.z);
-    S.transform.y = my - (my - S.transform.y) * (z / S.transform.z);
-    S.transform.z = z;
-    S._userPanned = true;
-    applyTransform();
-  }
-  function fitGraph() {
-    const bb = S.graphBBox; if (!bb) return;
-    const r = $("view-graph").getBoundingClientRect();
-    if (!r.width) return;
-    const z = clamp(Math.min((r.width - 28) / bb.W, (r.height - 28) / bb.H), 0.3, 1.2);
-    S.transform = { z, x: Math.max(14, (r.width - bb.W * z) / 2), y: Math.max(14, (r.height - bb.H * z) / 2) };
-    S._userPanned = false;
-    applyTransform();
-  }
-  function panToNode(id) {
-    const n = (S._nodeIndex || {})[id]; if (!n) return;
-    const r = $("view-graph").getBoundingClientRect();
-    const z = S.transform.z;
-    S.transform.x = r.width / 2 - (n.x + n.w / 2) * z;
-    S.transform.y = r.height / 2 - (n.y + n.h / 2) * z;
-    S._userPanned = true;
-    applyTransform();
-  }
-
-  // (The former "agents" table view was removed — the node-edge graph is the agent
-  // map: nodes carry deployed L0/L1/L2 state. The worktree-divergence note moved to
-  // the L0 inspector; per-task agent detail lives in the L2 inspector "work" tab.)
-
-  // ============================================================== LIST =======
-  function listSig() {
-    const rows = tasksFiltered();
-    return JSON.stringify({
-      v: "list", q: S.query, af: S.areaFilter, sf: S.statusFilter,
-      rows: rows.map((t) => [t.id, t.state, t.updatedAt]),
-    });
-  }
-
-  function renderList() {
-    const root = $("view-list");
-    const rows = sortExceptionsFirst(tasksFiltered());
-    const now = S.snap.generatedAt;
-    let body = rows.map((t) => `
-      <tr data-task-id="${escAttr(t.id)}" data-layer="l2" data-selected="${S.selectedId === t.id}" data-pinned="${S.pinnedId === t.id}">
-        <td>${statusChip(t.state)}</td>
-        <td class="c-id">${highlight(t.id, S.query)}</td>
-        <td class="c-title">${highlight(t.title || "", S.query)}</td>
-        <td class="c-area">${esc(t.area)}</td>
-        <td class="c-branch">${highlight(shortBranch(t.workerBranch), S.query)}</td>
-        <td class="c-updated">${esc(relTime(t.updatedAt, now))}</td>
-      </tr>`).join("");
-    if (!rows.length) body = `<tr><td colspan="6" class="lane-empty" style="padding:16px">no tasks match the current filters</td></tr>`;
-    root.innerHTML = `<table class="task-table">
-      <thead><tr><th>state</th><th>id</th><th>title</th><th>area</th><th>branch</th><th>upd</th></tr></thead>
-      <tbody>${body}</tbody></table>`;
-  }
-
   // =========================================================== RENDER ALL ====
   function renderAll() {
     if (!S.snap) return;
     renderTop();
     populateAreaFilter();
     renderShowing();
-    renderCurrentView();
     refreshInspectorHeaderFromSnap();
     tickAge();
+    // Plan lenses refresh off the same snapshot (signature-gated, own scroll/
+    // selection preservation). The dispatcher is composed in main.js and also
+    // drives the router's deferred deep-link resolution.
+    if (bus.onSnapshot) bus.onSnapshot();
   }
 
-  // The graph is always rendered; the task list is rendered only while its drawer
-  // is open. Each is signature-gated so a quiet poll rebuilds neither.
-  function renderCurrentView(force) {
-    if (!S.snap) return;
-    const gsig = graphSig();
-    if (force || S.lastSig.graph !== gsig) {
-      const scroll = $("view-scroll");
-      const prevTop = scroll.scrollTop;
-      renderGraph();
-      S.lastSig.graph = gsig;
-      scroll.scrollTop = prevTop;
-    }
-    if (S.listOpen) {
-      const lsig = listSig();
-      if (force || S.lastSig.list !== lsig) {
-        const lb = $("list-body");
-        const prevTop = lb ? lb.scrollTop : 0;
-        renderList();
-        S.lastSig.list = lsig;
-        if (lb) lb.scrollTop = prevTop;
-      }
-    }
-    applyMarkers(); // keep selection/pin markers fresh on graph + list rows
-  }
+  // Filter/search changes repaint the showing-count and ask the mounted Plan lens
+  // to refresh (its own signature gate decides whether to rebuild).
+  function planRefresh() { if (bus.onSnapshot) bus.onSnapshot(); }
 
+  // Selection/pin markers are applied over prebuilt lens DOM — never a rebuild.
+  // Any lens row/bar carrying data-task-id + data-selected/data-pinned updates.
   function applyMarkers() {
-    document.querySelectorAll("[data-selected]").forEach((el) => {
-      const id = el.dataset.taskId || el.dataset.id;
-      el.dataset.selected = String(id === S.selectedId);
+    document.querySelectorAll("[data-task-id][data-selected]").forEach((el) => {
+      el.dataset.selected = String(el.dataset.taskId === S.selectedId);
     });
     document.querySelectorAll("[data-task-id][data-pinned]").forEach((el) => {
       el.dataset.pinned = String(el.dataset.taskId === S.pinnedId);
     });
-    applyEdgeHighlight();
-  }
-
-  // Recolor structural edges to the selected node + inject dependency edges for the
-  // selected/pinned task. No relayout — runs on every quiet poll via applyMarkers.
-  function applyEdgeHighlight() {
-    const svg = document.querySelector("#view-graph .edge-layer");
-    if (!svg) return;
-    svg.querySelectorAll(".edge.sel").forEach((p) => p.classList.remove("sel"));
-    svg.querySelectorAll(".edge.dep").forEach((p) => p.remove());
-    const sel = S.selectedId;
-    if (sel) svg.querySelectorAll(`.edge[data-to="${cssEsc(sel)}"]`).forEach((p) => p.classList.add("sel"));
-    const focus = S.selectedKind === "l2" ? S.selectedId : null;
-    if (!focus) return;
-    const idx = S._nodeIndex || {};
-    const self = idx[focus];
-    const t = (S.snap.l2Tasks || []).find((x) => x.id === focus);
-    if (!self || !t) return;
-    let add = "";
-    for (const dep of t.dependsOn || []) { const dn = idx[dep]; if (dn) add += depEdge(dn, self); }
-    for (const inc of S.snap.l2Tasks || []) {
-      if ((inc.dependsOn || []).includes(focus)) { const dn = idx[inc.id]; if (dn) add += depEdge(self, dn); }
-    }
-    if (add) svg.insertAdjacentHTML("beforeend", add);
   }
 
   function populateAreaFilter() {
@@ -640,8 +297,6 @@
     $("showing-count").innerHTML = filtered
       ? `showing <b>${shown}</b> of <b>${total}</b>`
       : `<b>${total}</b> tasks · <b>${(S.snap.summary && S.snap.summary.activeAgents) || 0}</b> non-terminal`;
-    const lc = $("list-count");
-    if (lc) lc.textContent = filtered ? `${shown} / ${total}` : `${total}`;
   }
 
   function tickAge() {
@@ -653,6 +308,14 @@
 
   // ========================================================= INSPECTOR ======
   function select(kind, id) {
+    // Plan-surface node selection is owned by the workbench aside (360px
+    // drilldown), NOT the bottom sheet — but only when nothing is already open in
+    // the sheet (a node chip clicked inside an open task inspector still opens the
+    // node in the sheet, replacing the task view, as before).
+    if (kind === "node" && bus.onNodeSelect && bus.planVisible && bus.planVisible() && S.selectedKind === "none") {
+      bus.onNodeSelect(id);
+      return;
+    }
     S.selectedKind = kind; S.selectedId = id;
     // Open/close the inspector bottom-sheet modal (scrim + slide-up sheet).
     const insp = $("inspector");
@@ -662,9 +325,16 @@
     insp.setAttribute("aria-hidden", String(!open));
     insp.style.transform = ""; // clear any drag offset so CSS open/close takes over
     $("inspector-scrim").dataset.open = String(open);
-    if (kind === "l2") { try { history.replaceState(null, "", "#" + id); } catch (e) {} }
-    else if (kind === "node") { try { history.replaceState(null, "", "#NODE:" + id); } catch (e) {} }
-    else if (kind === "overview") { try { history.replaceState(null, "", "#PLAN"); } catch (e) {} }
+    // The router owns the URL hash; fall back to a legacy write if unwired (dev).
+    if (bus.writeRoute) {
+      if (kind === "l2") bus.writeRoute("task", id, S.inspTab);
+      else if (kind === "node") bus.writeRoute("node", id, null);
+      else if (kind === "overview") bus.writeRoute("overview", "plan", null);
+    } else {
+      if (kind === "l2") { try { history.replaceState(null, "", "#" + id); } catch (e) {} }
+      else if (kind === "node") { try { history.replaceState(null, "", "#NODE:" + id); } catch (e) {} }
+      else if (kind === "overview") { try { history.replaceState(null, "", "#PLAN"); } catch (e) {} }
+    }
     applyMarkers();
     renderInspector();
   }
@@ -1567,33 +1237,11 @@
 
   // ============================================================ EVENTS ======
   function onClick(e) {
-    // a pan-drag just ended — swallow the trailing click so it doesn't select
-    if (S._suppressClick) { S._suppressClick = false; return; }
-
     const copyBtn = e.target.closest(".copy-btn");
     if (copyBtn) { e.stopPropagation(); copy(copyBtn.dataset.copy); return; }
 
-    const zoomBtn = e.target.closest(".zoom-btn");
-    if (zoomBtn) {
-      const z = zoomBtn.dataset.zoom;
-      if (z === "fit") fitGraph(); else zoomAt(z === "in" ? 1.2 : 1 / 1.2);
-      return;
-    }
-
     const pinGlyph = e.target.closest(".pin-glyph");
     if (pinGlyph) { e.stopPropagation(); const node = pinGlyph.closest("[data-task-id]"); if (node) togglePin(node.dataset.taskId); return; }
-
-    const more = e.target.closest(".gnode.more");
-    if (more) {
-      const area = more.dataset.area;
-      S.budgets.set(area, (S.budgets.get(area) || 0) + MORE_STEP);
-      renderCurrentView(true);
-      return;
-    }
-
-    // L1 graph node: toggle its lane AND select it for the inspector
-    const l1node = e.target.closest(".gnode.l1");
-    if (l1node) { toggleExpand(l1node.dataset.area); select("l1", l1node.dataset.id); return; }
 
     // Node navigation — area Nodes-tab rows and task/node provenance chips.
     const navNode = e.target.closest("[data-nav-node]");
@@ -1609,43 +1257,20 @@
     if (l0) { select("l0", "L0"); return; }
   }
 
-  // background-drag = pan; wheel = zoom-to-cursor; click on a node still selects
-  function initGraphInteractions() {
-    const vp = $("view-graph");
-    vp.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      zoomAt(Math.exp(-e.deltaY * 0.0015), e);
-    }, { passive: false });
-    let down = null, moved = false;
-    vp.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0) return;
-      if (e.target.closest(".gnode") || e.target.closest(".canvas-controls")) return; // node/control press
-      down = { x: e.clientX, y: e.clientY, tx: S.transform.x, ty: S.transform.y }; moved = false;
-    });
-    window.addEventListener("pointermove", (e) => {
-      if (!down) return;
-      const dx = e.clientX - down.x, dy = e.clientY - down.y;
-      if (!moved && Math.hypot(dx, dy) > 5) { moved = true; S._userPanned = true; vp.classList.add("dragging"); }
-      if (moved) { S.transform.x = down.tx + dx; S.transform.y = down.ty + dy; applyTransform(); }
-    });
-    const end = () => { if (down && moved) S._suppressClick = true; down = null; moved = false; vp.classList.remove("dragging"); };
-    window.addEventListener("pointerup", end);
-    window.addEventListener("pointercancel", end);
-  }
-
-  // Deep link: #<id> or #<id>:<tab>  (id = TASK-xxxx | L0 | L1:area)
+  // Deep link: #<id> or #<id>:<tab> (legacy grammar). Retained for compatibility;
+  // the hash router (core/router.js) now owns deep-link resolution and calls the
+  // same navigateToTask/select seams, so this is a fallback for standalone use.
   function applyDeepLink() {
     const h = decodeURIComponent((location.hash || "").replace(/^#/, ""));
     if (!h) return;
     const ci = h.lastIndexOf(":");
     let id = h, tab = "";
-    // L1:/NODE: ids contain a ':', so only split a trailing :tab past that prefix colon.
     const prefixed = h.startsWith("L1:") || h.startsWith("NODE:");
     if (ci > 0 && !prefixed) { id = h.slice(0, ci); tab = h.slice(ci + 1); }
     else if (prefixed && h.indexOf(":", h.indexOf(":") + 1) > 0) {
       const j = h.indexOf(":", h.indexOf(":") + 1); id = h.slice(0, j); tab = h.slice(j + 1);
     }
-    if (tab) S.inspTab = tab === "events" ? "timeline" : tab; // events tab was renamed
+    if (tab) S.inspTab = tab === "events" ? "timeline" : tab;
     if (/^TASK-\d+$/.test(id)) { if ((S.snap.l2Tasks || []).some((t) => t.id === id)) navigateToTask(id); }
     else if (id === "L0") select("l0", "L0");
     else if (id === "PLAN") select("overview", "plan");
@@ -1653,18 +1278,11 @@
     else if (/^L1:/.test(id)) select("l1", id);
   }
 
+  // Open a task in the inspector bottom sheet, and (on the Plan surface) switch to
+  // the Tasks lens and scroll/ring its row — the lens handles the scroll.
   function navigateToTask(id) {
-    const t = (S.snap.l2Tasks || []).find((x) => x.id === id);
-    if (t && !S.expanded.has(t.area)) S.expanded.add(t.area);
     select("l2", id);
-    renderCurrentView(true); // rebuild so the (now-expanded) lane includes the node
-    panToNode(id);
-  }
-  const cssEsc = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : s);
-
-  function toggleExpand(area) {
-    if (S.expanded.has(area)) S.expanded.delete(area); else S.expanded.add(area);
-    renderCurrentView(true);
+    if (bus.onTaskNavigate) bus.onTaskNavigate(id);
   }
 
   function togglePin(id) {
@@ -1675,48 +1293,11 @@
     if (S.selectedId) $("insp-pin").setAttribute("aria-pressed", String(S.pinnedId === S.selectedId));
   }
 
-  // Task-list drawer: expand/retract inside the graph area (no view swap).
-  function applyListDrawer() {
-    const d = $("list-drawer");
-    d.dataset.open = String(S.listOpen);
-    d.style.setProperty("--list-h", S.listHeight + "px");
-    $("list-toggle").setAttribute("aria-expanded", String(S.listOpen));
-  }
-  function toggleList(open) {
-    S.listOpen = (open == null) ? !S.listOpen : open;
-    localStorage.setItem("gluerun.listOpen", S.listOpen ? "1" : "0");
-    applyListDrawer();
-    if (S.listOpen) renderCurrentView(true);   // populate the table on first open
-    if (!S._userPanned) fitGraph();            // graph re-fits to its new height
-  }
-  function setListHeight(px) {
-    S.listHeight = Math.max(120, Math.min(window.innerHeight - 220, Math.round(px)));
-    localStorage.setItem("gluerun.listH", String(S.listHeight));
-    $("list-drawer").style.setProperty("--list-h", S.listHeight + "px");
-    if (!S._userPanned) fitGraph();
-  }
-  // Drag the drawer's top grip to resize (height grows as the pointer moves up).
-  function initListResize() {
-    const grip = $("list-resize");
-    let startY = 0, startH = 0, dragging = false;
-    grip.addEventListener("pointerdown", (e) => {
-      if (!S.listOpen) return;
-      dragging = true; startY = e.clientY; startH = S.listHeight;
-      grip.setPointerCapture(e.pointerId); e.preventDefault();
-    });
-    grip.addEventListener("pointermove", (e) => {
-      if (dragging) setListHeight(startH + (startY - e.clientY));
-    });
-    const end = (e) => { if (dragging) { dragging = false; try { grip.releasePointerCapture(e.pointerId); } catch (x) {} } };
-    grip.addEventListener("pointerup", end);
-    grip.addEventListener("pointercancel", end);
-  }
-
   function setAreaFilter(area) {
     S.areaFilter = area;
     $("filter-area").value = area;
     renderShowing();
-    renderCurrentView(true);
+    planRefresh();
   }
 
   function setStatusFilter(st) {
@@ -1724,7 +1305,7 @@
     $("filter-status").value = S.statusFilter;
     renderTop();
     renderShowing();
-    renderCurrentView(true);
+    planRefresh();
   }
 
   // -------------------------------------------------- inspector bottom sheet
@@ -2264,29 +1845,24 @@
     $("btn-refresh").addEventListener("click", () => load(true));
     $("plan-pill").addEventListener("click", () => select("overview", "plan"));
 
-    // Task-list drawer: toggle on the header bar; drag the grip to resize.
-    $("list-toggle").addEventListener("click", () => toggleList());
-    initListResize();
-
     let qt;
     $("search-input").addEventListener("input", (e) => {
       clearTimeout(qt);
-      qt = setTimeout(() => { S.query = e.target.value.trim().toLowerCase(); renderShowing(); renderCurrentView(true); }, 120);
+      qt = setTimeout(() => { S.query = e.target.value.trim().toLowerCase(); renderShowing(); planRefresh(); }, 120);
     });
 
     $("filter-area").addEventListener("change", (e) => setAreaFilter(e.target.value));
-    $("filter-status").addEventListener("change", (e) => { S.statusFilter = e.target.value; renderTop(); renderShowing(); renderCurrentView(true); });
+    $("filter-status").addEventListener("change", (e) => { S.statusFilter = e.target.value; renderTop(); renderShowing(); planRefresh(); });
 
     document.querySelectorAll('.stat-pill[role="button"]').forEach((p) => {
       const act = () => {
         const stat = p.dataset.stat;
         if (stat === "frontier") {
-          const fas = [...frontierAreaSet()];
-          // Pan to a live L1 planner's area first, else the first frontier area.
-          const l1 = (S.snap.agents && S.snap.agents.l1) || [];
-          const activeArea = (l1.find((a) => a.l1Active && fas.includes(a.area)) || {}).area;
-          const target = activeArea || fas[0];
-          if (target) { setAreaFilter(""); fas.forEach((a) => S.expanded.add(a)); renderCurrentView(true); panToNode("L1:" + target); }
+          // Focus the first ready frontier node in the DAG lens aside (if any).
+          const o = (S.snap && S.snap.orchestration) || {};
+          const fr = (o.nextAreas && Array.isArray(o.nextAreas.frontier)) ? o.nextAreas.frontier : [];
+          const nodeId = (fr[0] && (fr[0].node || fr[0].id)) || (o.nextArea && o.nextArea.node);
+          if (nodeId && bus.onNodeSelect) bus.onNodeSelect(nodeId);
         } else if (stat === "blocked") {
           setStatusFilter(S.statusFilter === "blocked" ? "" : "blocked");
         } else {
@@ -2310,25 +1886,17 @@
     initResize();
     termInit();
     overlayInit();
-    initGraphInteractions();
-    if (window.ResizeObserver) {
-      const ro = new ResizeObserver(() => { if (!S._userPanned) fitGraph(); });
-      ro.observe($("view-graph"));
-    }
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "/" && document.activeElement !== $("search-input")) { e.preventDefault(); $("search-input").focus(); }
       else if (e.key === "Escape") {
         const onSearch = document.activeElement === $("search-input");
-        if (onSearch && S.query) { $("search-input").value = ""; S.query = ""; renderShowing(); renderCurrentView(true); }
+        if (onSearch && S.query) { $("search-input").value = ""; S.query = ""; renderShowing(); planRefresh(); }
         else if (onSearch) { $("search-input").blur(); }
         else if (S.selectedKind !== "none") { select("none", null); } // keep dock height; terminal owns it
       }
     });
 
-    // ?list=1 opens the task-list drawer on load.
-    if (new URLSearchParams(location.search).get("list") === "1") S.listOpen = true;
-    applyListDrawer();
     load(false);
     setInterval(() => { if (!document.hidden) load(false); }, POLL_MS);
     setInterval(tickAge, 1000);
@@ -2347,11 +1915,12 @@
 
   export {
     // state + vocab
-    S, T, O, POLL_MS, STATE_TONE, STATE_LABEL, STATE_ORDER, toneOf, labelOf,
+    S, T, O, POLL_MS, STATE_TONE, STATE_LABEL, STATE_ORDER, toneOf, labelOf, gateTone,
     // dom + format helpers
-    $, esc, escAttr, icon, relTime, toast, kvGrid,
-    // data + selection + navigation
-    load, setConn, select, navigateToTask, applyDeepLink, gateBlock,
+    $, esc, escAttr, icon, relTime, toast, kvGrid, statusChip, highlight, shortBranch,
+    // filtering + selection + navigation seams (used by the plan surface + router)
+    tasksFiltered, sortExceptionsFirst, load, setConn, select, navigateToTask,
+    setAreaFilter, applyDeepLink, gateBlock,
     // pollers (visibility resume)
     termTick, overlayTick,
     // entry

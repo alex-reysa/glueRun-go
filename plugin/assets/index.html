@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="/assets/tokens.css">
   <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/plan.css">
 </head>
 <body>
   <!-- Custom geometric icon set — 16x16, 1.6px stroke, round caps, never filled -->
@@ -108,6 +109,11 @@
         <span class="glyph"><svg class="icon"><use href="#i-grid"/></svg></span>
         <span>gluerun</span>
       </div>
+      <nav id="surface-nav" aria-label="Surface switcher">
+        <button type="button" data-surface="plan" aria-pressed="true">Plan</button>
+        <button type="button" data-surface="consoles" aria-pressed="false">Consoles</button>
+        <button type="button" data-surface="agents" aria-pressed="false">Agents</button>
+      </nav>
       <span id="health-flag" class="health-flag" data-tone="idle"><span class="tone-dot"></span><span id="health-text">loading</span></span>
       <span id="stop-chip" class="status-chip" data-tone="idle" data-present="false"><svg class="icon" style="width:13px;height:13px"><use href="#i-stop"/></svg><span id="stop-text">stop —</span></span>
       <div class="stat-strip" id="stat-strip">
@@ -130,9 +136,9 @@
       <button id="btn-refresh" class="btn primary" title="Reload snapshot"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button>
     </header>
 
-    <!-- MAIN VIEWPORT — graph canvas + retractable task-list drawer -->
-    <section id="graph-viewport" class="glass">
-      <div id="graph-toolbar">
+    <!-- MAIN VIEWPORT — three surface roots; the router shows exactly one. -->
+    <section id="surface-plan" class="surface glass" data-active="true">
+      <div id="plan-workbench-header">
         <label class="search-wrap"><svg class="icon"><use href="#i-search"/></svg>
           <input id="search-input" type="search" placeholder="search id · title · branch" autocomplete="off" spellcheck="false">
         </label>
@@ -155,23 +161,17 @@
         </span>
         <span id="showing-count"></span>
       </div>
-      <div id="graph-body">
-        <div class="view-scroll" id="view-scroll">
-          <div id="view-graph" class="graph-pad" aria-label="graph view"></div>
-        </div>
-        <!-- LIST DRAWER — expand/retract a task table without leaving the graph -->
-        <div id="list-drawer" data-open="false">
-          <div id="list-resize" title="Drag to resize"></div>
-          <button id="list-toggle" aria-expanded="false" aria-controls="list-body" title="Show / hide task list">
-            <svg class="icon ld-chev"><use href="#i-chev"/></svg>
-            <span class="ld-title"><svg class="icon"><use href="#i-list"/></svg>task list</span>
-            <span class="ld-count" id="list-count"></span>
-          </button>
-          <div id="list-body">
-            <div id="view-list" class="list-pad" role="region" aria-label="task list"></div>
-          </div>
-        </div>
+      <div id="plan-body">
+        <nav id="plan-lensnav" role="tablist" aria-orientation="vertical" aria-label="Plan views"></nav>
+        <div id="plan-pane" aria-label="Plan lens"></div>
+        <aside id="plan-aside" data-open="true" aria-label="Node drilldown"></aside>
       </div>
+    </section>
+    <section id="surface-consoles" class="surface glass" data-active="false" hidden>
+      <span class="surface-stub">Consoles — coming in this release</span>
+    </section>
+    <section id="surface-agents" class="surface glass" data-active="false" hidden>
+      <span class="surface-stub">Agents — coming in this release</span>
     </section>
 
     <!-- BOTTOM DOCK — unified live-activity zone: semantic event feed (left sidebar)

@@ -198,7 +198,6 @@ h1, h2, h3 { letter-spacing: -0.015em; font-weight: 600; margin: 0; }
 }
 
 #top-bar { grid-area: top; }
-#graph-viewport { grid-area: main; }
 #dock { grid-area: dock; }
 
 /* ----------------------------------------------------------------------- */
@@ -335,21 +334,6 @@ h1, h2, h3 { letter-spacing: -0.015em; font-weight: 600; margin: 0; }
 /* Main viewport + toolbar                                                  */
 /* ----------------------------------------------------------------------- */
 
-#graph-viewport {
-  border-radius: var(--r-card);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-#graph-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--rule);
-  flex-wrap: wrap;
-}
 .seg {
   display: inline-flex;
   padding: 2px;
@@ -395,52 +379,6 @@ select.filter:hover { border-color: var(--rule-strong); }
 #showing-count { font-size: 11px; color: var(--muted); margin-left: auto; white-space: nowrap; }
 #showing-count b { color: var(--text); font-family: var(--mono); font-weight: 600; }
 
-.view-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
-
-/* ----- Graph: node-edge canvas (L0 -> L1 -> L2, left to right) ----- */
-.graph-pad { position: absolute; inset: 0; overflow: hidden; padding: 0; cursor: grab; }
-.graph-pad.dragging { cursor: grabbing; }
-.graph-pad.dragging .gnode { pointer-events: none; }
-
-.canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
-.edge-layer { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; z-index: 0; }
-.edge { fill: none; stroke: rgba(0, 0, 0, 0.12); stroke-width: 1; vector-effect: non-scaling-stroke; transition: stroke var(--d-color) var(--ease); }
-.edge.sel { stroke: color-mix(in srgb, var(--tone-cobalt) 70%, transparent); stroke-width: 1.5; }
-.edge.dep { stroke: color-mix(in srgb, var(--tone-violet) 72%, transparent); stroke-width: 1.5; stroke-dasharray: 4 3; }
-
-.gnode {
-  position: absolute;
-  display: flex; align-items: center; gap: 9px;
-  padding: 0 11px;
-  border-radius: var(--r-12);
-  background: var(--glass);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  text-align: left; overflow: hidden; z-index: 1; cursor: pointer;
-  transition: box-shadow var(--d-base) var(--ease), transform var(--d-base) var(--ease), border-color var(--d-color) var(--ease);
-}
-.gnode:hover { transform: translateY(-1px); box-shadow: var(--glass-shadow-lift); }
-.gnode[data-selected="true"] { border-color: color-mix(in srgb, var(--tone) 60%, transparent); }
-.gnode[data-pinned="true"] { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--tone-violet) 55%, transparent), var(--glass-shadow); }
-.gnode.search-dim { opacity: 0.35; }
-.gnode .gn-id { font-family: var(--mono); font-weight: 600; font-size: 12px; color: var(--text); flex: 0 0 auto; }
-.gnode .gn-title { font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
-.gnode .gn-chip { flex: 0 0 auto; }
-.gnode mark { background: color-mix(in srgb, var(--tone-cobalt) 22%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
-
-.gnode.l0 { gap: 11px; }
-.gnode.l0 .gn-title { font-weight: 600; font-size: 13px; }
-.gnode.l0 .gn-meta { font-size: 10.5px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gnode.l1 .gn-title { font-weight: 600; letter-spacing: -0.01em; }
-.gnode.l1.has-frontier { box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone-violet) 32%, transparent), var(--glass-shadow); }
-.gnode.l2 .pin-glyph { color: var(--faint); opacity: 0; transition: opacity var(--d-color) var(--ease), color var(--d-color) var(--ease); flex: 0 0 auto; }
-.gnode.l2:hover .pin-glyph { opacity: 1; }
-.gnode.l2[data-pinned="true"] .pin-glyph { opacity: 1; color: var(--tone-violet); }
-.gnode.more { justify-content: center; color: var(--tone-cobalt); background: rgba(255, 255, 255, 0.5); border-style: dashed; font-size: 11.5px; box-shadow: none; }
-.gnode.more:hover { background: color-mix(in srgb, var(--tone-cobalt) 8%, rgba(255,255,255,0.6)); }
-
-.chevron { color: var(--faint); transition: transform var(--d-base) var(--ease); flex: 0 0 auto; }
-.gnode.l1[data-expanded="true"] .chevron { transform: rotate(90deg); }
 .frontier-marker {
   display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
   font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
@@ -450,38 +388,7 @@ select.filter:hover { border-color: var(--rule-strong); }
   padding: 1px 6px 1px 4px; border-radius: var(--r-chip);
 }
 .frontier-marker .diamond { width: 7px; height: 7px; transform: rotate(45deg); background: var(--tone-violet); border-radius: 1.5px; }
-.fdiamond { width: 8px; height: 8px; transform: rotate(45deg); background: var(--tone-violet); border-radius: 2px; flex: 0 0 auto; }
 .lane-empty { padding: 6px 4px; font-size: 11.5px; color: var(--faint); }
-
-/* Live L1 planner badge — a parallel-area planner is actively working this area
-   (derived from an active .gluerun-state/l1-leases record). Cobalt = active. */
-.l1-planner {
-  flex: 0 0 auto;
-  font: 600 9px/1 var(--mono);
-  letter-spacing: 0.04em;
-  padding: 2px 5px;
-  border-radius: 999px;
-  color: var(--tone-cobalt);
-  background: color-mix(in srgb, var(--tone-cobalt) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--tone-cobalt) 32%, transparent);
-}
-.gnode.l1.has-l1 { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--tone-cobalt) 30%, transparent), var(--glass-shadow); }
-/* Frontier + live planner: the cobalt planner ring wins the border; the violet
-   ◆ still marks it as a ready frontier node. */
-.gnode.l1.has-frontier.has-l1 { box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone-cobalt) 34%, transparent), var(--glass-shadow); }
-
-/* canvas controls — live in the un-transformed viewport, never scaled */
-.canvas-controls { position: absolute; right: 14px; bottom: 14px; z-index: 6; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-.canvas-controls .cc-row { display: flex; gap: 6px; }
-.zoom-btn {
-  width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
-  border-radius: var(--r-btn); border: 1px solid var(--rule);
-  background: var(--glass-solid);
-  box-shadow: var(--glass-shadow); color: var(--muted);
-  transition: color var(--d-color) var(--ease), border-color var(--d-color) var(--ease);
-}
-.zoom-btn:hover { color: var(--text); border-color: var(--rule-strong); }
-.zoom-btn.wide { width: auto; padding: 0 10px; font-size: 11.5px; font-weight: 500; gap: 6px; }
 
 /* ----- Roles catalog (declared) + work tab (observed) ----- */
 .role-item { display: grid; grid-template-columns: 26px 1fr auto; gap: 11px; align-items: start; padding: 10px 2px; border-bottom: 1px solid var(--hair); }
@@ -551,33 +458,6 @@ select.filter:hover { border-color: var(--rule-strong); }
   transition: background var(--d-color) var(--ease);
 }
 #dock-resize-handle:hover::after { background: rgba(0, 0, 0, 0.28); }
-
-#graph-body { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-
-/* Task-list drawer — expand/retract a table inside the graph area (no view swap) */
-#list-drawer {
-  flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0;
-  border-top: 1px solid var(--rule); background: rgba(255, 255, 255, 0.55);
-}
-#list-drawer[data-open="true"] { height: var(--list-h, 320px); }
-#list-resize { height: 7px; flex: 0 0 auto; cursor: ns-resize; display: none; align-items: center; justify-content: center; }
-#list-drawer[data-open="true"] #list-resize { display: flex; }
-#list-resize::after { content: ""; width: 34px; height: 3px; border-radius: 999px; background: rgba(0, 0, 0, 0.14); transition: background var(--d-color) var(--ease); }
-#list-resize:hover::after { background: rgba(0, 0, 0, 0.28); }
-#list-toggle {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 8px; width: 100%; height: 32px;
-  padding: 0 12px; border: 0; border-bottom: 1px solid transparent; background: transparent; cursor: pointer;
-  color: var(--muted); font-size: 11.5px; font-weight: 600;
-}
-#list-toggle:hover { color: var(--text); background: rgba(0, 0, 0, 0.025); }
-#list-drawer[data-open="true"] #list-toggle { color: var(--text); border-bottom-color: var(--rule); }
-#list-toggle .ld-chev { width: 13px; height: 13px; transform: rotate(-90deg); transition: transform var(--d-struct) var(--ease); }
-#list-drawer[data-open="true"] #list-toggle .ld-chev { transform: rotate(90deg); }
-#list-toggle .ld-title { display: inline-flex; align-items: center; gap: 6px; }
-#list-toggle .ld-title .icon { width: 13px; height: 13px; }
-#list-toggle .ld-count { font-family: var(--mono); color: var(--faint); font-weight: 500; }
-#list-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
-#list-drawer[data-open="false"] #list-body { display: none; }
 
 /* ----------------------------------------------------------------------- */
 /* Dock = unified live-activity zone: event feed (left) + terminal (right)  */

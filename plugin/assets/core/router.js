@@ -1,0 +1,176 @@
+/* core/router.js — the console's hash router. Owns which #surface-* is shown,
+   which surface-nav button is pressed, and the URL grammar:
+
+     #<surface>[/<lens>[/<selection>[:<tab>]]]
+     #plan/timeline|matrix|dag|tasks[/NODE:<id>|TASK-XXXX[:tab]]
+     #consoles[/<sessionId>]
+     #agents[/<roleId>[/<sessionId>]]
+
+   Legacy 0.5.x hashes are migrated on load + hashchange:
+     #TASK-0123[:tab] → #plan/tasks/TASK-0123[:tab]   (+ navigate)
+     #NODE:<id>       → #plan/dag/NODE:<id>            (+ select node)
+     #L1:<area>       → #plan/tasks (+ area filter + select L1)
+     #PLAN            → open the overview inspector (plan-pill behavior)
+     ?list=1          → #plan/tasks
+
+   Selections need the first snapshot, so on initial load they are deferred and
+   applied by tick() once S.snap arrives; hashchange navigations apply at once.
+
+   Import direction: router → app.js (never the reverse), router → bus. app.js
+   imports only bus, so there is no static cycle. */
+
+import { select, navigateToTask, setAreaFilter, S } from "../app.js";
+import { bus } from "./bus.js";
+
+const SURFACES = ["plan", "consoles", "agents"];
+const LENSES = ["timeline", "matrix", "dag", "tasks"];
+
+let cfg = { onSurface: null, onLens: null };
+let applying = false;         // guard: suppress route writes while resolving one
+let pending = null;           // deferred initial selection (needs a snapshot)
+
+// -------------------------------------------------------------- parse ------
+export function currentRoute() {
+  const raw = decodeURIComponent((location.hash || "").replace(/^#/, ""));
+  const legacy = migrateLegacy(raw);
+  if (legacy) return legacy;
+  const parts = raw.split("/").filter(Boolean);
+  const surface = SURFACES.includes(parts[0]) ? parts[0] : "plan";
+  if (surface === "plan") {
+    const lens = LENSES.includes(parts[1]) ? parts[1] : null;
+    let sel = parts[2] != null ? parts.slice(2).join("/") : null;
+    let tab = null;
+    if (sel) {
+      // TASK-xxxx:tab — only split a trailing :tab (NODE:id keeps its colon).
+      if (/^TASK-\d+:/.test(sel)) { const i = sel.indexOf(":"); tab = sel.slice(i + 1); sel = sel.slice(0, i); }
+      else if (/^NODE:/.test(sel)) { const j = sel.indexOf(":", 5); if (j > 0) { tab = sel.slice(j + 1); sel = sel.slice(0, j); } }
+    }
+    return { surface, lens, sel, tab };
+  }
+  if (surface === "consoles") return { surface, session: parts[1] || null };
+  return { surface, role: parts[1] || null, session: parts[2] || null };
+}
+
+// Returns a route object for a legacy hash, or null if the hash isn't legacy.
+function migrateLegacy(raw) {
+  if (!raw) {
+    if (new URLSearchParams(location.search).get("list") === "1") return { surface: "plan", lens: "tasks", sel: null, tab: null, _migrate: true };
+    return null;
+  }
+  if (/^TASK-\d+(:|$)/.test(raw)) {
+    const i = raw.indexOf(":");
+    const id = i > 0 ? raw.slice(0, i) : raw;
+    const tab = i > 0 ? raw.slice(i + 1) : null;
+    return { surface: "plan", lens: "tasks", sel: id, tab, _migrate: true };
+  }
+  if (/^NODE:/.test(raw)) return { surface: "plan", lens: "dag", sel: raw, tab: null, _migrate: true };
+  if (/^L1:/.test(raw)) return { surface: "plan", lens: "tasks", sel: raw, tab: null, _migrate: true };
+  if (raw === "PLAN") return { surface: "plan", lens: null, sel: "PLAN", tab: null, _migrate: true };
+  return null;
+}
+
+// -------------------------------------------------------------- write ------
+export function writeRoute(surface, lens, selId, tab) {
+  if (applying) return;
+  let h = "#" + surface;
+  if (surface === "plan") {
+    if (lens) h += "/" + lens;
+    if (selId) { h += "/" + selId; if (tab) h += ":" + tab; }
+  }
+  try { history.replaceState(null, "", h); } catch (e) {}
+}
+
+// -------------------------------------------------- surface visibility -----
+export function surfaceVisible(name) {
+  const el = document.getElementById("surface-" + name);
+  return !!el && el.dataset.active === "true";
+}
+
+function showSurface(name) {
+  for (const s of SURFACES) {
+    const el = document.getElementById("surface-" + s);
+    if (!el) continue;
+    const on = s === name;
+    el.dataset.active = String(on);
+    el.hidden = !on;
+  }
+  document.querySelectorAll("#surface-nav [data-surface]").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.surface === name));
+  });
+}
+
+// ------------------------------------------------------------- resolve -----
+function resolveSelection(route) {
+  if (route.surface !== "plan") return;
+  const sel = route.sel, tab = route.tab;
+  if (!sel) return;
+  if (sel === "PLAN") { select("overview", "plan"); return; }
+  if (/^TASK-\d+$/.test(sel)) {
+    if (tab) S.inspTab = tab === "events" ? "timeline" : tab;
+    navigateToTask(sel);
+    return;
+  }
+  if (/^NODE:/.test(sel)) {
+    const id = sel.slice(5);
+    if (bus.onNodeSelect) bus.onNodeSelect(id); else select("node", id);
+    return;
+  }
+  if (/^L1:/.test(sel)) {
+    const area = sel.slice(3);
+    setAreaFilter(area);
+    select("l1", "L1:" + area);
+  }
+}
+
+// Apply a parsed route: surface + lens now; selection now if the snapshot is in,
+// else defer to the next tick(). `initial` selections always defer.
+function applyRoute(route, initial) {
+  applying = true;
+  try {
+    showSurface(route.surface);
+    if (cfg.onSurface) cfg.onSurface(route.surface);
+    if (route.surface === "plan" && route.lens && cfg.onLens) cfg.onLens(route.lens);
+  } finally { applying = false; }
+  // Normalize a legacy/implicit hash to the canonical form.
+  if (route._migrate || !location.hash) {
+    const lens = route.lens || (cfg.getLens ? cfg.getLens() : "timeline");
+    writeRoute(route.surface, lens, /^L1:/.test(route.sel || "") || route.sel === "PLAN" ? null : route.sel, route.tab);
+  }
+  if (route.surface === "plan" && (route.sel)) {
+    if (initial || !S.snap) pending = route; else resolveSelection(route);
+  }
+}
+
+// Called every snapshot tick (via bus.onSnapshot) — applies a deferred initial
+// selection exactly once, when the snapshot is finally available.
+export function tick() {
+  if (pending && S.snap) { const p = pending; pending = null; resolveSelection(p); }
+}
+
+// -------------------------------------------------------------- init -------
+export function initRouter(options) {
+  cfg = Object.assign({ onSurface: null, onLens: null, getLens: null }, options || {});
+
+  bus.writeRoute = (kind, id, tab) => {
+    const r = currentRoute();
+    if (r.surface !== "plan") return;
+    if (kind === "task") writeRoute("plan", r.lens || (cfg.getLens && cfg.getLens()) || "tasks", id, tab);
+    else if (kind === "node") writeRoute("plan", r.lens || (cfg.getLens && cfg.getLens()) || "dag", "NODE:" + id, tab);
+    else if (kind === "none") writeRoute("plan", r.lens || (cfg.getLens && cfg.getLens()), null, null);
+  };
+  bus.planVisible = () => surfaceVisible("plan");
+
+  // Surface-nav segmented control.
+  const nav = document.getElementById("surface-nav");
+  if (nav) nav.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-surface]");
+    if (!b) return;
+    const name = b.dataset.surface;
+    const lens = cfg.getLens ? cfg.getLens() : "timeline";
+    writeRoute(name, lens, null, null);
+    applyRoute(currentRoute(), false);
+  });
+
+  window.addEventListener("hashchange", () => applyRoute(currentRoute(), false));
+  applyRoute(currentRoute(), true);
+}
