@@ -272,45 +272,113 @@
 .plan-fade.right { right: 0; background: linear-gradient(to left, var(--surface-panel), rgba(255,255,255,0)); }
 .plan-fade[data-show="true"] { opacity: 1; }
 
-/* ---- DAG lens (ported PlanGraphLarge, stage axis) ---- */
+/* ---- DAG lens (card-based pipeline) ---- */
 @keyframes pm-plan-ring {
   0% { box-shadow: 0 0 0 0 rgba(47,111,208,0.34); }
-  70% { box-shadow: 0 0 0 6px rgba(47,111,208,0); }
+  70% { box-shadow: 0 0 0 5px rgba(47,111,208,0); }
   100% { box-shadow: 0 0 0 0 rgba(47,111,208,0); }
 }
 .plan-scroll-host { position: relative; height: 100%; }
-.plan-dag-scroll { height: 100%; overflow: auto; }
+.plan-dag-scroll {
+  height: 100%; overflow: auto;
+  background-image: radial-gradient(var(--grid-line) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.plan-dag-stagewrap { position: relative; margin: 0 auto; }
 .plan-dag-stage { position: relative; margin: 0 auto; }
-.plan-dag-tint { position: absolute; background: var(--surface-sunken); opacity: 0.4; border-radius: var(--radius-lg); z-index: 0; }
+.plan-dag-tint { position: absolute; background: var(--surface-sunken); opacity: 0.5; border-radius: var(--radius-lg); z-index: 0; }
+
+/* slim collapsible stage ribbon */
 .plan-dag-ribbon {
-  position: absolute; height: 30px; display: flex; align-items: center; gap: 8px;
-  padding: 0 12px; border-radius: var(--radius-md); background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle); cursor: pointer; z-index: 2; text-align: left;
+  position: absolute; height: 24px; display: flex; align-items: center; gap: 7px;
+  padding: 0 10px; border-radius: var(--radius-sm); background: transparent;
+  border: 0; cursor: pointer; z-index: 2; text-align: left;
 }
-.plan-dag-ribbon .pdr-chev { width: 11px; height: 11px; color: var(--n-500); display: inline-flex; transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease-out); flex: none; }
+.plan-dag-ribbon:hover { background: var(--surface-sunken); }
+.plan-dag-ribbon .pdr-chev { width: 10px; height: 10px; color: var(--n-500); display: inline-flex; transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease-out); flex: none; }
 .plan-dag-ribbon[aria-expanded="false"] .pdr-chev { transform: rotate(0deg); }
-.plan-dag-ribbon .pdr-id { font: 700 9px var(--font-sans); letter-spacing: 0.07em; color: var(--text-secondary); }
-.plan-dag-ribbon .pdr-name { font: 500 11px var(--font-sans); color: var(--text-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-dag-ribbon .pdr-id { font: 700 10px var(--font-sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-meta); }
+.plan-dag-ribbon .pdr-count { font-size: 10px; color: var(--text-faint); }
+
 .plan-dag-edges { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
-.plan-dag-label { position: absolute; width: 100px; text-align: center; pointer-events: none; z-index: 3; font: 400 10px var(--font-mono); color: var(--text-secondary); transition: opacity var(--dur-fast) var(--ease-out); }
-.plan-dag-nodewrap { position: absolute; width: 38px; height: 38px; z-index: 3; }
-.plan-dag-node {
-  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
-  border-radius: var(--radius-pill); cursor: pointer; padding: 0; outline-offset: 2px;
-  transition: opacity var(--dur-fast) var(--ease-out), outline-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+
+/* pill card node + attribution line */
+.plan-dag-cardwrap { position: absolute; width: 190px; z-index: 3; }
+.plan-dag-card {
+  width: 100%; height: 40px; display: flex; align-items: center; gap: 8px;
+  padding: 0 12px; cursor: pointer; text-align: left;
+  background: var(--surface-panel); border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill); box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
-.plan-dag-node.is-active { animation: pm-plan-ring 1.9s ease-out infinite; }
-.plan-dag-node .pdn-dot { width: 16px; height: 16px; border-radius: var(--radius-pill); }
-.plan-dag-node .pdn-check { color: #fff; display: inline-flex; }
-.plan-dag-node .pdn-check .icon { width: 15px; height: 15px; }
+.plan-dag-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.plan-dag-card[data-trace="focus"] { box-shadow: 0 0 0 2px var(--surface-panel), 0 0 0 4px var(--ink); }
+.plan-dag-card[data-trace="up"] { box-shadow: 0 0 0 2px var(--surface-panel), 0 0 0 3px var(--tone-blue-dot); }
+.plan-dag-card[data-trace="down"] { box-shadow: 0 0 0 2px var(--surface-panel), 0 0 0 3px var(--tone-green-dot); }
+.plan-dag-card[data-selected="true"] { box-shadow: 0 0 0 2px var(--surface-panel), 0 0 0 4px var(--ink); }
+.plan-dag-card .pdc-name {
+  flex: 1 1 auto; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.01em;
+}
+.plan-dag-card .pdc-badge {
+  flex: none; font-size: 10.5px; color: var(--text-meta); background: var(--surface-soft);
+  padding: 1px 6px; border-radius: var(--radius-pill);
+}
+
+/* status glyphs (16px) */
+.pdc-glyph { flex: none; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; }
+.pdc-glyph.g-done { background: var(--tone-green-bg); border-radius: var(--radius-pill); }
+.pdc-glyph.g-done .icon { width: 11px; height: 11px; color: var(--tone-green-dot); }
+.pdc-glyph.g-active { }
+.pdc-glyph.g-active .pdc-pulse { width: 10px; height: 10px; border-radius: var(--radius-pill); background: var(--tone-blue-dot); animation: pm-plan-ring 1.9s ease-out infinite; }
+.pdc-glyph.g-frontier i, .pdc-glyph.g-eval i { display: block; width: 9px; height: 9px; transform: rotate(45deg); }
+.pdc-glyph.g-frontier i { border: 1.5px solid var(--tone-coral-dot); }
+.pdc-glyph.g-eval i { background: var(--tone-coral-dot); }
+.pdc-glyph.g-failed { border: 1.5px solid var(--tone-red-dot); border-radius: var(--radius-pill); color: var(--tone-red-dot); font: 700 12px var(--font-sans); line-height: 1; }
+.pdc-glyph.g-queued i { display: block; width: 12px; height: 12px; border: 1.5px solid var(--n-400); border-radius: var(--radius-pill); }
+
+.plan-dag-attr { display: flex; align-items: center; gap: 6px; height: 18px; padding-left: 4px; pointer-events: none; transition: opacity var(--dur-fast) var(--ease-out); }
+.plan-dag-attr .pdc-avatar { width: 8px; height: 8px; border-radius: var(--radius-pill); flex: none; background: var(--n-400); }
+.plan-dag-attr .pdc-avatar[data-tone="coral"] { background: var(--tone-coral-dot); }
+.plan-dag-attr .pdc-owner { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* collapsed stage summary — matches the card look */
 .plan-dag-summary {
-  position: absolute; height: 80px; background: var(--surface-panel); border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); display: flex; flex-direction: column;
-  justify-content: center; padding: 0 16px; cursor: pointer; z-index: 4; text-align: left; gap: 2px;
+  position: absolute; height: 52px; background: var(--surface-panel); border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); display: flex; flex-direction: column;
+  justify-content: center; padding: 0 14px; cursor: pointer; z-index: 4; text-align: left; gap: 1px;
 }
+.plan-dag-summary:hover { box-shadow: var(--shadow-md); }
 .plan-dag-summary .pds-eyebrow { font: 700 9px var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-meta); }
-.plan-dag-summary .pds-name { font: 600 13px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.plan-dag-summary .pds-meta { font: 400 10px var(--font-mono); color: var(--text-faint); }
+.plan-dag-summary .pds-name { font: 600 12.5px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-dag-summary .pds-meta { font-size: 10px; color: var(--text-faint); }
+
+/* floating fit-to-width button (bottom-left) */
+.plan-dag-fit {
+  position: absolute; left: 14px; bottom: 14px; width: 32px; height: 32px; z-index: 8;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  background: var(--surface-panel); border: 1px solid var(--border-default);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-xs); color: var(--text-secondary);
+  transition: box-shadow var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.plan-dag-fit:hover { box-shadow: var(--shadow-md); color: var(--text-primary); }
+.plan-dag-fit .icon { width: 15px; height: 15px; }
+.plan-dag-fit[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--n-0); }
+
+/* sticky progress footer (bottom-right) */
+.plan-dag-progress {
+  position: absolute; right: 14px; bottom: 14px; z-index: 8;
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 6px 12px; background: var(--surface-panel); border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill); box-shadow: var(--shadow-xs);
+  transition: box-shadow var(--dur-fast) var(--ease-out);
+}
+.plan-dag-progress:hover { box-shadow: var(--shadow-md); }
+.plan-dag-progress .pdf-dot { width: 6px; height: 6px; border-radius: var(--radius-pill); flex: none; box-sizing: border-box; }
+.plan-dag-progress .pdf-dot.pass { background: var(--tone-green-dot); }
+.plan-dag-progress .pdf-dot.active { background: var(--tone-blue-dot); }
+.plan-dag-progress .pdf-dot.hollow { border: 1px solid var(--n-400); }
+.plan-dag-progress .pdf-count { font-size: 11px; color: var(--text-secondary); margin-left: 2px; }
 
 /* ---- Matrix lens (ported PlanDependencyMatrix) ---- */
 .plan-matrix { position: relative; padding: 20px 26px 24px; }
