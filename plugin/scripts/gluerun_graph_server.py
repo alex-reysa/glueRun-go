@@ -22,6 +22,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -2481,21 +2482,31 @@ def detect_duplicate_tasks(leases: list[dict[str, Any]]) -> dict[str, dict[str, 
 
 class _ComputeCache:
     """Generic single-flight TTL cache keyed by an arbitrary string. Mirrors
-    SnapshotCache/SessionsCache: one thread computes, others reuse. Read-only."""
+    SnapshotCache/SessionsCache: one thread computes, others reuse. Read-only.
+
+    Holds up to ``CAPACITY`` (key, value) slots in an LRU OrderedDict so live +
+    archived (?plan=) roots do not thrash a single slot when they alternate.
+    Single-flight is preserved via a global compute gate (the underlying
+    collectors are cheap, pure-filesystem reads), matching the pre-multi-slot
+    lock discipline. ``invalidate()`` clears every slot."""
+
+    CAPACITY = 4
 
     def __init__(self, compute, ttl: float) -> None:
         self._compute_fn = compute
         self.ttl = ttl
         self._lock = threading.Lock()
         self._gate = threading.Lock()
-        self._value: Any = None
-        self._stamp: float = 0.0
-        self._key: str = ""
+        self._slots: "OrderedDict[str, tuple[Any, float]]" = OrderedDict()
 
     def _fresh(self, key: str) -> Any:
         with self._lock:
-            if self._value is not None and self._key == key and (time.monotonic() - self._stamp) < self.ttl:
-                return self._value
+            entry = self._slots.get(key)
+            if entry is not None:
+                value, stamp = entry
+                if value is not None and (time.monotonic() - stamp) < self.ttl:
+                    self._slots.move_to_end(key)  # LRU touch
+                    return value
         return None
 
     def get(self, key: str, compute_arg) -> Any:
@@ -2508,18 +2519,17 @@ class _ComputeCache:
                 return cached
             value = self._compute_fn(compute_arg)
             with self._lock:
-                self._value = value
-                self._stamp = time.monotonic()
-                self._key = key
+                self._slots[key] = (value, time.monotonic())
+                self._slots.move_to_end(key)
+                while len(self._slots) > self.CAPACITY:
+                    self._slots.popitem(last=False)  # evict least-recently-used
             return value
 
     def invalidate(self) -> None:
-        """Drop the cached value so the next get() recomputes. Used after a
+        """Drop every cached slot so the next get() recomputes. Used after a
         settings write mutates the underlying config."""
         with self._lock:
-            self._value = None
-            self._key = ""
-            self._stamp = 0.0
+            self._slots.clear()
 
 
 def _events_path(repo: Path) -> Path:
@@ -4372,6 +4382,62 @@ def load_home(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Plan threads registry (gluerun.plans.v0)                                     #
+# --------------------------------------------------------------------------- #
+
+# A plan id as minted by `gluerun plan archive` (plan-<UTCstamp>[-<slug>]). Also
+# the sole gate for the ?plan= filesystem-root param, so the charset is tight.
+PLAN_ID_RE = re.compile(r"^plan-[A-Za-z0-9-]{1,64}$")
+
+# Fields surfaced for each archived plan; mirrors the engine's index.json entry
+# (ops.sh) and the plan manifest.json (both share these keys).
+_PLAN_ENTRY_FIELDS = ("id", "name", "archivedAt", "gates", "taskCount",
+                      "eventCount", "headSha", "branch")
+
+
+def _plan_entry(src: dict[str, Any]) -> dict[str, Any]:
+    return {k: src.get(k) for k in _PLAN_ENTRY_FIELDS}
+
+
+def collect_plans(repo: Path) -> dict[str, Any]:
+    """Pure-filesystem read of the archived-plan registry. Reads
+    ``.gluerun-state/plans/index.json`` and self-heals by also scanning
+    ``plans/*/manifest.json`` for any archived dir missing from the index
+    (merge by id; index entries win). Sorted newest-first. Missing/empty →
+    ``plans: []``."""
+    plans_dir = state_path(repo, "plans")
+    entries: dict[str, dict[str, Any]] = {}
+    # Self-heal first so index entries (authoritative) overwrite manifest-derived
+    # ones on the merge below.
+    if plans_dir.is_dir():
+        try:
+            children = sorted(plans_dir.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            if not child.is_dir():
+                continue
+            manifest = read_json(child / "manifest.json")
+            if isinstance(manifest, dict) and isinstance(manifest.get("id"), str) and manifest["id"]:
+                entries[manifest["id"]] = _plan_entry(manifest)
+    index = read_json(plans_dir / "index.json")
+    if isinstance(index, dict):
+        for item in index.get("plans") or []:
+            if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
+                entries[item["id"]] = _plan_entry(item)
+    plans = sorted(entries.values(), key=lambda p: p.get("archivedAt") or "", reverse=True)
+    return {"schema": "gluerun.plans.v0", "generatedAt": utc_now(), "plans": plans}
+
+
+_PLANS_CACHE = _ComputeCache(collect_plans, 6.0)
+
+
+def load_plans(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    return _PLANS_CACHE.get(str(repo), repo)
+
+
+# --------------------------------------------------------------------------- #
 # Console adapter (gluerun.console-adapter.v0)                                     #
 # --------------------------------------------------------------------------- #
 #
@@ -4741,6 +4807,41 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
 
+    def resolve_plan_repo(self, query: dict[str, list[str]]):
+        """Resolve the read-collector root for a request's optional ?plan= param.
+
+        No ``plan`` param → ``(Handler.repo, False)`` (live). Otherwise the id is
+        validated against ``PLAN_ID_RE``, required to exist in the archived-plan
+        registry, and its ``plans/<id>`` dir must resolve *inside* the plans dir
+        and be an existing directory → ``(that_dir, True)``. Any failure returns
+        ``None`` and the caller replies 404 ``{"error": "unknown plan"}``."""
+        raw = query.get("plan", [None])[0]
+        if raw is None or raw == "":
+            return (self.repo, False)
+        pid = raw
+        if not PLAN_ID_RE.match(pid):
+            return None
+        listing = load_plans(self.repo)
+        if pid not in {p.get("id") for p in listing.get("plans", [])}:
+            return None
+        plans_dir = state_path(self.repo, "plans").resolve()
+        candidate = (state_path(self.repo, "plans") / pid).resolve()
+        try:
+            candidate.relative_to(plans_dir)
+        except ValueError:
+            return None
+        if candidate == plans_dir or not candidate.is_dir():
+            return None
+        return (candidate, True)
+
+    def _plan_root(self, query: dict[str, list[str]]):
+        """resolve_plan_repo(), but on failure it sends the 404 and returns None
+        so the route can just ``if resolved is None: return``."""
+        resolved = self.resolve_plan_repo(query)
+        if resolved is None:
+            self.send_json({"error": "unknown plan"}, 404)
+        return resolved
+
     def _no_cache_headers(self) -> None:
         self.send_header("Cache-Control", "no-store, must-revalidate")
 
@@ -4791,11 +4892,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(SNAPSHOT_CACHE.get(self.repo, fresh=fresh))
             return
         if route.startswith("/api/task/"):
+            resolved = self._plan_root(parse_qs(parsed.query))
+            if resolved is None:
+                return
+            repo, _ = resolved
             task_id = unquote(route[len("/api/task/"):]).strip("/")
             if not TASK_ID_RE.match(task_id):
                 self.send_json({"error": "invalid task id"}, 400)
                 return
-            detail = collect_task_detail(self.repo, task_id)
+            detail = collect_task_detail(repo, task_id)
             if detail is None:
                 self.send_json({"error": f"task not found: {task_id}"}, 404)
                 return
@@ -4803,12 +4908,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/api/sessions":
             query = parse_qs(parsed.query)
+            resolved = self._plan_root(query)
+            if resolved is None:
+                return
+            repo, is_archived = resolved
             limit = query.get("limit", [SESSION_RETURN_LIMIT])[0]
-            self.send_json(slice_sessions(SESSIONS_CACHE.get(self.repo), limit))
+            # Archived data is cold + immutable: bypass the live SessionsCache
+            # (single-slot, 2s TTL) and read the mini-repo directly.
+            sessions = collect_sessions(repo) if is_archived else SESSIONS_CACHE.get(repo)
+            self.send_json(slice_sessions(sessions, limit))
             return
         if route.startswith("/api/session/"):
             session_id = unquote(route[len("/api/session/"):]).strip("/")
             query = parse_qs(parsed.query)
+            resolved = self._plan_root(query)
+            if resolved is None:
+                return
+            repo, _ = resolved
 
             def _int(name: str) -> int | None:
                 raw = query.get(name, [None])[0]
@@ -4824,36 +4940,47 @@ class Handler(BaseHTTPRequestHandler):
             limit = max(1, min(SESSION_LINE_LIMIT_MAX, limit))
             file_name = query.get("file", [None])[0] or None
             raw = query.get("raw", ["0"])[0] not in ("0", "", "false")
-            data = read_session(self.repo, session_id, cursor, limit, file_name, raw)
+            data = read_session(repo, session_id, cursor, limit, file_name, raw)
             if data is None:
                 self.send_json({"error": f"session not found: {session_id}"}, 404)
                 return
             self.send_json(data)
             return
         if route.startswith("/api/node/"):
+            resolved = self._plan_root(parse_qs(parsed.query))
+            if resolved is None:
+                return
+            repo, _ = resolved
             node_id = unquote(route[len("/api/node/"):]).strip("/")
             if not NODE_ID_RE.match(node_id):
                 self.send_json({"error": "invalid node id"}, 400)
                 return
-            detail = collect_node_detail(self.repo, node_id)
+            detail = collect_node_detail(repo, node_id)
             if detail is None:
                 self.send_json({"error": f"node not found: {node_id}"}, 404)
                 return
             self.send_json(detail)
             return
         if route.startswith("/api/area/") and route.endswith("/nodes"):
+            resolved = self._plan_root(parse_qs(parsed.query))
+            if resolved is None:
+                return
+            repo, _ = resolved
             area = unquote(route[len("/api/area/"):-len("/nodes")]).strip("/")
             if not AREA_ID_RE.match(area):
                 self.send_json({"error": "invalid area"}, 400)
                 return
-            detail = collect_area_nodes(self.repo, area)
+            detail = collect_area_nodes(repo, area)
             if detail is None:
                 self.send_json({"error": f"area not found: {area}"}, 404)
                 return
             self.send_json(detail)
             return
         if route == "/api/dag":
-            self.send_json(load_dag_view(self.repo))
+            resolved = self._plan_root(parse_qs(parsed.query))
+            if resolved is None:
+                return
+            self.send_json(load_dag_view(resolved[0]))
             return
         if route == "/api/config":
             self.send_json(load_config_view(self.repo))
@@ -4862,23 +4989,34 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(collect_settings_view(self.repo))
             return
         if route == "/api/prompts":
-            self.send_json(collect_prompts(self.repo))
+            resolved = self._plan_root(parse_qs(parsed.query))
+            if resolved is None:
+                return
+            self.send_json(collect_prompts(resolved[0]))
             return
         if route.startswith("/api/prompt/"):
+            resolved = self._plan_root(parse_qs(parsed.query))
+            if resolved is None:
+                return
+            repo, _ = resolved
             name = unquote(route[len("/api/prompt/"):]).strip("/")
-            data = collect_prompt(self.repo, name)
+            data = collect_prompt(repo, name)
             if data is None:
                 self.send_json({"error": f"prompt not found: {name}"}, 404)
                 return
             self.send_json(data)
             return
         if route.startswith("/api/raw/"):
+            resolved = self._plan_root(parse_qs(parsed.query))
+            if resolved is None:
+                return
+            repo, _ = resolved
             rest = unquote(route[len("/api/raw/"):]).strip("/")
             raw_root, sep, raw_name = rest.partition("/")
             if not sep or not raw_name:
                 self.send_json({"error": "raw request must be /api/raw/<root>/<name>"}, 400)
                 return
-            data = collect_raw(self.repo, raw_root, raw_name)
+            data = collect_raw(repo, raw_root, raw_name)
             if data is None:
                 self.send_json({"error": f"raw not found: {raw_root}/{raw_name}"}, 404)
                 return
@@ -4886,18 +5024,31 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route == "/api/timeline":
             query = parse_qs(parsed.query)
+            resolved = self._plan_root(query)
+            if resolved is None:
+                return
             since = (query.get("since", [""])[0] or "").strip()
-            data = load_timeline(self.repo)
+            data = load_timeline(resolved[0])
             self.send_json(filter_timeline_since(data, since) if since else data)
             return
         if route == "/api/overview":
-            self.send_json(load_overview(self.repo))
+            resolved = self._plan_root(parse_qs(parsed.query))
+            if resolved is None:
+                return
+            self.send_json(load_overview(resolved[0]))
             return
         if route == "/api/home":
             self.send_json(load_home(self.repo))
             return
+        if route == "/api/plans":
+            self.send_json(load_plans(self.repo))
+            return
         if route == "/api/events":
             query = parse_qs(parsed.query)
+            resolved = self._plan_root(query)
+            if resolved is None:
+                return
+            repo, _ = resolved
             raw_cursor = query.get("cursor", [None])[0]
             try:
                 cursor = int(raw_cursor) if raw_cursor not in (None, "") else None
@@ -4910,7 +5061,7 @@ class Handler(BaseHTTPRequestHandler):
             limit = max(1, min(OVERLAY_ROW_LIMIT_MAX, limit))
             type_csv = query.get("types", [None])[0]
             types = {t for t in type_csv.split(",") if t} if type_csv else None
-            self.send_json(collect_events_overlay(self.repo, cursor, limit, types))
+            self.send_json(collect_events_overlay(repo, cursor, limit, types))
             return
         if route == "/api/roles":
             # Static declared reference data — safe to cache hard.
@@ -4933,6 +5084,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         # The console's sole write route: POST /api/settings. Everything else 404s.
         parsed = urlparse(self.path)
+        # Archived plans are read-only mini-repos: reject any write scoped to one
+        # before touching the live config.
+        if parse_qs(parsed.query).get("plan"):
+            self.send_json({"error": "archived plans are read-only"}, 400)
+            return
         if parsed.path != "/api/settings":
             self.send_json({"error": "not found"}, 404)
             return
@@ -4981,6 +5137,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--prompt", help="Print one prompt's content JSON (e.g. auditor.md) and exit")
     parser.add_argument("--raw", help="Print one raw record JSON (e.g. config/gluerun.config.json) and exit")
     parser.add_argument("--home", action="store_true", help="Print the home landing digest JSON and exit")
+    parser.add_argument("--plans", action="store_true", help="Print the archived-plan registry JSON and exit")
     return parser.parse_args(argv)
 
 
@@ -5092,6 +5249,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.home:
         print(json.dumps(collect_home(repo), indent=2))
+        return 0
+    if args.plans:
+        print(json.dumps(collect_plans(repo), indent=2))
         return 0
     Handler.repo = repo
     server = ThreadingHTTPServer((args.host, args.port), Handler)

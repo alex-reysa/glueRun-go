@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import http.client
 import importlib.util
 import io
 import json
@@ -1723,6 +1724,8 @@ class NewCollectorsNoSubprocessTests(unittest.TestCase):
                 srv.collect_prompt(repo, "auditor.md")
                 srv.collect_raw(repo, "config", "gluerun.config.json")
                 srv.collect_settings_view(repo)
+                # 0.8.0 plan-threads registry read (pure-FS).
+                srv.collect_plans(repo)
             finally:
                 subprocess.run = saved
         self.assertEqual(calls, [])
@@ -2139,6 +2142,274 @@ class CollectHomeTests(unittest.TestCase):
         self.assertEqual(by_date[now.date().isoformat()]["failures"], 1)
         self.assertIsNotNone(home["lastActivityAt"])
         self.assertLessEqual(len(home["notable"]), 12)
+
+
+def _write_archived_plan(plans_dir: Path, pid: str, *, node_id: str,
+                         archived_at: str, name: str | None = None,
+                         with_manifest: bool = True, with_run: bool = False) -> dict:
+    """Materialize a minimal archived mini-repo plan under plans_dir/<pid>/ with
+    both subtrees. Returns the summary entry (index.json shape)."""
+    root = plans_dir / pid
+    (root / "docs/orchestration/tasks").mkdir(parents=True)
+    (root / "docs/orchestration/gates").mkdir(parents=True)
+    (root / ".gluerun-state/leases").mkdir(parents=True)
+    (root / ".gluerun-state/l1-leases").mkdir(parents=True)
+    (root / ".gluerun-state/runs").mkdir(parents=True)
+    (root / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+        "schema": "gluerun.orchestration.dag.v0",
+        "layers": ["contract"], "kinds": ["contract"],
+        "nodes": [
+            {"id": node_id, "stage": "A0-arch", "area": "core", "layer": "contract",
+             "kind": "contract", "dependsOn": [], "requiredCompletion": "x"},
+        ],
+    }))
+    (root / "docs/orchestration/gates" / f"{node_id}.gate-result.json").write_text(json.dumps(
+        {"node": node_id, "status": "passed", "authoritative": True,
+         "evidenceClass": "deterministic-proof", "recordedAt": archived_at}))
+    (root / "docs/orchestration/tasks/TASK-0001.md").write_text(
+        "# TASK-0001: archived task\n\nStatus: integrated\nArea: core\n")
+    (root / ".gluerun-state/events.ndjson").write_text(json.dumps(
+        {"ts": archived_at, "type": "plan.archived",
+         "data": {"planId": pid, "name": name or pid}}) + "\n")
+    if with_run:
+        run_dir = root / ".gluerun-state/runs/RUN-arch-1"
+        run_dir.mkdir(parents=True)
+        (run_dir / "codex.jsonl").write_text(
+            json.dumps({"type": "message", "role": "assistant", "content": "done"}) + "\n")
+    summary = {
+        "id": pid, "name": name or pid, "archivedAt": archived_at,
+        "gates": {"passed": 1, "total": 1}, "taskCount": 1, "eventCount": 1,
+        "headSha": "abc1234", "branch": "agent/integration",
+    }
+    if with_manifest:
+        manifest = dict(summary)
+        manifest.update({"schema": "gluerun.plan.manifest.v0",
+                         "engineVersion": "0.8.0", "schemaVersion": "v0", "forced": False})
+        (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    return summary
+
+
+class CollectPlansTests(unittest.TestCase):
+    """0.8.0 gluerun.plans.v0: registry read, manifest self-heal, sort, empties."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return Path(tmp.name)
+
+    def test_empty_repo(self) -> None:
+        data = srv.collect_plans(self._repo())
+        self.assertEqual(data["schema"], "gluerun.plans.v0")
+        self.assertEqual(data["plans"], [])
+        self.assertIn("generatedAt", data)
+
+    def test_registry_and_self_heal_sorted(self) -> None:
+        repo = self._repo()
+        plans_dir = repo / ".gluerun-state/plans"
+        plans_dir.mkdir(parents=True)
+        # Plan A: in index.json AND has a manifest (index entry must win).
+        a = _write_archived_plan(plans_dir, "plan-20260101T000000Z-alpha",
+                                 node_id="a-node", archived_at="2026-01-01T00:00:00Z",
+                                 name="Alpha")
+        # Plan B: manifest only, NOT in index → self-heal must surface it.
+        _write_archived_plan(plans_dir, "plan-20260201T000000Z-beta",
+                             node_id="b-node", archived_at="2026-02-01T00:00:00Z",
+                             name="Beta")
+        # index.json lists only A, but with a different display name than its
+        # manifest, so we can prove index wins the merge.
+        index_entry = dict(a, name="Alpha (from index)")
+        (plans_dir / "index.json").write_text(json.dumps(
+            {"schema": "gluerun.plans.index.v0", "updatedAt": a["archivedAt"],
+             "plans": [index_entry]}))
+
+        data = srv.collect_plans(repo)
+        ids = [p["id"] for p in data["plans"]]
+        self.assertEqual(ids, ["plan-20260201T000000Z-beta", "plan-20260101T000000Z-alpha"])
+        by_id = {p["id"]: p for p in data["plans"]}
+        # index entry wins over the manifest for A.
+        self.assertEqual(by_id["plan-20260101T000000Z-alpha"]["name"], "Alpha (from index)")
+        # self-healed B carries only the pinned entry fields.
+        self.assertEqual(set(by_id["plan-20260201T000000Z-beta"].keys()),
+                         set(srv._PLAN_ENTRY_FIELDS))
+        self.assertEqual(by_id["plan-20260201T000000Z-beta"]["gates"], {"passed": 1, "total": 1})
+        self.assertEqual(by_id["plan-20260201T000000Z-beta"]["taskCount"], 1)
+
+    def test_index_only_no_dir(self) -> None:
+        # An index entry with no archived dir on disk is still returned.
+        repo = self._repo()
+        plans_dir = repo / ".gluerun-state/plans"
+        plans_dir.mkdir(parents=True)
+        (plans_dir / "index.json").write_text(json.dumps(
+            {"schema": "gluerun.plans.index.v0",
+             "plans": [{"id": "plan-20260301T000000Z-x", "name": "X",
+                        "archivedAt": "2026-03-01T00:00:00Z", "gates": {"passed": 0, "total": 0},
+                        "taskCount": 0, "eventCount": 0, "headSha": "deadbee", "branch": "main"}]}))
+        data = srv.collect_plans(repo)
+        self.assertEqual([p["id"] for p in data["plans"]], ["plan-20260301T000000Z-x"])
+
+
+class PlanParamRoutingTests(unittest.TestCase):
+    """0.8.0 ?plan= routing over the HTTP layer: archived mini-repo roots serve
+    read-only; invalid/traversal ids 404; writes 400; excluded routes ignore."""
+
+    PID = "plan-20260101T000000Z-test"
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.live = Path(tmp.name)
+        for rel in ("docs/orchestration/tasks", "docs/orchestration/gates",
+                    ".gluerun-state/leases", ".gluerun-state/l1-leases",
+                    ".gluerun-state/runs"):
+            (self.live / rel).mkdir(parents=True)
+        # Live DAG has a node id distinct from the archived plan's.
+        (self.live / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+            "schema": "gluerun.orchestration.dag.v0",
+            "layers": ["contract"], "kinds": ["contract"],
+            "nodes": [{"id": "live-node", "stage": "L0-live", "area": "core",
+                       "layer": "contract", "kind": "contract", "dependsOn": [],
+                       "requiredCompletion": "x"}],
+        }))
+        (self.live / "gluerun.config.json").write_text('{"env": {}}')
+        self._config_before = (self.live / "gluerun.config.json").read_text()
+        # Archived mini-repo plan + registry.
+        plans_dir = self.live / ".gluerun-state/plans"
+        plans_dir.mkdir(parents=True)
+        summary = _write_archived_plan(plans_dir, self.PID, node_id="arch-node",
+                                       archived_at="2026-01-01T00:00:00Z", name="Test Plan",
+                                       with_run=True)
+        (plans_dir / "index.json").write_text(json.dumps(
+            {"schema": "gluerun.plans.index.v0", "updatedAt": summary["archivedAt"],
+             "plans": [summary]}))
+        # Fresh caches so the archived/live roots resolve against this fixture.
+        for cache in (srv._PLANS_CACHE, srv._DAG_VIEW_CACHE, srv._TIMELINE_CACHE,
+                      srv._OVERVIEW_CACHE):
+            cache.invalidate()
+
+        self._saved_repo = srv.Handler.repo
+        srv.Handler.repo = self.live
+        self.server = srv.ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+        def _teardown() -> None:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join()
+            srv.Handler.repo = self._saved_repo
+        self.addCleanup(_teardown)
+
+    def _req(self, method: str, path: str, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
+        headers = {}
+        raw_body = None
+        if body is not None:
+            raw_body = json.dumps(body).encode()
+            headers = {"Content-Type": "application/json", "Content-Length": str(len(raw_body))}
+        conn.request(method, path, body=raw_body, headers=headers)
+        resp = conn.getresponse()
+        payload = resp.read()
+        conn.close()
+        data = json.loads(payload) if payload else None
+        return resp.status, data
+
+    def test_dag_archived_vs_live(self) -> None:
+        status, live = self._req("GET", "/api/dag")
+        self.assertEqual(status, 200)
+        self.assertEqual([n["id"] for n in live["nodes"]], ["live-node"])
+        status, arch = self._req("GET", f"/api/dag?plan={self.PID}")
+        self.assertEqual(status, 200)
+        self.assertEqual([n["id"] for n in arch["nodes"]], ["arch-node"])
+
+    def test_timeline_and_raw_and_sessions_archived(self) -> None:
+        status, _ = self._req("GET", f"/api/timeline?plan={self.PID}")
+        self.assertEqual(status, 200)
+        status, raw = self._req("GET", f"/api/raw/dag/dag.v0.json?plan={self.PID}")
+        self.assertEqual(status, 200)
+        self.assertIn("arch-node", raw["content"])
+        status, sess = self._req("GET", f"/api/sessions?plan={self.PID}")
+        self.assertEqual(status, 200)
+        self.assertEqual(sess["schema"], "gluerun.codex.sessions.v0")
+
+    def test_unknown_and_malformed_and_traversal_404(self) -> None:
+        for pid in ("plan-does-not-exist", "not-a-plan", "plan-..%2F..%2Fx",
+                    "../x", "plan-with/slash"):
+            status, data = self._req("GET", f"/api/dag?plan={pid}")
+            self.assertEqual(status, 404, pid)
+            self.assertEqual(data, {"error": "unknown plan"}, pid)
+
+    def test_post_settings_with_plan_is_400_and_no_write(self) -> None:
+        status, data = self._req("POST", f"/api/settings?plan={self.PID}",
+                                 body={"changes": {"GLUERUN_MAX_CONCURRENT": "9"}})
+        self.assertEqual(status, 400)
+        self.assertEqual(data, {"error": "archived plans are read-only"})
+        self.assertEqual((self.live / "gluerun.config.json").read_text(), self._config_before)
+
+    def test_state_ignores_plan_param(self) -> None:
+        # /api/state is excluded: a valid ?plan= is ignored, live data served, 200.
+        status, _ = self._req("GET", f"/api/state?plan={self.PID}")
+        self.assertEqual(status, 200)
+
+    def test_plans_lists_archived(self) -> None:
+        status, data = self._req("GET", "/api/plans")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["schema"], "gluerun.plans.v0")
+        self.assertEqual([p["id"] for p in data["plans"]], [self.PID])
+
+
+class ComputeCacheMultiSlotTests(unittest.TestCase):
+    """0.8.0 _ComputeCache multi-slot LRU: alternating keys don't thrash, capacity
+    evicts LRU, invalidate() clears all slots. Single-flight/TTL preserved."""
+
+    def _counting_cache(self, ttl: float = 60.0):
+        calls: list = []
+
+        def compute(arg):
+            calls.append(arg)
+            return {"arg": arg}
+
+        return srv._ComputeCache(compute, ttl), calls
+
+    def test_alternating_keys_no_evict(self) -> None:
+        cache, calls = self._counting_cache()
+        for _ in range(3):
+            self.assertEqual(cache.get("a", "a"), {"arg": "a"})
+            self.assertEqual(cache.get("b", "b"), {"arg": "b"})
+        # Only one compute per distinct key despite repeated alternation.
+        self.assertEqual(calls, ["a", "b"])
+
+    def test_capacity_eviction_lru(self) -> None:
+        cache, calls = self._counting_cache()
+        for k in ("a", "b", "c", "d", "e"):  # 5 keys, capacity 4 -> 'a' evicted
+            cache.get(k, k)
+        self.assertEqual(len(calls), 5)
+        # b..e still cached (no recompute); a was evicted (recompute).
+        for k in ("b", "c", "d", "e"):
+            cache.get(k, k)
+        self.assertEqual(len(calls), 5)
+        cache.get("a", "a")
+        self.assertEqual(calls[-1], "a")
+        self.assertEqual(len(calls), 6)
+
+    def test_invalidate_clears_all(self) -> None:
+        cache, calls = self._counting_cache()
+        cache.get("a", "a")
+        cache.get("b", "b")
+        self.assertEqual(len(calls), 2)
+        cache.invalidate()
+        cache.get("a", "a")
+        cache.get("b", "b")
+        self.assertEqual(len(calls), 4)
+
+    def test_ttl_expiry_recomputes(self) -> None:
+        cache, calls = self._counting_cache(ttl=0.05)
+        cache.get("a", "a")
+        cache.get("a", "a")
+        self.assertEqual(len(calls), 1)
+        time.sleep(0.08)
+        cache.get("a", "a")
+        self.assertEqual(len(calls), 2)
 
 
 if __name__ == "__main__":
