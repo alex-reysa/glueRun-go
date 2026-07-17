@@ -15,9 +15,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2496,6 +2498,14 @@ class _ComputeCache:
                 self._key = key
             return value
 
+    def invalidate(self) -> None:
+        """Drop the cached value so the next get() recomputes. Used after a
+        settings write mutates the underlying config."""
+        with self._lock:
+            self._value = None
+            self._key = ""
+            self._stamp = 0.0
+
 
 def _events_path(repo: Path) -> Path:
     return state_path(repo, EVENTS_LOG_REL)
@@ -3764,6 +3774,190 @@ def load_config_view(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Settings write (gluerun.codex.settings.v0)                                   #
+# --------------------------------------------------------------------------- #
+#
+# The ONLY write surface in the console. It edits the whitelisted env{} block of
+# gluerun.config.json (never leases, gates, worktrees, or the STOP sentinel), so
+# the operator can retune the loop without hand-editing JSON. collect_settings
+# stays read-only and untouched — this layer validates + applies, then invalidates
+# the config/overview caches so the next read reflects the change.
+
+# GLUERUN_SLEEP / GLUERUN_MAX_HOURS bound the current nap and the loop's wall
+# budget, so a change only takes effect once autonomate loops back around; every
+# other knob is consumed at the top of the next cycle.
+_LOOP_RESTART_KEYS = {"GLUERUN_SLEEP", "GLUERUN_MAX_HOURS"}
+
+
+def _settings_applies_at(key: str) -> str:
+    return "loop-restart" if key in _LOOP_RESTART_KEYS else "next-cycle"
+
+
+def _settings_write_spec() -> tuple[set[str], dict[str, str]]:
+    """(whitelist, kind_by_key) for the writable settings surface.
+
+    Whitelist = SETTINGS_SPEC keys (minus derived, which have no real value to
+    write) ∪ every model/effort env key from both providers + the model/effort
+    fallbacks ∪ the config limit/flag env keys. `kind_by_key` carries the
+    SETTINGS_SPEC display kind where known (drives typed validation)."""
+    kinds: dict[str, str] = {}
+    derived: set[str] = set()
+    whitelist: set[str] = set()
+    for _title, _layout, items in SETTINGS_SPEC:
+        for env_key, _label, _fallback, kind, _unit, _meaning in items:
+            kinds[env_key] = kind
+            if kind == "derived":
+                derived.add(env_key)
+                continue
+            whitelist.add(env_key)
+    for provider_roles in _CONFIG_ROLE_KEYS.values():
+        for model_key, effort_key, _default in provider_roles.values():
+            whitelist.add(model_key)
+            whitelist.add(effort_key)
+    for model_key, _fallback in _CONFIG_MODEL_FALLBACK.values():
+        whitelist.add(model_key)
+    for effort_key in _CONFIG_EFFORT_FALLBACK.values():
+        if effort_key:
+            whitelist.add(effort_key)
+    for _name, key in _CONFIG_LIMIT_KEYS:
+        whitelist.add(key)
+    for _name, key in _CONFIG_FLAG_KEYS:
+        whitelist.add(key)
+    # Derived knobs (e.g. GLUERUN_MAX_DISPATCH) are read-only even though they
+    # also appear in _CONFIG_LIMIT_KEYS — the derived exclusion wins.
+    whitelist -= derived
+    return whitelist, kinds
+
+
+def _infer_setting_kind(key: str, kinds: dict[str, str]) -> str:
+    if key in kinds:
+        return kinds[key]
+    if key.endswith("_MODEL"):
+        return "model"
+    if key.endswith("_EFFORT") or key.endswith("_REASONING_EFFORT"):
+        return "reasoning"
+    return "string"
+
+
+def _normalize_setting_value(kind: str, raw: Any) -> tuple[bool, str]:
+    """Kind-typed validation. Returns (ok, normalized_value_or_error). An empty
+    string is the delete sentinel (reverts a key to its default) and is always
+    accepted. Numbers are stringified; booleans map to 1/0."""
+    if isinstance(raw, bool):
+        sval = "1" if raw else "0"
+    elif isinstance(raw, float):
+        sval = str(int(raw)) if raw.is_integer() else str(raw)
+    elif isinstance(raw, int):
+        sval = str(raw)
+    elif isinstance(raw, str):
+        sval = raw
+    else:
+        return False, "value must be a string or number"
+    if sval.strip() == "":
+        return True, ""  # delete sentinel — revert to default
+    if kind in ("count", "duration", "bytes"):
+        try:
+            n = int(sval.strip())
+        except ValueError:
+            return False, f"{kind} must be a non-negative integer"
+        if n < 0:
+            return False, f"{kind} must be a non-negative integer"
+        return True, str(n)
+    if kind == "bool":
+        low = sval.strip().lower()
+        if low in ("1", "true"):
+            return True, "1"
+        if low in ("0", "false"):
+            return True, "0"
+        return False, "bool must be 0 or 1"
+    # model / reasoning / enum / identifier / string
+    if len(sval) > 120:
+        return False, "value too long (max 120 chars)"
+    if "\n" in sval or "\r" in sval:
+        return False, "value must not contain newlines"
+    return True, sval
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text to a NamedTemporaryFile in the same directory, then os.replace
+    it into place — an atomic swap so a reader never sees a half-written config."""
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+                "w", dir=str(path.parent), prefix=".gluerun-cfg-", suffix=".json",
+                delete=False, encoding="utf-8") as tf:
+            tf.write(text)
+            tmp_name = tf.name
+        os.replace(tmp_name, str(path))
+    except Exception:
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        raise
+
+
+def apply_settings_changes(repo: Path, changes: Any) -> tuple[int, dict[str, Any]]:
+    """Validate + apply a batch of settings changes to gluerun.config.json's env{}.
+    Pure of HTTP so tests can exercise it directly. Returns (status_code, payload).
+
+    Rejects (400, nothing written) any unknown/read-only key or any value that
+    fails kind-typed validation. Requires an existing gluerun.config.json object
+    (else 409). An empty-string value deletes the key (reverts to default); every
+    other top-level config key and unrelated env key is preserved."""
+    repo = Path(repo)
+    if not isinstance(changes, dict):
+        return 400, {"error": "changes must be an object"}
+    whitelist, kinds = _settings_write_spec()
+    unknown = sorted(k for k in changes if k not in whitelist)
+    if unknown:
+        return 400, {"error": "unknown or read-only keys", "keys": unknown}
+    normalized: dict[str, str] = {}
+    for key, raw in changes.items():
+        kind = _infer_setting_kind(key, kinds)
+        ok, result = _normalize_setting_value(kind, raw)
+        if not ok:
+            return 400, {"error": result, "key": key}
+        normalized[key] = result
+    cfg_path = repo / "gluerun.config.json"
+    obj = read_json(cfg_path, None)
+    if not isinstance(obj, dict):
+        return 409, {"error": "no gluerun.config.json — initialize the repo first"}
+    env = obj.get("env")
+    if not isinstance(env, dict):
+        env = {}
+        obj["env"] = env
+    for key, value in normalized.items():
+        if value == "":
+            env.pop(key, None)  # revert to default
+        else:
+            env[key] = value
+    _atomic_write_text(cfg_path, json.dumps(obj, indent=2) + "\n")
+    _CONFIG_CACHE.invalidate()
+    _OVERVIEW_CACHE.invalidate()
+    return 200, {
+        "ok": True,
+        "applied": normalized,
+        "appliesAt": {k: _settings_applies_at(k) for k in normalized},
+        "config": collect_config(repo),
+        "settings": collect_settings(repo),
+    }
+
+
+def collect_settings_view(repo: Path) -> dict[str, Any]:
+    """GET /api/settings envelope: the read-only groups plus an appliesAt map for
+    every whitelisted (writable) key, so the UI can label when a change lands."""
+    whitelist, _kinds = _settings_write_spec()
+    return {
+        "schema": "gluerun.codex.settings.v0",
+        "generatedAt": utc_now(),
+        "groups": collect_settings(repo),
+        "appliesAt": {k: _settings_applies_at(k) for k in sorted(whitelist)},
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Console adapter (gluerun.console-adapter.v0)                                     #
 # --------------------------------------------------------------------------- #
 #
@@ -4250,6 +4444,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/config":
             self.send_json(load_config_view(self.repo))
             return
+        if route == "/api/settings":
+            self.send_json(collect_settings_view(self.repo))
+            return
         if route == "/api/timeline":
             query = parse_qs(parsed.query)
             since = (query.get("since", [""])[0] or "").strip()
@@ -4292,6 +4489,36 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
         self.send_json({"error": "not found"}, 404)
+
+    def do_POST(self) -> None:
+        # The console's sole write route: POST /api/settings. Everything else 404s.
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/settings":
+            self.send_json({"error": "not found"}, 404)
+            return
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None:
+            self.send_json({"error": "Content-Length required"}, 400)
+            return
+        try:
+            length = int(raw_len)
+        except ValueError:
+            self.send_json({"error": "invalid Content-Length"}, 400)
+            return
+        if length < 0 or length > 65536:
+            self.send_json({"error": "request body too large"}, 400)
+            return
+        body = self.rfile.read(length) if length else b""
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception:
+            self.send_json({"error": "malformed JSON body"}, 400)
+            return
+        if not isinstance(payload, dict) or not isinstance(payload.get("changes"), dict):
+            self.send_json({"error": 'body must be {"changes": {KEY: value, ...}}'}, 400)
+            return
+        status, resp = apply_settings_changes(self.repo, payload["changes"])
+        self.send_json(resp, status)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

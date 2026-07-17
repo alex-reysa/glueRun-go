@@ -1761,5 +1761,108 @@ class AutonomateLogResolutionTests(unittest.TestCase):
         self.assertIn({"name": "autonomate.log", "kind": "plain"}, files)
 
 
+class SettingsWriteTests(unittest.TestCase):
+    """W1: apply_settings_changes validates + applies to gluerun.config.json env{}
+    without touching any other key. collect_settings stays read-only."""
+
+    def _repo(self, config: dict | None = None) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state").mkdir()
+        if config is not None:
+            (repo / "gluerun.config.json").write_text(json.dumps(config))
+        # invalidate shared caches so cross-test residue never leaks in
+        srv._CONFIG_CACHE.invalidate()
+        srv._OVERVIEW_CACHE.invalidate()
+        return repo
+
+    def test_unknown_key_rejected_nothing_written(self) -> None:
+        repo = self._repo({"env": {}})
+        status, payload = srv.apply_settings_changes(repo, {"DATABASE_URL": "postgres://x"})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "unknown or read-only keys")
+        self.assertIn("DATABASE_URL", payload["keys"])
+        self.assertEqual(json.loads((repo / "gluerun.config.json").read_text())["env"], {})
+
+    def test_derived_kind_rejected(self) -> None:
+        # GLUERUN_MAX_DISPATCH is kind=derived in SETTINGS_SPEC -> read-only.
+        derived = [it[0] for _t, _l, items in srv.SETTINGS_SPEC for it in items if it[3] == "derived"]
+        self.assertIn("GLUERUN_MAX_DISPATCH", derived)
+        repo = self._repo({"env": {}})
+        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_DISPATCH": "5"})
+        self.assertEqual(status, 400)
+        self.assertIn("GLUERUN_MAX_DISPATCH", payload["keys"])
+
+    def test_bool_and_count_validation(self) -> None:
+        repo = self._repo({"env": {}})
+        # bool: only 0/1 (or true/false) accepted
+        status, _ = srv.apply_settings_changes(repo, {"GLUERUN_AUTO_INTEGRATE": "maybe"})
+        self.assertEqual(status, 400)
+        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_AUTO_INTEGRATE": True})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["applied"]["GLUERUN_AUTO_INTEGRATE"], "1")
+        # count: non-negative integer only
+        status, _ = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "-2"})
+        self.assertEqual(status, 400)
+        status, _ = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "notanumber"})
+        self.assertEqual(status, 400)
+        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": 4})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["applied"]["GLUERUN_MAX_CONCURRENT"], "4")
+
+    def test_write_preserves_other_keys(self) -> None:
+        repo = self._repo({
+            "schemaVersion": "v0", "runner": "claude-run.sh", "targetBranch": "agent/integration",
+            "env": {"CUSTOM_SECRET": "keepme", "GLUERUN_SLEEP": "5"}})
+        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "3"})
+        self.assertEqual(status, 200)
+        obj = json.loads((repo / "gluerun.config.json").read_text())
+        self.assertEqual(obj["schemaVersion"], "v0")
+        self.assertEqual(obj["runner"], "claude-run.sh")
+        self.assertEqual(obj["targetBranch"], "agent/integration")
+        self.assertEqual(obj["env"]["CUSTOM_SECRET"], "keepme")   # unknown env key preserved
+        self.assertEqual(obj["env"]["GLUERUN_SLEEP"], "5")
+        self.assertEqual(obj["env"]["GLUERUN_MAX_CONCURRENT"], "3")
+        self.assertEqual(payload["appliesAt"]["GLUERUN_MAX_CONCURRENT"], "next-cycle")
+
+    def test_empty_string_deletes_key(self) -> None:
+        repo = self._repo({"env": {"GLUERUN_MAX_CONCURRENT": "9", "CUSTOM_SECRET": "keepme"}})
+        status, _ = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": ""})
+        self.assertEqual(status, 200)
+        env = json.loads((repo / "gluerun.config.json").read_text())["env"]
+        self.assertNotIn("GLUERUN_MAX_CONCURRENT", env)
+        self.assertEqual(env["CUSTOM_SECRET"], "keepme")
+
+    def test_collect_config_reflects_write_cache_invalidated(self) -> None:
+        repo = self._repo({"runner": "claude-run.sh", "env": {}})
+        before = srv.load_config_view(repo)                       # primes the cache
+        self.assertIsNone(before["limits"]["maxConcurrent"])
+        srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "7"})
+        after = srv.load_config_view(repo)                        # must see the new value
+        self.assertEqual(after["limits"]["maxConcurrent"], "7")
+
+    def test_loop_restart_applies_at(self) -> None:
+        repo = self._repo({"env": {}})
+        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_SLEEP": "30"})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["appliesAt"]["GLUERUN_SLEEP"], "loop-restart")
+
+    def test_missing_config_409(self) -> None:
+        repo = self._repo(config=None)
+        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "2"})
+        self.assertEqual(status, 409)
+        self.assertIn("initialize the repo first", payload["error"])
+
+    def test_settings_view_shape(self) -> None:
+        repo = self._repo({"env": {}})
+        view = srv.collect_settings_view(repo)
+        self.assertEqual(view["schema"], "gluerun.codex.settings.v0")
+        self.assertEqual(view["groups"], srv.collect_settings(repo))
+        self.assertEqual(view["appliesAt"]["GLUERUN_SLEEP"], "loop-restart")
+        self.assertEqual(view["appliesAt"]["GLUERUN_MAX_CONCURRENT"], "next-cycle")
+        self.assertNotIn("GLUERUN_MAX_DISPATCH", view["appliesAt"])  # derived is read-only
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
