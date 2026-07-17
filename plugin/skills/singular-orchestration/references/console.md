@@ -1,24 +1,39 @@
 # Orchestration console — monitoring UI, JSON API, snapshot modes
 
-A read-only local web console over Singular's durable state. Since 0.6.0 it
-has three top-level surfaces (switcher in the top bar):
+A local web console over Singular's durable state. Since 0.7.0 it is a
+full-bleed workspace (slim 44px header, no dock) with four surfaces:
 
+- **Home** (default) — system at a glance: health verdict + attention feed
+  (STOP, breaker, planner backoff, stale L1 leases, disk, stale loop
+  pidfile), per-stage gate progress, live event feed, 14-day activity
+  sparkline, throughput tiles, quick links.
 - **Plan** — a workbench over the orchestration DAG with four lenses:
   Timeline (real execution Gantt: per-task attempt bars on compressed real
-  time, gate diamonds, L0 cycle strip, retry chains), Matrix (N×N dependency
-  matrix with gate-status diagonal and an acyclicity proof), DAG (layered
-  stage graph with collapse + upstream/downstream hover tracing), and Tasks
-  (the sortable task table). A right-hand aside drills into the selected DAG
-  node; the bottom-sheet inspector still owns full task detail.
+  time, gate diamonds, L0 cycle strip, retry chains; labels are
+  collision-placed and never overlap), Matrix (N×N dependency matrix,
+  cell size adapts to the pane width, gate-status diagonal, acyclicity
+  proof), DAG (layered stage graph with collapse + hover tracing), and
+  Tasks (the sortable task table + the status quick-filters). A right-hand
+  aside drills into the selected DAG node; the bottom-sheet inspector owns
+  full task detail.
 - **Consoles** — a live operations room: the L0 supervisor as a persistent
   left pane (semantic events + raw supervisor log), and a dynamic region
   where labeled agent consoles (role · task/area · phase · model) pop in as
   the system spawns planners/workers/auditors and linger→collapse into a
   recent rail when they finish. Finished sessions reopen with full parsed
-  scrollback — the rail is the idle/historical experience.
+  scrollback; a prompt chip opens the exact rendered prompt of the run.
 - **Agents** — a role card grid (avatar, live glyph, current work, model ·
-  effort from resolved config) with a per-role detail view: processes
-  (jump to their console) and read-only settings with env-key provenance.
+  effort) with per-role detail: processes (jump to their console), the
+  role's prompt template, and **editable settings** (see below).
+
+**Write scope (0.7.0):** the console's only write path is
+`POST /api/settings`, which edits whitelisted `GLUERUN_*` knobs in
+`gluerun.config.json` `env{}` (atomic; secrets and unknown keys untouched).
+Most changes apply on the next loop cycle; `GLUERUN_SLEEP`/`GLUERUN_MAX_HOURS`
+need a loop restart (the UI labels each). Orchestration state — tasks,
+leases, gates, STOP, worktrees — remains read-only from the console.
+Developer primitives: `{}` view-source buttons open the raw durable file
+behind any entity in the inspector.
 
 ## Start it
 
@@ -69,6 +84,10 @@ gluerun console --events              # live event overlay
 gluerun console --dag                 # full DAG view: nodes+gates+task rollups+edges (0.6.0)
 gluerun console --timeline            # execution timeline: task intervals+gates+cycles (0.6.0)
 gluerun console --config              # resolved per-role model/effort + limits (0.6.0)
+gluerun console --home                # at-a-glance digest: health+attention+activity (0.7.0)
+gluerun console --prompts             # role prompt library listing (0.7.0)
+gluerun console --prompt <name>.md    # one prompt template's content (0.7.0)
+gluerun console --raw <root>/<name>   # raw durable file behind an entity (0.7.0)
 ```
 
 Use these to summarize orchestration health or inspect one task from a
@@ -77,7 +96,8 @@ terminal-only context.
 ## Read-only rules
 
 The console (and any agent using it for monitoring) observes; it never
-steers:
+steers. The single exception since 0.7.0 is the settings write path above
+(whitelisted config env{} knobs). Everything else:
 
 - Treat Singular durable state as authoritative.
 - Do not mutate the repo, `.gluerun-state`, worktrees, leases, tasks,
@@ -157,6 +177,17 @@ commands/tools they actually ran.
                           gate marks, L0 reconcile cycle spans
 /api/config             → resolved per-role model/effort with env-key provenance
                           + limits/flags (0.6.0; .env > config env{} > defaults)
+/api/home               → at-a-glance digest (0.7.0): health, attention[],
+                          gates, frontier, taskCounts, dispatch/autonomate
+                          liveness, breaker/backoff, 14-day activityByDay
+/api/settings           → GET: all knob rows (config env{} overlaid) + appliesAt;
+                          POST {"changes":{KEY:value}} writes whitelisted keys
+                          into gluerun.config.json env{} (the console's ONLY
+                          write path; ""-value deletes a key)
+/api/prompts            → role prompt library listing (0.7.0)
+/api/prompt/<name>      → one prompt template's content
+/api/raw/<root>/<name>  → raw durable file (roots: task, gate, gate-review,
+                          lease, l1-lease, dispatch, inbox, state, config, dag)
 ```
 
 Snapshot extras: `orchestration.gates` `{passed,total,byNode}` (replaces the

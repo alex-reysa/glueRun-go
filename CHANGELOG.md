@@ -7,6 +7,73 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.7.0] — 2026-07-17 — Workspace polish: Home, full-bleed canvas, editable settings, developer primitives
+
+Field feedback on 0.6.0 ("half way there"): the dashboard should feel like a
+full canvas per tab, the timeline garbled overlapping labels on dense lanes,
+the matrix didn't use wide screens, settings were read-only, and the system
+felt like a black box. `schemaVersion` stays **v1**; `POST /api/settings` is
+the console's first write path and it only touches `gluerun.config.json`
+`env{}` — orchestration state remains read-only.
+
+### Workspace shell
+- **Home** is a new landing surface (default route): health verdict +
+  attention feed (STOP, breaker, planner backoff, stale L1 leases, disk,
+  stale loop pidfile), per-stage gate progress, live event feed, a 14-day
+  activity sparkline (dispatches/integrations/failures), throughput tiles,
+  and quick links into the other tabs.
+- The header slims to a single 44px row (brand, Home·Plan·Consoles·Agents
+  nav, health, stop, conn, Refresh); the stat strip and plan pill retire —
+  their content lives on Home, and the actionable status filters moved into
+  the Plan workbench header. The bottom dock is deleted; every surface is a
+  full-bleed workspace with hairline dividers.
+
+### Plan surface fixes
+- **Timeline**: per-lane label placement with measured text (inline /
+  right-outside only when it fits before the next bar / hidden with hover +
+  tooltip) and lanes clip overflow — overlapping garbled labels are gone.
+  Real bar widths (6px min, adjacent slivers merged) replace the 18px blob
+  floor; retry chips move to row ends; collapsed areas take one 30px row
+  with the heat strip inline; sticky day labels; denser rows (20px bars).
+- **Matrix**: cell size now derives from the pane width
+  (`clamp(22..44px)`), so the grid uses a 16:9 screen instead of rendering
+  a fixed 774px square; marks and diagonal pills scale with the cell.
+
+### Agents: editable settings
+- Role detail and a new System settings panel (all 23 knobs in 4 groups)
+  edit model/effort/concurrency/safety knobs with kind-typed validation and
+  per-key "applies next cycle" / "needs loop restart" labels. Saves go
+  through **`POST /api/settings`** → atomic write into
+  `gluerun.config.json` `env{}` (the layer the engine actually re-reads
+  each cycle; `.env` is only read at loop launch). Whitelisted keys only —
+  secrets and unknown config keys are never touched; derived knobs render
+  read-only. `/api/settings` rows overlay config env{} so saved values are
+  visible immediately.
+
+### Developer primitives (no black boxes)
+- **Prompts**: `GET /api/prompts` + `/api/prompt/<name>` serve the role
+  prompt library (`docs/orchestration/prompts/`); the Agents role detail
+  shows each role's template, and Consoles panes/rows carry a prompt chip
+  opening the EXACT rendered prompt of that run (rendered `*-prompt.md`
+  files now stream through the session reader as `kind:"prompt"`).
+- **Raw view-source**: `GET /api/raw/<root>/<name>` (tasks incl.
+  superseded, gates + reviews, leases, L1 leases, dispatch records, inbox
+  packets, origin-state/circuit/planner-backoff/STATUS, config, DAG) with
+  per-root allowlists and containment; quiet `{}` buttons on tasks, nodes,
+  Home breaker/backoff, and Agents config open the underlying file in the
+  inspector (pretty-printed JSON, path, size, mtime).
+- **`GET /api/home`** (`gluerun.codex.home.v0`, `--home`): the at-a-glance
+  digest powering Home — first server-side read of dispatch records and
+  planner-backoff.json, pid-liveness without subprocesses.
+
+### Migrating from 0.6.0
+- No action required. The dock and `#dock` sizing knobs are gone; the event
+  feed lives on Home. Bare URLs land on `#home` (all 0.6.0 routes and
+  legacy deep links still work). New one-shot flags: `--home`, `--prompts`,
+  `--prompt <name>`, `--raw <root>/<name>`.
+
+---
+
 ## [0.6.0] — 2026-07-17 — Three-surface console redesign (Plan · Consoles · Agents)
 
 A full information-architecture redesign of the read-only console, replacing
