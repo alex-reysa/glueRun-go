@@ -1363,5 +1363,79 @@ class ProbeOverrideEscapeHatchTests(unittest.TestCase):
         self.assertFalse(srv.probe_command_overridden("nextAreas"))
 
 
+class AssetRouteTests(unittest.TestCase):
+    """0.6.0 asset serving: extension allowlist + containment, subdirs allowed."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "core").mkdir()
+        (root / "styles.css").write_text("body{}")
+        (root / "core" / "util.js").write_text("export {};")
+        (root / "notes.txt").write_text("not served")
+        saved = srv.ASSETS_DIR
+        srv.ASSETS_DIR = root
+        self.addCleanup(lambda: setattr(srv, "ASSETS_DIR", saved))
+        self.root = root
+
+    def test_top_level_css(self) -> None:
+        resolved = srv.resolve_asset("styles.css")
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved[0], (self.root / "styles.css").resolve())
+        self.assertIn("text/css", resolved[1])
+
+    def test_subdirectory_module(self) -> None:
+        resolved = srv.resolve_asset("core/util.js")
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved[0], (self.root / "core" / "util.js").resolve())
+        self.assertIn("javascript", resolved[1])
+
+    def test_rejections(self) -> None:
+        for name in ("../test_gluerun_graph_server.py", "..%2fx.js", "/etc/passwd",
+                     "notes.txt", ".hidden.js", "core/.env.js", "", "core/missing.js"):
+            self.assertIsNone(srv.resolve_asset(name), name)
+
+
+class AutonomateLogResolutionTests(unittest.TestCase):
+    """The engine's --detach loop writes autonomate.log; the legacy name is
+    autonomate.out.log. The server follows whichever exists (newest wins)."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        self.state = self.repo / ".gluerun-state"
+        self.state.mkdir()
+
+    def test_engine_name_only(self) -> None:
+        (self.state / "autonomate.log").write_text("loop\n")
+        self.assertEqual(srv.resolve_autonomate_log(self.repo), "autonomate.log")
+        session = srv._origin_session(self.repo)
+        self.assertIn({"name": "autonomate.log", "kind": "plain"}, session["logFiles"])
+        # A pre-0.6.0 client asking for the legacy alias still gets the live log.
+        path, _files = srv._resolve_session_log(self.repo, "origin", "autonomate.out.log")
+        self.assertEqual(path, self.state / "autonomate.log")
+
+    def test_newest_wins(self) -> None:
+        (self.state / "autonomate.log").write_text("old\n")
+        (self.state / "autonomate.out.log").write_text("new\n")
+        now = time.time()
+        os.utime(self.state / "autonomate.log", (now - 600, now - 600))
+        os.utime(self.state / "autonomate.out.log", (now, now))
+        self.assertEqual(srv.resolve_autonomate_log(self.repo), "autonomate.out.log")
+
+    def test_neither_defaults_to_legacy(self) -> None:
+        self.assertEqual(srv.resolve_autonomate_log(self.repo), "autonomate.out.log")
+        path, _files = srv._resolve_session_log(self.repo, "origin", "autonomate.out.log")
+        self.assertIsNone(path)
+
+    def test_explicit_engine_file_served(self) -> None:
+        (self.state / "autonomate.log").write_text("loop\n")
+        path, files = srv._resolve_session_log(self.repo, "origin", "autonomate.log")
+        self.assertEqual(path, self.state / "autonomate.log")
+        self.assertIn({"name": "autonomate.log", "kind": "plain"}, files)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -21,7 +21,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -64,10 +64,53 @@ FAILED_STATUSES = {"failed", "error", "errored"}
 # Terminal set used for "is this lease still owned by a worker" checks.
 TERMINAL_LEASE_STATUSES = DONE_STATUSES | AWAITING_STATUSES | BLOCKED_STATUSES | FAILED_STATUSES
 
-ASSET_CONTENT_TYPES = {
-    "styles.css": "text/css; charset=utf-8",
-    "app.js": "application/javascript; charset=utf-8",
+# Assets are served by extension allowlist + resolved-path containment (not a
+# per-file registry) so the SPA can ship ES modules in subdirectories.
+ASSET_EXT_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".svg": "image/svg+xml; charset=utf-8",
 }
+
+
+def resolve_asset(name: str) -> tuple[Path, str] | None:
+    """Map an /assets/<name> request to (file, content type), or None.
+
+    Rejects absolute paths, dot-prefixed components (covers ``..`` and
+    dotfiles), unknown extensions, and anything resolving outside ASSETS_DIR.
+    """
+    if not name or name.startswith("/"):
+        return None
+    pure = PurePosixPath(name)
+    if any(part.startswith(".") for part in pure.parts):
+        return None
+    content_type = ASSET_EXT_TYPES.get(pure.suffix.lower())
+    if content_type is None:
+        return None
+    root = ASSETS_DIR.resolve()
+    path = (root / name).resolve()
+    if root not in path.parents or not path.is_file():
+        return None
+    return path, content_type
+
+
+# The engine's --detach loop writes ``autonomate.log``; the legacy/adapter name
+# is ``autonomate.out.log``. Both are accepted; freshest existing file wins.
+AUTONOMATE_LOG_ENGINE = "autonomate.log"
+
+
+def resolve_autonomate_log(repo: Path) -> str:
+    """State-relative name of the L0 supervisor log for this repo."""
+    best, best_mtime = None, 0.0
+    for name in dict.fromkeys((AUTONOMATE_LOG_REL, AUTONOMATE_LOG_ENGINE)):
+        try:
+            mtime = state_path(repo, name).stat().st_mtime
+        except OSError:
+            continue
+        if mtime > best_mtime:
+            best, best_mtime = name, mtime
+    return best or AUTONOMATE_LOG_REL
 
 # Which run-dir prompt file implies which worker role. Decider is matched by the
 # "decider-prompt-" prefix (its suffix carries the recovery reason).
@@ -1336,7 +1379,7 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
             "originState": origin_state_compact,
         },
         "events": parse_events(state_path(repo, EVENTS_LOG_REL), 40),
-        "autonomateTail": tail_lines(state_path(repo, AUTONOMATE_LOG_REL), 80),
+        "autonomateTail": tail_lines(state_path(repo, resolve_autonomate_log(repo)), 80),
         "disk": collect_disk(repo),
         "l1Areas": l1_areas,
         "l1Leases": l1_leases,
@@ -1724,7 +1767,8 @@ def _gate_session(path: Path, name: str, mtime: float, fresh: bool, names: set[s
 
 def _origin_session(repo: Path) -> dict[str, Any]:
     state_dir = state_path(repo)
-    mtime = max(_safe_mtime(state_dir / AUTONOMATE_LOG_REL), _safe_mtime(state_dir / EVENTS_LOG_REL))
+    auto_log = resolve_autonomate_log(repo)
+    mtime = max(_safe_mtime(state_dir / auto_log), _safe_mtime(state_dir / EVENTS_LOG_REL))
     fresh = (time.time() - mtime) < SESSION_LIVE_WINDOW
     stop = (state_dir / "STOP").exists()
     state = "active" if fresh else ("stopped" if stop else "idle")
@@ -1735,7 +1779,7 @@ def _origin_session(repo: Path) -> dict[str, Any]:
         "stop": stop,
         "updatedAt": _iso_from_mtime(mtime),
         "logFiles": [{"name": EVENTS_LOG_REL, "kind": "event"},
-                     {"name": AUTONOMATE_LOG_REL, "kind": "plain"}],
+                     {"name": auto_log, "kind": "plain"}],
         "live": fresh, "_mtime": mtime,
     }
 
@@ -1844,10 +1888,15 @@ def _resolve_session_log(repo: Path, session_id: str, file_name: str | None) -> 
     """Resolve (path, logFiles) for a session, validating every component against
     path traversal. file_name must be one of the session's own logFiles."""
     if session_id == "origin":
+        auto_log = resolve_autonomate_log(repo)
         files = [{"name": EVENTS_LOG_REL, "kind": "event"},
-                 {"name": AUTONOMATE_LOG_REL, "kind": "plain"}]
-        names = {f["name"] for f in files}
-        chosen = file_name if file_name in names else EVENTS_LOG_REL
+                 {"name": auto_log, "kind": "plain"}]
+        # Either autonomate name is accepted so pre-0.6.0 clients keep working;
+        # a requested-but-absent alias falls through to the resolved log.
+        accepted = {EVENTS_LOG_REL, AUTONOMATE_LOG_REL, AUTONOMATE_LOG_ENGINE, auto_log}
+        chosen = file_name if file_name in accepted else EVENTS_LOG_REL
+        if chosen != EVENTS_LOG_REL and not state_path(repo, chosen).is_file():
+            chosen = auto_log
         path = state_path(repo) / chosen
         return (path if path.is_file() else None, files)
     if not SESSION_ID_RE.match(session_id):
@@ -3529,8 +3578,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_asset(self, filename: str, content_type: str) -> None:
-        path = ASSETS_DIR / filename
+    def send_asset(self, filename: str | Path, content_type: str) -> None:
+        path = filename if isinstance(filename, Path) else ASSETS_DIR / filename
         try:
             data = path.read_bytes()
         except FileNotFoundError:
@@ -3550,12 +3599,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_asset("index.html", "text/html; charset=utf-8")
             return
         if route.startswith("/assets/"):
-            name = route[len("/assets/"):]
-            content_type = ASSET_CONTENT_TYPES.get(name)
-            if content_type is None:
+            resolved = resolve_asset(unquote(route[len("/assets/"):]))
+            if resolved is None:
                 self.send_json({"error": "not found"}, 404)
                 return
-            self.send_asset(name, content_type)
+            self.send_asset(resolved[0], resolved[1])
             return
         if route == "/api/state":
             query = parse_qs(parsed.query)
