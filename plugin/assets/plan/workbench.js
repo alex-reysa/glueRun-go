@@ -128,6 +128,10 @@ function renderAside() {
      <div class="plan-aside-gate">
        <span class="status-chip" data-tone="${gtone}"><span class="tone-dot" data-tone="${gtone}"></span><span>gate ${esc(g.status || "absent")}</span></span>
        ${g.recordedAt ? `<span class="plan-aside-meta">${esc(relTime(g.recordedAt, S.snap && S.snap.generatedAt))} ago${g.evidenceClass ? " · " + esc(g.evidenceClass) : ""}</span>` : ""}
+       <span class="insp-raw-cluster" style="margin-left:auto">
+         <button class="insp-raw-btn" data-raw-root="gate" data-raw-name="${escAttr(node.id)}.gate-result.json" data-raw-title="gate ${escAttr(node.id)}" title="view source · gate">{ }<span class="irb-label">gate</span></button>
+         <button class="insp-raw-btn" data-raw-root="dag" data-raw-name="dag.v0.json" data-raw-title="dag.v0.json" title="view source · dag">{ }<span class="irb-label">dag</span></button>
+       </span>
      </div>
      ${node.requiredCompletion ? `<div class="plan-aside-block"><span class="meta-label">required completion</span><p class="plan-aside-text">${esc(node.requiredCompletion)}</p></div>` : ""}
      ${node.description ? `<div class="plan-aside-block"><span class="meta-label">description</span><p class="plan-aside-text">${esc(node.description)}</p></div>` : ""}

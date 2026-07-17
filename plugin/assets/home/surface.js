@@ -245,8 +245,8 @@ function mount() {
   const surf = document.getElementById("surface-home");
   if (!surf) return;
   surf.addEventListener("click", (e) => {
-    const raw = e.target.closest("[data-raw-root]");
-    if (raw && window.__gluerunViewRaw) { window.__gluerunViewRaw(raw.dataset.rawRoot, raw.dataset.rawName); return; }
+    // Attention {} raw buttons carry [data-raw-root]; the app.js document handler
+    // (viewRaw) opens them in the inspector file-view — no local wiring needed.
     const stage = e.target.closest("[data-stage]");
     if (stage) { location.hash = "#plan/matrix"; return; }
     const tile = e.target.closest("[data-plan-filter]");

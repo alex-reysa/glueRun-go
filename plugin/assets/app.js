@@ -48,6 +48,7 @@ import { startFeed } from "./core/sessions-feed.js";
     areaNodesInflight: new Set(),
     overview: null,            // /api/overview (plan progress + inputs + settings + status)
     overviewInflight: false,
+    fileSubject: null,         // { title, path, content, language, size, mtime } for the "file" inspector kind
     roleCatalog: null,     // /api/roles (declared reference), fetched once
     roleInflight: false,
     lastSig: {},
@@ -355,12 +356,66 @@ import { startFeed } from "./core/sessions-feed.js";
     const kind = S.selectedKind;
     // When nothing is selected the inspector slides out (CSS, data-subject-kind=none);
     // no empty-state element to toggle.
-    if (kind === "none") { $("inspector-tabs").innerHTML = ""; return; }
+    if (kind === "none") { $("inspector-tabs").innerHTML = ""; setRawCluster(null); return; }
+    setRawCluster(null);   // specific renderers (l2, node, file) repopulate as needed
     if (kind === "l0") return renderInspectorL0();
     if (kind === "l1") return renderInspectorL1();
     if (kind === "l2") return renderInspectorL2();
     if (kind === "node") return renderInspectorNode();
     if (kind === "overview") return renderInspectorOverview();
+    if (kind === "file") return renderInspectorFile();
+  }
+
+  // Populate the header's {}-button cluster (raw/prompt "view source" affordances).
+  // buttons: [{label, root, name, title}] — cleared for kinds that own none.
+  function setRawCluster(buttons) {
+    const host = $("insp-raw-cluster");
+    if (!host) return;
+    host.innerHTML = (buttons || []).map((b) =>
+      `<button class="insp-raw-btn" data-raw-root="${escAttr(b.root)}" data-raw-name="${escAttr(b.name)}" data-raw-title="${escAttr(b.title || b.label)}" title="view source · ${escAttr(b.title || b.label)}">{ }<span class="irb-label">${esc(b.label)}</span></button>`
+    ).join("");
+  }
+
+  const fmtBytes = (n) => n == null ? "" : (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB");
+
+  // ---- generic file-view inspector (shared foundation for raw + prompt views) ----
+  function renderInspectorFile() {
+    const fs = S.fileSubject || {};
+    setRawCluster(null);
+    setInspHeader(fs.title || "file", "", "", null, "");
+    $("insp-sub").innerHTML =
+      `<span class="mono">${esc(fs.path || "")}</span>` +
+      (fs.size != null ? `<span>${esc(fmtBytes(fs.size))}</span>` : "") +
+      (fs.mtime ? `<span>${esc(relTime(new Date(fs.mtime * 1000).toISOString()))} ago</span>` : "");
+    setTabs(["source"]);
+    let body = fs.content || "";
+    if (fs.language === "json") { try { body = JSON.stringify(JSON.parse(body), null, 2); } catch (e) { /* show verbatim */ } }
+    showPanels(`<div class="tab-panel" data-tab="source">
+      <div class="insp-file-head"><button class="copy-btn" data-copy="${escAttr(fs.content || "")}">${icon("i-copy")} copy</button></div>
+      <pre class="insp-file mono">${esc(body)}</pre></div>`);
+  }
+
+  // Open a resolved file payload in the inspector file-view.
+  function viewFile(fs) { S.fileSubject = fs; select("file", (fs && (fs.path || fs.title)) || "file"); }
+
+  // Fetch a raw record (/api/raw/<root>/<name>) and show it in the file-view.
+  async function viewRaw(root, name, title) {
+    try {
+      const res = await fetch("/api/raw/" + encodeURIComponent(root) + "/" + encodeURIComponent(name), { cache: "no-store" });
+      if (!res.ok) throw new Error("http " + res.status);
+      const r = await res.json();
+      viewFile({ title: title || r.name || name, path: r.path, content: r.content, language: String(name).endsWith(".json") ? "json" : "md", size: r.size, mtime: r.mtime });
+    } catch (e) { toast("could not load " + name); }
+  }
+
+  // Fetch a role prompt template (/api/prompt/<name>) and show it in the file-view.
+  async function viewPrompt(name) {
+    try {
+      const res = await fetch("/api/prompt/" + encodeURIComponent(name), { cache: "no-store" });
+      if (!res.ok) throw new Error("http " + res.status);
+      const r = await res.json();
+      viewFile({ title: name, path: r.path, content: r.content, language: "md", size: r.size, mtime: r.mtime });
+    } catch (e) { toast("could not load " + name); }
   }
 
   function showInspState(which) {
@@ -618,6 +673,14 @@ import { startFeed } from "./core/sessions-feed.js";
 
   function renderTaskDetail(d) {
     setInspHeader(d.id, d.title, `${d.area} · ${labelOf(d.state)}`, d.state, shortBranch(d.workerBranch));
+    // Raw "view source" cluster: the task's durable primitives (E3).
+    const rawBtns = [
+      { label: "task", root: "task", name: d.id + ".md", title: "task " + d.id },
+      { label: "lease", root: "lease", name: d.id + ".json", title: "lease " + d.id },
+      { label: "dispatch", root: "dispatch", name: d.id + ".json", title: "dispatch " + d.id },
+    ];
+    if (d.gates && d.gates.length) rawBtns.push({ label: "gate", root: "gate", name: d.gates[0].node + ".gate-result.json", title: "gate " + d.gates[0].node });
+    setRawCluster(rawBtns);
     // Task detail carries a runId → surface an "open console" jump to the Consoles
     // surface (pinned + soloed on that run).
     const cb = $("insp-console");
@@ -855,6 +918,10 @@ import { startFeed } from "./core/sessions-feed.js";
     const fr = d.frontier || {};
     setInspHeader(d.nodeId, def.description ? truncate(def.description, 80) : d.nodeId,
       `node · ${def.stage || ""}${def.layer ? " · " + def.layer : ""}`, gateTone(gate.status), "");
+    setRawCluster([
+      { label: "gate", root: "gate", name: d.nodeId + ".gate-result.json", title: "gate " + d.nodeId },
+      { label: "dag", root: "dag", name: "dag.v0.json", title: "dag.v0.json" },
+    ]);
     const depChips = (def.dependsOn || []).map((u) =>
       `<button class="dep-chip" data-node-id="${escAttr(u)}" data-nav-node="1"><span class="dep-chip-id">${esc(u)}</span></button>`).join("") || '<span class="section-empty">none</span>';
     const overview = `<div class="tab-panel" data-tab="overview">
@@ -1203,6 +1270,9 @@ import { startFeed } from "./core/sessions-feed.js";
     const copyBtn = e.target.closest(".copy-btn");
     if (copyBtn) { e.stopPropagation(); copy(copyBtn.dataset.copy); return; }
 
+    const rawBtn = e.target.closest(".insp-raw-btn, [data-raw-root]");
+    if (rawBtn && rawBtn.dataset.rawRoot) { e.stopPropagation(); viewRaw(rawBtn.dataset.rawRoot, rawBtn.dataset.rawName, rawBtn.dataset.rawTitle); return; }
+
     const pinGlyph = e.target.closest(".pin-glyph");
     if (pinGlyph) { e.stopPropagation(); const node = pinGlyph.closest("[data-task-id]"); if (node) togglePin(node.dataset.taskId); return; }
 
@@ -1528,6 +1598,8 @@ import { startFeed } from "./core/sessions-feed.js";
     // filtering + selection + navigation seams (used by the plan surface + router)
     tasksFiltered, sortExceptionsFirst, load, setConn, select, navigateToTask,
     setAreaFilter, applyDeepLink, gateBlock,
+    // developer primitives — inspector file-view + raw/prompt helpers (E)
+    viewFile, viewRaw, viewPrompt,
     // activity feed (relocated to Home; Home remounts + repaints it)
     overlayTick, renderActivityFeed,
     // entry

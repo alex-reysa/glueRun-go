@@ -541,6 +541,27 @@ select.filter:hover { border-color: var(--rule-strong); }
 .insp-sub .mono { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .insp-head-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 
+/* quiet {} "view source" cluster (raw + prompt developer affordances) */
+.insp-raw-cluster { display: inline-flex; align-items: center; gap: 3px; }
+.insp-raw-btn {
+  display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px;
+  border: 1px solid var(--border-subtle); border-radius: var(--r-chip);
+  background: transparent; color: var(--muted); cursor: pointer;
+  font-family: var(--mono); font-size: 11px; line-height: 1;
+  transition: border-color var(--d-color) var(--ease), color var(--d-color) var(--ease);
+}
+.insp-raw-btn:hover { border-color: var(--rule-strong); color: var(--text); background: rgba(0,0,0,0.02); }
+.insp-raw-btn .irb-label { font-family: var(--sans); font-size: 10.5px; }
+
+/* file-view: a single source pane, JSON pretty-printed client-side */
+.insp-file-head { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.insp-file {
+  margin: 0; padding: 14px 16px; border-radius: var(--r-btn);
+  background: var(--surface-sunken); border: 1px solid var(--rule);
+  font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  max-height: 62vh; overflow: auto; color: var(--text);
+}
+
 #inspector-tabs {
   display: flex; gap: 4px;
   padding: 0 12px 9px;
