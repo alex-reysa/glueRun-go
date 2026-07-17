@@ -1480,6 +1480,118 @@ class CollectDagViewTests(unittest.TestCase):
             self.assertFalse(srv.NODE_ID_RE.match(bad), bad)
 
 
+def _tev(ts: str, etype: str, **data: object) -> dict:
+    return {"ts": ts, "type": etype, "data": data}
+
+
+class BuildTaskIntervalsTests(unittest.TestCase):
+    """Pure interval reconstruction: events open/close attempts; the dispatch
+    record only reconciles the latest one (records are overwritten per attempt)."""
+
+    def test_two_attempts_last_open_then_dispatch_close(self) -> None:
+        events = [
+            _tev("2026-07-10T10:00:00Z", "l1.dispatch_started", taskId="TASK-1", runId="RUN-a"),
+            _tev("2026-07-10T10:20:00Z", "origin.dispatch_reaped", taskId="TASK-1", exitCode=1, outcome="failed"),
+            _tev("2026-07-10T11:00:00Z", "l1.dispatch_started", taskId="TASK-1", runId="RUN-b"),
+        ]
+        rec = {"state": "reaped", "reapedAt": "2026-07-10T11:30:00Z", "exitCode": 0, "outcome": "ok"}
+        intervals, live = srv.build_task_intervals(events, rec, None)
+        self.assertFalse(live)
+        self.assertEqual(len(intervals), 2)
+        self.assertEqual((intervals[0]["kind"], intervals[0]["endedAt"], intervals[0]["outcome"]),
+                         ("dispatch", "2026-07-10T10:20:00Z", "failed"))
+        self.assertEqual((intervals[1]["kind"], intervals[1]["endedAt"], intervals[1]["source"]),
+                         ("retry", "2026-07-10T11:30:00Z", "dispatch"))
+        self.assertEqual(intervals[1]["outcome"], "ok")
+
+    def test_launched_dispatch_is_live(self) -> None:
+        events = [_tev("2026-07-10T10:00:00Z", "l1.dispatch_started", taskId="TASK-1", runId="RUN-a")]
+        intervals, live = srv.build_task_intervals(events, {"state": "launched"}, None)
+        self.assertTrue(live)
+        self.assertIsNone(intervals[0]["endedAt"])
+
+    def test_soft_close_via_task_events(self) -> None:
+        events = [
+            _tev("2026-07-10T10:00:00Z", "l1.dispatch_started", taskId="TASK-1", runId="RUN-a"),
+            _tev("2026-07-10T10:40:00Z", "l1.task_accepted", taskId="TASK-1", runId="RUN-a"),
+        ]
+        intervals, live = srv.build_task_intervals(events, None, None)
+        self.assertFalse(live)
+        self.assertEqual(intervals[0]["endedAt"], "2026-07-10T10:40:00Z")
+
+    def test_window_fallbacks(self) -> None:
+        # No events at all: dispatch record, then lease timestamps.
+        rec = {"state": "reaped", "startedAt": "2026-07-10T09:00:00Z",
+               "reapedAt": "2026-07-10T09:30:00Z", "outcome": "ok", "exitCode": 0}
+        intervals, live = srv.build_task_intervals([], rec, None)
+        self.assertEqual((intervals[0]["source"], intervals[0]["endedAt"]), ("dispatch", "2026-07-10T09:30:00Z"))
+        intervals, live = srv.build_task_intervals([], None,
+            {"createdAt": "2026-07-10T09:00:00Z", "updatedAt": "2026-07-10T09:45:00Z", "runId": "RUN-x"})
+        self.assertEqual((intervals[0]["source"], intervals[0]["endedAt"]), ("lease", "2026-07-10T09:45:00Z"))
+        intervals, live = srv.build_task_intervals([], None, None)
+        self.assertEqual(intervals, [])
+
+
+class CollectTimelineTests(unittest.TestCase):
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / "docs/orchestration/tasks").mkdir(parents=True)
+        (repo / "docs/orchestration/gates").mkdir(parents=True)
+        (repo / ".gluerun-state/leases").mkdir(parents=True)
+        (repo / ".gluerun-state/dispatch").mkdir(parents=True)
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+            "nodes": [{"id": "alpha", "stage": "S0", "area": "core", "layer": "x",
+                       "kind": "contract", "dependsOn": [], "requiredCompletion": "x"}]}))
+        return repo
+
+    def test_timeline_shape(self) -> None:
+        repo = self._repo()
+        (repo / ".gluerun-state/events.ndjson").write_text("\n".join([
+            json.dumps(_tev("2026-07-10T08:00:00Z", "origin.reconcile_started", runId="ORIGIN-1", mode="apply")),
+            json.dumps(_tev("2026-07-10T08:00:05Z", "origin.reconcile_completed", runId="ORIGIN-1", mode="apply")),
+            json.dumps(_tev("2026-07-10T09:00:00Z", "planner.staged", taskId="TASK-0001", node="alpha", area="core")),
+            json.dumps(_tev("2026-07-10T10:00:00Z", "l1.dispatch_started", taskId="TASK-0001", runId="RUN-a")),
+            json.dumps(_tev("2026-07-10T10:30:00Z", "origin.dispatch_reaped", taskId="TASK-0001", exitCode=0, outcome="ok")),
+            json.dumps(_tev("2026-07-10T10:35:00Z", "integration.integrated", taskId="TASK-0001",
+                            branch="agent/core/TASK-0001", runId="ORIGIN-2")),
+            json.dumps(_tev("2026-07-10T11:00:00Z", "origin.reconcile_started", runId="ORIGIN-3", mode="apply")),
+        ]) + "\n")
+        (repo / ".gluerun-state/leases/TASK-0001.json").write_text(json.dumps(
+            {"taskId": "TASK-0001", "area": "core", "status": "integrated", "retryCount": 0,
+             "branch": "agent/core/TASK-0001", "createdAt": "2026-07-10T10:00:00Z",
+             "updatedAt": "2026-07-10T10:35:00Z"}))
+        (repo / "docs/orchestration/gates/alpha.gate-result.json").write_text(json.dumps(
+            {"node": "alpha", "status": "passed", "authoritative": True,
+             "evidenceClass": "deterministic-proof", "recordedAt": "2026-07-10T10:40:00Z"}))
+
+        data = srv.collect_timeline(repo)
+        self.assertEqual(data["schema"], "gluerun.codex.timeline.v0")
+        self.assertEqual(data["counts"]["tasks"], 1)
+        task = data["tasks"][0]
+        self.assertEqual(task["node"], "alpha")
+        self.assertEqual(task["intervals"][0]["endedAt"], "2026-07-10T10:30:00Z")
+        self.assertEqual(task["integratedAt"], "2026-07-10T10:35:00Z")
+        self.assertFalse(task["liveNow"])
+        self.assertEqual(data["gates"], [{"node": "alpha", "status": "passed",
+                                          "recordedAt": "2026-07-10T10:40:00Z",
+                                          "evidenceClass": "deterministic-proof"}])
+        cycles = data["cycles"]
+        self.assertEqual(len(cycles), 2)
+        self.assertEqual(cycles[0]["endedAt"], "2026-07-10T08:00:05Z")
+        self.assertIsNone(cycles[1]["endedAt"])   # unpaired start stays open
+        self.assertFalse(data["window"]["truncated"])
+
+        # ?since= filter drops everything before the cutoff.
+        filtered = srv.filter_timeline_since(data, "2026-07-10T10:50:00Z")
+        self.assertEqual(filtered["counts"]["tasks"], 0)
+        self.assertEqual(len(filtered["cycles"]), 1)   # the still-open cycle survives
+        self.assertEqual(filtered["gates"], [])
+        filtered = srv.filter_timeline_since(data, "2026-07-10T10:00:00Z")
+        self.assertEqual(filtered["counts"]["tasks"], 1)
+
+
 class AutonomateLogResolutionTests(unittest.TestCase):
     """The engine's --detach loop writes autonomate.log; the legacy name is
     autonomate.out.log. The server follows whichever exists (newest wins)."""

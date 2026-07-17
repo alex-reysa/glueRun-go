@@ -2112,6 +2112,7 @@ def build_events_index(lines: list[str]) -> dict[str, Any]:
     by_task: dict[str, list[dict[str, Any]]] = {}
     by_branch: dict[str, list[dict[str, Any]]] = {}
     by_node: dict[str, list[dict[str, Any]]] = {}
+    cycles: list[dict[str, Any]] = []
     tail_rows: list[dict[str, Any]] = []
     for line in lines:
         line = line.strip()
@@ -2136,8 +2137,11 @@ def build_events_index(lines: list[str]) -> dict[str, Any]:
             by_branch.setdefault(branch, []).append(ev)
         if node:
             by_node.setdefault(node, []).append(ev)
+        if etype in ("origin.reconcile_started", "origin.reconcile_completed"):
+            cycles.append(ev)   # L0 cycle spans for /api/timeline (carry runId+mode only)
         tail_rows.append(project_event(ev))
-    return {"by_task": by_task, "by_branch": by_branch, "by_node": by_node, "tail_rows": tail_rows}
+    return {"by_task": by_task, "by_branch": by_branch, "by_node": by_node,
+            "cycles": cycles, "tail_rows": tail_rows}
 
 
 def _chain_sort_key(ev: dict[str, Any]) -> tuple[str, int]:
@@ -3220,6 +3224,17 @@ def _dag_task_bucket(status: str | None) -> str:
     return "other"
 
 
+def _events_node_map(events_idx: dict[str, Any]) -> dict[str, str]:
+    """task -> DAG node from the events index (newest event with data.node wins)."""
+    out: dict[str, str] = {}
+    for tid, evs in (events_idx.get("by_task") or {}).items():
+        for ev in evs:
+            node = _ev_data(ev).get("node")
+            if node:
+                out[tid] = str(node)
+    return out
+
+
 def _task_header_node(path_str: str) -> str | None:
     """`DAG node:` header from a task file head (0.5.0+ tasks carry it)."""
     try:
@@ -3249,13 +3264,7 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
                 "errors": ([] if validate_env.get("ok")
                            else [e for e in str(validate_env.get("stdout") or "").split("; ") if e])}
 
-    events_idx = load_events_index(repo)
-    task_node: dict[str, str] = {}
-    for tid, evs in (events_idx.get("by_task") or {}).items():
-        for ev in evs:
-            node = _ev_data(ev).get("node")
-            if node:
-                task_node[tid] = str(node)
+    task_node = dict(_events_node_map(load_events_index(repo)))
 
     tasks = collect_tasks(repo)
     leases = collect_leases(repo)
@@ -3371,6 +3380,204 @@ _DAG_VIEW_CACHE = _ComputeCache(collect_dag_view, 6.0)
 def load_dag_view(repo: Path) -> dict[str, Any]:
     repo = repo.resolve()
     return _DAG_VIEW_CACHE.get(str(repo), repo)
+
+
+# --------------------------------------------------------------------------- #
+# /api/timeline — real execution intervals (gluerun.codex.timeline.v0)        #
+# --------------------------------------------------------------------------- #
+
+_INTERVAL_SOFT_CLOSE_TYPES = ("l1.task_accepted", "l1.task_failed",
+                              "l1.task_terminal", "l1.aborted")
+_TIMELINE_CYCLE_CAP = 250
+
+
+def build_task_intervals(task_events: list[dict[str, Any]],
+                         dispatch_rec: dict[str, Any] | None = None,
+                         lease: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], bool]:
+    """Reconstruct per-attempt execution intervals for one task. Pure.
+
+    Each l1.dispatch_started opens an attempt; the canonical close is the
+    first origin.dispatch_reaped in that attempt's window (it carries
+    exitCode/outcome), falling back to accept/fail/terminal events. Dispatch
+    records are overwritten per attempt, so they can only reconcile the
+    LATEST attempt (state=launched with no reapedAt -> live). Tasks that
+    predate the events window synthesize one interval from the dispatch
+    record, else from lease createdAt->updatedAt. Returns (intervals, live)."""
+    events = sorted((e for e in (task_events or []) if isinstance(e, dict)),
+                    key=lambda e: str(e.get("ts") or ""))
+    starts = [e for e in events if e.get("type") == "l1.dispatch_started"]
+    reaps = [e for e in events if e.get("type") == "origin.dispatch_reaped"]
+    softs = [e for e in events if e.get("type") in _INTERVAL_SOFT_CLOSE_TYPES]
+    rec = dispatch_rec if isinstance(dispatch_rec, dict) else {}
+    lease = lease if isinstance(lease, dict) else {}
+
+    intervals: list[dict[str, Any]] = []
+    for i, start in enumerate(starts):
+        s_ts = str(start.get("ts") or "")
+        next_ts = str(starts[i + 1].get("ts") or "") if i + 1 < len(starts) else None
+
+        def first_in_window(pool: list[dict[str, Any]]) -> dict[str, Any] | None:
+            for ev in pool:
+                ts = str(ev.get("ts") or "")
+                if ts >= s_ts and (next_ts is None or ts <= next_ts):
+                    return ev
+            return None
+
+        close = first_in_window(reaps) or first_in_window(softs)
+        close_data = _ev_data(close) if close else {}
+        intervals.append({
+            "startedAt": start.get("ts"),
+            "endedAt": close.get("ts") if close else None,
+            "kind": "dispatch" if i == 0 else "retry",
+            "runId": _ev_data(start).get("runId"),
+            "outcome": close_data.get("outcome"),
+            "exitCode": close_data.get("exitCode"),
+            "source": "events",
+        })
+
+    live = False
+    if intervals and intervals[-1]["endedAt"] is None:
+        last = intervals[-1]
+        if rec.get("state") == "reaped" and rec.get("reapedAt"):
+            last["endedAt"] = rec.get("reapedAt")
+            if last["outcome"] is None:
+                last["outcome"] = rec.get("outcome")
+            if last["exitCode"] is None:
+                last["exitCode"] = rec.get("exitCode")
+            last["source"] = "dispatch"
+        elif rec.get("state") == "launched":
+            live = True
+
+    if not intervals:
+        if rec.get("startedAt"):
+            live = rec.get("state") == "launched" and not rec.get("reapedAt")
+            intervals.append({"startedAt": rec.get("startedAt"), "endedAt": rec.get("reapedAt"),
+                              "kind": "dispatch", "runId": rec.get("runId"),
+                              "outcome": rec.get("outcome"), "exitCode": rec.get("exitCode"),
+                              "source": "dispatch"})
+        elif lease.get("createdAt"):
+            intervals.append({"startedAt": lease.get("createdAt"), "endedAt": lease.get("updatedAt"),
+                              "kind": "dispatch", "runId": lease.get("runId"),
+                              "outcome": None, "exitCode": None, "source": "lease"})
+    return intervals, live
+
+
+def collect_timeline(repo: Path) -> dict[str, Any]:
+    """Real execution history for the Gantt lens: per-task attempt intervals,
+    gate marks, and L0 reconcile cycle spans. Pure filesystem; bounded by the
+    events-index tail window (window.truncated flags degraded coverage)."""
+    repo = repo.resolve()
+    idx = load_events_index(repo)
+    by_task_ev = idx.get("by_task") or {}
+    node_map = _events_node_map(idx)
+    leases = {str(l.get("taskId")): l for l in collect_leases(repo) if l.get("taskId")}
+    tasks_meta = {t["id"]: t for t in collect_tasks(repo)}
+    dispatch: dict[str, dict[str, Any]] = {}
+    for path in sorted(state_path(repo, "dispatch").glob("TASK-*.json")):
+        d = read_json(path, {})
+        if isinstance(d, dict) and d.get("taskId"):
+            dispatch[str(d["taskId"])] = d
+
+    tasks_out: list[dict[str, Any]] = []
+    for tid in sorted(set(by_task_ev) | set(leases) | set(dispatch)):
+        lease = leases.get(tid) or {}
+        meta = tasks_meta.get(tid) or {}
+        evs = by_task_ev.get(tid) or []
+        intervals, live = build_task_intervals(evs, dispatch.get(tid), lease)
+        if not intervals:
+            continue
+        integrated_at = None
+        for ev in evs:
+            if ev.get("type") == "integration.integrated":
+                integrated_at = ev.get("ts")
+        status = str(lease.get("status") or meta.get("status") or "unknown")
+        node = node_map.get(tid)
+        if not node and meta.get("path"):
+            node = _task_header_node(str(meta["path"]))
+        tasks_out.append({
+            "taskId": tid,
+            "node": node,
+            "area": lease.get("area") or meta.get("area") or None,
+            "status": status,
+            "retryCount": lease.get("retryCount"),
+            "branch": lease.get("branch") or meta.get("workerBranch") or None,
+            "intervals": intervals,
+            "liveNow": live,
+            "integratedAt": integrated_at or (lease.get("updatedAt")
+                                              if _dag_task_bucket(status) == "integrated" else None),
+        })
+
+    gates: list[dict[str, Any]] = []
+    for nid in (load_dag_registry(repo).get("by_id") or {}):
+        try:
+            gate = _load_gate_for_node(repo, nid)
+        except Exception:
+            gate = None
+        if isinstance(gate, dict) and gate.get("recordedAt"):
+            gates.append({"node": nid, "status": gate.get("status"),
+                          "recordedAt": gate.get("recordedAt"),
+                          "evidenceClass": gate.get("evidenceClass")})
+    gates.sort(key=lambda g: str(g["recordedAt"]))
+
+    cycles: list[dict[str, Any]] = []
+    open_by_run: dict[str, dict[str, Any]] = {}
+    for ev in idx.get("cycles") or []:
+        data = _ev_data(ev)
+        rid = str(data.get("runId") or "")
+        if ev.get("type") == "origin.reconcile_started":
+            span = {"runId": rid, "startedAt": ev.get("ts"), "endedAt": None,
+                    "mode": data.get("mode")}
+            open_by_run[rid] = span
+            cycles.append(span)
+        elif rid in open_by_run and open_by_run[rid]["endedAt"] is None:
+            open_by_run[rid]["endedAt"] = ev.get("ts")
+    cycles = cycles[-_TIMELINE_CYCLE_CAP:]
+
+    truncated = False
+    try:
+        truncated = _events_path(repo).stat().st_size > EVENTS_INDEX_MAX_BYTES
+    except OSError:
+        pass
+    return {
+        "schema": "gluerun.codex.timeline.v0",
+        "generatedAt": utc_now(),
+        "now": utc_now(),
+        "window": {"truncated": truncated},
+        "tasks": tasks_out,
+        "gates": gates,
+        "cycles": cycles,
+        "counts": {"tasks": len(tasks_out),
+                   "intervals": sum(len(t["intervals"]) for t in tasks_out),
+                   "cycles": len(cycles)},
+    }
+
+
+def filter_timeline_since(data: dict[str, Any], since: str) -> dict[str, Any]:
+    """Post-cache ?since= filter: keep tasks with any open interval or one
+    ending at/after `since` (ISO-8601 Z strings compare lexically)."""
+    def keep_task(t: dict[str, Any]) -> bool:
+        if t.get("liveNow"):
+            return True
+        return any(i.get("endedAt") is None or str(i["endedAt"]) >= since
+                   for i in t.get("intervals") or [])
+
+    out = dict(data)
+    out["tasks"] = [t for t in data.get("tasks") or [] if keep_task(t)]
+    out["cycles"] = [c for c in data.get("cycles") or []
+                     if c.get("endedAt") is None or str(c["endedAt"]) >= since]
+    out["gates"] = [g for g in data.get("gates") or [] if str(g.get("recordedAt") or "") >= since]
+    out["counts"] = {"tasks": len(out["tasks"]),
+                     "intervals": sum(len(t.get("intervals") or []) for t in out["tasks"]),
+                     "cycles": len(out["cycles"])}
+    return out
+
+
+_TIMELINE_CACHE = _ComputeCache(collect_timeline, 6.0)
+
+
+def load_timeline(repo: Path) -> dict[str, Any]:
+    repo = repo.resolve()
+    return _TIMELINE_CACHE.get(str(repo), repo)
 
 
 # --------------------------------------------------------------------------- #
@@ -3855,6 +4062,12 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/dag":
             self.send_json(load_dag_view(self.repo))
             return
+        if route == "/api/timeline":
+            query = parse_qs(parsed.query)
+            since = (query.get("since", [""])[0] or "").strip()
+            data = load_timeline(self.repo)
+            self.send_json(filter_timeline_since(data, since) if since else data)
+            return
         if route == "/api/overview":
             self.send_json(load_overview(self.repo))
             return
@@ -3907,6 +4120,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--events", action="store_true", help="Print the live event overlay JSON and exit")
     parser.add_argument("--overview", action="store_true", help="Print the plan overview JSON and exit")
     parser.add_argument("--dag", action="store_true", help="Print the full DAG view JSON (nodes+gates+tasks+edges) and exit")
+    parser.add_argument("--timeline", action="store_true", help="Print the execution timeline JSON (task intervals+gates+cycles) and exit")
     return parser.parse_args(argv)
 
 
@@ -3991,6 +4205,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.dag:
         print(json.dumps(collect_dag_view(repo), indent=2))
+        return 0
+    if args.timeline:
+        print(json.dumps(collect_timeline(repo), indent=2))
         return 0
     Handler.repo = repo
     server = ThreadingHTTPServer((args.host, args.port), Handler)
