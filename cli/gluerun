@@ -663,6 +663,10 @@ Operate / recover:
   accept-packet PATH   deterministic acceptance of an existing state packet
 
 Setup / lifecycle:
+  plan archive [--name NAME] [--force] [--no-commit]   archive the completed plan as a
+                                                      browsable thread (.gluerun-state/plans/<id>)
+                                                      and reset the live tree to a starter DAG
+  plan list [--json]   list archived plan threads (id, name, date, gates, tasks)
   init                 scaffold gluerun.config.json + docs/orchestration in this repo
   doctor               check deps, engine resolution, repo config
   update [VERSION]     pin this repo to an engine version (.gluerun-version)
@@ -709,6 +713,7 @@ main() {
     gates)         run_engine ops.sh gates "$@" ;;
     health)        run_engine ops.sh health "$@" ;;
     gc)            run_engine ops.sh gc "$@" ;;
+    plan)          run_engine ops.sh plan "$@" ;;
     lease)         run_engine lease.sh "$@" ;;
     accept-packet) run_engine accept-existing-packet.sh "$@" ;;
     metrics)       cmd_metrics "$@" ;;
