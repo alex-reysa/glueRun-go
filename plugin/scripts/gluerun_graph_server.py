@@ -53,6 +53,7 @@ TASK_ID_RE = re.compile(r"^TASK-\d+$")
 # adapter behaves exactly as before.
 TASKS_DIR_REL = "docs/orchestration/tasks"
 AREAS_DIR_REL = "docs/orchestration/areas"
+PROMPTS_DIR_REL = "docs/orchestration/prompts"
 STATE_DIR_REL = ".gluerun-state"
 EVENTS_LOG_REL = "events.ndjson"            # within the state dir
 AUTONOMATE_LOG_REL = "autonomate.out.log"   # within the state dir
@@ -1446,6 +1447,12 @@ PLAIN_LOG_NAMES = ("gate-check.log", "scope-check.log", "secret-scan.log")
 # Codex thread logs, in role-priority order (primary stream first).
 CODEX_LOG_NAMES = (("worker-codex.log", "worker"), ("auditor-codex.log", "auditor"),
                    ("planner-codex.log", "planner"), ("decider-codex.log", "decider"))
+# Rendered per-run prompt files surfaced as secondary session panes (AFTER the
+# logs — logs stay the primary stream). decider-prompt-*.md is matched by prefix
+# (its suffix carries the recovery reason).
+PROMPT_FILE_NAMES = ("l2-prompt.md", "l2-active-prompt.md", "l2-repair-prompt.md",
+                     "planner-prompt.md", "auditor-prompt.md", "auditor-active-prompt.md",
+                     "reaudit-prompt.md", "auditor-reaudit-prompt.md")
 # "<iso>  LEVEL  message" — the shape Codex emits for its plain stderr lines.
 ISO_LEVEL_LINE_RE = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+([A-Z]+)\s+(.*)$")
 # Codex plugin/skill loader chatter — hundreds of identical WARN lines per run that
@@ -1613,6 +1620,14 @@ def _session_log_files(run_dir: Path) -> list[dict[str, str]]:
     for name in PLAIN_LOG_NAMES:
         if (run_dir / name).is_file():
             files.append({"name": name, "kind": "plain"})
+    # Rendered prompts come AFTER the logs so the log stream stays primary; they
+    # are accepted by _resolve_session_log (which validates against this list).
+    for name in PROMPT_FILE_NAMES:
+        if (run_dir / name).is_file():
+            files.append({"name": name, "kind": "prompt"})
+    for path in sorted(run_dir.glob("decider-prompt-*.md")):
+        if path.is_file():
+            files.append({"name": path.name, "kind": "prompt"})
     return files
 
 
@@ -3958,6 +3973,69 @@ def collect_settings_view(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Prompts (gluerun.codex.prompts.v0)                                           #
+# --------------------------------------------------------------------------- #
+#
+# Read-only view of the durable role prompt library plus per-role attribution.
+# Rendered per-run prompts live inside session run dirs and are served through
+# the session terminal (see _session_log_files); these endpoints serve the
+# canonical library under docs/orchestration/prompts.
+
+PROMPT_ROLE_MAP = {
+    "l1-planner.md": "planner",
+    "l2-test-first-developer.md": "developer",
+    "auditor.md": "auditor",
+    "reviewer.md": "reviewer",
+    "decider.md": "decider",
+    "l0-origin.md": "origin",
+    "l1-area-orchestrator.md": "l1-orchestrator",
+    "plan-critic.md": "critic",
+}
+PROMPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.md$")
+PROMPT_MAX_BYTES = 262144  # 256 KB read cap
+
+
+def collect_prompts(repo: Path) -> dict[str, Any]:
+    """List the role prompt library (docs/orchestration/prompts/*.md). Read-only;
+    pure filesystem. Sorted by name; role is null for prompts with no mapping."""
+    root = repo / PROMPTS_DIR_REL
+    prompts: list[dict[str, Any]] = []
+    if root.is_dir():
+        for path in root.glob("*.md"):
+            if not path.is_file():
+                continue
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            prompts.append({"name": path.name, "bytes": st.st_size,
+                            "mtime": int(st.st_mtime), "role": PROMPT_ROLE_MAP.get(path.name)})
+    prompts.sort(key=lambda p: p["name"])
+    return {"schema": "gluerun.codex.prompts.v0", "generatedAt": utc_now(), "prompts": prompts}
+
+
+def collect_prompt(repo: Path, name: str) -> dict[str, Any] | None:
+    """One prompt's content, resolved + containment-guarded under the prompts dir.
+    Returns None (404) on a bad name, traversal, or missing file. Read-only."""
+    if not PROMPT_NAME_RE.match(name):
+        return None
+    root = (repo / PROMPTS_DIR_REL).resolve()
+    path = (root / name).resolve()
+    if root not in path.parents or not path.is_file():
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    try:
+        content = path.read_bytes()[:PROMPT_MAX_BYTES].decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    return {"name": name, "path": str(path), "size": st.st_size,
+            "mtime": int(st.st_mtime), "content": content}
+
+
+# --------------------------------------------------------------------------- #
 # Console adapter (gluerun.console-adapter.v0)                                     #
 # --------------------------------------------------------------------------- #
 #
@@ -4447,6 +4525,17 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/settings":
             self.send_json(collect_settings_view(self.repo))
             return
+        if route == "/api/prompts":
+            self.send_json(collect_prompts(self.repo))
+            return
+        if route.startswith("/api/prompt/"):
+            name = unquote(route[len("/api/prompt/"):]).strip("/")
+            data = collect_prompt(self.repo, name)
+            if data is None:
+                self.send_json({"error": f"prompt not found: {name}"}, 404)
+                return
+            self.send_json(data)
+            return
         if route == "/api/timeline":
             query = parse_qs(parsed.query)
             since = (query.get("since", [""])[0] or "").strip()
@@ -4537,6 +4626,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dag", action="store_true", help="Print the full DAG view JSON (nodes+gates+tasks+edges) and exit")
     parser.add_argument("--timeline", action="store_true", help="Print the execution timeline JSON (task intervals+gates+cycles) and exit")
     parser.add_argument("--config", action="store_true", help="Print the resolved per-role runner config JSON and exit")
+    parser.add_argument("--prompts", action="store_true", help="Print the role prompt library JSON and exit")
+    parser.add_argument("--prompt", help="Print one prompt's content JSON (e.g. auditor.md) and exit")
     return parser.parse_args(argv)
 
 
@@ -4627,6 +4718,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.config:
         print(json.dumps(collect_config(repo), indent=2))
+        return 0
+    if args.prompts:
+        print(json.dumps(collect_prompts(repo), indent=2))
+        return 0
+    if args.prompt:
+        data = collect_prompt(repo, args.prompt.strip("/"))
+        if data is None:
+            print(f"prompt not found: {args.prompt}", file=sys.stderr)
+            return 3
+        print(json.dumps(data, indent=2))
         return 0
     Handler.repo = repo
     server = ThreadingHTTPServer((args.host, args.port), Handler)

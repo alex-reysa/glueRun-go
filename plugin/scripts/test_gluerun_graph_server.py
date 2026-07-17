@@ -1864,5 +1864,68 @@ class SettingsWriteTests(unittest.TestCase):
         self.assertNotIn("GLUERUN_MAX_DISPATCH", view["appliesAt"])  # derived is read-only
 
 
+class PromptEndpointTests(unittest.TestCase):
+    """W2: the role prompt library list/fetch + rendered per-run prompts served
+    through the session terminal. Pure filesystem; traversal-guarded."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / "docs/orchestration/prompts").mkdir(parents=True)
+        (repo / ".gluerun-state").mkdir()
+        return repo
+
+    def test_list_maps_roles(self) -> None:
+        repo = self._repo()
+        pdir = repo / "docs/orchestration/prompts"
+        (pdir / "auditor.md").write_text("audit\n")
+        (pdir / "l2-test-first-developer.md").write_text("dev\n")
+        (pdir / "custom-note.md").write_text("x\n")
+        out = srv.collect_prompts(repo)
+        self.assertEqual(out["schema"], "gluerun.codex.prompts.v0")
+        names = [p["name"] for p in out["prompts"]]
+        self.assertEqual(names, sorted(names))  # sorted by name
+        by_name = {p["name"]: p for p in out["prompts"]}
+        self.assertEqual(by_name["auditor.md"]["role"], "auditor")
+        self.assertEqual(by_name["l2-test-first-developer.md"]["role"], "developer")
+        self.assertIsNone(by_name["custom-note.md"]["role"])  # unknown -> null
+        self.assertEqual(by_name["auditor.md"]["bytes"], 6)
+
+    def test_content_fetch(self) -> None:
+        repo = self._repo()
+        (repo / "docs/orchestration/prompts/reviewer.md").write_text("review body\n")
+        data = srv.collect_prompt(repo, "reviewer.md")
+        self.assertEqual(data["name"], "reviewer.md")
+        self.assertEqual(data["content"], "review body\n")
+        self.assertEqual(data["size"], 12)
+
+    def test_traversal_and_bad_names_rejected(self) -> None:
+        repo = self._repo()
+        (repo / "secret.md").write_text("nope\n")
+        for bad in ("../secret.md", "/etc/passwd", ".hidden.md", "auditor.txt", "..", "sub/x.md"):
+            self.assertIsNone(srv.collect_prompt(repo, bad), bad)
+
+    def test_missing_prompt_none(self) -> None:
+        self.assertIsNone(srv.collect_prompt(self._repo(), "nope.md"))
+
+    def test_run_dir_prompt_served_through_session(self) -> None:
+        repo = self._repo()
+        run = repo / ".gluerun-state/runs/RUN-1"
+        run.mkdir(parents=True)
+        (run / "worker-codex.log").write_text('{"type":"item.completed"}\n')
+        (run / "l2-prompt.md").write_text("# worker prompt\ndo the thing\n")
+        files = srv._session_log_files(run)
+        self.assertIn({"name": "l2-prompt.md", "kind": "prompt"}, files)
+        self.assertEqual(files[0]["kind"], "codex")  # logs stay primary
+        # _resolve_session_log accepts the prompt name and read_session serves it raw
+        path, _files = srv._resolve_session_log(repo, "RUN-1", "l2-prompt.md")
+        self.assertEqual(path.resolve(), (run / "l2-prompt.md").resolve())
+        session = srv.read_session(repo, "RUN-1", None, 50, "l2-prompt.md", True)
+        self.assertEqual(session["file"], "l2-prompt.md")
+        joined = "\n".join(line.get("text", "") for line in session["lines"])
+        self.assertIn("do the thing", joined)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
