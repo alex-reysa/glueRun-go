@@ -4756,7 +4756,10 @@ gluerun_write_origin_state() {
   worktrees="$(gluerun_extra_worktree_count)"
 
   local ready_json leases_json
-  ready_json="$(gluerun_list_ready_tasks | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
+  # Snapshot telemetry should not pay the legacy O(ready × tasks) duplicate
+  # signature scan. The dispatch frontier performs the authoritative duplicate,
+  # dependency, lease, and scope checks before launching any worker.
+  ready_json="$(GLUERUN_SKIP_DUPLICATE_READY_TASKS=0 gluerun_list_ready_tasks | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
   if [[ -d "$GLUERUN_LEASES_DIR" ]]; then
     leases_json="$(find "$GLUERUN_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
   else
