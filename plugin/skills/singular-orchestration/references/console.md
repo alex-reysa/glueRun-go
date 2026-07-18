@@ -1,17 +1,22 @@
 # Orchestration console — monitoring UI, JSON API, snapshot modes
 
-A local web console over Singular's durable state. Since 0.7.0 it is a
-full-bleed workspace (slim 44px header, no dock) with five surfaces:
+A local web console over Singular's durable state. Since 0.10.0 it is a
+full-bleed **app shell**: a left sidebar lists plan threads (the live plan plus
+archived read-only threads) and holds an app-level Providers nav, and a slim
+44px header carries four thread-scoped tabs (Home, Plan, Consoles, Agents):
 
 - **Home** (default) — system at a glance: health verdict + attention feed
   (STOP, breaker, planner backoff, stale L1 leases, disk, stale loop
   pidfile), per-stage gate progress, live event feed, 14-day activity
-  sparkline, throughput tiles, quick links.
+  sparkline, throughput tiles, a **supervisor card** (periodic read-only
+  briefing + propose-only chat) and **provider quota gauges** (0.10.0),
+  quick links.
 - **Plan** — a workbench over the orchestration DAG with four lenses:
   Timeline (real execution Gantt: per-task attempt bars on compressed real
   time, gate diamonds, L0 cycle strip, retry chains; labels are
-  collision-placed and never overlap), Matrix (N×N dependency matrix,
-  cell size adapts to the pane width, gate-status diagonal, acyclicity
+  collision-placed and never overlap), Matrix (N×N dependency matrix with
+  sticky headers/row labels, readable two-line labels, height-aware fit and
+  follow-diagonal scrolling (0.10.0), gate-status diagonal, acyclicity
   proof), DAG (layered stage graph with collapse + hover tracing), and
   Tasks (the sortable task table + the status quick-filters). A right-hand
   aside drills into the selected DAG node; the bottom-sheet inspector owns
@@ -25,7 +30,8 @@ full-bleed workspace (slim 44px header, no dock) with five surfaces:
 - **Agents** — a role card grid (avatar, live glyph, current work, model ·
   effort) with per-role detail: processes (jump to their console), the
   role's prompt template, and **editable settings** (see below).
-- **Providers** (0.9.0) — runtime/provider status cards for every supported
+- **Providers** (0.9.0; moved into the sidebar app-nav in 0.10.0) —
+  runtime/provider status cards for every supported
   agent CLI (Claude Code, Codex, Gemini, OpenCode, Cursor, Grok): installed
   + version, auth status probed via each CLI's own status command or
   credential-file/env inference (email · plan shown when the CLI prints
@@ -34,8 +40,10 @@ full-bleed workspace (slim 44px header, no dock) with five surfaces:
   editable `GLUERUN_<PROVIDER>_MODEL` knob, a copyable login command when
   unauthenticated, and a **"Use as default runner"** switch (writes
   `GLUERUN_RUNNER` via the settings path; applies next cycle). Probes are
-  cached 60s; "Recheck" forces a re-probe. Live-only (disabled when viewing
-  an archived plan).
+  cached 60s; "Recheck" forces a re-probe. Each card also carries a
+  **subscription-quota gauge** (0.10.0: Codex real used-percent/window/reset
+  from its own local session data; tier-only or not-exposed for the rest).
+  Live-only (disabled when viewing an archived plan).
 
 **Write scope (0.7.0):** the console's only write path is
 `POST /api/settings`, which edits whitelisted `GLUERUN_*` knobs in
@@ -179,7 +187,8 @@ commands/tools they actually ran.
                           (returns a next cursor; poll-friendly)
 /api/sessions?limit=N   → runtime session inventory (planner/worker/auditor rows
                           incl. durable model/effort/exitCode session-meta;
-                          default 16, max 40; origin always included)
+                          supervisor briefing + ask runs appear as assistant-kind
+                          rows (0.10.0); default 16, max 40; origin always included)
 /api/session/<id>       → paged session transcript reader
                           (?cursor=N&limit=N&file=<name>&raw=1)
 /api/dag                → full DAG view (0.6.0): nodes merged with gate results,
@@ -192,7 +201,9 @@ commands/tools they actually ran.
                           + limits/flags (0.6.0; .env > config env{} > defaults)
 /api/home               → at-a-glance digest (0.7.0): health, attention[],
                           gates, frontier, taskCounts, dispatch/autonomate
-                          liveness, breaker/backoff, 14-day activityByDay
+                          liveness, breaker/backoff, 14-day activityByDay;
+                          + loop (STATUS iteration/note), briefing (latest
+                          supervisor report), supervisor {intervalMin,enabled} (0.10.0)
 /api/settings           → GET: all knob rows (config env{} overlaid) + appliesAt;
                           POST {"changes":{KEY:value}} writes whitelisted keys
                           into gluerun.config.json env{} (the console's ONLY
@@ -209,8 +220,19 @@ commands/tools they actually ran.
                           per agent CLI installed/version/path, authStatus +
                           email/plan (CLI status probes, 3s timeouts, 60s cache;
                           ?refresh=1 re-probes), env-key presence, runner script,
-                          isDefaultRunner, roles, last-used session evidence.
+                          isDefaultRunner, roles, last-used session evidence, and
+                          a per-provider quota field (0.10.0: Codex real usage
+                          from local rollout JSONL; tier-only/not-exposed else).
                           Live-only (?plan= ignored); never contains secrets
+/api/report             → POST: request a one-shot supervisor briefing (0.10.0);
+                          spawns the readonly runner (429 while busy or inside the
+                          60s throttle); ?plan= / archived plans rejected
+/api/ask                → POST {"question": "…"}: ask the supervisor (0.10.0);
+                          mints ASK-<id>, writes the question to a file (never on
+                          argv), spawns the readonly runner; 202 {runId}; 429 busy
+/api/ask/<id>           → one ask's state + answer (0.10.0; pure-FS; answer capped;
+                          proposedSettings filtered to the settings whitelist)
+/api/asks               → newest-20 ask runs (0.10.0)
 ```
 
 **Plan threads (0.8.0).** After `gluerun plan archive` (see SKILL.md), each
@@ -222,10 +244,12 @@ snapshot. Appending `?plan=<plan-id>` to the read endpoints (`/api/dag`,
 against the registry (unknown → 404). `/api/state`, `/api/home`,
 `/api/config` and `/api/settings` are live-only and ignore the param; any
 POST carrying `?plan=` is rejected 400 — archived plans are strictly
-read-only. In the UI, the header plan switcher (and the Home "Previous
+read-only. In the UI, the sidebar threads list (and the Home "Previous
 plans" card) opens a thread in historical mode: a read-only banner, Plan
 lenses + Consoles transcripts rendered from the archive, Agents disabled,
-polling frozen. Deep link: `http://…/?plan=<plan-id>#plan/timeline`.
+polling frozen. The supervisor briefing/chat and provider quota gauges are
+live-only — historical `?plan=` mode shows none of them. Deep link:
+`http://…/?plan=<plan-id>#plan/timeline`.
 
 Snapshot extras: `orchestration.gates` `{passed,total,byNode}` (replaces the
 legacy `gateD0`/`gateD1` probes; the built-in status/frontier/validate probes

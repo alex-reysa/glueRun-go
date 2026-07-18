@@ -7,6 +7,105 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.10.0] — 2026-07-18 — App shell (threads sidebar), matrix rebuild, provider quotas, supervisor briefing + chat
+
+Four requests in one release, moving the console from viewer toward platform:
+a two-level app shell (plan threads in a left sidebar, surfaces become
+thread-scoped tabs), a rebuilt dependency matrix, subscription-quota gauges on
+Home, and a supervisor presence — a periodic read-only briefing plus a
+propose-only chat. `schemaVersion` stays **v1**; every engine addition is
+byte-inert until its knob is set (a no-config reconcile cycle creates zero
+supervisor artifacts).
+
+### Console — app shell (left sidebar + plan threads)
+- The four surfaces become **thread-scoped tabs** behind the slim header
+  (Home, Plan, Consoles, Agents); a new **left sidebar** holds the plan-
+  threads list (the live plan, highlighted, plus archived read-only threads —
+  name · date · gates P/T) and an **app-level nav** into which **Providers
+  moves out of the tab row**. Clicking an archived thread reloads into
+  `?plan=` historical mode; "Current plan" returns to live.
+- The rail collapses (persisted in localStorage; auto-rail under 1100px), and
+  both navs drive `showSurface` with mirrored `aria-pressed`. The old header
+  plan-switcher `<select>` is gone. Zero route/server changes — all asset
+  hashes for the untouched modules are unaffected.
+
+### Console — dependency matrix rebuilt
+- **Sticky** column headers, row labels, and the top-left corner stay pinned
+  (opaque) while scrolling. Row labels are now **readable two lines** (title
+  over id) instead of the mono id bleeding under the title — fixes the
+  id-overlap bug on names like `metrics-extract`.
+- **Height-aware fit:** cell size is the min of the width- and height-fit
+  (clamped 22–44px); when the grid fits an axis it centers on it.
+- **Follow-diagonal scrolling** (toggle, persisted, default on): scrolling
+  right walks the matrix down in lockstep so the gate-status diagonal stays in
+  view; the y-axis stays free and the toolbar toggle decouples the axes. The
+  floating detail card now stays in the pane corner instead of scrolling
+  offscreen when the grid is taller than the pane.
+
+### Engine + Console — supervisor briefing & ask
+- New engine `engine/supervise.sh` (`--once`) and `engine/ask.sh` run a
+  **read-only one-shot runner** over a state digest (STATUS.md, health,
+  frontier, gates, recent events, config env{}, settings whitelist).
+  `gluerun report` requests a briefing; `gluerun ask "<question>" [--wait]`
+  asks the supervisor a question. Both are **propose-only** — the model never
+  writes; it may only emit a `proposedSettings` map restricted to the settings
+  whitelist.
+- Briefings are validated against
+  `schemas/supervisor-report.v0.schema.json`
+  (`gluerun.orchestration.supervisor-report.v0`) and written to
+  `.gluerun-state/supervisor/latest.json` (+ pruned history); events
+  `supervisor.report` / `.failed` / `.ask_started` / `.ask_answered` /
+  `.ask_failed`. New knobs, all inert by default:
+  `GLUERUN_SUPERVISOR_INTERVAL_MIN` (`0` = off; the L0 loop then auto-briefs at
+  most once per interval, stamping before spawn so it cannot double-spawn),
+  `GLUERUN_SUPERVISOR_TIMEOUT_SEC` (900), `GLUERUN_ASK_TIMEOUT_SEC` (600).
+- Console: `POST /api/report` and `POST /api/ask` spawn the readonly runner
+  (a second deliberate subprocess exception — the question is written to a
+  file, never passed on argv; `start_new_session`; 429 while busy or inside
+  the 60s report throttle); `GET /api/ask/<id>` and `GET /api/asks` read state
+  pure-FS. `/api/home` gains `loop` (iteration/note from STATUS.md),
+  `briefing` (latest report, narrative capped), and `supervisor`
+  (`{intervalMin, enabled}`). Home renders a supervisor card (stage, loop
+  note, briefing narrative + risks + next steps, refresh) and a propose-only
+  chat with per-key **Apply chips** — a human click is the only write, through
+  POST /api/settings. Ask/briefing runs stream in Consoles as `assistant`-kind
+  sessions.
+
+### Console — provider subscription quotas
+- `/api/providers` gains an additive **`quota`** field (`gluerun.providers.v0`
+  is unchanged otherwise). Codex exposes real usage: a bounded tail probe over
+  its newest local rollout JSONL reads the last `rate_limits` (used-percent,
+  window, reset time, plan type) — **rollout files only, never a credential**.
+  Cursor reports tier-only; providers with no headless usage source report
+  `not-exposed`; absent CLIs `cli-missing`.
+- Home (above the links) and each Providers card render a **usage gauge** for
+  Codex (percent used, window label, reset countdown, plan chip, staleness)
+  and honest tier / not-exposed states for the rest; the section quiet-hides
+  when nothing qualifies or `/api/providers` 404s. Live-only.
+
+### Fixes
+- Regenerated the engine console adapter
+  (`plugin/adapters/console-adapter.v0.json`): its `logFileMaps.codexLogs` had
+  drifted and, when loaded, stripped `auditor-codex.log` from the streamable
+  set — restored, and the new `assistant-codex.log` / `supervisor-codex.log`
+  names added, so adapter-loaded and adapter-less session streaming match.
+- `test-autonomate-supervisor-gate.sh`'s cleanup trap no longer flakes on
+  "Directory not empty" when the detached briefing tree is still writing under
+  the fixture at exit (retry-tolerant `rm`).
+
+### Tests
+- Bash suite gains `test-supervise.sh`, `test-ask.sh`,
+  `test-autonomate-supervisor-gate.sh` (stub-runner; byte-inert proof when the
+  knob is unset), and `test-console-shell-dom.sh` — headless-Chrome
+  `--dump-dom` assertions over the sidebar shell, the four-tab header, and the
+  rebuilt matrix (skips cleanly when Chrome is absent).
+- Python suite gains `CodexQuotaTests`, `ProvidersQuotaFieldTests`,
+  `CollectHomeSupervisorTests`, `CollectAskTests`, `AskReportRouteTests`,
+  `SessionsAssistantTests`; the no-subprocess and secret-leak guards are
+  extended to the new collectors, and `/api/settings` stays byte-identical.
+
+---
+
 ## [0.9.0] — 2026-07-18 — Providers: runtime status tab + Gemini/OpenCode/Cursor runners
 
 See which agent CLIs are connected, at what version, under which account —

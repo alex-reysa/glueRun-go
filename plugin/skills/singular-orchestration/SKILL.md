@@ -236,8 +236,12 @@ gluerun console --snapshot      # one-shot JSON health snapshot, no browser
 gluerun console --task TASK-0042   # one-shot task detail JSON
 ```
 
-The console is a read-only web UI (L0→L1→L2 graph, task inspector, events,
-JSON API) — start/reuse it with `gluerun console --ensure` (URL persists in
+The console is a web UI over orchestration state — an app shell whose left
+sidebar lists plan threads (live + archived) plus an app-level Providers nav,
+with Home/Plan/Consoles/Agents as thread-scoped tabs; Home also carries the
+supervisor briefing/chat and provider quota gauges. Orchestration state stays
+read-only (the sole write path is the whitelisted settings knobs). Start/reuse
+it with `gluerun console --ensure` (URL persists in
 `.gluerun-state/console.url`; `--status`/`--stop` manage it). Ground rules:
 durable state is authoritative, "active" is derived from live facts (pids,
 active leases, worktrees) — never from markdown claims or bare lease-file
@@ -249,6 +253,26 @@ jq cookbook (exact field names per artifact):
 While a run is live, watch for: worker liveness vs lease count, planner
 failures (only fatal when a cycle produced nothing), and **free disk** — a
 full volume shows up as confusing all-red gate runs, not as a disk error.
+
+### Supervisor briefing & ask (0.10.0)
+
+A read-only overseer can narrate the run and answer questions. It is
+propose-only: it may suggest settings but never writes them — a human applies
+them (the console's Apply chips write through the settings whitelist).
+
+```bash
+gluerun report                       # request a one-shot briefing (stage, risks, next steps)
+gluerun ask "where are we?" --wait   # ask the supervisor; --wait tails to the answer
+```
+
+Both spawn a readonly one-shot agent over a state digest (STATUS, health,
+frontier, gates, recent events, config). Auto-briefings are off by default; set
+a cadence with `GLUERUN_SUPERVISOR_INTERVAL_MIN` (minutes, `0` = off — the L0
+loop then briefs at most once per interval), and bound the runners with
+`GLUERUN_SUPERVISOR_TIMEOUT_SEC` (900) / `GLUERUN_ASK_TIMEOUT_SEC` (600).
+Briefings land in `.gluerun-state/supervisor/latest.json`; the console Home
+shows the latest one plus a propose-only chat, and ask/report runs appear in
+Consoles. See [references/console.md](references/console.md).
 
 ## 5. Completion, gates, recovery
 
@@ -331,7 +355,7 @@ then resets to the init starter DAG with a fresh event journal seeded by a
 `plan.archived` event and commits the `docs/orchestration` reset
 (`--no-commit` to skip). Task numbering restarts at TASK-0001. Author the
 next plan exactly as in §2. Archived threads are browsable in the console
-via the header plan switcher / Home "Previous plans" card, or
+via the sidebar threads list / Home "Previous plans" card, or
 `gluerun console --plans` (see [references/console.md](references/console.md)).
 
 ## Invariants — do not weaken

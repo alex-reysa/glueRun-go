@@ -18,7 +18,19 @@ SCRIPT_DIR="$ENGINE_HOME/engine"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+# The (enabled) briefing spawns a detached supervise.sh tree that keeps writing
+# under "$tmp" after every assertion has passed; a plain `rm -rf` then races it
+# and trips "Directory not empty" under suite load. Retry a few times and never
+# return nonzero so a slow spawn tree cannot fail an otherwise-green run.
+cleanup() {
+  local i
+  for i in 1 2 3; do
+    rm -rf "$tmp" 2>/dev/null && return 0
+    sleep 1
+  done
+  rm -rf "$tmp" 2>/dev/null || true
+}
+trap cleanup EXIT
 root="$tmp/repo"
 mkdir -p "$root/.gluerun-state" "$root/docs/orchestration/prompts" \
   "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates"

@@ -52,6 +52,9 @@ one-off overrides. Operator secrets/overrides go in
 | `GLUERUN_REVIEW_MAX_AGE_HOURS` | `168` | Max age of gate-review.v0 evidence for evaluation-node promotion (`0` off). |
 | `GLUERUN_RUNS_KEEP` / `GLUERUN_EVENTS_MAX_MB` | `200` / `64` | `gluerun gc` runs-history cap per bucket and events rotation threshold. |
 | `GLUERUN_SLEEP_POLL_SEC` | `10` | Interruptible-sleep chunk: STOP/`gluerun wake` take effect within this. |
+| `GLUERUN_SUPERVISOR_INTERVAL_MIN` | `0` | Minutes between automatic read-only supervisor briefings from the L0 loop; `0`/unset = off (byte-inert). |
+| `GLUERUN_SUPERVISOR_TIMEOUT_SEC` | `900` | Wall-clock bound on a briefing runner (`gluerun report` / an auto-briefing). |
+| `GLUERUN_ASK_TIMEOUT_SEC` | `600` | Wall-clock bound on an ask runner (`gluerun ask`). |
 
 Model/effort selection per role: `GLUERUN_CLAUDE_MODEL`,
 `GLUERUN_CLAUDE_{L1,L2,PLANNER,AUDITOR,DECIDER}_MODEL`;
@@ -79,6 +82,27 @@ Key events (in `.gluerun-state/events.ndjson`, countable via
 `gluerun metrics`): `context.strategy_selected`, `context.resume_failed`,
 `plan.critiqued`, `plan.revised`, `plan.revise_parked`,
 `planner.backoff_active`, `ctx.paired_audit`, `ctx.artifact_secret`.
+
+## Supervisor briefing & ask (0.10.0)
+
+A read-only overseer that narrates the run and answers operator questions. It
+is propose-only — it can suggest settings but never writes them:
+
+```bash
+gluerun report                       # one-shot briefing -> .gluerun-state/supervisor/latest.json
+gluerun ask "where are we?" --wait   # ask a question; --wait tails until the answer lands
+```
+
+Enable automatic briefings with `GLUERUN_SUPERVISOR_INTERVAL_MIN` (minutes;
+`0`/unset = off) — set it either in `gluerun.config.json` `env{}` or from the
+console (the Providers-tab settings channel and the Home supervisor card's
+enable chip both write it through `POST /api/settings`). The L0 loop then
+briefs at most once per interval and stays byte-inert when the knob is unset.
+Bound the runners with `GLUERUN_SUPERVISOR_TIMEOUT_SEC` (900) and
+`GLUERUN_ASK_TIMEOUT_SEC` (600). Both verbs spawn a readonly one-shot agent
+over a state digest; the ask/briefing runs appear in the console **Consoles**
+surface as assistant-kind sessions, and Home renders the latest briefing plus a
+propose-only chat (per-key Apply chips are the only write path).
 
 ## Autonomy runbook
 

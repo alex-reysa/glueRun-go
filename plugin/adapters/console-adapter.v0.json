@@ -818,12 +818,24 @@
         "worker"
       ],
       [
+        "auditor-codex.log",
+        "auditor"
+      ],
+      [
         "planner-codex.log",
         "planner"
       ],
       [
         "decider-codex.log",
         "decider"
+      ],
+      [
+        "assistant-codex.log",
+        "assistant"
+      ],
+      [
+        "supervisor-codex.log",
+        "supervisor"
       ]
     ],
     "plainLogs": [
