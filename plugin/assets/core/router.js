@@ -5,6 +5,7 @@
      #plan/timeline|matrix|dag|tasks[/NODE:<id>|TASK-XXXX[:tab]]
      #consoles[/<sessionId>]
      #agents[/<roleId>[/<sessionId>]]
+     #providers[/<providerId>]
 
    Legacy 0.5.x hashes are migrated on load + hashchange:
      #TASK-0123[:tab] → #plan/tasks/TASK-0123[:tab]   (+ navigate)
@@ -23,7 +24,7 @@ import { select, navigateToTask, setAreaFilter, S } from "../app.js";
 import { bus } from "./bus.js";
 import { isHistorical } from "./api.js";
 
-const SURFACES = ["home", "plan", "consoles", "agents"];
+const SURFACES = ["home", "plan", "consoles", "agents", "providers"];
 const LENSES = ["timeline", "matrix", "dag", "tasks"];
 
 let cfg = { onSurface: null, onLens: null };
@@ -50,6 +51,7 @@ export function currentRoute() {
     return { surface, lens, sel, tab };
   }
   if (surface === "consoles") return { surface, session: parts[1] || null };
+  if (surface === "providers") return { surface, id: parts[1] || null };
   return { surface, role: parts[1] || null, session: parts[2] || null };
 }
 
@@ -87,6 +89,9 @@ export function writeRoute(surface, lens, selId, tab) {
     // #agents[/<roleId>[/<sessionId>]] — lens carries the roleId, selId the session
     if (lens) h += "/" + lens;
     if (selId) h += "/" + selId;
+  } else if (surface === "providers") {
+    // #providers[/<providerId>] — lens carries the providerId
+    if (lens) h += "/" + lens;
   }
   try { history.replaceState(null, "", h); } catch (e) {}
 }
@@ -136,9 +141,9 @@ function resolveSelection(route) {
 // Apply a parsed route: surface + lens now; selection now if the snapshot is in,
 // else defer to the next tick(). `initial` selections always defer.
 function applyRoute(route, initial) {
-  // Agents is a live-repo concept (config/settings) — unreachable in historical
-  // mode. Redirect any #agents route to #home before it resolves.
-  if (isHistorical() && route.surface === "agents") {
+  // Agents + Providers are live-repo concepts (config/settings/runtime probes) —
+  // unreachable in historical mode. Redirect either route to #home before it resolves.
+  if (isHistorical() && (route.surface === "agents" || route.surface === "providers")) {
     route = { surface: "home" };
     try { history.replaceState(null, "", "#home"); } catch (e) {}
   }
@@ -152,6 +157,7 @@ function applyRoute(route, initial) {
     // every hashchange — no deferral like the plan selection below.
     if (route.surface === "consoles" && cfg.onConsole) cfg.onConsole(route);
     if (route.surface === "agents" && cfg.onAgents) cfg.onAgents(route);
+    if (route.surface === "providers" && cfg.onProviders) cfg.onProviders(route);
     if (route.surface === "home" && cfg.onHome) cfg.onHome(route);
   } finally { applying = false; }
   // Normalize a legacy/implicit hash to the canonical form.
@@ -172,7 +178,7 @@ export function tick() {
 
 // -------------------------------------------------------------- init -------
 export function initRouter(options) {
-  cfg = Object.assign({ onSurface: null, onLens: null, getLens: null, onConsole: null, onAgents: null, onHome: null }, options || {});
+  cfg = Object.assign({ onSurface: null, onLens: null, getLens: null, onConsole: null, onAgents: null, onProviders: null, onHome: null }, options || {});
 
   bus.writeRoute = (kind, id, tab) => {
     const r = currentRoute();

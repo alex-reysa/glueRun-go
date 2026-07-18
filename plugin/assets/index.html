@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/assets/plan.css">
   <link rel="stylesheet" href="/assets/consoles.css">
   <link rel="stylesheet" href="/assets/agents.css">
+  <link rel="stylesheet" href="/assets/providers.css">
   <link rel="stylesheet" href="/assets/home.css">
 </head>
 <body>
@@ -117,6 +118,7 @@
         <button type="button" data-surface="plan" aria-pressed="false">Plan</button>
         <button type="button" data-surface="consoles" aria-pressed="false">Consoles</button>
         <button type="button" data-surface="agents" aria-pressed="false">Agents</button>
+        <button type="button" data-surface="providers" aria-pressed="false">Providers</button>
       </nav>
       <span class="select-wrap" id="plan-switcher" hidden>
         <select id="plan-switcher-select" class="filter plan-switcher-select" aria-label="Switch plan thread"></select>
@@ -178,6 +180,9 @@
     </section>
     <section id="surface-agents" class="surface" data-active="false" hidden>
       <span class="surface-stub">Agents — coming in this release</span>
+    </section>
+    <section id="surface-providers" class="surface" data-active="false" hidden>
+      <span class="surface-stub">Providers — coming in this release</span>
     </section>
     <section id="surface-home" class="surface" data-active="false" hidden>
       <div class="home-body" id="home-body"></div>

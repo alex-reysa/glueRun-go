@@ -126,8 +126,11 @@ export function initPlans() {
   }
 
   if (isHistorical()) {
-    const agentsNav = document.querySelector('#surface-nav [data-surface="agents"]');
-    if (agentsNav) { agentsNav.disabled = true; agentsNav.title = "live only"; }
+    // Agents + Providers are live-only surfaces — disable their nav buttons.
+    for (const surface of ["agents", "providers"]) {
+      const nav = document.querySelector(`#surface-nav [data-surface="${surface}"]`);
+      if (nav) { nav.disabled = true; nav.title = "live only"; }
+    }
   }
 
   paintBanner();   // shows the id fallback immediately; refreshed once plans resolve
