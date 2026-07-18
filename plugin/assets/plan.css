@@ -385,10 +385,32 @@
 .plan-dag-progress .pdf-count { font-size: 11px; color: var(--text-secondary); margin-left: 2px; }
 
 /* ---- Matrix lens (ported PlanDependencyMatrix) ---- */
-.plan-matrix { position: relative; padding: 20px 26px 24px; }
+/* DAG-lens host pattern: an unscaled .plan-scroll-host owns the scroll container
+   plus the floating detail card. The scroll container centres the grid on each
+   axis it fits (data-fit-x/-y) and scrolls it on any axis it overflows. Column
+   headers pin to the top, row labels to the left, the corner to both — the
+   timeline-lens sticky idiom, with the padding baked into the sticky layers so
+   pinned and unpinned positions never jump. */
+.plan-mx-scroll {
+  height: 100%; overflow: auto; display: flex;
+  justify-content: flex-start; align-items: flex-start;
+}
+.plan-mx-scroll[data-fit-x="true"] { justify-content: center; }
+.plan-mx-scroll[data-fit-y="true"] { align-items: center; }
+.plan-matrix { flex: none; padding: 0; }
 .pm-grid { --pm-cell: 27px; margin: 0; }
-.pm-grid.pm-centered { margin: 0 auto; }
-.pm-colhead-row { display: flex; align-items: flex-end; }
+
+.pm-colhead-row {
+  display: flex; align-items: flex-end;
+  position: sticky; top: 0; z-index: 7;
+  background: var(--surface-panel); border-bottom: 1px solid var(--border-default);
+  padding-top: 10px;
+}
+.pm-colhead { flex: none; }
+.pm-corner {
+  position: sticky; left: 0; z-index: 8;
+  background: var(--surface-panel); border-right: 1px solid var(--border-subtle);
+}
 .pm-colhead-cell {
   flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px;
   cursor: pointer; padding-bottom: 5px; overflow: hidden;
@@ -396,18 +418,27 @@
 .pm-colhead-cell .pmch-stage { font: 700 8px var(--font-sans); letter-spacing: 0.06em; color: var(--text-meta); height: 10px; }
 .pm-colhead-cell .pmch-id {
   font: 400 8.5px var(--font-mono); color: var(--text-faint);
-  writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; max-height: 58px; overflow: hidden;
+  writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap;
+  max-height: 76px; overflow: hidden; text-overflow: ellipsis;
 }
 .pm-colhead-cell[data-hover="true"] .pmch-id { color: var(--text-primary); font-weight: 600; }
+
 .pm-row { display: flex; align-items: stretch; }
+/* the row label is sticky-left + opaque so scrolled cells can never bleed under
+   the readable title/id (mirrors .tl-gutter). Title is primary; id ellipsizes. */
 .pm-rowlabel {
-  flex: none; display: flex; align-items: center; gap: 9px; height: var(--pm-cell);
-  padding: 0 10px 0 8px; cursor: pointer; border: none; background: transparent; text-align: left;
+  flex: none; display: flex; align-items: center; gap: 9px;
+  position: sticky; left: 0; z-index: 5;
+  background: var(--surface-panel); border-right: 1px solid var(--border-subtle);
+  padding: 0 12px 0 14px; cursor: pointer; border-top: 0; text-align: left;
 }
-.pm-rowlabel .pmrl-id { font-size: 9.5px; color: var(--text-faint); width: 26px; flex: none; }
-.pm-rowlabel .pmrl-title { font: 400 11.5px var(--font-sans); color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1 1 auto; }
+.pmrl-text { display: flex; align-items: baseline; gap: 7px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.pm-grid.pm-lg .pmrl-text { flex-direction: column; align-items: stretch; gap: 1px; }
+.pm-rowlabel .pmrl-title { font: 500 11.5px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pm-rowlabel .pmrl-id { font-size: 9.5px; color: var(--text-faint); flex: none; max-width: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-grid.pm-lg .pmrl-id { max-width: 100%; }
 .pm-row:hover .pmrl-title { color: var(--text-primary); }
-.pm-rowlabel .pmrl-gate { margin-left: auto; flex: none; }
+.pm-rowlabel .pmrl-gate { margin-left: auto; flex: none; align-self: center; }
 .pm-cell { flex: none; display: flex; align-items: center; justify-content: center; padding: 0; }
 .pm-cell.pm-diag { cursor: pointer; background: var(--surface-panel); border-top: 0; }
 .pm-mark { width: calc(var(--pm-cell) * 0.5); height: calc(var(--pm-cell) * 0.5); border-radius: 3.5px; background: var(--n-800); opacity: 0.82; transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
@@ -415,10 +446,12 @@
 .pm-diagpill.is-failed { outline: 2px solid var(--tone-red-dot); }
 .pm-diag[data-selected="true"] .pm-diagpill { outline: 2px solid var(--ink); }
 .pm-diagpill .pmd-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); }
-.pm-footer { margin-top: 14px; display: flex; align-items: center; gap: 8px; color: var(--text-faint); font: 400 11px var(--font-sans); }
+.pm-footer { margin-top: 14px; display: flex; align-items: center; gap: 8px; padding: 0 14px 16px; color: var(--text-faint); font: 400 11px var(--font-sans); }
 .pm-footer-warn { color: var(--tone-amber-fg); }
 .pm-footer-warn .icon { width: 14px; height: 14px; }
-.pm-detail { right: 26px; bottom: 22px; }
+/* detail card floats in the pane corner (a scroll-host child) so it stays visible
+   however far the grid is scrolled — the old absolute-in-content card went off. */
+.pm-detail { right: 16px; bottom: 14px; }
 
 /* ---- Timeline lens (flagship) ---- */
 :root { --tl-gutter: 210px; }
