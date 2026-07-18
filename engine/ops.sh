@@ -17,6 +17,8 @@ set -euo pipefail
 #   ops.sh gc [--dry-run]
 #   ops.sh plan archive [--name NAME] [--force] [--no-commit]
 #   ops.sh plan list [--json]
+#   ops.sh ask "<question>" [--wait]
+#   ops.sh report
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
@@ -902,6 +904,52 @@ for p in plans:
 PY
 }
 
+# --- ask / report (0.10.0 supervisor) ----------------------------------------
+# ops_ask mints an ASK run, stages question.md (never argv-to-runner), and runs
+# ask.sh. Default: dispatch in the background and print the runId. --wait: run in
+# the foreground and print the answer when it lands.
+ops_ask() {
+  local question="" want_wait="no"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --wait) want_wait="yes"; shift ;;
+      -*) echo "usage: gluerun ask \"<question>\" [--wait]" >&2; return 2 ;;
+      *) if [[ -z "$question" ]]; then question="$1"; else question="$question $1"; fi; shift ;;
+    esac
+  done
+  [[ -n "$question" ]] || { echo "usage: gluerun ask \"<question>\" [--wait]" >&2; return 2; }
+  gluerun_ensure_state_dirs
+  local run_id run_dir
+  run_id="ASK-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  run_dir="$(gluerun_run_dir "$run_id")"
+  mkdir -p "$run_dir"
+  python3 - "$run_dir/question.md" "$question" <<'PY'
+import os, sys
+path, q = sys.argv[1], sys.argv[2]
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    f.write(q)
+os.replace(tmp, path)
+PY
+  echo "runId=$run_id"
+  if [[ "$want_wait" == "yes" ]]; then
+    bash "$SCRIPT_DIR/ask.sh" --run-id "$run_id"
+    # A timeout / no-answer ends with no answer.md; that is a normal terminal
+    # outcome (state is in ask.json), so never fail the verb on its absence.
+    if [[ -f "$run_dir/answer.md" ]]; then echo "---"; cat "$run_dir/answer.md"; fi
+  else
+    ( bash "$SCRIPT_DIR/ask.sh" --run-id "$run_id" >>"$run_dir/ask-spawn.log" 2>&1 & ) || true
+    echo "dispatched (poll the console, or re-run with --wait)"
+  fi
+}
+
+# ops_report runs a single supervisor briefing in the foreground; latest.json is
+# updated in place only if the model returns a schema-valid report.
+ops_report() {
+  echo "requesting supervisor briefing (readonly, one-shot)..." >&2
+  bash "$SCRIPT_DIR/supervise.sh" --once
+}
+
 case "$verb" in
   supersede)     ops_supersede "$@" ;;
   clear-backoff) gluerun_planner_backoff_clear ;;
@@ -913,7 +961,9 @@ case "$verb" in
   health)        ops_health "$@" ;;
   gc)            ops_gc "$@" ;;
   plan)          ops_plan "$@" ;;
+  ask)           ops_ask "$@" ;;
+  report)        ops_report "$@" ;;
   *)
-    echo "usage: ops.sh supersede|clear-backoff|breaker|stop|resume|wake|gates|health|gc|plan ..." >&2
+    echo "usage: ops.sh supersede|clear-backoff|breaker|stop|resume|wake|gates|health|gc|plan|ask|report ..." >&2
     exit 2 ;;
 esac

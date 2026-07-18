@@ -251,6 +251,25 @@ PY
 
   gluerun_write_status "$iteration" "running (disp=$dispatched int=$integrated failD=$faild failI=$faili planFail=$planner_failures importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
 
+  # Periodic supervisor briefing (0.10.0). BYTE-INERT when the interval knob is
+  # unset/0: a single string test skips the whole block, so no supervisor/ dir,
+  # stamp, or SUP run is ever created. When enabled, brief at most once per
+  # interval, never during a quota/planner backoff, and stamp BEFORE spawning so
+  # an immediate next cycle cannot double-spawn. The briefing is a detached,
+  # log-redirected background readonly session — it never blocks the loop.
+  sup_int="${GLUERUN_SUPERVISOR_INTERVAL_MIN:-0}"
+  if [[ "$sup_int" =~ ^[0-9]+$ && "$sup_int" -gt 0 && -z "$bo_json" ]]; then
+    sup_dir="$GLUERUN_STATE_DIR/supervisor"
+    sup_last=0
+    [[ -f "$sup_dir/last-run" ]] && sup_last="$(cat "$sup_dir/last-run" 2>/dev/null || echo 0)"
+    [[ "$sup_last" =~ ^[0-9]+$ ]] || sup_last=0
+    if (( now - sup_last >= sup_int * 60 )); then
+      mkdir -p "$sup_dir"
+      printf '%s\n' "$now" >"$sup_dir/last-run"
+      ( bash "$SCRIPT_DIR/supervise.sh" --once >>"$sup_dir/spawn.log" 2>&1 & ) || true
+    fi
+  fi
+
   # DAG exhausted: planner says all areas complete and nothing is left to do.
   if [[ "$gen_complete" == "yes" && "$ready_now" -eq 0 && "$active_now" -eq 0 ]]; then
     echo "[autonomate] DAG exhausted (all areas complete); halting"

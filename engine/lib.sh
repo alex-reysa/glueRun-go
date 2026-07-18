@@ -108,6 +108,7 @@ GLUERUN_AUDIT_SCHEMA="${GLUERUN_AUDIT_SCHEMA:-$GLUERUN_SCHEMA_DIR/audit-verdict.
 GLUERUN_DECIDER_SCHEMA="${GLUERUN_DECIDER_SCHEMA:-$GLUERUN_SCHEMA_DIR/decider-verdict.v0.schema.json}"
 GLUERUN_GATE_SCHEMA="${GLUERUN_GATE_SCHEMA:-$GLUERUN_SCHEMA_DIR/gate-result.v0.schema.json}"
 GLUERUN_TASKBATCH_SCHEMA="${GLUERUN_TASKBATCH_SCHEMA:-$GLUERUN_SCHEMA_DIR/task-batch.v0.schema.json}"
+GLUERUN_SUPERVISOR_SCHEMA="${GLUERUN_SUPERVISOR_SCHEMA:-$GLUERUN_SCHEMA_DIR/supervisor-report.v0.schema.json}"
 # Post-worker + integrate validation. No universal default — a repo MUST set its
 # gate command (per task `Gate command:` or via config). Empty = no implicit gate.
 GLUERUN_DEFAULT_GATE_CMD="${GLUERUN_DEFAULT_GATE_CMD:-}"
@@ -160,6 +161,13 @@ GLUERUN_STOP_FILE="${GLUERUN_STOP_FILE:-$GLUERUN_STATE_DIR/STOP}"
 GLUERUN_STATUS_FILE="${GLUERUN_STATUS_FILE:-$GLUERUN_STATE_DIR/STATUS.md}"
 GLUERUN_BREAKER_FILE="${GLUERUN_BREAKER_FILE:-$GLUERUN_STATE_DIR/circuit.json}"
 GLUERUN_PLANNER_BACKOFF_FILE="${GLUERUN_PLANNER_BACKOFF_FILE:-$GLUERUN_STATE_DIR/planner-backoff.json}"
+# Supervisor briefing + ask (0.10.0). All INERT by default: the autonomate loop
+# only spawns a periodic briefing when the interval knob is >0, and `gluerun ask`
+# / `gluerun report` are explicit operator verbs. With INTERVAL_MIN=0 (default) a
+# reconcile cycle creates ZERO supervisor artifacts (byte-identical to 0.9.0).
+GLUERUN_SUPERVISOR_INTERVAL_MIN="${GLUERUN_SUPERVISOR_INTERVAL_MIN:-0}"    # minutes between auto briefings; 0 = off
+GLUERUN_SUPERVISOR_TIMEOUT_SEC="${GLUERUN_SUPERVISOR_TIMEOUT_SEC:-900}"    # readonly briefing runner wall budget
+GLUERUN_ASK_TIMEOUT_SEC="${GLUERUN_ASK_TIMEOUT_SEC:-600}"                  # readonly ask runner wall budget
 # Detached dispatch (default ON; set to 0 for the legacy batch path). When on,
 # reconcile spawns workers in their own session and returns within seconds;
 # completion is observed by the reaper on later cycles via dispatch records +
@@ -2634,6 +2642,194 @@ data = json.loads(sys.argv[2])
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
+PY
+}
+
+# ---- Supervisor briefing + ask (0.10.0) -------------------------------------
+# Read-only overseer helpers. Every function here is INERT until an explicit
+# supervise.sh / ask.sh spawn (or the autonomate interval gate) calls it, so
+# merely sourcing lib.sh writes nothing and an ordinary reconcile cycle stays
+# byte-identical to 0.9.0.
+
+# The writable-settings menu the supervisor may PROPOSE (never apply). The real
+# whitelist + typed validation lives server-side (_settings_write_spec); this is
+# the human-facing knob list surfaced to the model as guidance / defense-in-depth.
+gluerun_settings_whitelist_keys() {
+  cat <<'EOF'
+GLUERUN_CODEX_MODEL
+GLUERUN_CODEX_SERVICE_TIER
+GLUERUN_CODEX_PLANNER_REASONING_EFFORT
+GLUERUN_CODEX_L2_REASONING_EFFORT
+GLUERUN_CODEX_AUDITOR_REASONING_EFFORT
+GLUERUN_MAX_CONCURRENT
+GLUERUN_MAX_L1_CONCURRENT
+GLUERUN_ENABLE_L1_PARALLEL
+GLUERUN_L1_TASKS_PER_NODE
+GLUERUN_L2_SLICE_BUDGET
+GLUERUN_L2_SLICE_BUDGET_MAX
+GLUERUN_MAX_RETRIES
+GLUERUN_MAX_CONSEC_FAILS
+GLUERUN_MAX_HOURS
+GLUERUN_MIN_DISK_GB
+GLUERUN_L1_STALE_MINUTES
+GLUERUN_PLANNER_BACKOFF_SECONDS
+GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS
+GLUERUN_AUTO_INTEGRATE
+GLUERUN_PUSH
+GLUERUN_GENERATE
+GLUERUN_SLEEP
+GLUERUN_TARGET_BRANCH
+GLUERUN_SUPERVISOR_INTERVAL_MIN
+EOF
+}
+
+# Build the shared read-only situational digest into <out> as a delimited file.
+# Sections (each clamped to 4000 chars, ~24KB ceiling): STATUS.md verbatim,
+# ops health JSON, DAG frontier JSON, gate table JSON, the last 30 events
+# (compact ts/type/message), the config env{} block, and the settings whitelist.
+# Both supervise.sh and ask.sh consume this via gluerun_render_supervisor_prompt.
+gluerun_supervisor_digest() {
+  local out="$1"
+  gluerun_ensure_state_dirs
+  local status health frontier gates events cfgenv whitelist
+  status="$(cat "$GLUERUN_STATUS_FILE" 2>/dev/null || true)"; [[ -n "$status" ]] || status="(no STATUS.md written yet)"
+  health="$(bash "$GLUERUN_ENGINE_DIR/ops.sh" health --json 2>/dev/null || true)"; [[ -n "$health" ]] || health="{}"
+  frontier="$(bash "$GLUERUN_ENGINE_DIR/dag.sh" next-areas 2>/dev/null || true)"; [[ -n "$frontier" ]] || frontier="{}"
+  gates="$(bash "$GLUERUN_ENGINE_DIR/ops.sh" gates --json 2>/dev/null || true)"; [[ -n "$gates" ]] || gates="{}"
+  events="$(tail -n 30 "$GLUERUN_EVENTS_FILE" 2>/dev/null | python3 -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        e = json.loads(line)
+        print("%s  %s  %s" % (e.get("ts", ""), e.get("type", ""), e.get("message", "")))
+    except Exception:
+        pass
+' 2>/dev/null || true)"
+  [[ -n "$events" ]] || events="(no events yet)"
+  cfgenv="$(python3 - "$GLUERUN_JSON_CONFIG_FILE" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+    env = cfg.get("env") or {}
+    for k in sorted(env):
+        print("%s=%s" % (k, env[k]))
+except Exception:
+    pass
+PY
+)"
+  [[ -n "$cfgenv" ]] || cfgenv="(no config env{})"
+  whitelist="$(gluerun_settings_whitelist_keys)"
+  python3 - "$out" "$status" "$health" "$frontier" "$gates" "$events" "$cfgenv" "$whitelist" <<'PY'
+import sys
+out = sys.argv[1]
+keys = ["STATUS-MD", "HEALTH-JSON", "FRONTIER-JSON", "GATES-JSON", "EVENTS-TAIL", "CONFIG-ENV", "SETTINGS-WHITELIST"]
+vals = sys.argv[2:9]
+CLAMP = 4000
+parts = []
+for key, val in zip(keys, vals):
+    s = (val or "").strip("\n")
+    if len(s) > CLAMP:
+        s = s[:CLAMP] + "\n…(truncated)"
+    parts.append("<<<GLUERUN:%s>>>\n%s\n" % (key, s))
+parts.append("<<<GLUERUN:END>>>\n")
+with open(out, "w", encoding="utf-8") as f:
+    f.write("".join(parts))
+PY
+}
+
+# Render a supervisor/ask prompt template into <out> by substituting the digest
+# sections for [STATUS-MD] [HEALTH-JSON] [FRONTIER-JSON] [GATES-JSON]
+# [EVENTS-TAIL] [CONFIG-ENV] [SETTINGS-WHITELIST], plus [QUESTION] from the
+# (optional) question FILE. The question is read from a file and written into the
+# rendered prompt file ONLY — it never transits a runner argv.
+gluerun_render_supervisor_prompt() {
+  local tmpl="$1" digest="$2" out="$3" qfile="${4:-}"
+  python3 - "$tmpl" "$digest" "$out" "$qfile" <<'PY'
+import sys
+tmpl_path, digest_path, out_path, qfile = sys.argv[1:5]
+with open(tmpl_path, "r", encoding="utf-8") as f:
+    tmpl = f.read()
+sections = {}
+cur = None
+buf = []
+with open(digest_path, "r", encoding="utf-8") as f:
+    for line in f:
+        s = line.rstrip("\n")
+        if s.startswith("<<<GLUERUN:") and s.endswith(">>>"):
+            if cur is not None:
+                sections[cur] = "\n".join(buf).strip("\n")
+            key = s[len("<<<GLUERUN:"):-3]
+            if key == "END":
+                cur = None
+                break
+            cur = key
+            buf = []
+        else:
+            buf.append(line.rstrip("\n"))
+    if cur is not None:
+        sections[cur] = "\n".join(buf).strip("\n")
+question = ""
+if qfile:
+    try:
+        with open(qfile, "r", encoding="utf-8") as f:
+            question = f.read().strip()
+    except Exception:
+        question = ""
+repl = {
+    "[STATUS-MD]": sections.get("STATUS-MD", ""),
+    "[HEALTH-JSON]": sections.get("HEALTH-JSON", ""),
+    "[FRONTIER-JSON]": sections.get("FRONTIER-JSON", ""),
+    "[GATES-JSON]": sections.get("GATES-JSON", ""),
+    "[EVENTS-TAIL]": sections.get("EVENTS-TAIL", ""),
+    "[CONFIG-ENV]": sections.get("CONFIG-ENV", ""),
+    "[SETTINGS-WHITELIST]": sections.get("SETTINGS-WHITELIST", ""),
+    "[QUESTION]": question,
+}
+for needle, value in repl.items():
+    tmpl = tmpl.replace(needle, value)
+with open(out_path, "w", encoding="utf-8") as f:
+    f.write(tmpl)
+PY
+}
+
+# Validate an extracted supervisor report against GLUERUN_SUPERVISOR_SCHEMA
+# (required schema/stage/narrative, additionalProperties false, string items),
+# then post-check the constraints the shared checker does not cover: risks /
+# nextSteps are <=8 strings and proposedSettings is a string->string map.
+# Returns non-zero (with a stderr reason) on any violation. Symmetric with
+# gluerun_validate_decider_verdict.
+gluerun_validate_supervisor_report() {
+  local file="$1" data
+  data="$(python3 - "$file" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    print(json.dumps(json.load(open(sys.argv[1])), separators=(",", ":")))
+except Exception:
+    sys.exit(2)
+PY
+)"
+  [[ -n "$data" ]] || { echo "supervisor report: not parseable JSON" >&2; return 2; }
+  gluerun_json_schema_check "$data" "$GLUERUN_SUPERVISOR_SCHEMA" "supervisor report" || return $?
+  python3 - "$file" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k in ("risks", "nextSteps"):
+    v = d.get(k)
+    if v is None:
+        continue
+    if not isinstance(v, list) or len(v) > 8 or any(not isinstance(x, str) for x in v):
+        print("supervisor report: %s must be at most 8 strings" % k, file=sys.stderr)
+        sys.exit(2)
+ps = d.get("proposedSettings")
+if ps is not None:
+    if not isinstance(ps, dict) or any(
+        not isinstance(k, str) or not isinstance(val, str) for k, val in ps.items()
+    ):
+        print("supervisor report: proposedSettings must be a string->string map", file=sys.stderr)
+        sys.exit(2)
 PY
 }
 

@@ -724,6 +724,8 @@ Operate / recover:
   resume               remove STOP
   wake                 clear backoff + reset breaker + drop STOP + end the current nap
   gc [--dry-run]       cap runs history, prune integrated worktrees, rotate events
+  ask "<question>" [--wait]   ask the read-only supervisor a question (propose-only)
+  report               request a one-shot supervisor briefing (writes latest.json)
   lease list|show|set-status|create                    raw lease operations
   accept-packet PATH   deterministic acceptance of an existing state packet
 
@@ -779,6 +781,8 @@ main() {
     health)        run_engine ops.sh health "$@" ;;
     gc)            run_engine ops.sh gc "$@" ;;
     plan)          run_engine ops.sh plan "$@" ;;
+    ask)           run_engine ops.sh ask "$@" ;;
+    report)        run_engine ops.sh report "$@" ;;
     lease)         run_engine lease.sh "$@" ;;
     accept-packet) run_engine accept-existing-packet.sh "$@" ;;
     metrics)       cmd_metrics "$@" ;;
