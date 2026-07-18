@@ -7,6 +7,69 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.9.0] — 2026-07-18 — Providers: runtime status tab + Gemini/OpenCode/Cursor runners
+
+See which agent CLIs are connected, at what version, under which account —
+and switch the engine between them. Modeled on the multi-CLI provider
+patterns of opencode / pi / t3code (probe → installed/version → auth status
+→ ready/warning/error rollup with email · plan). `schemaVersion` stays v1.
+
+### Engine — three new runners (six total)
+- `engine/gemini-run.sh`, `engine/opencode-run.sh`, `engine/cursor-run.sh`
+  join claude/codex/grok as full drop-in runners: same CLI surface, exit
+  semantics (127 missing CLI, 124 timeout w/ process-tree kill, 86 resume
+  refused, 3/4 parse/error), readonly restore guard, best-effort
+  `--session-meta` (provider ids gemini/opencode/cursor; no session
+  affinity v1). Headless invocations: `gemini -o json --yolo` (envelope
+  accepted from stdout OR stderr — 0.42.x emits it on stderr behind
+  warning lines), `opencode run --format json`, `cursor-agent -p
+  --output-format json -f` (`--mode ask` for readonly). Flat model knobs
+  `GLUERUN_{GEMINI,OPENCODE,CURSOR}_MODEL` (unset = the CLI's own default,
+  flag omitted) + `_TIMEOUT_SEC` (default 1200).
+- Switch runners with `GLUERUN_RUNNER` in config `env{}` (proven to
+  override the top-level `runner` key on every lib.sh source) — the
+  console's "Use as default runner" writes exactly that.
+- `gluerun doctor` now checks all six provider CLIs on PATH with
+  file/env-inference auth hints (warn-only, no subprocess probes) and
+  model-prefix sanity for the new keys.
+
+### Console — Providers surface + /api/providers
+- New **Providers** tab (5th surface): a status card per provider —
+  installed + version, auth line (email · plan when the CLI prints them;
+  otherwise a one-line reason plus a copyable login command), env-key
+  presence chips, runner script + "default runner" badge + roles using it
+  + last-used/exit evidence from session metadata, an editable model knob,
+  and a "Use as default runner" action (applies next cycle). Live-only;
+  disabled while viewing an archived plan.
+- `GET /api/providers` (`gluerun.providers.v0`) + `--providers` one-shot:
+  per-provider probes (`claude auth status`, `codex login status`,
+  `cursor-agent about --format json`, `opencode auth list`, env/file
+  inference for gemini; `<bin> --version` for versions) run in a thread
+  pool with 3s timeouts, cached 60s, `?refresh=1` re-probes. The payload
+  never contains credential values — only presence, counts, and strings
+  the CLIs themselves print. This collector is the deliberate
+  subprocess exception (like the git-backed snapshot); everything else
+  stays pure-FS.
+- Provider identity generalized: the runner→provider mapping is a
+  registry lookup (was a hardcoded claude-else-codex guess), and
+  `/api/config` + `/api/providers` honor env{} `GLUERUN_RUNNER`.
+  POST /api/settings whitelist gains `GLUERUN_RUNNER` (validated
+  `*-run.sh` name only) + the new model/timeout keys.
+
+### Tests
+- Bash 153/153 (new: test-gemini-run.sh / test-opencode-run.sh /
+  test-cursor-run.sh incl. the stderr-envelope quirk case; doctor
+  updated). Python 166/166 (new: CollectProvidersTests,
+  ProvidersRouteTests — fake-binary PATH fixtures, secret-leak guard,
+  cache TTL/refresh, runner-switch round-trip + rejection). Real
+  end-to-end runner smokes on this machine: cursor pong/exit 0; gemini
+  error-path surfaces the CLI's own auth message; opencode correctly
+  reports not-connected. Headless-Chrome UI verification: 80/80
+  assertions across real-repo and POST-fixture contexts at 1920×1080
+  and 1280×700, zero pageerrors.
+
+---
+
 ## [0.8.0] — 2026-07-18 — Plan threads: chat-style sequential plans
 
 One repo no longer means one plan forever. When a DAG completes, archive it

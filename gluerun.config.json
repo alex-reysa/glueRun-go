@@ -1,6 +1,6 @@
 {
   "schemaVersion": "v1",
-  "engineVersion": "0.8.0",
+  "engineVersion": "0.9.0",
   "targetBranch": "agent/integration",
   "gateCommand": "bash tests/run.sh",
   "runner": "claude-run.sh",

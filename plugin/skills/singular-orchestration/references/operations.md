@@ -175,8 +175,11 @@ bookkeeping (task-file Status + lease status) to match reality.
 work, the reaper + decider will rule integrate on a later cycle — verify
 before intervening.
 
-**Provider quota wall.** Switch `runner` in `gluerun.config.json`
-(`claude-run.sh` ↔ `codex-run.sh`). Delete
+**Provider quota wall.** Switch runners: use the console Providers tab's
+"Use as default runner", or set `GLUERUN_RUNNER` in `gluerun.config.json`
+`env{}` (any of `claude-run.sh`, `codex-run.sh`, `gemini-run.sh`,
+`opencode-run.sh`, `cursor-run.sh`, `grok-run.sh` — check auth first via
+`gluerun console --providers`). Delete
 `.gluerun-state/planner-backoff.json` if its premise died with the switch;
 session-affinity's runner-changed gate correctly degrades persisted
 sessions to fresh.

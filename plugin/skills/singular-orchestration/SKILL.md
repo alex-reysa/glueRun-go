@@ -66,8 +66,15 @@ Then edit `gluerun.config.json` before anything will run:
 - `gateCommand` — the command that proves the repo healthy (e.g.
   `bash tests/run.sh`, `npm test`). The scaffold ships `false` on purpose so
   an unconfigured repo fails closed — replace it.
-- `runner` — `claude-run.sh` or `codex-run.sh` (switchable later, e.g. on
-  provider quota walls).
+- `runner` — which agent CLI drives the roles: `claude-run.sh`,
+  `codex-run.sh`, `gemini-run.sh`, `opencode-run.sh`, `cursor-run.sh`, or
+  `grok-run.sh` (0.9.0; switchable later, e.g. on provider quota walls —
+  from the console's Providers tab, or by writing `GLUERUN_RUNNER` to config
+  `env{}`, which overrides the top-level key). Check install/auth status per
+  provider with `gluerun doctor` or `gluerun console --providers`; the
+  claude/codex runners keep per-role model+effort knobs, the others take a
+  flat `GLUERUN_<PROVIDER>_MODEL` (unset = the CLI's own default) and have
+  no session affinity yet.
 - `areas{}` — named file-scope groups: each key maps to an array of path
   prefixes, e.g. `"areas": {"api": ["src/api/", "tests/api/"], "core":
   ["src/core/", "tests/core/"]}`. DAG nodes reference an area by key and

@@ -1,7 +1,7 @@
 # Orchestration console — monitoring UI, JSON API, snapshot modes
 
 A local web console over Singular's durable state. Since 0.7.0 it is a
-full-bleed workspace (slim 44px header, no dock) with four surfaces:
+full-bleed workspace (slim 44px header, no dock) with five surfaces:
 
 - **Home** (default) — system at a glance: health verdict + attention feed
   (STOP, breaker, planner backoff, stale L1 leases, disk, stale loop
@@ -25,6 +25,17 @@ full-bleed workspace (slim 44px header, no dock) with four surfaces:
 - **Agents** — a role card grid (avatar, live glyph, current work, model ·
   effort) with per-role detail: processes (jump to their console), the
   role's prompt template, and **editable settings** (see below).
+- **Providers** (0.9.0) — runtime/provider status cards for every supported
+  agent CLI (Claude Code, Codex, Gemini, OpenCode, Cursor, Grok): installed
+  + version, auth status probed via each CLI's own status command or
+  credential-file/env inference (email · plan shown when the CLI prints
+  them; never any secret values), env-key presence, the provider's runner
+  script + roles using it + last-used evidence from session metadata, an
+  editable `GLUERUN_<PROVIDER>_MODEL` knob, a copyable login command when
+  unauthenticated, and a **"Use as default runner"** switch (writes
+  `GLUERUN_RUNNER` via the settings path; applies next cycle). Probes are
+  cached 60s; "Recheck" forces a re-probe. Live-only (disabled when viewing
+  an archived plan).
 
 **Write scope (0.7.0):** the console's only write path is
 `POST /api/settings`, which edits whitelisted `GLUERUN_*` knobs in
@@ -89,6 +100,7 @@ gluerun console --prompts             # role prompt library listing (0.7.0)
 gluerun console --prompt <name>.md    # one prompt template's content (0.7.0)
 gluerun console --raw <root>/<name>   # raw durable file behind an entity (0.7.0)
 gluerun console --plans               # archived plan-thread registry (0.8.0)
+gluerun console --providers           # runtime/provider status probes (0.9.0)
 ```
 
 Use these to summarize orchestration health or inspect one task from a
@@ -193,6 +205,12 @@ commands/tools they actually ran.
                           gluerun.plans.v0): id, name, archivedAt, gates,
                           taskCount, eventCount, headSha, branch — from
                           .gluerun-state/plans/index.json (+ manifest self-heal)
+/api/providers          → runtime/provider status (0.9.0, gluerun.providers.v0):
+                          per agent CLI installed/version/path, authStatus +
+                          email/plan (CLI status probes, 3s timeouts, 60s cache;
+                          ?refresh=1 re-probes), env-key presence, runner script,
+                          isDefaultRunner, roles, last-used session evidence.
+                          Live-only (?plan= ignored); never contains secrets
 ```
 
 **Plan threads (0.8.0).** After `gluerun plan archive` (see SKILL.md), each
