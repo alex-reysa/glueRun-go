@@ -2739,5 +2739,203 @@ class ProvidersRouteTests(unittest.TestCase):
         self.assertEqual(len(data["providers"]), len(srv.PROVIDERS))
 
 
+class CodexQuotaTests(unittest.TestCase):
+    """B1: the Codex rollout quota probe. mtime beats the filename/day-dir date;
+    the LAST rate_limits line wins; only the ~256KB tail is scanned; null
+    primary/secondary and malformed lines degrade cleanly; a missing sessions dir
+    is unavailable; staleSeconds derives from the file mtime. Reads ONLY rollout
+    jsonl (never a credential file)."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+
+    def _day_dir(self, base: dt.datetime, days_ago: int = 0) -> Path:
+        d = base - dt.timedelta(days=days_ago)
+        p = self.home / ".codex" / "sessions" / f"{d.year:04d}/{d.month:02d}/{d.day:02d}"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _line(self, used, *, plan="pro", window=10080, resets=1784950515,
+              primary=True, secondary=None, extra=None) -> str:
+        prim = ({"used_percent": used, "window_minutes": window, "resets_at": resets}
+                if primary else None)
+        payload = {"type": "token_count", "info": {"model_context_window": 200000},
+                   "rate_limits": {"limit_id": "codex", "primary": prim,
+                                   "secondary": secondary, "credits": {"balance": "0"},
+                                   "plan_type": plan}}
+        if extra:
+            payload["info"]["note"] = extra
+        return json.dumps({"timestamp": "t", "type": "event_msg", "payload": payload})
+
+    def _write(self, day_dir: Path, name: str, lines: list[str],
+               mtime: float | None = None) -> Path:
+        p = day_dir / name
+        p.write_text("\n".join(lines) + "\n")
+        if mtime is not None:
+            os.utime(p, (mtime, mtime))
+        return p
+
+    def test_mtime_beats_name(self) -> None:
+        now = dt.datetime.now(dt.UTC)
+        # An OLD-named file under an earlier day dir, but the freshest mtime.
+        self._write(self._day_dir(now, days_ago=3), "rollout-2020-01-01T00-00-00-old.jsonl",
+                    [self._line(42.0)], mtime=time.time())
+        # A NEW-named file under today's dir, but a stale mtime.
+        self._write(self._day_dir(now, days_ago=0), "rollout-2999-01-01T00-00-00-new.jsonl",
+                    [self._line(10.0)], mtime=time.time() - 99999)
+        q = srv._codex_quota(self.home)
+        self.assertTrue(q["available"])
+        self.assertEqual(q["usedPercent"], 42.0)   # newest mtime, not newest name
+
+    def test_last_line_wins(self) -> None:
+        now = dt.datetime.now(dt.UTC)
+        self._write(self._day_dir(now), "rollout-a.jsonl",
+                    [self._line(5.0), self._line(50.0), self._line(88.0)])
+        q = srv._codex_quota(self.home)
+        self.assertEqual(q["usedPercent"], 88.0)
+
+    def test_tail_window_only(self) -> None:
+        now = dt.datetime.now(dt.UTC)
+        # A valid rate_limits line at the very start, then >256KB of padding with
+        # no rate_limits: the tail read never reaches the start line.
+        padding = ["x" * 200 for _ in range(1500)]  # ~300KB
+        self._write(self._day_dir(now), "rollout-a.jsonl", [self._line(5.0), *padding])
+        q = srv._codex_quota(self.home)
+        self.assertFalse(q["available"])
+        self.assertEqual(q["reason"], "no-rollout-data")
+
+    def test_null_primary_and_secondary(self) -> None:
+        now = dt.datetime.now(dt.UTC)
+        self._write(self._day_dir(now), "rollout-a.jsonl",
+                    [self._line(0.0, primary=False, secondary=None)])
+        q = srv._codex_quota(self.home)
+        self.assertEqual(q, {"available": False, "reason": "no-rollout-data"})
+
+    def test_secondary_fallback(self) -> None:
+        now = dt.datetime.now(dt.UTC)
+        sec = {"used_percent": 55.0, "window_minutes": 300, "resets_at": 1784950000}
+        self._write(self._day_dir(now), "rollout-a.jsonl",
+                    [self._line(0.0, primary=False, secondary=sec)])
+        q = srv._codex_quota(self.home)
+        self.assertTrue(q["available"])
+        self.assertEqual(q["usedPercent"], 55.0)     # top-level trio falls back to secondary
+        self.assertIsNone(q["primary"])
+        self.assertEqual(q["secondary"]["usedPercent"], 55.0)
+
+    def test_malformed_lines_skipped(self) -> None:
+        now = dt.datetime.now(dt.UTC)
+        # A trailing line that contains the marker but is invalid JSON is skipped;
+        # the earlier valid line is used.
+        self._write(self._day_dir(now), "rollout-a.jsonl",
+                    [self._line(20.0), '{"rate_limits": THIS IS BROKEN}'])
+        q = srv._codex_quota(self.home)
+        self.assertTrue(q["available"])
+        self.assertEqual(q["usedPercent"], 20.0)
+
+    def test_missing_sessions_dir(self) -> None:
+        q = srv._codex_quota(self.home)   # nothing seeded
+        self.assertEqual(q, {"available": False, "reason": "no-rollout"})
+
+    def test_stale_seconds(self) -> None:
+        now = dt.datetime.now(dt.UTC)
+        self._write(self._day_dir(now), "rollout-a.jsonl", [self._line(30.0)],
+                    mtime=time.time() - 8000)
+        q = srv._codex_quota(self.home)
+        self.assertTrue(q["available"])
+        self.assertGreaterEqual(q["staleSeconds"], 7900)
+
+    def test_byname_fallback_when_no_dated_dir(self) -> None:
+        # A rollout under a very old (out-of-lookback) day dir is still found via
+        # the by-name fallback (newest year/month/day by name).
+        old = self.home / ".codex" / "sessions" / "2019" / "05" / "05"
+        old.mkdir(parents=True)
+        (old / "rollout-x.jsonl").write_text(self._line(7.0) + "\n")
+        q = srv._codex_quota(self.home)
+        self.assertTrue(q["available"])
+        self.assertEqual(q["usedPercent"], 7.0)
+
+
+class ProvidersQuotaFieldTests(unittest.TestCase):
+    """B2: the additive per-provider `quota` field on collect_providers. Codex
+    surfaces real rollout usage; cursor is tier-only; claude is not-exposed; an
+    absent CLI is cli-missing. The secrets rule is re-verified over the new
+    payload — the quota path reads only rollout jsonl, never a credential file."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        self.repo = base / "repo"
+        (self.repo / ".gluerun-state").mkdir(parents=True)
+        (self.repo / "gluerun.config.json").write_text(
+            json.dumps({"runner": "codex-run.sh", "env": {}}))
+        self.home = base / "home"
+        self.home.mkdir()
+        # Fake PATH: codex + cursor-agent + claude installed; grok absent.
+        self.bindir = base / "bin"
+        self.bindir.mkdir()
+        for name, body in (("codex", _FAKE_CODEX), ("cursor-agent", _FAKE_CURSOR),
+                           ("claude", _FAKE_CLAUDE)):
+            p = self.bindir / name
+            p.write_text(body)
+            p.chmod(0o755)
+        self.env = {"PATH": str(self.bindir), "HOME": str(self.home)}
+        srv._PROVIDERS_CACHE.invalidate()
+        self.addCleanup(srv._PROVIDERS_CACHE.invalidate)
+
+    def _seed_rollout(self, extra: str | None = None) -> None:
+        day = dt.datetime.now(dt.UTC)
+        d = self.home / ".codex/sessions" / f"{day.year:04d}/{day.month:02d}/{day.day:02d}"
+        d.mkdir(parents=True)
+        rl = {"limit_id": "codex",
+              "primary": {"used_percent": 30.0, "window_minutes": 10080, "resets_at": 1784950515},
+              "secondary": None, "credits": {"balance": "0"}, "plan_type": "prolite"}
+        info = {"note": extra} if extra else {}
+        (d / "rollout-x.jsonl").write_text(json.dumps(
+            {"timestamp": "t", "type": "event_msg",
+             "payload": {"type": "token_count", "info": info, "rate_limits": rl}}) + "\n")
+
+    def _providers(self):
+        payload = srv.collect_providers(self.repo, env=self.env, home=self.home)
+        return payload, {p["id"]: p for p in payload["providers"]}
+
+    def test_codex_quota_available(self) -> None:
+        self._seed_rollout()
+        _payload, by = self._providers()
+        q = by["codex"]["quota"]
+        self.assertTrue(q["available"])
+        self.assertEqual(q["usedPercent"], 30.0)
+        self.assertEqual(q["planType"], "prolite")
+        self.assertEqual(q["source"], "rollout")
+        self.assertIn("resetsAt", q)
+        self.assertIn("staleSeconds", q)
+
+    def test_dispatch_by_provider(self) -> None:
+        self._seed_rollout()
+        _payload, by = self._providers()
+        self.assertEqual(by["claude"]["quota"], {"available": False, "reason": "not-exposed"})
+        self.assertEqual(by["cursor"]["quota"], {"available": False, "reason": "tier-only"})
+        self.assertEqual(by["grok"]["quota"], {"available": False, "reason": "cli-missing"})
+
+    def test_codex_installed_but_no_rollout(self) -> None:
+        _payload, by = self._providers()   # codex on PATH, no sessions dir
+        self.assertFalse(by["codex"]["quota"]["available"])
+        self.assertEqual(by["codex"]["quota"]["reason"], "no-rollout")
+
+    def test_no_secret_values_leak_via_quota(self) -> None:
+        # A secret in a NON-rate_limits field of the rollout line must not surface;
+        # neither must a credential-file token (the quota path never reads it — codex
+        # auth resolves via the CLI probe / existence check, not by reading the file).
+        self._seed_rollout(extra="ROLLOUT_SECRET_XYZ")
+        (self.home / ".codex/auth.json").write_text('{"OPENAI_API_KEY":"CODEX_SECRET_KKK"}')
+        payload, by = self._providers()
+        self.assertTrue(by["codex"]["quota"]["available"])
+        blob = json.dumps(payload)
+        for secret in ("ROLLOUT_SECRET_XYZ", "CODEX_SECRET_KKK"):
+            self.assertNotIn(secret, blob)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

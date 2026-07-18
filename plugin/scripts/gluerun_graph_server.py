@@ -4333,6 +4333,191 @@ def _provider_rollup(out: dict[str, Any]) -> tuple[str, str]:
                        else "installed — auth state unknown")
 
 
+# --- subscription-quota probe (Codex-only real usage; SECRETS RULE) ---------- #
+#
+# Only Codex exposes real subscription usage headlessly: its rollout JSONL logs
+# carry a rate_limits object (used_percent / window / resets_at / plan_type).
+# Cursor exposes a tier only; every other runtime exposes nothing without reading
+# a credential file — which is FORBIDDEN. The Codex path reads ONLY rollout JSONL
+# files under ~/.codex/sessions, never any credential/auth file. ANY failure
+# degrades to an unavailable payload — the quota probe never raises into the probe.
+
+CODEX_QUOTA_TAIL_BYTES = 262144       # bytes tailed from the newest rollout jsonl
+CODEX_ROLLOUT_DAY_LOOKBACK = 14       # dated day-dir candidates per clock (UTC+local)
+
+
+def _codex_rollout_byname_fallback(sessions: Path) -> list[Path]:
+    """When no dated day-dir candidate exists (clock skew / stale machine), walk
+    the newest year/month by NAME and take the last 7 day dirs. Bounded, pure FS."""
+    def _latest_child(parent: Path) -> Path | None:
+        try:
+            names = sorted((e.name for e in os.scandir(parent)
+                            if e.is_dir(follow_symlinks=False)), reverse=True)
+        except OSError:
+            return None
+        return (parent / names[0]) if names else None
+
+    year = _latest_child(sessions)
+    month = _latest_child(year) if year is not None else None
+    if month is None:
+        return []
+    try:
+        days = sorted((month / e.name for e in os.scandir(month)
+                       if e.is_dir(follow_symlinks=False)),
+                      key=lambda p: p.name, reverse=True)
+    except OSError:
+        return []
+    return days[:7]
+
+
+def _codex_rollout_newest(home: Path) -> Path | None:
+    """Newest-BY-MTIME ``rollout-*.jsonl`` under ``~/.codex/sessions``. A rollout is
+    filed under the date its session STARTED, which can differ both from wall-clock
+    day and from the file's freshest mtime (a long-lived session keeps appending),
+    so recency by name is unreliable — mtime wins. Candidate day dirs are the last
+    14 days for BOTH the UTC and local 'today' (<=28 stats); a by-name fallback
+    covers the no-dated-dir case. Pure FS."""
+    sessions = home / ".codex" / "sessions"
+    if not sessions.is_dir():
+        return None
+    day_dirs: list[Path] = []
+    seen: set[str] = set()
+    for base in (dt.datetime.now(dt.UTC), dt.datetime.now()):
+        for i in range(CODEX_ROLLOUT_DAY_LOOKBACK):
+            d = base - dt.timedelta(days=i)
+            rel = f"{d.year:04d}/{d.month:02d}/{d.day:02d}"
+            if rel in seen:
+                continue
+            seen.add(rel)
+            cand = sessions / rel
+            if cand.is_dir():
+                day_dirs.append(cand)
+    if not day_dirs:
+        day_dirs = _codex_rollout_byname_fallback(sessions)
+    newest: Path | None = None
+    newest_mtime = -1.0
+    for day_dir in day_dirs:
+        try:
+            entries = list(os.scandir(day_dir))
+        except OSError:
+            continue
+        for e in entries:
+            if not (e.name.startswith("rollout-") and e.name.endswith(".jsonl")):
+                continue
+            try:
+                m = e.stat(follow_symlinks=False).st_mtime
+            except OSError:
+                continue
+            if m > newest_mtime:
+                newest_mtime, newest = m, Path(e.path)
+    return newest
+
+
+def _find_rate_limits(obj: Any, depth: int = 0) -> dict[str, Any] | None:
+    """Locate the rate_limits object inside a parsed rollout line. Codex nests it
+    under ``payload.rate_limits`` (a token_count event), but the envelope is
+    version-dependent, so search tolerantly to a bounded depth for a dict carrying
+    a ``rate_limits`` dict — or a dict that itself looks like one. Pure; depth<=4."""
+    if depth > 4 or obj is None:
+        return None
+    if isinstance(obj, dict):
+        rl = obj.get("rate_limits")
+        if isinstance(rl, dict):
+            return rl
+        if "limit_id" in obj or "primary" in obj or "secondary" in obj:
+            return obj
+        for value in obj.values():
+            found = _find_rate_limits(value, depth + 1)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = _find_rate_limits(value, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def _codex_quota(home: Path) -> dict[str, Any]:
+    """Codex subscription quota from the newest rollout JSONL's LAST rate_limits
+    record. Tails ~256KB (rollouts reach tens of MB), scans lines backwards for the
+    last one carrying rate_limits, and normalizes the snake_case shape to camelCase.
+    The top-level usedPercent/windowMinutes/resetsAt mirror ``primary`` (falling back
+    to ``secondary``); both null => no-rollout-data. SECRETS RULE: reads ONLY rollout
+    JSONL, never a credential file; ANY exception => unavailable, never raises."""
+    try:
+        newest = _codex_rollout_newest(home)
+        if newest is None:
+            return {"available": False, "reason": "no-rollout"}
+        st = newest.stat()
+        with newest.open("rb") as fh:
+            seeked = st.st_size > CODEX_QUOTA_TAIL_BYTES
+            if seeked:
+                fh.seek(st.st_size - CODEX_QUOTA_TAIL_BYTES)
+            data = fh.read()
+        lines = data.decode("utf-8", errors="replace").split("\n")
+        if seeked and lines:
+            lines = lines[1:]  # drop the partial first line the seek landed inside
+        rate_limits: dict[str, Any] | None = None
+        for line in reversed(lines):
+            if '"rate_limits"' not in line:
+                continue
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                parsed = json.loads(stripped)
+            except Exception:
+                continue
+            found = _find_rate_limits(parsed)
+            if found is not None:
+                rate_limits = found
+                break
+        if rate_limits is None:
+            return {"available": False, "reason": "no-rollout-data"}
+
+        def _window(side: Any) -> dict[str, Any] | None:
+            if not isinstance(side, dict):
+                return None
+            return {"usedPercent": side.get("used_percent"),
+                    "windowMinutes": side.get("window_minutes"),
+                    "resetsAt": side.get("resets_at")}
+
+        primary = _window(rate_limits.get("primary"))
+        secondary = _window(rate_limits.get("secondary"))
+        if primary is None and secondary is None:
+            return {"available": False, "reason": "no-rollout-data"}
+        lead = primary or secondary or {}
+        credits = rate_limits.get("credits")
+        return {
+            "available": True,
+            "usedPercent": lead.get("usedPercent"),
+            "windowMinutes": lead.get("windowMinutes"),
+            "resetsAt": lead.get("resetsAt"),
+            "primary": primary,
+            "secondary": secondary,
+            "planType": rate_limits.get("plan_type"),
+            "credits": credits if isinstance(credits, dict) else None,
+            "staleSeconds": max(0, int(time.time() - st.st_mtime)),
+            "source": "rollout",
+        }
+    except Exception:
+        return {"available": False, "reason": "rollout-parse-error"}
+
+
+def _provider_quota(pid: str, installed: bool, home: Path) -> dict[str, Any]:
+    """Per-provider subscription-quota dispatch. codex -> real rollout probe;
+    cursor -> tier-only (no headless usage endpoint); an absent CLI -> cli-missing;
+    everything else -> not-exposed (would require a forbidden credential read)."""
+    if not installed:
+        return {"available": False, "reason": "cli-missing"}
+    if pid == "codex":
+        return _codex_quota(home)
+    if pid == "cursor":
+        return {"available": False, "reason": "tier-only"}
+    return {"available": False, "reason": "not-exposed"}
+
+
 def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path) -> dict[str, Any]:
     binary = spec["binary"]
     exe = shutil.which(binary, path=env.get("PATH") or "")
@@ -4345,6 +4530,9 @@ def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path) -> di
         "envKeyPresent": {k: bool(env.get(k)) for k in spec.get("envKeys", [])},
         "runnerScript": spec["runnerScript"],
     }
+    # Additive quota field (gluerun.providers.v0 stays; not byte-pinned). Set on
+    # both the installed and not-installed paths so the field is always present.
+    out["quota"] = _provider_quota(spec["id"], exe is not None, home)
     if exe is None:
         out["status"], out["message"] = _provider_rollup(out)
         return out
