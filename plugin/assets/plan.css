@@ -446,12 +446,28 @@
 .pm-diagpill.is-failed { outline: 2px solid var(--tone-red-dot); }
 .pm-diag[data-selected="true"] .pm-diagpill { outline: 2px solid var(--ink); }
 .pm-diagpill .pmd-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); }
-.pm-footer { margin-top: 14px; display: flex; align-items: center; gap: 8px; padding: 0 14px 16px; color: var(--text-faint); font: 400 11px var(--font-sans); }
+/* footer is sticky-left (width:max-content) so the acyclicity line stays readable
+   at the pane's left edge however far the grid is scrolled right. */
+.pm-footer { margin-top: 14px; display: flex; align-items: center; gap: 8px; padding: 0 14px 16px; color: var(--text-faint); font: 400 11px var(--font-sans); position: sticky; left: 0; width: max-content; }
 .pm-footer-warn { color: var(--tone-amber-fg); }
 .pm-footer-warn .icon { width: 14px; height: 14px; }
 /* detail card floats in the pane corner (a scroll-host child) so it stays visible
    however far the grid is scrolled — the old absolute-in-content card went off. */
 .pm-detail { right: 16px; bottom: 14px; }
+
+/* follow-diagonal toolbar (a scroll-host child, top-right) — the .plan-dag-fit
+   recipe as a labelled pill; hidden when the grid fully fits (nothing to follow). */
+.pm-toolbar { position: absolute; top: 14px; right: 14px; z-index: 8; display: flex; gap: 8px; }
+.pm-follow {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px;
+  background: var(--surface-panel); border: 1px solid var(--border-default);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-xs); color: var(--text-secondary);
+  font: 600 11.5px var(--font-sans); cursor: pointer;
+  transition: box-shadow var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.pm-follow:hover { box-shadow: var(--shadow-md); color: var(--text-primary); }
+.pm-follow .icon { width: 14px; height: 14px; }
+.pm-follow[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--n-0); }
 
 /* ---- Timeline lens (flagship) ---- */
 :root { --tl-gutter: 210px; }

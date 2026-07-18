@@ -26,6 +26,7 @@ const PAD_V = 20;           // vertical breathing room (fit math)
 const CELL_MIN = 22, CELL_MAX = 44;
 const LG_CELL = 32;         // at/above this the row label stacks title over id
 const TONE = { ink: "var(--n-800)", blue: "var(--tone-blue-dot)", green: "var(--tone-green-dot)" };
+const FOLLOW_KEY = "gluerun.plan.mx.follow";
 
 const clamp = (lo, hi, v) => Math.max(lo, Math.min(hi, v));
 
@@ -33,8 +34,14 @@ let pane = null, sigLast = null, selectedId = null;
 let CELL = 27;                          // computed per build from the pane box
 let fitX = false, fitY = false;         // does the grid fit each axis (centre vs scroll)
 let order = [], nodesById = {}, depSets = {}, dependentsMap = {};
-let depCellEls = [], rowLabelEls = {}, colHeadEls = {}, diagEls = {}, detailEl = null, scrollEl = null;
+let depCellEls = [], rowLabelEls = {}, colHeadEls = {}, diagEls = {}, detailEl = null, scrollEl = null, toolbarEl = null;
 let resizeObs = null, resizeTimer = null;
+// Follow-diagonal: a horizontal scroll drives an equal vertical scroll so the eye
+// tracks the diagonal (marks + status pills). Default ON, persisted. lastLeft is
+// the previous scrollLeft; progScroll suppresses the follow during our own
+// programmatic scrolls (selection centring, post-rebuild restore).
+let followOn = (() => { try { return localStorage.getItem(FOLLOW_KEY) !== "0"; } catch (e) { return true; } })();
+let lastLeft = 0, progScroll = false;
 
 function stageIndexMap(dag) { const m = {}; (dag.stages || []).forEach((s, i) => { m[s.id] = i; }); return m; }
 
@@ -77,7 +84,7 @@ function build() {
   // column header row: a sticky corner spacer over the labels, then vertical ids
   let head = `<div class="pm-colhead pm-corner" style="width:${LABEL_W}px"></div>`;
   order.forEach((col, i) => {
-    head += `<div class="pm-colhead-cell" data-colhead="${escAttr(col.id)}" title="${escAttr(col.id)}" style="width:${CELL}px;${stageStart(i) ? "border-left:1px solid var(--border-strong)" : ""}">
+    head += `<div class="pm-colhead-cell" data-colhead="${escAttr(col.id)}" title="${escAttr(col.id)}" style="width:${CELL}px;${stageStart(i) ? "border-left:1px solid var(--n-400)" : ""}">
       <span class="pmch-stage">${stageStart(i) ? esc(col.stage.split("-")[0]) : ""}</span>
       <span class="pmch-id">${esc(col.id)}</span></div>`;
   });
@@ -87,7 +94,7 @@ function build() {
   order.forEach((row, rowIndex) => {
     let cells = "";
     order.forEach((col, colIndex) => {
-      const bl = stageStart(colIndex) ? "1px solid var(--border-strong)" : "1px solid var(--border-subtle)";
+      const bl = stageStart(colIndex) ? "1px solid var(--n-400)" : "1px solid var(--border-subtle)";
       if (row.id === col.id) {
         cells += `<button class="pm-cell pm-diag" data-diag="${escAttr(row.id)}" data-node="${escAttr(row.id)}" style="width:${CELL}px;height:${CELL}px;border-left:${bl}">${diagMark(row)}</button>`;
       } else {
@@ -97,7 +104,7 @@ function build() {
       }
     });
     const title = (nodesById[row.id].description || "").split(".")[0] || row.id;
-    rows += `<div class="pm-row" data-row="${escAttr(row.id)}" style="border-top:${stageStart(rowIndex) ? "1px solid var(--border-strong)" : "1px solid var(--border-subtle)"}">
+    rows += `<div class="pm-row" data-row="${escAttr(row.id)}" style="border-top:${stageStart(rowIndex) ? "1px solid var(--n-400)" : "1px solid var(--border-subtle)"}">
       <button class="pm-rowlabel" data-node="${escAttr(row.id)}" data-selected="false" title="${escAttr(row.id + " — " + title)}" style="width:${LABEL_W}px;height:${CELL}px">
         <span class="pmrl-text">
           <span class="pmrl-title">${esc(title)}</span>
@@ -107,11 +114,12 @@ function build() {
       </button>${cells}</div>`;
   });
 
-  // acyclicity footer (real topological sort)
+  // acyclicity footer (real topological sort); sticky-left so it stays readable
+  // however far the grid is scrolled right (width:max-content, see plan.css).
   const acyclic = isAcyclic(dag);
   const footer = acyclic
-    ? `<div class="pm-footer" style="width:${width}px"><span>All marks fall below the diagonal — every dependency points to an earlier node, so the plan is provably acyclic.</span></div>`
-    : `<div class="pm-footer pm-footer-warn" style="width:${width}px"><span>${icon("i-alert")} a dependency cycle was detected — the plan is not a DAG.</span></div>`;
+    ? `<div class="pm-footer"><span>${esc(n)} nodes — every dependency points to an earlier node; the plan is provably acyclic.</span></div>`
+    : `<div class="pm-footer pm-footer-warn"><span>${icon("i-alert")} a dependency cycle was detected — the plan is not a DAG.</span></div>`;
 
   pane.style.overflow = "hidden";
   pane.innerHTML =
@@ -125,6 +133,9 @@ function build() {
            </div>
          </div>
        </div>
+       <div class="pm-toolbar"${fitX && fitY ? " hidden" : ""}>
+         <button class="pm-follow" aria-pressed="${followOn}" title="Follow diagonal — scrolling right also scrolls down so the eye tracks the diagonal">${icon("i-arrowdown")}<span>Follow diagonal</span></button>
+       </div>
        <div class="plan-detail-card pm-detail" hidden></div>
      </div>`;
 
@@ -135,6 +146,8 @@ function build() {
   pane.querySelectorAll("[data-diag]").forEach((el) => { diagEls[el.dataset.diag] = el; });
   detailEl = pane.querySelector(".pm-detail");
   scrollEl = pane.querySelector(".plan-mx-scroll");
+  toolbarEl = pane.querySelector(".pm-toolbar");
+  lastLeft = scrollEl ? scrollEl.scrollLeft : 0;   // reset the follow baseline for the fresh scroller
   wire();
   repaint(null);
 }
@@ -210,6 +223,21 @@ function isAcyclic(dag) {
   return seen === dag.nodes.length;
 }
 
+// Follow-diagonal scroll linking. A horizontal scroll (wheel, trackpad, scrollbar
+// drag) echoes an equal delta into the vertical axis so the eye tracks the
+// diagonal. The vertical axis is otherwise free. Loop-free by construction: the
+// scrollTop write fires another scroll event, but scrollLeft is unchanged there
+// so dx === 0 and we return before writing again. progScroll suppresses the whole
+// thing during our own programmatic scrolls (selection centring, rebuild restore).
+function onScroll() {
+  if (!scrollEl) return;
+  const left = scrollEl.scrollLeft;
+  const dx = left - lastLeft;
+  lastLeft = left;                       // always track, even on a skipped event
+  if (progScroll || !followOn || dx === 0) return;
+  scrollEl.scrollTop += dx;
+}
+
 function wire() {
   const grid = pane.querySelector(".pm-grid");
   grid.addEventListener("click", (e) => { const b = e.target.closest("[data-node]"); if (b && bus.onNodeSelect) bus.onNodeSelect(b.dataset.node); });
@@ -219,6 +247,13 @@ function wire() {
     repaint(cell.dataset.colhead || cell.dataset.row);
   });
   grid.addEventListener("pointerleave", () => repaint(null));
+  if (scrollEl) scrollEl.addEventListener("scroll", onScroll, { passive: true });
+  const follow = pane.querySelector(".pm-follow");
+  if (follow) follow.addEventListener("click", () => {
+    followOn = !followOn;
+    try { localStorage.setItem(FOLLOW_KEY, followOn ? "1" : "0"); } catch (e) {}
+    follow.setAttribute("aria-pressed", String(followOn));
+  });
 }
 
 // The computed CELL folds into the signature so a size-band crossing rebuilds
@@ -246,6 +281,7 @@ function observeResize() {
         fitX = fit.x; fitY = fit.y;
         scrollEl.dataset.fitX = String(fitX);
         scrollEl.dataset.fitY = String(fitY);
+        if (toolbarEl) toolbarEl.hidden = fitX && fitY;   // hide the follow pill once it all fits
       }
     }, 120);
   });
@@ -259,20 +295,30 @@ export const lens = {
     const sig = currentSig();
     if (sig !== sigLast) {
       // Preserve the scroll position across a signature rebuild (a live tick must
-      // not yank the viewport back to the origin).
+      // not yank the viewport back to the origin) — under progScroll so the
+      // restore does not trip the follow handler, resyncing the baseline after.
       const sl = scrollEl ? scrollEl.scrollLeft : 0, st = scrollEl ? scrollEl.scrollTop : 0;
       build(); sigLast = sig;
-      if (scrollEl) { scrollEl.scrollLeft = sl; scrollEl.scrollTop = st; }
+      if (scrollEl) {
+        progScroll = true;
+        scrollEl.scrollLeft = sl; scrollEl.scrollTop = st;
+        requestAnimationFrame(() => { lastLeft = scrollEl ? scrollEl.scrollLeft : 0; progScroll = false; });
+      }
     }
   },
   applySelection(id) {
     selectedId = id; repaint(null);
-    const el = diagEls[id]; if (el) el.scrollIntoView({ block: "center", inline: "center" });
+    const el = diagEls[id]; if (!el) return;
+    // Centre the node without the follow handler adding extra vertical drift
+    // (scrollIntoView moves both axes); resync the baseline once it settles.
+    progScroll = true;
+    el.scrollIntoView({ block: "center", inline: "center" });
+    requestAnimationFrame(() => { lastLeft = scrollEl ? scrollEl.scrollLeft : 0; progScroll = false; });
   },
   unmount() {
     if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
     clearTimeout(resizeTimer);
     if (pane) pane.style.overflow = "";
-    pane = null; sigLast = null; depCellEls = []; scrollEl = null;
+    pane = null; sigLast = null; depCellEls = []; scrollEl = null; toolbarEl = null; progScroll = false;
   },
 };
