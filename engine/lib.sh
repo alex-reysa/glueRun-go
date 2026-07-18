@@ -4466,7 +4466,7 @@ gluerun_write_status() {
   local branch head ready active imported integrated decisions parked breaker stop
   branch="$(gluerun_current_branch 2>/dev/null || echo '?')"
   head="$(git -C "$GLUERUN_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-  ready="$(gluerun_list_ready_tasks 2>/dev/null | wc -l | tr -d ' ')"
+  ready="$(gluerun_list_status_ready_tasks 2>/dev/null | wc -l | tr -d ' ')"
   active="$(gluerun_active_lease_count 2>/dev/null || echo 0)"
   imported="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
   integrated="$(grep -c '"integration.integrated"' "$GLUERUN_EVENTS_FILE" 2>/dev/null || echo 0)"
