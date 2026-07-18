@@ -169,6 +169,60 @@ function integrationHtml(p) {
   </div>`;
 }
 
+// The subscription-quota block (0.10.0). Codex exposes real headless usage → a
+// gauge (usedPercent bar, tone warn ≥75 / error ≥90, window label + reset
+// countdown + planType chip + a stale hint when the rollout is >2h old). Authed
+// CLIs without a headless usage endpoint (cursor/claude → tier-only/not-exposed)
+// get a one-line "tier · quota not exposed by CLI". Everything else renders
+// nothing (cli-missing, no rollout data, parse error). Between integration + knob.
+function quotaBlockHtml(p) {
+  const q = p.quota;
+  if (!q) return "";
+  if (q.available) {
+    const pct = Math.max(0, Math.round(q.usedPercent || 0));
+    const tone = pct >= 90 ? "error" : pct >= 75 ? "warn" : "";
+    const meta = [windowLabel(q.windowMinutes), resetsIn(q.resetsAt), q.planType]
+      .filter(Boolean).map((m) => `<span>${esc(m)}</span>`).join(`<span class="pvq-dot">·</span>`);
+    const stale = (q.staleSeconds || 0) > 7200 ? `stale ${Math.round(q.staleSeconds / 3600)}h` : "";
+    const sec = (q.secondary && q.secondary.usedPercent != null)
+      ? `<span class="pvq-track pvq-track-sec" title="secondary window ${escAttr(Math.round(q.secondary.usedPercent) + "%")}"><span class="pvq-fill" style="width:${Math.max(0, Math.round(q.secondary.usedPercent))}%"></span></span>` : "";
+    return `<div class="pv-quota" data-tone="${tone}">
+      <div class="pvq-head"><span class="pvq-label">subscription usage</span><span class="pvq-pct mono">${pct}%</span></div>
+      <div class="pvq-tracks"><span class="pvq-track"><span class="pvq-fill" style="width:${pct}%"></span></span>${sec}</div>
+      <div class="pvq-meta">${meta}${stale ? `<span class="pvq-dot">·</span><span class="pvq-stale">${esc(stale)}</span>` : ""}</div>
+    </div>`;
+  }
+  if (q.reason === "tier-only" || q.reason === "not-exposed") {
+    if (p.authStatus !== "authenticated") return "";
+    const tier = p.plan ? `<span class="pvq-tierval">${esc(p.plan)}</span><span class="pvq-dot">·</span>` : "";
+    return `<div class="pv-quota pv-quota-tier">${tier}<span class="pvq-tiernote">quota not exposed by CLI</span></div>`;
+  }
+  return "";   // cli-missing / no-rollout-data / rollout-parse-error → nothing
+}
+
+// window-minutes → a human label (10080 = the 7-day plan window).
+function windowLabel(m) {
+  if (m == null) return "";
+  if (m === 10080) return "7-day";
+  if (m % 1440 === 0) return (m / 1440) + "-day";
+  if (m % 60 === 0) return (m / 60) + "h";
+  return m + "m";
+}
+
+// Client-computed "resets in …" from epoch-seconds resetsAt (past → "resetting…").
+function resetsIn(epochSec) {
+  if (!epochSec) return "";
+  const ms = epochSec * 1000 - Date.now();
+  if (ms <= 0) return "resetting…";
+  const totalMin = Math.round(ms / 60000);
+  const days = Math.floor(totalMin / 1440);
+  const hrs = Math.floor((totalMin % 1440) / 60);
+  const mins = totalMin % 60;
+  if (days > 0) return `resets in ${days}d ${hrs}h`;
+  if (hrs > 0) return `resets in ${hrs}h ${mins}m`;
+  return `resets in ${mins}m`;
+}
+
 function modelKnobHtml(p) {
   const key = MODEL_KEY[p.id];
   if (!key) return "";
@@ -216,6 +270,7 @@ function cardHtml(p) {
     ${authLineHtml(p)}
     ${envRowHtml(p)}
     ${integrationHtml(p)}
+    ${quotaBlockHtml(p)}
     ${modelKnobHtml(p)}
     <div class="pv-action">${actionButtonHtml(p)}</div>
   </article>`;
@@ -252,11 +307,18 @@ function signature() {
   if (PV.unavailable) return "unavailable";
   const d = PV.data;
   if (!d) return "loading";
-  const provSig = (d.providers || []).map((p) => [
-    p.id, p.status, p.authStatus, p.email, p.plan, p.version, p.installed,
-    p.isDefaultRunner, p.runnerPresent, (p.roles || []).join(","), p.lastUsedAt,
-    p.lastExitCode, p.recentSessions, Object.values(p.envKeyPresent || {}).join(""),
-  ].join("~")).join("|");
+  const provSig = (d.providers || []).map((p) => {
+    const q = p.quota || {};
+    return [
+      p.id, p.status, p.authStatus, p.email, p.plan, p.version, p.installed,
+      p.isDefaultRunner, p.runnerPresent, (p.roles || []).join(","), p.lastUsedAt,
+      p.lastExitCode, p.recentSessions, Object.values(p.envKeyPresent || {}).join(""),
+      // quota fields (additive) — rounded % + fixed resetsAt + reason + a coarse
+      // stale-threshold bit so the card repaints only on a real quota change.
+      q.available, q.usedPercent != null ? Math.round(q.usedPercent) : "", q.resetsAt,
+      q.reason, (q.staleSeconds || 0) > 7200,
+    ].join("~");
+  }).join("|");
   const envSig = PV.configEnv
     ? Object.keys(MODEL_KEY).map((id) => MODEL_KEY[id] + "=" + (PV.configEnv[MODEL_KEY[id]] || "")).join(",")
     : "noenv";

@@ -139,6 +139,32 @@
 .pv-model-save:disabled { opacity: 0.4; cursor: not-allowed; }
 .pv-model-key { flex: 1 0 100%; font-size: 9.5px; color: var(--text-faint); }
 
+/* subscription quota (0.10.0) — a real Codex usage gauge; a one-line tier note
+   for authed CLIs with no headless usage endpoint. Composes existing tones:
+   neutral fill escalating to coral (≥75%) then red (≥90%). */
+.pv-quota {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 10px 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle); background: var(--surface-sunken);
+}
+.pvq-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pvq-label { font: 600 9px var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
+.pvq-pct { font-size: 12.5px; font-weight: 700; color: var(--text-primary); }
+.pv-quota[data-tone="warn"] .pvq-pct { color: var(--tone-coral-fg); }
+.pv-quota[data-tone="error"] .pvq-pct { color: var(--tone-red-dot); }
+.pvq-tracks { display: flex; flex-direction: column; gap: 4px; }
+.pvq-track { height: 7px; border-radius: 999px; background: var(--n-200); overflow: hidden; }
+.pvq-track-sec { height: 4px; opacity: 0.75; }
+.pvq-fill { display: block; height: 100%; border-radius: 999px; background: var(--n-400); transition: width var(--dur-base) var(--ease-out); }
+.pv-quota[data-tone="warn"] .pvq-fill { background: var(--tone-coral-solid); }
+.pv-quota[data-tone="error"] .pvq-fill { background: var(--tone-red-dot); }
+.pvq-meta { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 10.5px; color: var(--text-meta); }
+.pvq-dot { color: var(--text-faint); }
+.pvq-stale { color: var(--text-faint); font-style: italic; }
+.pv-quota-tier { flex-direction: row; align-items: center; gap: 6px; padding: 8px 12px; }
+.pvq-tierval { font-size: 11.5px; font-weight: 600; color: var(--text-secondary); text-transform: capitalize; }
+.pvq-tiernote { font-size: 10.5px; color: var(--text-faint); }
+
 /* default-runner action */
 .pv-action { margin-top: 2px; }
 .pv-default-btn {

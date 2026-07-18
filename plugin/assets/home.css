@@ -158,3 +158,137 @@
 .home-hist-meta { display: flex; flex-direction: column; gap: 2px; }
 .home-hist-meta .hhm-k { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-meta); }
 .home-hist-meta .hhm-v { font-size: 13px; color: var(--text-primary); }
+
+/* 8. provider quota — an honest usage mix: a real Codex gauge, tier chips for
+   authed CLIs that don't expose headless usage. Gauge escalates neutral → coral
+   (≥75%) → red (≥90%); coral stays the only accent, status tones keep meaning. */
+.home-quota .hq-list { display: flex; flex-direction: column; gap: 8px; }
+.hq-item {
+  display: grid;
+  grid-template-columns: 76px minmax(80px, 1fr) 40px minmax(0, auto);
+  align-items: center; gap: 12px;
+  padding: 9px 13px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle); background: var(--surface-panel);
+}
+.hq-name { font-size: 12px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hq-tracks { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.hq-track { height: 7px; border-radius: 999px; background: var(--n-200); overflow: hidden; }
+.hq-track-sec { height: 4px; opacity: 0.75; }
+.hq-fill { display: block; height: 100%; border-radius: 999px; background: var(--n-400); transition: width var(--dur-base) var(--ease-out); }
+.hq-item[data-tone="warn"] .hq-fill { background: var(--tone-coral-solid); }
+.hq-item[data-tone="error"] .hq-fill { background: var(--tone-red-dot); }
+.hq-pct { font-size: 12px; font-weight: 700; color: var(--text-primary); text-align: right; }
+.hq-item[data-tone="warn"] .hq-pct { color: var(--tone-coral-fg); }
+.hq-item[data-tone="error"] .hq-pct { color: var(--tone-red-dot); }
+.hq-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; justify-self: end; }
+.hq-dot { color: var(--text-faint); }
+.hq-stale { color: var(--text-faint); font-style: italic; }
+/* tier-only providers (claude / cursor / …) — no headless usage endpoint */
+.hq-tier { display: flex; align-items: center; gap: 8px; }
+.hq-tierval { font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: capitalize; }
+.hq-tiernote { font-size: 10.5px; color: var(--text-faint); }
+
+/* 9. supervisor — deterministic stage line + latest LLM briefing + propose-only
+   chat. Calm warm-neutral chrome; coral marks operator-side turns + apply chips. */
+.home-sup { gap: 10px; }
+.home-sup-stage { font-size: 12.5px; font-weight: 600; color: var(--text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.home-sup-refresh {
+  margin-left: auto; flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px;
+  border: 1px solid var(--border-default); border-radius: var(--radius-pill);
+  background: var(--surface-page); color: var(--text-secondary); font-size: 11.5px; font-weight: 600; cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.home-sup-refresh:hover { border-color: var(--border-strong); background: var(--surface-soft); color: var(--text-primary); }
+.home-sup-refresh:disabled { opacity: 0.55; cursor: progress; }
+.home-sup-refresh .icon { width: 13px; height: 13px; }
+.home-sup-note { font-size: 11.5px; color: var(--text-secondary); }
+.home-sup-ago { color: var(--text-faint); }
+
+.home-sup-brief {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle); background: var(--surface-soft);
+}
+.home-sup-narr { font-size: 12.5px; line-height: 1.55; color: var(--text-primary); margin: 0; }
+.home-sup-sub { display: flex; gap: 10px; align-items: baseline; }
+.home-sup-k { flex: 0 0 38px; font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); padding-top: 2px; }
+.home-sup-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.home-sup-chip {
+  font-size: 11px; color: var(--tone-coral-fg);
+  padding: 2px 9px; border-radius: var(--radius-pill);
+  background: var(--tone-coral-bg); border: 1px solid var(--tone-coral-border);
+}
+.home-sup-steps { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.home-sup-steps li { font-size: 12px; color: var(--text-secondary); line-height: 1.45; }
+.home-sup-briefed { font-size: 10px; color: var(--text-faint); }
+
+.home-sup-off {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 11px 14px; border-radius: var(--radius-md);
+  border: 1px dashed var(--border-strong); background: var(--surface-sunken);
+}
+.home-sup-offtext { font-size: 12px; color: var(--text-secondary); }
+.home-sup-enable {
+  margin-left: auto; height: 28px; padding: 0 13px; border-radius: var(--radius-md);
+  border: 1px solid var(--tone-coral-border); background: var(--tone-coral-bg); color: var(--tone-coral-fg);
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.home-sup-enable:hover { background: var(--tone-coral-solid); color: var(--n-0); border-color: var(--tone-coral-solid); }
+.home-sup-enable:disabled { opacity: 0.55; cursor: progress; }
+
+/* chat — thread of alternating turns + an input row; draft rides CHAT.draft. */
+.home-sup-chatwrap { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.hchat-thread {
+  max-height: 320px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  background: var(--surface-panel);
+}
+.hchat-empty { font-size: 12px; color: var(--text-faint); padding: 6px 2px; line-height: 1.55; }
+.hchat-turn { display: flex; flex-direction: column; gap: 8px; }
+.hchat-q, .hchat-a { display: flex; flex-direction: column; gap: 3px; max-width: 88%; }
+.hchat-q { align-self: flex-end; align-items: flex-end; }
+.hchat-a { align-self: flex-start; }
+.hchat-role { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
+.hchat-text { font-size: 12.5px; line-height: 1.5; padding: 8px 12px; border-radius: var(--radius-md); }
+.hchat-q .hchat-text { background: var(--tone-coral-bg); border: 1px solid var(--tone-coral-border); color: var(--text-primary); border-bottom-right-radius: 3px; }
+.hchat-a .hchat-text { background: var(--surface-soft); border: 1px solid var(--border-subtle); color: var(--text-primary); border-bottom-left-radius: 3px; }
+.hchat-err { color: var(--tone-red-fg); }
+.hchat-pending .hchat-text { color: var(--text-meta); display: inline-flex; align-items: center; gap: 8px; }
+.hchat-dots { display: inline-flex; gap: 3px; }
+.hchat-dots span { width: 5px; height: 5px; border-radius: 999px; background: var(--text-faint); animation: hchat-pulse 1.2s var(--ease-inout) infinite; }
+.hchat-dots span:nth-child(2) { animation-delay: 0.2s; }
+.hchat-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes hchat-pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+.hchat-applies { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.hchat-apply {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px;
+  border: 1px solid var(--tone-coral-border); border-radius: var(--radius-pill);
+  background: var(--surface-page); color: var(--tone-coral-fg); font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.hchat-apply code { font-size: 10.5px; color: var(--text-secondary); }
+.hchat-apply:hover:not(:disabled) { background: var(--tone-coral-bg); }
+.hchat-apply:disabled, .hchat-apply[data-applied="true"] {
+  cursor: default; border-color: var(--tone-green-border); color: var(--tone-green-fg);
+  background: var(--tone-green-bg); opacity: 0.9;
+}
+.hchat-apply[data-applied="true"] code { color: var(--tone-green-fg); }
+
+.hchat-inputrow { display: flex; gap: 8px; align-items: flex-end; }
+.hchat-input {
+  flex: 1 1 auto; min-height: 38px; max-height: 120px; resize: none;
+  padding: 9px 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-default); background: var(--surface-page);
+  font: 500 12.5px var(--sans); color: var(--text-primary); line-height: 1.4;
+}
+.hchat-input:focus { outline: 0; border-color: color-mix(in srgb, var(--tone-coral-dot) 55%, transparent); background: var(--n-0); }
+.hchat-input::placeholder { color: var(--text-faint); }
+.hchat-send {
+  flex: 0 0 auto; height: 38px; padding: 0 18px; border-radius: var(--radius-md);
+  border: 1px solid var(--ink); background: var(--ink); color: var(--n-0);
+  font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.hchat-send:hover { opacity: 0.9; }
