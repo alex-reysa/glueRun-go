@@ -173,9 +173,50 @@ cmd_doctor() {
       printf "  warn  .gluerun-version (%s) and gluerun.config.json engineVersion (%s) disagree; .gluerun-version wins\n" "$pinfile" "$cfgpin"
     fi
   else printf "  warn  not in a git repo\n"; fi
-  # runner CLI (best-effort)
-  command -v claude >/dev/null 2>&1 && printf "  ok    claude CLI on PATH\n" || printf "  warn  claude CLI not on PATH\n"
-  command -v codex  >/dev/null 2>&1 && printf "  ok    codex CLI on PATH\n"  || printf "  warn  codex CLI not on PATH\n"
+  # runner provider CLIs (best-effort, warn-only) + one-line auth hint per provider.
+  # Auth hints use ONLY cheap file/env inference (0.9.0 provider registry) — NO CLI
+  # auth subprocess probes, so doctor stays fast. Presence never fails the check.
+  provider_auth_hint() { # <id> -> "auth: <one line>" via pure FS/env inference
+    case "$1" in
+      claude)
+        if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then echo "auth: ok (ANTHROPIC_API_KEY)"
+        elif [[ -f "$HOME/.claude/.credentials.json" ]]; then echo "auth: ok (.credentials.json)"
+        else echo "auth: unknown (may use Keychain; login: claude auth login)"; fi ;;
+      codex)
+        if [[ -n "${OPENAI_API_KEY:-}" ]]; then echo "auth: ok (OPENAI_API_KEY)"
+        elif [[ -f "$HOME/.codex/auth.json" ]]; then echo "auth: ok (auth.json)"
+        else echo "auth: none (login: codex login)"; fi ;;
+      gemini)
+        if [[ -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then echo "auth: ok (API key env)"
+        elif [[ -f "$HOME/.gemini/oauth_creds.json" ]]; then echo "auth: ok (oauth_creds.json)"
+        else echo "auth: none (login: run gemini once to sign in)"; fi ;;
+      opencode)
+        local ocf="$HOME/.local/share/opencode/auth.json"
+        if [[ -n "${OPENCODE_AUTH_CONTENT:-}" ]]; then echo "auth: ok (OPENCODE_AUTH_CONTENT)"
+        elif [[ -f "$ocf" ]]; then
+          local n; n="$(python3 -c 'import json,sys
+try: print(len(json.load(open(sys.argv[1]))))
+except Exception: print(0)' "$ocf" 2>/dev/null || echo 0)"
+          echo "auth: ok ($n provider entries)"
+        else echo "auth: none (login: opencode auth login)"; fi ;;
+      cursor)
+        if [[ -n "${CURSOR_API_KEY:-}" ]]; then echo "auth: ok (CURSOR_API_KEY)"
+        elif [[ -f "$HOME/.cursor/cli-config.json" ]] && grep -q '"authInfo"' "$HOME/.cursor/cli-config.json" 2>/dev/null; then echo "auth: ok (cli-config.json)"
+        else echo "auth: none (login: cursor-agent login)"; fi ;;
+      grok)
+        echo "auth: n/a (version probe only)" ;;
+      *) echo "auth: unknown" ;;
+    esac
+  }
+  local _prov _id _bin
+  for _prov in "claude:claude" "codex:codex" "gemini:gemini" "opencode:opencode" "cursor:cursor-agent" "grok:grok"; do
+    _id="${_prov%%:*}"; _bin="${_prov##*:}"
+    if command -v "$_bin" >/dev/null 2>&1; then
+      printf "  ok    %s CLI (%s) on PATH — %s\n" "$_id" "$_bin" "$(provider_auth_hint "$_id")"
+    else
+      printf "  warn  %s CLI (%s) not on PATH\n" "$_id" "$_bin"
+    fi
+  done
 
   # --- 0.5.0 preflights (each bit the field run) -------------------------------
   # Model id prefix sanity (invalid `gpt-5.6` failed only at planner runtime as
@@ -202,6 +243,30 @@ except Exception:
     case "$codex_model" in
       gpt-*|o[0-9]*|codex-*) printf "  ok    codex model: %s\n" "$codex_model" ;;
       *) printf "  warn  GLUERUN_CODEX_MODEL '%s' has an unrecognized prefix (typo?)\n" "$codex_model" ;;
+    esac
+  fi
+  # New 0.9.0 provider model keys (checked only when set; each CLI has its own
+  # default when the key is unset, in which case the runner omits the model flag).
+  local gemini_model opencode_model cursor_model
+  gemini_model="${GLUERUN_GEMINI_MODEL:-$(cfg_env_val GLUERUN_GEMINI_MODEL)}"
+  opencode_model="${GLUERUN_OPENCODE_MODEL:-$(cfg_env_val GLUERUN_OPENCODE_MODEL)}"
+  cursor_model="${GLUERUN_CURSOR_MODEL:-$(cfg_env_val GLUERUN_CURSOR_MODEL)}"
+  if [[ -n "$gemini_model" ]]; then
+    case "$gemini_model" in
+      gemini-*|auto) printf "  ok    gemini model: %s\n" "$gemini_model" ;;
+      *) printf "  warn  GLUERUN_GEMINI_MODEL '%s' has an unrecognized prefix (expect gemini-* or auto)\n" "$gemini_model" ;;
+    esac
+  fi
+  if [[ -n "$opencode_model" ]]; then
+    case "$opencode_model" in
+      */*|auto) printf "  ok    opencode model: %s\n" "$opencode_model" ;;
+      *) printf "  warn  GLUERUN_OPENCODE_MODEL '%s' should be provider/model (e.g. anthropic/claude-sonnet-4-5)\n" "$opencode_model" ;;
+    esac
+  fi
+  if [[ -n "$cursor_model" ]]; then
+    case "$cursor_model" in
+      auto|gpt-*|cursor-*|claude-*|sonnet*|opus*|o[0-9]*) printf "  ok    cursor model: %s\n" "$cursor_model" ;;
+      *) printf "  warn  GLUERUN_CURSOR_MODEL '%s' has an unrecognized prefix (typo?)\n" "$cursor_model" ;;
     esac
   fi
 
