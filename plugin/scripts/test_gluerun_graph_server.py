@@ -1726,6 +1726,9 @@ class NewCollectorsNoSubprocessTests(unittest.TestCase):
                 srv.collect_settings_view(repo)
                 # 0.8.0 plan-threads registry read (pure-FS).
                 srv.collect_plans(repo)
+                # 0.10.0 supervisor ask read collectors (pure-FS).
+                srv.collect_ask(repo, "ASK-does-not-exist")
+                srv.collect_asks(repo)
             finally:
                 subprocess.run = saved
         self.assertEqual(calls, [])
@@ -2935,6 +2938,359 @@ class ProvidersQuotaFieldTests(unittest.TestCase):
         blob = json.dumps(payload)
         for secret in ("ROLLOUT_SECRET_XYZ", "CODEX_SECRET_KKK"):
             self.assertNotIn(secret, blob)
+
+
+class CollectHomeSupervisorTests(unittest.TestCase):
+    """C1: collect_home's additive supervisor fields — loop from STATUS.md,
+    briefing filtered from supervisor/latest.json (None when absent), supervisor
+    {intervalMin, enabled} from config env. Schema stays gluerun.codex.home.v0."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state").mkdir()
+        (repo / "docs/orchestration/tasks").mkdir(parents=True)
+        srv._HOME_CACHE.invalidate()
+        self.addCleanup(srv._HOME_CACHE.invalidate)
+        return repo
+
+    def test_absent_supervisor_fields(self) -> None:
+        home = srv.collect_home(self._repo())
+        self.assertEqual(home["schema"], "gluerun.codex.home.v0")
+        self.assertIsNone(home["briefing"])
+        self.assertEqual(home["supervisor"], {"intervalMin": 0, "enabled": False})
+        self.assertEqual(home["loop"], {"iteration": None, "note": None, "updatedAt": None})
+
+    def test_loop_from_status_md(self) -> None:
+        repo = self._repo()
+        (repo / ".gluerun-state/STATUS.md").write_text(
+            "# gluerun Autonomous Status\n\nIteration: 7\nNote: grinding core\n"
+            "Updated: 2026-07-18T00:00:00Z\n")
+        home = srv.collect_home(repo)
+        self.assertEqual(home["loop"]["iteration"], 7)
+        self.assertEqual(home["loop"]["note"], "grinding core")
+        self.assertEqual(home["loop"]["updatedAt"], "2026-07-18T00:00:00Z")
+
+    def test_briefing_filtered_and_capped(self) -> None:
+        repo = self._repo()
+        sup = repo / ".gluerun-state/supervisor"
+        sup.mkdir()
+        (sup / "latest.json").write_text(json.dumps({
+            "schema": "gluerun.orchestration.supervisor-report.v0",
+            "stage": "working core", "narrative": "x" * 5000,
+            "risks": ["disk"], "nextSteps": ["watch"],
+            "proposedSettings": {"GLUERUN_MAX_CONCURRENT": "2"},
+            "generatedAt": "2026-07-18T00:00:00Z", "runId": "SUP-1",
+            "unknownExtra": "should-be-dropped"}))
+        home = srv.collect_home(repo)
+        b = home["briefing"]
+        self.assertEqual(b["stage"], "working core")
+        self.assertEqual(len(b["narrative"]), 4000)      # narrative capped
+        self.assertNotIn("unknownExtra", b)              # filtered to known keys
+        self.assertEqual(b["proposedSettings"], {"GLUERUN_MAX_CONCURRENT": "2"})
+        self.assertEqual(b["runId"], "SUP-1")
+
+    def test_supervisor_enabled_from_config(self) -> None:
+        repo = self._repo()
+        (repo / "gluerun.config.json").write_text(json.dumps(
+            {"env": {"GLUERUN_SUPERVISOR_INTERVAL_MIN": "15"}}))
+        home = srv.collect_home(repo)
+        self.assertEqual(home["supervisor"], {"intervalMin": 15, "enabled": True})
+        # invalid / zero -> disabled
+        (repo / "gluerun.config.json").write_text(json.dumps(
+            {"env": {"GLUERUN_SUPERVISOR_INTERVAL_MIN": "nope"}}))
+        srv._HOME_CACHE.invalidate()
+        self.assertFalse(srv.collect_home(repo)["supervisor"]["enabled"])
+
+
+class CollectAskTests(unittest.TestCase):
+    """C2: collect_ask state derivation + safety. Covers pending/running/done/
+    timeout passthrough, the crash rule (running + dead pid + stale ask.json →
+    error), proposedSettings whitelist filtering, the answer cap, id-regex + path
+    containment rejection, and the newest-first /api/asks list."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state/runs").mkdir(parents=True)
+        return repo
+
+    def _ask(self, repo: Path, run_id: str, ask_doc: dict, *,
+             answer: str | None = None, mtime: float | None = None) -> Path:
+        run_dir = repo / ".gluerun-state/runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "ask.json").write_text(json.dumps(ask_doc))
+        if answer is not None:
+            (run_dir / "answer.md").write_text(answer)
+        if mtime is not None:
+            os.utime(run_dir / "ask.json", (mtime, mtime))
+        return run_dir
+
+    def test_done_with_answer_and_proposed_whitelist(self) -> None:
+        repo = self._repo()
+        self._ask(repo, "ASK-1", {"state": "done", "question": "status?",
+                  "proposedSettings": {"GLUERUN_MAX_CONCURRENT": "4", "DATABASE_URL": "nope"},
+                  "answeredAt": "2026-07-18T00:00:00Z"}, answer="all good")
+        d = srv.collect_ask(repo, "ASK-1")
+        self.assertEqual(d["state"], "done")
+        self.assertEqual(d["answer"], "all good")
+        self.assertEqual(d["proposedSettings"], {"GLUERUN_MAX_CONCURRENT": "4"})  # non-whitelist dropped
+
+    def test_pending_and_running_passthrough(self) -> None:
+        repo = self._repo()
+        self._ask(repo, "ASK-2", {"state": "pending"})
+        self.assertEqual(srv.collect_ask(repo, "ASK-2")["state"], "pending")
+        self._ask(repo, "ASK-3", {"state": "running", "pid": os.getpid()})  # live pid
+        self.assertEqual(srv.collect_ask(repo, "ASK-3")["state"], "running")
+
+    def test_crash_rule(self) -> None:
+        repo = self._repo()
+        # running + dead pid + stale (>60s) ask.json -> error
+        self._ask(repo, "ASK-4", {"state": "running", "pid": 999999999},
+                  mtime=time.time() - 120)
+        self.assertEqual(srv.collect_ask(repo, "ASK-4")["state"], "error")
+        # running + dead pid but FRESH ask.json -> still running (not yet stale)
+        self._ask(repo, "ASK-5", {"state": "running", "pid": 999999999})
+        self.assertEqual(srv.collect_ask(repo, "ASK-5")["state"], "running")
+
+    def test_timeout_passthrough(self) -> None:
+        repo = self._repo()
+        self._ask(repo, "ASK-6", {"state": "timeout"})
+        self.assertEqual(srv.collect_ask(repo, "ASK-6")["state"], "timeout")
+
+    def test_answer_capped(self) -> None:
+        repo = self._repo()
+        self._ask(repo, "ASK-7", {"state": "done"}, answer="y" * (srv.ASK_ANSWER_CAP + 500))
+        self.assertEqual(len(srv.collect_ask(repo, "ASK-7")["answer"]), srv.ASK_ANSWER_CAP)
+
+    def test_bad_id_and_missing_dir(self) -> None:
+        repo = self._repo()
+        self.assertIsNone(srv.collect_ask(repo, "NOTASK-1"))     # wrong prefix
+        self.assertIsNone(srv.collect_ask(repo, "ASK-../etc"))   # traversal chars
+        self.assertIsNone(srv.collect_ask(repo, "ASK-nonexistent"))  # regex-ok, absent
+
+    def test_collect_asks_newest_first(self) -> None:
+        repo = self._repo()
+        self._ask(repo, "ASK-a", {"state": "done"}, answer="a", mtime=time.time() - 100)
+        self._ask(repo, "ASK-b", {"state": "pending"}, mtime=time.time())
+        payload = srv.collect_asks(repo)
+        self.assertEqual(payload["schema"], "gluerun.orchestration.asks.v0")
+        self.assertEqual([a["runId"] for a in payload["asks"]], ["ASK-b", "ASK-a"])
+
+
+class AskReportRouteTests(unittest.TestCase):
+    """C3: the /api/ask + /api/report write routes over HTTP. Popen is monkeypatched
+    (no engine script actually runs) so we can assert the 202 + staged files + argv
+    shape (list argv, never shell, start_new_session, question NOT in argv), the 429
+    busy/throttle guards, the 400s (long question, ?plan=), and 404s. GET
+    /api/ask/<id> + /api/asks are exercised too."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        (self.repo / ".gluerun-state/runs").mkdir(parents=True)
+        (self.repo / "gluerun.config.json").write_text('{"env": {}}')
+        # Monkeypatch Popen: record every call, never launch anything.
+        self.popen_calls: list = []
+        real_popen = srv.subprocess.Popen
+
+        def fake_popen(argv, **kwargs):
+            self.popen_calls.append((argv, kwargs))
+
+            class _Handle:
+                pid = 4242
+            return _Handle()
+
+        srv.subprocess.Popen = fake_popen
+        self.addCleanup(lambda: setattr(srv.subprocess, "Popen", real_popen))
+        self._saved_repo = srv.Handler.repo
+        srv.Handler.repo = self.repo
+        self.server = srv.ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+        def _teardown() -> None:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join()
+            srv.Handler.repo = self._saved_repo
+
+        self.addCleanup(_teardown)
+
+    def _req(self, method: str, path: str, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
+        headers = {}
+        raw = None
+        if body is not None:
+            raw = json.dumps(body).encode()
+            headers = {"Content-Type": "application/json", "Content-Length": str(len(raw))}
+        conn.request(method, path, body=raw, headers=headers)
+        resp = conn.getresponse()
+        payload = resp.read()
+        conn.close()
+        return resp.status, (json.loads(payload) if payload else None)
+
+    def test_post_ask_202_stages_files_and_argv_shape(self) -> None:
+        secret = "SEEKRIT_QUESTION_MARKER"
+        status, data = self._req("POST", "/api/ask",
+                                 body={"question": f"what is {secret} status?"})
+        self.assertEqual(status, 202)
+        run_id = data["runId"]
+        self.assertTrue(srv.ASK_ID_RE.match(run_id))
+        run_dir = self.repo / ".gluerun-state/runs" / run_id
+        self.assertTrue((run_dir / "question.md").is_file())
+        self.assertTrue((run_dir / "ask.json").is_file())
+        self.assertEqual(json.loads((run_dir / "ask.json").read_text())["state"], "pending")
+        # exactly one spawn, correct argv/kwargs shape
+        self.assertEqual(len(self.popen_calls), 1)
+        argv, kwargs = self.popen_calls[0]
+        self.assertEqual(argv[0], "bash")
+        self.assertTrue(argv[1].endswith("engine/ask.sh"))
+        self.assertEqual(argv[2:], ["--run-id", run_id])
+        self.assertTrue(kwargs.get("start_new_session"))
+        self.assertNotIn("shell", kwargs)                       # never shell=True
+        self.assertEqual(kwargs.get("cwd"), str(self.repo.resolve()))
+        # the question NEVER appears in the argv, but IS staged on disk
+        self.assertNotIn(secret, " ".join(str(a) for a in argv))
+        self.assertIn(secret, (run_dir / "question.md").read_text())
+
+    def test_busy_guard_429(self) -> None:
+        run_dir = self.repo / ".gluerun-state/runs/ASK-busy"
+        run_dir.mkdir(parents=True)
+        (run_dir / "ask.json").write_text(json.dumps(
+            {"state": "running", "pid": os.getpid(), "runId": "ASK-busy"}))
+        status, data = self._req("POST", "/api/ask", body={"question": "hi"})
+        self.assertEqual(status, 429)
+        self.assertEqual(data["activeRunId"], "ASK-busy")
+        self.assertEqual(len(self.popen_calls), 0)              # nothing spawned
+
+    def test_ask_400s(self) -> None:
+        status, data = self._req("POST", "/api/ask?plan=plan-x", body={"question": "hi"})
+        self.assertEqual(status, 400)                            # ?plan= rejected first
+        self.assertEqual(data, {"error": "archived plans are read-only"})
+        status, _ = self._req("POST", "/api/ask", body={"question": "y" * 2001})
+        self.assertEqual(status, 400)                            # >2000 chars
+        status, _ = self._req("POST", "/api/ask", body={"question": "   "})
+        self.assertEqual(status, 400)                            # empty
+        status, _ = self._req("POST", "/api/ask", body={"nope": 1})
+        self.assertEqual(status, 400)                            # missing question
+        self.assertEqual(len(self.popen_calls), 0)
+
+    def test_get_ask_and_asks_and_404(self) -> None:
+        run_dir = self.repo / ".gluerun-state/runs/ASK-x"
+        run_dir.mkdir(parents=True)
+        (run_dir / "ask.json").write_text(json.dumps(
+            {"state": "done", "runId": "ASK-x", "question": "q",
+             "proposedSettings": {"GLUERUN_MAX_CONCURRENT": "3"}}))
+        (run_dir / "answer.md").write_text("here is the answer")
+        status, data = self._req("GET", "/api/ask/ASK-x")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["state"], "done")
+        self.assertEqual(data["answer"], "here is the answer")
+        self.assertEqual(data["proposedSettings"], {"GLUERUN_MAX_CONCURRENT": "3"})
+        status, data = self._req("GET", "/api/asks")
+        self.assertEqual(status, 200)
+        self.assertIn("ASK-x", [a["runId"] for a in data["asks"]])
+        status, _ = self._req("GET", "/api/ask/ASK-nope")
+        self.assertEqual(status, 404)
+
+    def test_post_report_202_and_throttle(self) -> None:
+        status, data = self._req("POST", "/api/report")
+        self.assertEqual(status, 202)
+        self.assertEqual(data["state"], "requested")
+        self.assertEqual(len(self.popen_calls), 1)
+        argv, kwargs = self.popen_calls[0]
+        self.assertTrue(argv[1].endswith("engine/supervise.sh"))
+        self.assertEqual(argv[2:], ["--once"])
+        self.assertTrue(kwargs.get("start_new_session"))
+        # a fresh SUP run dir now throttles a second request (<60s)
+        (self.repo / ".gluerun-state/runs/SUP-recent").mkdir(parents=True)
+        status, data = self._req("POST", "/api/report")
+        self.assertEqual(status, 429)
+        self.assertIn("retryAfterSeconds", data)
+
+
+class SessionsAssistantTests(unittest.TestCase):
+    """C4: SUP-/ASK- run dirs are discovered as kind "assistant" (label = question
+    head or "supervisor briefing"); recommend_auto never auto-selects them; the
+    assistant-codex.log streams through read_session."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state/runs").mkdir(parents=True)
+        return repo
+
+    def _run(self, repo: Path, name: str, files: dict) -> Path:
+        run_dir = repo / ".gluerun-state/runs" / name
+        run_dir.mkdir(parents=True)
+        for fname, content in files.items():
+            (run_dir / fname).write_text(content)
+        return run_dir
+
+    def test_ask_classified_assistant_with_label(self) -> None:
+        repo = self._repo()
+        self._run(repo, "ASK-1", {
+            "assistant-codex.log": "chatter\n",
+            "ask.json": json.dumps({"state": "done", "question": "where are we in the plan?"}),
+            "answer.md": "we are here"})
+        ask = next(s for s in srv.discover_sessions(repo) if s["id"] == "ASK-1")
+        self.assertEqual(ask["kind"], "assistant")
+        self.assertEqual(ask["role"], "assistant")
+        self.assertIn("where are we", ask["label"])
+        self.assertTrue(any(f["name"] == "assistant-codex.log" for f in ask["logFiles"]))
+
+    def test_supervisor_classified_assistant(self) -> None:
+        repo = self._repo()
+        self._run(repo, "SUP-1", {
+            "supervisor-codex.log": "chatter\n",
+            "session-supervisor.json": json.dumps({"role": "supervisor"}),
+            "report-raw.json": "{}"})
+        sup = next(s for s in srv.discover_sessions(repo) if s["id"] == "SUP-1")
+        self.assertEqual(sup["kind"], "assistant")
+        self.assertEqual(sup["label"], "supervisor briefing")
+
+    def test_recommend_auto_never_picks_assistant(self) -> None:
+        auto = srv.recommend_auto([{"id": "ASK-1", "kind": "assistant", "live": True}])
+        self.assertEqual(auto, {"mode": "origin", "sessionIds": ["origin"]})
+
+    def test_read_session_streams_assistant_log(self) -> None:
+        repo = self._repo()
+        self._run(repo, "ASK-2", {
+            "assistant-codex.log": "assistant runner chatter\n",
+            "ask.json": json.dumps({"state": "done", "question": "q"})})
+        data = srv.read_session(repo, "ASK-2", None, 500, None, False)
+        self.assertIsNotNone(data)
+        self.assertEqual(data["file"], "assistant-codex.log")
+        self.assertTrue(any("assistant runner chatter" in json.dumps(line)
+                            for line in data["lines"]))
+
+    def test_stale_adapter_cannot_strip_assistant_logs(self) -> None:
+        # gluerun console always launches the server with GLUERUN_ENGINE_HOME set,
+        # and a pre-0.10 adapter snapshot's logFileMaps replaces CODEX_LOG_NAMES /
+        # PROMPT_FILE_NAMES wholesale (without the assistant names). The pinned
+        # ASSISTANT_* constants must keep ASK-/SUP- runs streaming regardless.
+        apply_adapter_with_restore(self, {
+            "schema": "gluerun.console-adapter.v0",
+            "logFileMaps": {"codexLogs": [["worker-codex.log", "worker"],
+                                          ["planner-codex.log", "planner"],
+                                          ["decider-codex.log", "decider"]],
+                            "plainLogs": ["gate-check.log"]}})
+        repo = self._repo()
+        self._run(repo, "ASK-9", {
+            "assistant-codex.log": "assistant runner chatter\n",
+            "ask-prompt.md": "rendered prompt\n",
+            "ask.json": json.dumps({"state": "done", "question": "q"})})
+        data = srv.read_session(repo, "ASK-9", None, 500, None, False)
+        self.assertIsNotNone(data)
+        self.assertEqual(data["file"], "assistant-codex.log")   # still the primary stream
+        names = [f["name"] for f in data["logFiles"]]
+        self.assertIn("ask-prompt.md", names)                    # prompt pane survives too
 
 
 if __name__ == "__main__":

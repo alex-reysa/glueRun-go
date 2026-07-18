@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -1448,13 +1449,23 @@ WORKER_ACTIVE_LEASE = {"running", "dispatched", "active"}
 PLAIN_LOG_NAMES = ("gate-check.log", "scope-check.log", "secret-scan.log")
 # Codex thread logs, in role-priority order (primary stream first).
 CODEX_LOG_NAMES = (("worker-codex.log", "worker"), ("auditor-codex.log", "auditor"),
-                   ("planner-codex.log", "planner"), ("decider-codex.log", "decider"))
+                   ("planner-codex.log", "planner"), ("decider-codex.log", "decider"),
+                   ("assistant-codex.log", "assistant"), ("supervisor-codex.log", "supervisor"))
 # Rendered per-run prompt files surfaced as secondary session panes (AFTER the
 # logs — logs stay the primary stream). decider-prompt-*.md is matched by prefix
 # (its suffix carries the recovery reason).
 PROMPT_FILE_NAMES = ("l2-prompt.md", "l2-active-prompt.md", "l2-repair-prompt.md",
                      "planner-prompt.md", "auditor-prompt.md", "auditor-active-prompt.md",
-                     "reaudit-prompt.md", "auditor-reaudit-prompt.md")
+                     "reaudit-prompt.md", "auditor-reaudit-prompt.md",
+                     "ask-prompt.md", "supervisor-prompt.md")
+# 0.10.0 supervisor/ask session files, ALSO pinned outside the adapter surface:
+# an adapter's logFileMaps replaces CODEX_LOG_NAMES/PROMPT_FILE_NAMES wholesale,
+# so a pre-0.10 engine-shipped or repo adapter snapshot would silently strip the
+# additions above and break assistant-session streaming. _session_log_files
+# unions these back in (deduped) so ASK-/SUP- runs stream regardless of adapter age.
+ASSISTANT_LOG_NAMES = (("assistant-codex.log", "assistant"),
+                       ("supervisor-codex.log", "supervisor"))
+ASSISTANT_PROMPT_NAMES = ("ask-prompt.md", "supervisor-prompt.md")
 # "<iso>  LEVEL  message" — the shape Codex emits for its plain stderr lines.
 ISO_LEVEL_LINE_RE = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+([A-Z]+)\s+(.*)$")
 # Codex plugin/skill loader chatter — hundreds of identical WARN lines per run that
@@ -1614,18 +1625,24 @@ def read_log_window(path: Path, cursor: int | None, max_bytes: int = SESSION_LOG
 
 
 def _session_log_files(run_dir: Path) -> list[dict[str, str]]:
-    """Streamable logs present in a run dir, primary (Codex thread) first."""
+    """Streamable logs present in a run dir, primary (Codex thread) first. The
+    0.10.0 assistant/supervisor names are unioned in from their pinned constants
+    (deduped) so an older adapter's wholesale logFileMaps override cannot strip
+    them from ASK-/SUP- run dirs."""
     files: list[dict[str, str]] = []
-    for name, role in CODEX_LOG_NAMES:
-        if (run_dir / name).is_file():
+    seen: set[str] = set()
+    for name, role in (*CODEX_LOG_NAMES, *ASSISTANT_LOG_NAMES):
+        if name not in seen and (run_dir / name).is_file():
+            seen.add(name)
             files.append({"name": name, "kind": "codex", "role": role})
     for name in PLAIN_LOG_NAMES:
         if (run_dir / name).is_file():
             files.append({"name": name, "kind": "plain"})
     # Rendered prompts come AFTER the logs so the log stream stays primary; they
     # are accepted by _resolve_session_log (which validates against this list).
-    for name in PROMPT_FILE_NAMES:
-        if (run_dir / name).is_file():
+    for name in (*PROMPT_FILE_NAMES, *ASSISTANT_PROMPT_NAMES):
+        if name not in seen and (run_dir / name).is_file():
+            seen.add(name)
             files.append({"name": name, "kind": "prompt"})
     for path in sorted(run_dir.glob("decider-prompt-*.md")):
         if path.is_file():
@@ -1703,6 +1720,10 @@ def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float) -> dict[s
         return _planner_session(repo, path, name, mtime, fresh, names)
     if "gate-check.log" in names or "audit.json" in names or "auditor-codex.log" in names:
         return _gate_session(path, name, mtime, fresh, names)
+    # 0.10.0 supervisor/ask run dirs (ASK-* / SUP-*): operator-initiated readonly
+    # sessions, listed as kind "assistant". recommend_auto never auto-picks them.
+    if "assistant-codex.log" in names or "supervisor-codex.log" in names or "ask.json" in names:
+        return _assistant_session(path, name, mtime, fresh, names)
     return None
 
 
@@ -1829,6 +1850,45 @@ def _gate_session(path: Path, name: str, mtime: float, fresh: bool, names: set[s
         "startedAt": None, "updatedAt": _iso_from_mtime(mtime),
         "logFiles": _session_log_files(path),
         "live": fresh, "_mtime": mtime, "_dir": str(path),
+    }
+    _attach_session_meta(sess, path)
+    return sess
+
+
+def _assistant_session(path: Path, name: str, mtime: float, fresh: bool,
+                       names: set[str]) -> dict[str, Any]:
+    """A SUP-/ASK- run dir: the supervisor briefing + operator-ask sessions
+    (0.10.0), listed as kind "assistant" (label = the question head for an ask, or
+    "supervisor briefing"). L0-level, operator-initiated: recommend_auto never
+    auto-selects it. The ask's ask.json state maps onto the shared UI vocabulary."""
+    is_ask = "ask.json" in names or name.startswith("ASK-")
+    if is_ask:
+        ask = read_json(path / "ask.json", None)
+        ask = ask if isinstance(ask, dict) else {}
+        raw_state = str(ask.get("state") or "")
+        question = str(ask.get("question") or "").strip()
+        label = (question[:80] + "…") if len(question) > 80 else (question or "operator question")
+        if raw_state == "done":
+            state = "integrated"
+        elif raw_state in ("error", "timeout"):
+            state = "failed"
+        elif raw_state in ("pending", "running"):
+            state = "active" if fresh else "stale"
+        else:
+            state = "active" if fresh else "idle"
+        role, phase = "assistant", "ask"
+    else:
+        label = "supervisor briefing"
+        state = "active" if fresh else "idle"
+        role, phase = "supervisor", "briefing"
+    sess = {
+        "id": name, "kind": "assistant", "layer": "L0", "role": role,
+        "taskId": None, "area": None, "runId": name, "label": label,
+        "state": state, "phase": phase,
+        "startedAt": None, "updatedAt": _iso_from_mtime(mtime),
+        "logFiles": _session_log_files(path),
+        "live": fresh and state == "active",
+        "_mtime": mtime, "_dir": str(path),
     }
     _attach_session_meta(sess, path)
     return sess
@@ -4875,6 +4935,41 @@ def _breaker_threshold(repo: Path) -> int:
         return 3
 
 
+# 0.10.0 supervisor briefing: the fields home surfaces from the latest briefing
+# document the engine's supervise.sh publishes. narrative is capped so a runaway
+# model can't bloat the home poll.
+_BRIEFING_KEYS = ("schema", "stage", "narrative", "risks", "nextSteps",
+                  "proposedSettings", "generatedAt", "runId")
+_BRIEFING_NARRATIVE_CAP = 4000
+
+
+def _load_supervisor_briefing(repo: Path) -> dict[str, Any] | None:
+    """The latest supervisor briefing (.gluerun-state/supervisor/latest.json),
+    filtered to known keys with the narrative capped. None when absent. Pure FS."""
+    raw = read_json(state_path(repo, "supervisor", "latest.json"), None)
+    if not isinstance(raw, dict):
+        return None
+    out = {key: raw[key] for key in _BRIEFING_KEYS if key in raw}
+    narrative = out.get("narrative")
+    if isinstance(narrative, str) and len(narrative) > _BRIEFING_NARRATIVE_CAP:
+        out["narrative"] = narrative[:_BRIEFING_NARRATIVE_CAP]
+    return out
+
+
+def _supervisor_config(repo: Path) -> dict[str, Any]:
+    """{intervalMin, enabled} from config env GLUERUN_SUPERVISOR_INTERVAL_MIN
+    (0/unset/invalid = disabled — matches the engine's inert default). Pure FS."""
+    cfg = read_json(repo / "gluerun.config.json", None)
+    env = cfg.get("env") if isinstance(cfg, dict) and isinstance(cfg.get("env"), dict) else {}
+    raw = env.get("GLUERUN_SUPERVISOR_INTERVAL_MIN")
+    try:
+        interval = int(str(raw).strip()) if raw not in (None, "") else 0
+    except (ValueError, TypeError):
+        interval = 0
+    interval = max(0, interval)
+    return {"intervalMin": interval, "enabled": interval > 0}
+
+
 def collect_home(repo: Path) -> dict[str, Any]:
     """The landing digest. Read-only; pure filesystem (no subprocesses)."""
     repo = repo.resolve()
@@ -5013,6 +5108,17 @@ def collect_home(repo: Path) -> dict[str, Any]:
     severities = {a["severity"] for a in attention}
     health = "blocker" if "blocker" in severities else ("watch" if "watch" in severities else "ok")
 
+    # --- supervisor loop / briefing (0.10.0; additive, pure-FS) ---------------
+    try:
+        status_text = (repo / STATUS_REL).read_text(errors="replace")
+    except OSError:
+        status_text = ""
+    status = parse_status_md(status_text) if status_text else {}
+    loop = {"iteration": status.get("iteration"), "note": status.get("note"),
+            "updatedAt": status.get("updatedAt")}
+    briefing = _load_supervisor_briefing(repo)
+    supervisor = _supervisor_config(repo)
+
     return {
         "schema": "gluerun.codex.home.v0",
         "generatedAt": utc_now(),
@@ -5029,6 +5135,9 @@ def collect_home(repo: Path) -> dict[str, Any]:
         "lastActivityAt": last_activity,
         "activityByDay": activity_by_day,
         "notable": tail[-12:],
+        "loop": loop,
+        "briefing": briefing,
+        "supervisor": supervisor,
     }
 
 
@@ -5038,6 +5147,218 @@ _HOME_CACHE = _ComputeCache(collect_home, 6.0)
 def load_home(repo: Path) -> dict[str, Any]:
     repo = repo.resolve()
     return _HOME_CACHE.get(str(repo), repo)
+
+
+# --------------------------------------------------------------------------- #
+# Supervisor ask / report (gluerun.orchestration.ask.v0)                       #
+# --------------------------------------------------------------------------- #
+#
+# The console's ONLY two write endpoints beyond /api/settings. Each POST is a
+# DELIBERATE subprocess exception (a spawner, not a collector): it launches an
+# engine script (engine/ask.sh, engine/supervise.sh) via subprocess.Popen with a
+# list argv (NEVER shell=True), cwd=repo, start_new_session=True so the readonly
+# runner outlives the request. The operator question transits question.md on disk
+# and NEVER a runner argv. The GET side (collect_ask/collect_asks) stays pure-FS.
+
+ASK_ID_RE = re.compile(r"^ASK-[A-Za-z0-9-]+$")
+ASK_QUESTION_MAX = 2000            # chars accepted on POST /api/ask (post-CR-strip)
+ASK_QUESTION_STORE_CAP = 280       # question head persisted (mirrors the engine)
+ASK_ANSWER_CAP = 32768             # answer.md bytes returned by /api/ask/<id>
+ASK_LIST_LIMIT = 20                # newest ASK runs on /api/asks
+ASK_LIST_ANSWER_CAP = 2000         # answer head kept per /api/asks list entry
+ASK_BUSY_SCAN = 10                 # newest ASK dirs inspected for the busy guard
+ASK_TOKEN_BYTES = 2               # token_hex bytes in a minted ASK id (engine parity)
+ASK_CRASH_STALE_SECONDS = 60.0     # running + dead pid + stale ask.json => crashed
+REPORT_MIN_INTERVAL_SECONDS = 60.0  # throttle window for POST /api/report
+
+_ASK_SPAWN_LOCK = threading.Lock()
+_REPORT_SPAWN_LOCK = threading.Lock()
+
+
+def _validate_ask_question(raw: str) -> tuple[bool, str]:
+    """Sanitize + bound an operator question: strip CR, reject other C0 control
+    chars (except \\n and \\t), cap at 2000 chars, reject empty. Returns
+    (ok, cleaned_or_error)."""
+    q = raw.replace("\r", "")
+    if len(q) > ASK_QUESTION_MAX:
+        return False, f"question too long (max {ASK_QUESTION_MAX} chars)"
+    if any(ord(ch) < 0x20 and ch not in ("\n", "\t") for ch in q):
+        return False, "question contains control characters"
+    q = q.strip()
+    if not q:
+        return False, "question must not be empty"
+    return True, q
+
+
+def _ask_dirs_newest(repo: Path, limit: int) -> list[tuple[float, Path, str]]:
+    """(mtime, path, name) for the newest ``limit`` ASK-* run dirs. Pure FS."""
+    runs_root = state_path(repo, "runs")
+    out: list[tuple[float, Path, str]] = []
+    if runs_root.is_dir():
+        try:
+            for entry in os.scandir(runs_root):
+                if entry.name.startswith("ASK-") and entry.is_dir(follow_symlinks=False):
+                    out.append((_safe_mtime(Path(entry.path)), Path(entry.path), entry.name))
+        except OSError:
+            pass
+    out.sort(key=lambda t: t[0], reverse=True)
+    return out[:limit]
+
+
+def _active_ask(repo: Path) -> str | None:
+    """runId of a currently-running ask (state running + a live pid) among the
+    newest few ASK dirs, else None. Backs the single-flight busy guard."""
+    for _mtime, path, name in _ask_dirs_newest(repo, ASK_BUSY_SCAN):
+        ask = read_json(path / "ask.json", None)
+        if (isinstance(ask, dict) and str(ask.get("state")) == "running"
+                and _pid_alive(ask.get("pid"))):
+            return name
+    return None
+
+
+def _ask_state(ask: dict[str, Any], ask_json_path: Path) -> str:
+    """Derive the reported ask state, applying the crash rule: a `running` ask
+    whose pid is dead and whose ask.json has gone stale (>60s) is a crashed engine
+    process, surfaced as `error`."""
+    state = str(ask.get("state") or "pending")
+    if state == "running":
+        mtime = _safe_mtime(ask_json_path)
+        stale = (time.time() - mtime) if mtime else 0.0
+        if not _pid_alive(ask.get("pid")) and stale > ASK_CRASH_STALE_SECONDS:
+            return "error"
+    return state
+
+
+def collect_ask(repo: Path, run_id: str, *, answer_cap: int = ASK_ANSWER_CAP) -> dict[str, Any] | None:
+    """One ASK run's live state (pure FS; id regex + path containment). Derives a
+    terminal `error` when the engine crashed mid-run. `proposedSettings` are
+    re-filtered through the settings write whitelist (defense in depth — the engine
+    already restricts them). None when the run dir is absent / outside runs/."""
+    repo = repo.resolve()
+    if not ASK_ID_RE.match(run_id):
+        return None
+    runs_root = state_path(repo, "runs").resolve()
+    run_dir = (runs_root / run_id).resolve()
+    if run_dir.parent != runs_root or not run_dir.is_dir():
+        return None
+    ask = read_json(run_dir / "ask.json", None)
+    ask = ask if isinstance(ask, dict) else {}
+    state = _ask_state(ask, run_dir / "ask.json")
+    try:
+        answer = (run_dir / "answer.md").read_text(errors="replace")[:answer_cap]
+    except OSError:
+        answer = None
+    proposed: dict[str, str] = {}
+    raw_proposed = ask.get("proposedSettings")
+    if isinstance(raw_proposed, dict):
+        whitelist, _kinds = _settings_write_spec()
+        proposed = {str(k): str(v) for k, v in raw_proposed.items() if k in whitelist}
+    return {
+        "schema": "gluerun.orchestration.ask.v0",
+        "runId": run_id,
+        "state": state,
+        "question": str(ask.get("question") or "")[:ASK_QUESTION_STORE_CAP],
+        "createdAt": ask.get("createdAt"),
+        "updatedAt": ask.get("updatedAt"),
+        "answeredAt": ask.get("answeredAt"),
+        "answer": answer,
+        "proposedSettings": proposed,
+    }
+
+
+def collect_asks(repo: Path) -> dict[str, Any]:
+    """Newest-20 ASK runs as a list (pure FS). List entries keep only an answer
+    head; the full answer is fetched per-run via /api/ask/<id>."""
+    repo = repo.resolve()
+    asks: list[dict[str, Any]] = []
+    for _mtime, _path, name in _ask_dirs_newest(repo, ASK_LIST_LIMIT):
+        detail = collect_ask(repo, name, answer_cap=ASK_LIST_ANSWER_CAP)
+        if detail is not None:
+            asks.append(detail)
+    return {"schema": "gluerun.orchestration.asks.v0", "generatedAt": utc_now(), "asks": asks}
+
+
+def _spawn_engine_script(repo: Path, script: str, args: list[str]) -> None:
+    """Launch an engine script detached from the request. DELIBERATE subprocess
+    exception: a list argv (never shell=True), cwd=repo, start_new_session=True so
+    the readonly runner survives the HTTP response; GLUERUN_ROOT is pinned to the
+    served repo (lib.sh honors it). Inherits the server env otherwise (the console
+    sets GLUERUN_ENGINE_HOME; the child self-resolves it from its own path too)."""
+    engine_script = _engine_dir() / script
+    child_env = {**os.environ, "GLUERUN_ROOT": str(repo)}
+    subprocess.Popen(
+        ["bash", str(engine_script), *args],
+        cwd=str(repo), env=child_env,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def spawn_ask(repo: Path, question: str) -> tuple[int, dict[str, Any]]:
+    """Mint an ASK run, stage question.md + ask.json{pending}, and spawn
+    engine/ask.sh detached. The question is written to disk and NEVER passed in the
+    runner argv. Returns (202, {runId,...}) or (429, {...activeRunId}) when an ask
+    is already running. The mint + spawn are serialized so two POSTs can't race."""
+    repo = Path(repo).resolve()
+    with _ASK_SPAWN_LOCK:
+        active = _active_ask(repo)
+        if active is not None:
+            return 429, {"error": "an ask is already running", "activeRunId": active}
+        stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+        run_id = f"ASK-{stamp}-{secrets.token_hex(ASK_TOKEN_BYTES)}"
+        run_dir = state_path(repo, "runs", run_id)
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            _atomic_write_text(run_dir / "question.md", question + "\n")
+            now = utc_now()
+            _atomic_write_text(run_dir / "ask.json", json.dumps({
+                "schema": "gluerun.orchestration.ask.v0", "runId": run_id,
+                "state": "pending", "question": question[:ASK_QUESTION_STORE_CAP],
+                "createdAt": now, "updatedAt": now,
+            }, indent=2) + "\n")
+            _spawn_engine_script(repo, "ask.sh", ["--run-id", run_id])
+        except OSError as exc:
+            return 500, {"error": f"could not start ask: {exc}"}
+        return 202, {"runId": run_id, "state": "pending"}
+
+
+def _supervisor_last_activity(repo: Path) -> float | None:
+    """Freshest signal of supervisor activity: max of the engine's
+    supervisor/last-run epoch stamp and the newest SUP-* run dir mtime. None when
+    no briefing has ever run. Backs the POST /api/report throttle."""
+    times: list[float] = []
+    stamp = state_path(repo, "supervisor", "last-run")
+    try:
+        times.append(float(stamp.read_text().strip()))
+    except (OSError, ValueError):
+        pass
+    runs_root = state_path(repo, "runs")
+    if runs_root.is_dir():
+        try:
+            for entry in os.scandir(runs_root):
+                if entry.name.startswith("SUP-") and entry.is_dir(follow_symlinks=False):
+                    times.append(_safe_mtime(Path(entry.path)))
+        except OSError:
+            pass
+    return max(times) if times else None
+
+
+def spawn_report(repo: Path) -> tuple[int, dict[str, Any]]:
+    """Spawn engine/supervise.sh --once detached (same deliberate-subprocess
+    exception as spawn_ask). 429 when a briefing ran within the last 60s (covers
+    both an in-flight SUP run and a just-finished one). Returns (202, {...})."""
+    repo = Path(repo).resolve()
+    with _REPORT_SPAWN_LOCK:
+        last = _supervisor_last_activity(repo)
+        if last is not None and (time.time() - last) < REPORT_MIN_INTERVAL_SECONDS:
+            wait = int(REPORT_MIN_INTERVAL_SECONDS - (time.time() - last)) + 1
+            return 429, {"error": "a briefing ran within the last minute",
+                         "retryAfterSeconds": max(1, wait)}
+        try:
+            _spawn_engine_script(repo, "supervise.sh", ["--once"])
+        except OSError as exc:
+            return 500, {"error": f"could not start briefing: {exc}"}
+        return 202, {"state": "requested"}
 
 
 # --------------------------------------------------------------------------- #
@@ -5706,6 +6027,19 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/home":
             self.send_json(load_home(self.repo))
             return
+        if route == "/api/asks":
+            # Live-only (like /api/home): the supervisor ask thread is always the
+            # live machine's; a ?plan= param is ignored.
+            self.send_json(collect_asks(self.repo))
+            return
+        if route.startswith("/api/ask/"):
+            run_id = unquote(route[len("/api/ask/"):]).strip("/")
+            detail = collect_ask(self.repo, run_id)
+            if detail is None:
+                self.send_json({"error": f"ask not found: {run_id}"}, 404)
+                return
+            self.send_json(detail)
+            return
         if route == "/api/plans":
             self.send_json(load_plans(self.repo))
             return
@@ -5747,17 +6081,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json({"error": "not found"}, 404)
 
-    def do_POST(self) -> None:
-        # The console's sole write route: POST /api/settings. Everything else 404s.
-        parsed = urlparse(self.path)
-        # Archived plans are read-only mini-repos: reject any write scoped to one
-        # before touching the live config.
-        if parse_qs(parsed.query).get("plan"):
-            self.send_json({"error": "archived plans are read-only"}, 400)
-            return
-        if parsed.path != "/api/settings":
-            self.send_json({"error": "not found"}, 404)
-            return
+    def _read_json_body(self, limit: int = 65536) -> tuple[bool, Any]:
+        """Read + JSON-parse a request body, sending the 400 itself on any framing
+        or parse error. Returns (ok, value); on ok the value is the parsed JSON (an
+        empty body parses to {}). Shared by the /api/ask + /api/report write routes;
+        /api/settings keeps its own byte-identical reader."""
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None:
+            self.send_json({"error": "Content-Length required"}, 400)
+            return False, None
+        try:
+            length = int(raw_len)
+        except ValueError:
+            self.send_json({"error": "invalid Content-Length"}, 400)
+            return False, None
+        if length < 0 or length > limit:
+            self.send_json({"error": "request body too large"}, 400)
+            return False, None
+        body = self.rfile.read(length) if length else b""
+        if not body:
+            return True, {}
+        try:
+            return True, json.loads(body.decode("utf-8"))
+        except Exception:
+            self.send_json({"error": "malformed JSON body"}, 400)
+            return False, None
+
+    def _post_settings(self) -> None:
+        # The console's primary write route; behavior is byte-identical to pre-0.10.
         raw_len = self.headers.get("Content-Length")
         if raw_len is None:
             self.send_json({"error": "Content-Length required"}, 400)
@@ -5781,6 +6132,51 @@ class Handler(BaseHTTPRequestHandler):
             return
         status, resp = apply_settings_changes(self.repo, payload["changes"])
         self.send_json(resp, status)
+
+    def _post_ask(self) -> None:
+        # Deliberate spawner (not a collector): stages the question on disk and
+        # launches engine/ask.sh — the question NEVER transits the runner argv.
+        ok, payload = self._read_json_body()
+        if not ok:
+            return
+        if not isinstance(payload, dict):
+            self.send_json({"error": 'body must be {"question": "..."}'}, 400)
+            return
+        question = payload.get("question")
+        if not isinstance(question, str):
+            self.send_json({"error": "question must be a string"}, 400)
+            return
+        valid, cleaned = _validate_ask_question(question)
+        if not valid:
+            self.send_json({"error": cleaned}, 400)
+            return
+        status, resp = spawn_ask(self.repo, cleaned)
+        self.send_json(resp, status)
+
+    def _post_report(self) -> None:
+        # Deliberate spawner: launches engine/supervise.sh --once (throttled).
+        status, resp = spawn_report(self.repo)
+        self.send_json(resp, status)
+
+    def do_POST(self) -> None:
+        # Write routes only: /api/settings, /api/ask, /api/report. Everything else
+        # 404s. Archived plans are read-only mini-repos: reject any write scoped to
+        # one before touching live state.
+        parsed = urlparse(self.path)
+        if parse_qs(parsed.query).get("plan"):
+            self.send_json({"error": "archived plans are read-only"}, 400)
+            return
+        route = parsed.path
+        if route == "/api/settings":
+            self._post_settings()
+            return
+        if route == "/api/ask":
+            self._post_ask()
+            return
+        if route == "/api/report":
+            self._post_report()
+            return
+        self.send_json({"error": "not found"}, 404)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
