@@ -1712,23 +1712,38 @@ print(json.dumps(data, separators=(",", ":")))
 PY
 }
 
-# List task files whose Status header equals "ready", sorted by task id.
-gluerun_list_ready_tasks() {
-  local f status
+# List task files whose Status header equals "ready", sorted by task id, without
+# applying dispatch duplicate policy. A single parser process keeps queue
+# telemetry linear even when a campaign has dozens of ready tasks.
+gluerun_list_status_ready_tasks() {
   [[ -d "$GLUERUN_TASKS_DIR" ]] || return 0
+  python3 - "$GLUERUN_TASKS_DIR" <<'PY'
+import pathlib
+import sys
+
+tasks_dir = pathlib.Path(sys.argv[1])
+for path in sorted(tasks_dir.glob("TASK-*.md")):
+    if path.name == "TEMPLATE.md" or not path.is_file():
+        continue
+    try:
+        ready = any(line.strip().lower() == "status: ready" for line in path.open(encoding="utf-8"))
+    except OSError:
+        continue
+    if ready:
+        print(path)
+PY
+}
+
+# List ready task files after applying the legacy duplicate-dispatch policy.
+gluerun_list_ready_tasks() {
+  local f
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    case "$(basename "$f")" in
-      TEMPLATE.md) continue ;;
-    esac
-    status="$(gluerun_task_field "$f" status 2>/dev/null || true)"
-    if [[ "$status" == "ready" ]]; then
-      if [[ "${GLUERUN_SKIP_DUPLICATE_READY_TASKS:-1}" == "1" ]] && gluerun_find_duplicate_task_signature "$f" "" dispatch >/dev/null 2>&1; then
-        continue
-      fi
-      echo "$f"
+    if [[ "${GLUERUN_SKIP_DUPLICATE_READY_TASKS:-1}" == "1" ]] && gluerun_find_duplicate_task_signature "$f" "" dispatch >/dev/null 2>&1; then
+      continue
     fi
-  done < <(find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
+    echo "$f"
+  done < <(gluerun_list_status_ready_tasks)
 }
 
 # Select a deterministic ready frontier for canonical parallel dispatch.
@@ -4759,7 +4774,7 @@ gluerun_write_origin_state() {
   # Snapshot telemetry should not pay the legacy O(ready × tasks) duplicate
   # signature scan. The dispatch frontier performs the authoritative duplicate,
   # dependency, lease, and scope checks before launching any worker.
-  ready_json="$(GLUERUN_SKIP_DUPLICATE_READY_TASKS=0 gluerun_list_ready_tasks | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
+  ready_json="$(gluerun_list_status_ready_tasks | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
   if [[ -d "$GLUERUN_LEASES_DIR" ]]; then
     leases_json="$(find "$GLUERUN_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
   else

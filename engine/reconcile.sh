@@ -247,7 +247,7 @@ if [[ "$mode" == "actuate" ]]; then
   # parser also enforces dependencies, leases, and scope conflicts. Re-running
   # the legacy signature scan once per ready task makes large campaigns spend
   # minutes here before every dispatch cycle.
-  mapfile -t ready_tasks < <(GLUERUN_SKIP_DUPLICATE_READY_TASKS=0 gluerun_list_ready_tasks)
+  mapfile -t ready_tasks < <(gluerun_list_status_ready_tasks)
   base_sha="$(git -C "$GLUERUN_ROOT" rev-parse "$GLUERUN_TARGET_BRANCH")"
   batch_id="$run_id-batch"
 
@@ -262,7 +262,7 @@ if [[ "$mode" == "actuate" ]]; then
     echo "actuation: ready queue empty; attempting gate promotion..."
     promo_out="$("${GLUERUN_PROMOTER:-$SCRIPT_DIR/promote-gate.sh}" --from-reconcile --frontier 2>&1)" || true
     printf '%s\n' "$promo_out" | sed 's/^/  promotion: /'
-    mapfile -t ready_tasks < <(GLUERUN_SKIP_DUPLICATE_READY_TASKS=0 gluerun_list_ready_tasks)
+    mapfile -t ready_tasks < <(gluerun_list_status_ready_tasks)
   fi
 
   # With L1 parallelism enabled, plan several independent DAG nodes concurrently
@@ -294,7 +294,7 @@ if [[ "$mode" == "actuate" ]]; then
     fi
     [[ "$planner_failures_this_run" =~ ^[0-9]+$ ]] || planner_failures_this_run=0
     [[ "$l1_import_rejections_this_run" =~ ^[0-9]+$ ]] || l1_import_rejections_this_run=0
-    mapfile -t ready_tasks < <(GLUERUN_SKIP_DUPLICATE_READY_TASKS=0 gluerun_list_ready_tasks)
+    mapfile -t ready_tasks < <(gluerun_list_status_ready_tasks)
   fi
 
   mapfile -t dispatch_tasks < <(gluerun_select_dispatch_frontier "$dispatch_budget")

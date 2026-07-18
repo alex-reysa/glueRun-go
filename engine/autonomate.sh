@@ -201,7 +201,7 @@ PY
   # Reconcile's frontier selector already performs the authoritative duplicate,
   # dependency, lease, and scope checks. This post-cycle value is telemetry only;
   # avoid the legacy per-task duplicate scan on large campaigns.
-  ready_now="$(GLUERUN_SKIP_DUPLICATE_READY_TASKS=0 gluerun_list_ready_tasks | wc -l | tr -d ' ')"
+  ready_now="$(gluerun_list_status_ready_tasks | wc -l | tr -d ' ')"
   active_now="$(gluerun_active_lease_count)"
 
   progress="no"
