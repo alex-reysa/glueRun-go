@@ -302,6 +302,31 @@ Numbered recipes per incident class (symptom → verify → command → expected
 event) are in [references/operations.md](references/operations.md) — read it
 before debugging a stuck or misbehaving run.
 
+### Plan threads — finish one plan, start the next (0.8.0)
+
+A repo holds one *active* plan; finished plans become read-only archived
+threads (chat-style):
+
+```bash
+gluerun plan archive --name "Console redesign"   # snapshot + reset to starter DAG
+gluerun plan list [--json]                       # registry of archived threads
+```
+
+`plan archive` refuses unless the run is truly finished: autonomate loop
+stopped, origin lock free, no live dispatch trees, DAG frontier
+`allComplete`, and `.worktrees/` empty (`gluerun gc` first). Each guard is
+override-able with `--force`, but worktrees are never moved. It snapshots
+the plan into `.gluerun-state/plans/<plan-id>/` (a mini-repo the console
+can serve read-only: DAG, tasks, gates, areas, packets, events, runs,
+leases, dispatch records + a `manifest.json`), keeps `prompts/`,
+`planner-contract.md` and `decisions.md` live (copied into the archive),
+then resets to the init starter DAG with a fresh event journal seeded by a
+`plan.archived` event and commits the `docs/orchestration` reset
+(`--no-commit` to skip). Task numbering restarts at TASK-0001. Author the
+next plan exactly as in §2. Archived threads are browsable in the console
+via the header plan switcher / Home "Previous plans" card, or
+`gluerun console --plans` (see [references/console.md](references/console.md)).
+
 ## Invariants — do not weaken
 
 - `gateCommand` and gate results are the floor of truth; never bypass or

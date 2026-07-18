@@ -7,6 +7,76 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.8.0] — 2026-07-18 — Plan threads: chat-style sequential plans
+
+One repo no longer means one plan forever. When a DAG completes, archive it
+as a browsable thread and start a fresh one — like chats in an LLM app: one
+active plan, older plans read-only. `schemaVersion` stays **v1** (all
+additions are new verbs/endpoints; archived plans are served from mini-repo
+snapshots by the existing collectors).
+
+### Engine — `gluerun plan archive` / `gluerun plan list`
+- `gluerun plan archive [--name <display name>] [--force] [--no-commit]`
+  moves the finished plan's durable record into
+  `.gluerun-state/plans/<plan-id>/` laid out as a **mini-repo**
+  (`docs/orchestration/{dag.v0.json,tasks,gates,areas,packets}` moved;
+  `prompts/`, `planner-contract.md`, `decisions.md` copied so they stay
+  live; `.gluerun-state/{events.ndjson,runs,sessions,leases,l1-leases,
+  dispatch,inbox,origin-state.json,STATUS.md,circuit.json,
+  planner-backoff.json,task-id-counter}` moved), writes a
+  `manifest.json` (`gluerun.plan.manifest.v0`: name, archivedAt,
+  engineVersion, branch, headSha, gates passed/total, taskCount, event
+  span) and upserts the `plans/index.json` registry
+  (`gluerun.plans.index.v0`, newest first).
+- Safety: refuses (each override-able only with `--force`) while the
+  autonomate loop is alive, the origin lock is held, a launched dispatch
+  tree is still running, the DAG frontier is not `allComplete`, or
+  `.worktrees/` still has entries (worktrees are never moved — run
+  `gluerun gc` first). Runs under the origin lock.
+- Reset: after archiving, the repo returns to the init starter DAG
+  (`M0.scaffold`), a fresh `events.ndjson` seeded with a `plan.archived`
+  event, and a cleared task-id counter (next thread numbers from
+  TASK-0001); `docs/orchestration` is committed by default
+  (`--no-commit` to skip). Config, secrets, locks, console files and
+  `STOP` handling are never touched.
+- `gluerun plan list [--json]` prints the registry (self-heals from
+  per-plan manifests if the index is missing).
+
+### Console — thread switcher + read-only historical mode
+- `GET /api/plans` (`gluerun.plans.v0`) lists archived plans; `--plans`
+  one-shot flag added.
+- `?plan=<plan-id>` on the read endpoints (`/api/dag`, `/api/timeline`,
+  `/api/overview`, `/api/task`, `/api/node`, `/api/area`, `/api/events`,
+  `/api/sessions`, `/api/session`, `/api/prompts`, `/api/prompt`,
+  `/api/raw`) serves the archived plan's snapshot — ids are validated
+  against the registry and path-contained; unknown ids 404. `/api/state`,
+  `/api/home`, `/api/config`, `/api/settings` ignore the param, and any
+  POST carrying `?plan=` is rejected 400: **archived plans are
+  read-only**.
+- The compute cache is now multi-slot (LRU, capacity 4) so browsing an
+  archived plan doesn't evict the live plan's cached views.
+- UI: a plan switcher in the header lists the current plan and archived
+  threads (name · date · gates); Home gains a "Previous plans" card.
+  Selecting a thread reloads into `?plan=<id>` historical mode: a
+  persistent "viewing archived plan — read-only" banner, all four Plan
+  lenses + Consoles transcripts rendered from the archive, Agents (live
+  settings) disabled, live polling frozen (immutable data is fetched
+  once), and pin writes suppressed. "Back to live" returns to the active
+  thread.
+
+### Tests
+- New `tests/test-plan-archive.sh` (preconditions, archive layout,
+  reset, registry ordering, `--no-commit`, list `--json`); bash suite
+  150/150.
+- New `CollectPlansTests`, `PlanParamRoutingTests` (HTTP-layer:
+  archived-vs-live payloads, traversal/malformed-id 404s, POST 400,
+  `/api/state` param ignored), `ComputeCacheMultiSlotTests`;
+  `collect_plans` added to the no-subprocess guard; python suite
+  152/152. Headless-Chrome verification: 76 assertions across live +
+  historical modes at 1920×1080 and 1280×700, zero pageerrors.
+
+---
+
 ## [0.7.0] — 2026-07-17 — Workspace polish: Home, full-bleed canvas, editable settings, developer primitives
 
 Field feedback on 0.6.0 ("half way there"): the dashboard should feel like a

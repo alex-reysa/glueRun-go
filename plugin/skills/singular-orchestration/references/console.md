@@ -88,6 +88,7 @@ gluerun console --home                # at-a-glance digest: health+attention+act
 gluerun console --prompts             # role prompt library listing (0.7.0)
 gluerun console --prompt <name>.md    # one prompt template's content (0.7.0)
 gluerun console --raw <root>/<name>   # raw durable file behind an entity (0.7.0)
+gluerun console --plans               # archived plan-thread registry (0.8.0)
 ```
 
 Use these to summarize orchestration health or inspect one task from a
@@ -188,7 +189,25 @@ commands/tools they actually ran.
 /api/prompt/<name>      → one prompt template's content
 /api/raw/<root>/<name>  → raw durable file (roots: task, gate, gate-review,
                           lease, l1-lease, dispatch, inbox, state, config, dag)
+/api/plans              → archived plan-thread registry (0.8.0,
+                          gluerun.plans.v0): id, name, archivedAt, gates,
+                          taskCount, eventCount, headSha, branch — from
+                          .gluerun-state/plans/index.json (+ manifest self-heal)
 ```
+
+**Plan threads (0.8.0).** After `gluerun plan archive` (see SKILL.md), each
+archived plan lives at `.gluerun-state/plans/<plan-id>/` as a mini-repo
+snapshot. Appending `?plan=<plan-id>` to the read endpoints (`/api/dag`,
+`/api/timeline`, `/api/overview`, `/api/task`, `/api/node`, `/api/area`,
+`/api/events`, `/api/sessions`, `/api/session`, `/api/prompts`,
+`/api/prompt`, `/api/raw`) serves that archived snapshot; ids are validated
+against the registry (unknown → 404). `/api/state`, `/api/home`,
+`/api/config` and `/api/settings` are live-only and ignore the param; any
+POST carrying `?plan=` is rejected 400 — archived plans are strictly
+read-only. In the UI, the header plan switcher (and the Home "Previous
+plans" card) opens a thread in historical mode: a read-only banner, Plan
+lenses + Consoles transcripts rendered from the archive, Agents disabled,
+polling frozen. Deep link: `http://…/?plan=<plan-id>#plan/timeline`.
 
 Snapshot extras: `orchestration.gates` `{passed,total,byNode}` (replaces the
 legacy `gateD0`/`gateD1` probes; the built-in status/frontier/validate probes
