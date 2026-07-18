@@ -198,7 +198,10 @@ PY
   for v in dispatched integrated faild faili planner_failures l1_import_rejections reaped_ok reaped_failures workers_running promoted; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
   gen_complete="no"; printf '%s\n' "$cycle_out" | grep -q 'all-areas-complete' && gen_complete="yes"
   gen_made="no"; printf '%s\n' "$cycle_out" | grep -q 'gen:.*generated:' && gen_made="yes"
-  ready_now="$(gluerun_list_ready_tasks | wc -l | tr -d ' ')"
+  # Reconcile's frontier selector already performs the authoritative duplicate,
+  # dependency, lease, and scope checks. This post-cycle value is telemetry only;
+  # avoid the legacy per-task duplicate scan on large campaigns.
+  ready_now="$(GLUERUN_SKIP_DUPLICATE_READY_TASKS=0 gluerun_list_ready_tasks | wc -l | tr -d ' ')"
   active_now="$(gluerun_active_lease_count)"
 
   progress="no"
