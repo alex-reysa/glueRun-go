@@ -22,7 +22,8 @@ import sys
 import tempfile
 import threading
 import time
-from collections import OrderedDict
+from collections import Counter, OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -3683,6 +3684,75 @@ def load_timeline(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Provider registry (single source of truth for /api/providers + derivation)   #
+# --------------------------------------------------------------------------- #
+#
+# One dict per agent-CLI runtime glueRun can drive. Probe logic reads this table
+# (no per-provider if-ladders): ``authProbe`` names a non-interactive status
+# subcommand + a parser; ``inference`` names a pure FS/env fallback. Auth
+# resolution order is CLI status -> env-key presence -> credential-file
+# inference -> unknown. SECRETS RULE: parsers/inference emit only presence
+# booleans, counts, provider ids, type strings, and the email/plan the CLI
+# itself prints — never token/key VALUES or file contents.
+PROVIDERS = [
+    {"id": "claude", "name": "Claude Code", "binary": "claude",
+     "runnerScript": "claude-run.sh", "loginCommand": "claude auth login",
+     "envKeys": ["ANTHROPIC_API_KEY"],
+     "authProbe": {"args": ["auth", "status"], "parser": "claude"},
+     "inference": "credfile", "credFiles": [".claude/.credentials.json"]},
+    {"id": "codex", "name": "Codex CLI", "binary": "codex",
+     "runnerScript": "codex-run.sh", "loginCommand": "codex login",
+     "envKeys": ["OPENAI_API_KEY"],
+     "authProbe": {"args": ["login", "status"], "parser": "codex"},
+     "inference": "credfile", "credFiles": [".codex/auth.json"]},
+    {"id": "gemini", "name": "Gemini CLI", "binary": "gemini",
+     "runnerScript": "gemini-run.sh", "loginCommand": "gemini",
+     "envKeys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+     "authProbe": None, "inference": "gemini"},
+    {"id": "opencode", "name": "OpenCode", "binary": "opencode",
+     "runnerScript": "opencode-run.sh", "loginCommand": "opencode auth login",
+     "envKeys": ["OPENCODE_AUTH_CONTENT"],
+     "authProbe": {"args": ["auth", "list"], "parser": "opencode"},
+     "inference": "opencode"},
+    {"id": "cursor", "name": "Cursor CLI", "binary": "cursor-agent",
+     "runnerScript": "cursor-run.sh", "loginCommand": "cursor-agent login",
+     "envKeys": ["CURSOR_API_KEY"],
+     "authProbe": {"args": ["about", "--format", "json"], "parser": "cursor"},
+     "inference": "credfile", "credFiles": [".cursor/cli-config.json"]},
+    {"id": "grok", "name": "Grok CLI", "binary": "grok",
+     "runnerScript": "grok-run.sh", "loginCommand": None,
+     "envKeys": [],
+     "authProbe": None, "inference": None},
+]
+_PROVIDERS_BY_RUNNER = {p["runnerScript"]: p["id"] for p in PROVIDERS}
+
+
+def _provider_from_runner(runner: str) -> str:
+    """Provider id for a runner script basename via the registry.
+
+    claude-run.sh->claude ... cursor-run.sh->cursor; an unknown ``<name>-run.sh``
+    yields ``<name>`` (basename minus the suffix); anything else defaults to the
+    engine's own default runtime, codex."""
+    base = os.path.basename(str(runner or "")).strip()
+    if base in _PROVIDERS_BY_RUNNER:
+        return _PROVIDERS_BY_RUNNER[base]
+    if base.endswith("-run.sh"):
+        return base[: -len("-run.sh")] or "codex"
+    return "codex"
+
+
+def _engine_dir(env: dict[str, str] | None = None) -> Path:
+    """Directory holding the runner scripts, resolved like resolve_settings_dir:
+    ``$GLUERUN_ENGINE_HOME/engine`` when set (how ``gluerun console`` launches the
+    server), else the installed layout ``plugin/../engine`` relative to __file__."""
+    env = env if env is not None else os.environ
+    home = env.get("GLUERUN_ENGINE_HOME")
+    if home:
+        return Path(home) / "engine"
+    return Path(__file__).resolve().parent.parent.parent / "engine"
+
+
+# --------------------------------------------------------------------------- #
 # /api/config — resolved per-role runner config (gluerun.codex.config.v0)     #
 # --------------------------------------------------------------------------- #
 # Key families mirror engine/claude-run.sh + engine/codex-run.sh resolution;
@@ -3701,10 +3771,22 @@ _CONFIG_ROLE_KEYS = {
         "auditor":     ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_AUDITOR_REASONING_EFFORT", "high"),
         "decider":     ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_DECIDER_REASONING_EFFORT", "high"),
     },
+    # 0.9.0 providers: gemini/opencode/cursor/grok expose a single flat model key
+    # (no per-role model, no reasoning-effort mapping v1). An empty fallback means
+    # "CLI default" — the runner omits the model flag when the key is unset.
+    "gemini":   {r: ("GLUERUN_GEMINI_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
+    "opencode": {r: ("GLUERUN_OPENCODE_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
+    "cursor":   {r: ("GLUERUN_CURSOR_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
+    "grok":     {r: ("GLUERUN_GROK_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
 }
 _CONFIG_MODEL_FALLBACK = {"claude": ("GLUERUN_CLAUDE_MODEL", "claude-opus-4-8"),
-                          "codex": ("GLUERUN_CODEX_MODEL", "gpt-5.5")}
-_CONFIG_EFFORT_FALLBACK = {"claude": "GLUERUN_CLAUDE_EFFORT", "codex": None}
+                          "codex": ("GLUERUN_CODEX_MODEL", "gpt-5.5"),
+                          "gemini": ("GLUERUN_GEMINI_MODEL", ""),
+                          "opencode": ("GLUERUN_OPENCODE_MODEL", ""),
+                          "cursor": ("GLUERUN_CURSOR_MODEL", ""),
+                          "grok": ("GLUERUN_GROK_MODEL", "")}
+_CONFIG_EFFORT_FALLBACK = {"claude": "GLUERUN_CLAUDE_EFFORT", "codex": None,
+                           "gemini": None, "opencode": None, "cursor": None, "grok": None}
 _CONFIG_LIMIT_KEYS = (("maxConcurrent", "GLUERUN_MAX_CONCURRENT"),
                       ("maxDispatch", "GLUERUN_MAX_DISPATCH"),
                       ("l1Parallel", "GLUERUN_ENABLE_L1_PARALLEL"),
@@ -3726,17 +3808,28 @@ def collect_config(repo: Path) -> dict[str, Any]:
     cfg = read_json(repo / "gluerun.config.json", None)
     cfg = cfg if isinstance(cfg, dict) else {}
     cfg_env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
-    runner = str(cfg.get("runner") or "codex-run.sh")
-    provider = "claude" if "claude" in runner else "codex"
+    # env{} GLUERUN_RUNNER wins over the top-level "runner" key (engine/lib.sh
+    # emits env{} last, so it overrides on every source) — the runner switch is
+    # written there via POST /api/settings.
+    runner = str(cfg_env.get("GLUERUN_RUNNER") or cfg.get("runner") or "codex-run.sh")
+    provider = _provider_from_runner(runner)
 
-    role_keys = _CONFIG_ROLE_KEYS[provider]
-    fallback_model_key, fallback_model = _CONFIG_MODEL_FALLBACK[provider]
-    fallback_effort_key = _CONFIG_EFFORT_FALLBACK[provider]
+    role_keys = _CONFIG_ROLE_KEYS.get(provider)
+    if role_keys is None:
+        # Runner outside the registry: fall back to the flat single-model
+        # convention GLUERUN_<PROVIDER>_MODEL (no per-role model, no effort).
+        flat = f"GLUERUN_{provider.upper().replace('-', '_')}_MODEL"
+        role_keys = {r: (flat, None, None) for r in ("planner", "implementer", "auditor", "decider")}
+        fallback_model_key, fallback_model = flat, ""
+        fallback_effort_key = None
+    else:
+        fallback_model_key, fallback_model = _CONFIG_MODEL_FALLBACK[provider]
+        fallback_effort_key = _CONFIG_EFFORT_FALLBACK[provider]
     wanted: set[str] = {fallback_model_key}
     if fallback_effort_key:
         wanted.add(fallback_effort_key)
     for model_key, effort_key, _default in role_keys.values():
-        wanted.update((model_key, effort_key))
+        wanted.update(k for k in (model_key, effort_key) if k)
     wanted.update(key for _name, key in _CONFIG_LIMIT_KEYS)
     wanted.update(key for _name, key in _CONFIG_FLAG_KEYS)
     overrides = parse_env_overrides(repo, wanted)
@@ -3813,6 +3906,21 @@ def load_config_view(repo: Path) -> dict[str, Any]:
 # other knob is consumed at the top of the next cycle.
 _LOOP_RESTART_KEYS = {"GLUERUN_SLEEP", "GLUERUN_MAX_HOURS"}
 
+# 0.9.0 providers: writable keys not covered by SETTINGS_SPEC or the _CONFIG_*
+# structures. The four *_MODEL keys are already whitelisted via _CONFIG_MODEL_FALLBACK;
+# these are the ones with no other home. GLUERUN_RUNNER switches the default runner:
+# engine/lib.sh emits the config env{} block AFTER the top-level "runner" key, so on
+# every source the env{} GLUERUN_RUNNER wins — writing it here (kind "runner",
+# validated to a bare <name>-run.sh) retargets the loop next cycle. The three
+# *_TIMEOUT_SEC knobs bound the new runners' wall budget.
+_PROVIDER_WRITE_KINDS = {
+    "GLUERUN_RUNNER": "runner",
+    "GLUERUN_GEMINI_TIMEOUT_SEC": "count",
+    "GLUERUN_OPENCODE_TIMEOUT_SEC": "count",
+    "GLUERUN_CURSOR_TIMEOUT_SEC": "count",
+}
+_RUNNER_VALUE_RE = re.compile(r"^[a-z][a-z0-9-]*-run\.sh$")
+
 
 def _settings_applies_at(key: str) -> str:
     return "loop-restart" if key in _LOOP_RESTART_KEYS else "next-cycle"
@@ -3838,7 +3946,8 @@ def _settings_write_spec() -> tuple[set[str], dict[str, str]]:
     for provider_roles in _CONFIG_ROLE_KEYS.values():
         for model_key, effort_key, _default in provider_roles.values():
             whitelist.add(model_key)
-            whitelist.add(effort_key)
+            if effort_key:  # flat-model providers (gemini/opencode/cursor/grok) have none
+                whitelist.add(effort_key)
     for model_key, _fallback in _CONFIG_MODEL_FALLBACK.values():
         whitelist.add(model_key)
     for effort_key in _CONFIG_EFFORT_FALLBACK.values():
@@ -3848,6 +3957,11 @@ def _settings_write_spec() -> tuple[set[str], dict[str, str]]:
         whitelist.add(key)
     for _name, key in _CONFIG_FLAG_KEYS:
         whitelist.add(key)
+    # 0.9.0 provider knobs: runner switch + new-runner timeouts (the *_MODEL keys
+    # already came in via _CONFIG_MODEL_FALLBACK above).
+    for key, kind in _PROVIDER_WRITE_KINDS.items():
+        whitelist.add(key)
+        kinds[key] = kind
     # Derived knobs (e.g. GLUERUN_MAX_DISPATCH) are read-only even though they
     # also appear in _CONFIG_LIMIT_KEYS — the derived exclusion wins.
     whitelist -= derived
@@ -3895,6 +4009,14 @@ def _normalize_setting_value(kind: str, raw: Any) -> tuple[bool, str]:
         if low in ("0", "false"):
             return True, "0"
         return False, "bool must be 0 or 1"
+    if kind == "runner":
+        # A bare <name>-run.sh script name (lowercase, no path separators): the
+        # engine (lib.sh) prepends its engine dir, so a path or traversal is
+        # rejected outright.
+        rv = sval.strip()
+        if not _RUNNER_VALUE_RE.match(rv):
+            return False, "runner must be a bare <name>-run.sh script name (no path)"
+        return True, rv
     # model / reasoning / enum / identifier / string
     if len(sval) > 120:
         return False, "value too long (max 120 chars)"
@@ -3961,6 +4083,10 @@ def apply_settings_changes(repo: Path, changes: Any) -> tuple[int, dict[str, Any
     _atomic_write_text(cfg_path, json.dumps(obj, indent=2) + "\n")
     _CONFIG_CACHE.invalidate()
     _OVERVIEW_CACHE.invalidate()
+    # A runner switch (GLUERUN_RUNNER) or model/timeout change moves the config-
+    # derived provider fields (activeRunner/isDefaultRunner/roles), so drop the
+    # 60s providers cache too — the next /api/providers reflects the write.
+    _PROVIDERS_CACHE.invalidate()
     return 200, {
         "ok": True,
         "applied": normalized,
@@ -4004,6 +4130,351 @@ def collect_settings_view(repo: Path) -> dict[str, Any]:
         "groups": _overlay_config_env(repo, collect_settings(repo)),
         "appliesAt": {k: _settings_applies_at(k) for k in sorted(whitelist)},
     }
+
+
+# --------------------------------------------------------------------------- #
+# /api/providers — runtime status probes (gluerun.providers.v0)               #
+# --------------------------------------------------------------------------- #
+#
+# collect_providers is the DELIBERATE exception to NewCollectorsNoSubprocessTests:
+# like collect_snapshot's git calls it shells out (a --version + an auth-status
+# probe per installed CLI), but every probe is capture_output, text, timeout=3s,
+# never shell=True, short-circuits when the binary is absent, runs in a bounded
+# ThreadPoolExecutor(max_workers=6), and the whole payload is cached 60s
+# (?refresh=1 bypasses). It is therefore NOT added to that test's collector list.
+# SECRETS RULE: parsers/inference emit only presence booleans, counts, provider
+# ids, type strings, and the email/plan the CLI itself prints — never token/key
+# VALUES or credential-file contents.
+
+PROVIDERS_TTL = 60.0
+PROVIDERS_RUN_SCAN_CAP = 200          # newest run dirs scanned for session-meta
+PROVIDER_PROBE_TIMEOUT = 3            # seconds per version/auth subprocess
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_VERSION_RE = re.compile(r"\d+\.\d+(?:\.\d+)?(?:[-.][0-9A-Za-z]+)*")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text or "")
+
+
+def _providers_json(text: str) -> Any:
+    """Best-effort parse of JSON a CLI prints to stdout (tolerating ANSI / banner
+    noise around the object). Returns the parsed value or None."""
+    if not text:
+        return None
+    t = _strip_ansi(text).strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    i, j = t.find("{"), t.rfind("}")
+    if 0 <= i < j:
+        try:
+            return json.loads(t[i:j + 1])
+        except Exception:
+            return None
+    return None
+
+
+def _run_probe(cmd: list[str], env: dict[str, str]) -> "subprocess.CompletedProcess[str] | None":
+    """One provider probe: capture_output, text, 3s timeout, never shell=True.
+    Returns None on timeout / OS error (an indeterminate probe)."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=PROVIDER_PROBE_TIMEOUT, env=env, check=False)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _parse_version(text: str) -> str | None:
+    m = _VERSION_RE.search(_strip_ansi(text or ""))
+    return m.group(0) if m else None
+
+
+# --- auth-status parsers (one per CLI output contract) ----------------------- #
+
+def _auth_parse_claude(r: "subprocess.CompletedProcess[str]") -> dict[str, Any]:
+    obj = _providers_json(r.stdout)
+    if isinstance(obj, dict):
+        return {"authStatus": "authenticated" if obj.get("loggedIn") else "unauthenticated",
+                "authMethod": obj.get("authMethod"), "email": obj.get("email"),
+                "plan": obj.get("subscriptionType")}
+    return {"authStatus": "authenticated" if r.returncode == 0 else "unauthenticated"}
+
+
+def _auth_parse_codex(r: "subprocess.CompletedProcess[str]") -> dict[str, Any]:
+    low = (_strip_ansi(r.stdout) + " " + _strip_ansi(r.stderr)).lower()
+    if "logged in" in low and "not logged in" not in low:
+        method = "ChatGPT" if "chatgpt" in low else ("API key" if "api key" in low else None)
+        return {"authStatus": "authenticated", "authMethod": method}
+    if "not logged in" in low or r.returncode != 0:
+        return {"authStatus": "unauthenticated"}
+    return {"authStatus": "unknown"}
+
+
+def _auth_parse_cursor(r: "subprocess.CompletedProcess[str]") -> dict[str, Any] | None:
+    obj = _providers_json(r.stdout)
+    if isinstance(obj, dict) and "userEmail" in obj:
+        email = obj.get("userEmail")
+        if not email or email == "Not logged in":
+            return {"authStatus": "unauthenticated"}
+        return {"authStatus": "authenticated", "authMethod": "cursor",
+                "email": email, "plan": obj.get("subscriptionTier")}
+    text = _strip_ansi(r.stdout) + " " + _strip_ansi(r.stderr)
+    m = re.search(r"Logged in as\s+(\S+)", text)
+    if m:
+        return {"authStatus": "authenticated", "authMethod": "cursor", "email": m.group(1)}
+    if "not logged in" in text.lower():
+        return {"authStatus": "unauthenticated"}
+    return None  # indeterminate -> fall through to inference
+
+
+def _auth_parse_opencode(r: "subprocess.CompletedProcess[str]") -> dict[str, Any]:
+    text = _strip_ansi(r.stdout) + " " + _strip_ansi(r.stderr)
+    m = re.search(r"(\d+)\s+credential", text)
+    if m:
+        n = int(m.group(1))
+        if n > 0:
+            return {"authStatus": "authenticated", "authMethod": "opencode",
+                    "detail": f"{n} credential(s)"}
+        return {"authStatus": "unauthenticated"}
+    return {"authStatus": "unknown"} if r.returncode == 0 else {"authStatus": "unauthenticated"}
+
+
+_AUTH_PARSERS = {
+    "claude": _auth_parse_claude, "codex": _auth_parse_codex,
+    "cursor": _auth_parse_cursor, "opencode": _auth_parse_opencode,
+}
+
+
+# --- pure FS/env auth inference (fallback; presence / ids / types only) ------- #
+
+def _infer_gemini(home: Path, spec: dict[str, Any]) -> dict[str, Any] | None:
+    if (home / ".gemini" / "oauth_creds.json").exists():   # existence only, never read
+        return {"authStatus": "authenticated", "authMethod": "oauth-personal"}
+    settings = read_json(home / ".gemini" / "settings.json", None)
+    if isinstance(settings, dict):
+        sec = settings.get("security") if isinstance(settings.get("security"), dict) else {}
+        auth = sec.get("auth") if isinstance(sec.get("auth"), dict) else {}
+        selected = auth.get("selectedType") or settings.get("selectedAuthType")
+        if selected:
+            # A mode is declared but no key/session is confirmable non-interactively.
+            return {"authStatus": "unknown", "authMethod": str(selected)}
+    return None
+
+
+def _infer_opencode(home: Path, spec: dict[str, Any]) -> dict[str, Any] | None:
+    obj = read_json(home / ".local" / "share" / "opencode" / "auth.json", None)
+    if not isinstance(obj, dict):
+        return None
+    if not obj:
+        return {"authStatus": "unauthenticated"}
+    provs = sorted(str(k) for k in obj.keys())                 # provider ids only
+    types = sorted({str(v.get("type")) for v in obj.values()   # type strings only
+                    if isinstance(v, dict) and v.get("type")})
+    return {"authStatus": "authenticated", "authMethod": "opencode",
+            "detail": f"{len(obj)} credential(s): {', '.join(provs)}",
+            "credentialTypes": types}
+
+
+def _infer_credfile(home: Path, spec: dict[str, Any]) -> dict[str, Any] | None:
+    for rel in spec.get("credFiles", []):
+        if (home / rel).exists():           # existence only, never read contents
+            return {"authStatus": "authenticated", "authMethod": "credential-file"}
+    return None
+
+
+_INFERENCE = {"gemini": _infer_gemini, "opencode": _infer_opencode, "credfile": _infer_credfile}
+
+
+def _resolve_auth(spec: dict[str, Any], exe: str, env: dict[str, str],
+                  home: Path) -> dict[str, Any]:
+    """Auth resolution order: CLI status command -> env-key presence ->
+    credential-file inference -> unknown."""
+    ap = spec.get("authProbe")
+    if ap:
+        r = _run_probe([exe, *ap["args"]], env)
+        if r is not None:
+            parsed = _AUTH_PARSERS[ap["parser"]](r)
+            if parsed and parsed.get("authStatus") in ("authenticated", "unauthenticated"):
+                return parsed
+    for key in spec.get("envKeys", []):
+        if env.get(key):
+            return {"authStatus": "authenticated", "authMethod": f"api-key ({key})"}
+    inf = spec.get("inference")
+    if inf:
+        result = _INFERENCE[inf](home, spec)
+        if result:
+            return result
+    return {"authStatus": "unknown"}
+
+
+def _provider_rollup(out: dict[str, Any]) -> tuple[str, str]:
+    """(status, one-line human message) for a probed provider."""
+    binary = out["binary"]
+    if not out["installed"]:
+        return "missing", f"not installed — `{binary}` not on PATH"
+    auth = out["authStatus"]
+    login = out.get("loginCommand")
+    if auth == "authenticated":
+        email, plan = out.get("email"), out.get("plan")
+        if email and plan:
+            msg = f"authenticated as {email} · {plan}"
+        elif email:
+            msg = f"authenticated as {email}"
+        elif out.get("authMethod"):
+            msg = f"authenticated ({out['authMethod']})"
+        else:
+            msg = "authenticated"
+        return "ready", msg
+    if auth == "unauthenticated":
+        return "error", (f"not authenticated — run `{login}`" if login else "not authenticated")
+    return "warning", (f"installed — auth state unknown (run `{login}`)" if login
+                       else "installed — auth state unknown")
+
+
+def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path) -> dict[str, Any]:
+    binary = spec["binary"]
+    exe = shutil.which(binary, path=env.get("PATH") or "")
+    out: dict[str, Any] = {
+        "id": spec["id"], "name": spec["name"], "binary": binary,
+        "installed": exe is not None, "path": exe, "version": None,
+        "authStatus": "unknown", "authMethod": None, "email": None, "plan": None,
+        "loginCommand": spec.get("loginCommand"),
+        "envKeys": list(spec.get("envKeys", [])),
+        "envKeyPresent": {k: bool(env.get(k)) for k in spec.get("envKeys", [])},
+        "runnerScript": spec["runnerScript"],
+    }
+    if exe is None:
+        out["status"], out["message"] = _provider_rollup(out)
+        return out
+    vr = _run_probe([exe, *spec.get("versionArgs", ["--version"])], env)
+    if vr is not None:
+        out["version"] = _parse_version((vr.stdout or "") + "\n" + (vr.stderr or ""))
+    auth = _resolve_auth(spec, exe, env, home)
+    for key in ("authStatus", "authMethod", "email", "plan", "detail", "credentialTypes"):
+        if auth.get(key) is not None:
+            out[key] = auth[key]
+    out["status"], out["message"] = _provider_rollup(out)
+    return out
+
+
+def _active_runner(repo: Path) -> str:
+    """Basename of the runner the engine would launch: config env{} GLUERUN_RUNNER
+    (wins in engine/lib.sh) > top-level "runner" > engine default codex-run.sh."""
+    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+    runner = env.get("GLUERUN_RUNNER") or cfg.get("runner") or "codex-run.sh"
+    return os.path.basename(str(runner))
+
+
+def _provider_session_stats(repo: Path) -> dict[str, dict[str, Any]]:
+    """Per-provider {recentSessions, lastUsedAt, lastExitCode} from durable
+    session-meta. Scans the newest ~200 run dirs' session-*.json plus every
+    sessions/planner/*.json, grouping by the meta's "provider" field. Pure FS."""
+    stats: dict[str, dict[str, Any]] = {}
+    metas: list[Path] = []
+    runs_root = state_path(repo, "runs")
+    if runs_root.is_dir():
+        try:
+            dirs = [e for e in os.scandir(runs_root) if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            dirs = []
+        dirs.sort(key=lambda e: _safe_mtime(Path(e.path)), reverse=True)
+        for entry in dirs[:PROVIDERS_RUN_SCAN_CAP]:
+            try:
+                metas.extend(Path(entry.path).glob("session-*.json"))
+            except OSError:
+                continue
+    planner_dir = state_path(repo, "sessions", "planner")
+    if planner_dir.is_dir():
+        try:
+            metas.extend(planner_dir.glob("*.json"))
+        except OSError:
+            pass
+    for path in metas:
+        obj = read_json(path, None)
+        if not isinstance(obj, dict):
+            continue
+        pid = obj.get("provider")
+        if not pid:
+            continue
+        entry = stats.setdefault(str(pid), {"recentSessions": 0, "lastUsedAt": None,
+                                            "lastExitCode": None, "_epoch": -1.0})
+        entry["recentSessions"] += 1
+        ts = obj.get("createdAt")
+        epoch = _iso_to_epoch(ts) if ts else _safe_mtime(path)
+        if epoch > entry["_epoch"]:
+            entry["_epoch"] = epoch
+            entry["lastUsedAt"] = ts or _iso_from_mtime(_safe_mtime(path))
+            entry["lastExitCode"] = obj.get("exitCode")
+    for entry in stats.values():
+        entry.pop("_epoch", None)
+    return stats
+
+
+def _compute_providers(repo: Path, env: dict[str, str], home: Path) -> dict[str, Any]:
+    repo = Path(repo)
+    checked_at = utc_now()
+    engine_dir = _engine_dir(env)
+    active_runner = _active_runner(repo)
+    cfg = collect_config(repo)                 # pure-FS; reuses the runner->provider fix
+    active_provider = cfg.get("provider")
+    active_roles = sorted(cfg.get("roles", {}).keys())
+    session_stats = _provider_session_stats(repo)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        probes = list(pool.map(lambda spec: _probe_provider(spec, env, home), PROVIDERS))
+    providers: list[dict[str, Any]] = []
+    for spec, probe in zip(PROVIDERS, probes):
+        pid = spec["id"]
+        probe["runnerPresent"] = (engine_dir / spec["runnerScript"]).is_file()
+        probe["isDefaultRunner"] = spec["runnerScript"] == active_runner
+        probe["roles"] = list(active_roles) if pid == active_provider else []
+        st = session_stats.get(pid, {})
+        probe["lastUsedAt"] = st.get("lastUsedAt")
+        probe["lastExitCode"] = st.get("lastExitCode")
+        probe["recentSessions"] = st.get("recentSessions", 0)
+        probe["checkedAt"] = checked_at
+        providers.append(probe)
+    counts = Counter(p["status"] for p in providers)
+    ready = counts.get("ready", 0)
+    attention = counts.get("warning", 0) + counts.get("error", 0) + counts.get("missing", 0)
+    return {
+        "schema": "gluerun.providers.v0",
+        "checkedAt": checked_at,
+        "repo": str(repo),
+        "activeProvider": active_provider,
+        "activeRunner": active_runner,
+        "providers": providers,
+        "summary": {
+            "ready": ready, "warning": counts.get("warning", 0),
+            "error": counts.get("error", 0), "missing": counts.get("missing", 0),
+            "attention": attention,
+            "message": f"{ready} ready · {attention} attention",
+        },
+    }
+
+
+_PROVIDERS_CACHE = _ComputeCache(
+    lambda repo: _compute_providers(repo, os.environ, Path.home()), PROVIDERS_TTL)
+
+
+def collect_providers(repo: Path, refresh: bool = False, *,
+                      env: dict[str, str] | None = None,
+                      home: Path | None = None) -> dict[str, Any]:
+    """Runtime provider/runtime status (gluerun.providers.v0). Subprocess-based
+    (version + auth probes) but cached 60s; ``refresh`` bypasses + repopulates.
+
+    ``env``/``home`` overrides bypass the cache (tests point probes at a fake
+    PATH + credential HOME); production uses os.environ + Path.home()."""
+    repo = Path(repo).resolve()
+    if env is not None or home is not None:
+        return _compute_providers(repo, env if env is not None else os.environ,
+                                  Path(home) if home is not None else Path.home())
+    if refresh:
+        _PROVIDERS_CACHE.invalidate()
+    return _PROVIDERS_CACHE.get(str(repo), repo)
 
 
 # --------------------------------------------------------------------------- #
@@ -4988,6 +5459,13 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/settings":
             self.send_json(collect_settings_view(self.repo))
             return
+        if route == "/api/providers":
+            # Live-only (like /api/config, /api/settings): a ?plan= param is
+            # ignored — provider status is always the live machine's runtimes.
+            query = parse_qs(parsed.query)
+            refresh = query.get("refresh", ["0"])[0] not in ("0", "", "false")
+            self.send_json(collect_providers(self.repo, refresh=refresh))
+            return
         if route == "/api/prompts":
             resolved = self._plan_root(parse_qs(parsed.query))
             if resolved is None:
@@ -5133,6 +5611,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dag", action="store_true", help="Print the full DAG view JSON (nodes+gates+tasks+edges) and exit")
     parser.add_argument("--timeline", action="store_true", help="Print the execution timeline JSON (task intervals+gates+cycles) and exit")
     parser.add_argument("--config", action="store_true", help="Print the resolved per-role runner config JSON and exit")
+    parser.add_argument("--providers", action="store_true", help="Print the runtime provider/runtime status JSON and exit")
     parser.add_argument("--prompts", action="store_true", help="Print the role prompt library JSON and exit")
     parser.add_argument("--prompt", help="Print one prompt's content JSON (e.g. auditor.md) and exit")
     parser.add_argument("--raw", help="Print one raw record JSON (e.g. config/gluerun.config.json) and exit")
@@ -5228,6 +5707,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.config:
         print(json.dumps(collect_config(repo), indent=2))
+        return 0
+    if args.providers:
+        print(json.dumps(collect_providers(repo), indent=2))
         return 0
     if args.prompts:
         print(json.dumps(collect_prompts(repo), indent=2))

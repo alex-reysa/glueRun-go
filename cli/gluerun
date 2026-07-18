@@ -678,7 +678,7 @@ cmd_console() {
   local a
   for a in "$@"; do
     case "$a" in
-      --snapshot|--sessions|--events|--overview|--dag|--timeline|--config|\
+      --snapshot|--sessions|--events|--overview|--dag|--timeline|--config|--providers|\
       --prompts|--prompt|--prompt=*|--raw|--raw=*|--home|--plans|\
       --task|--task=*|--session|--session=*|--node|--node=*|--area|--area=*)
         GLUERUN_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" "$@" ;;

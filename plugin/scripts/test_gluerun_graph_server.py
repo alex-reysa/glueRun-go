@@ -2412,5 +2412,332 @@ class ComputeCacheMultiSlotTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
 
+# --- 0.9.0 providers: fake agent-CLI stubs (case on "$*", the space-joined args) #
+_FAKE_CLAUDE = """#!/bin/sh
+case "$*" in
+  "--version") echo "2.1.198 (Claude Code)" ;;
+  "auth status") echo '{"loggedIn":true,"authMethod":"claude.ai","email":"claude@example.com","subscriptionType":"max"}' ; exit 0 ;;
+  *) exit 1 ;;
+esac
+"""
+_FAKE_CODEX = """#!/bin/sh
+case "$*" in
+  "--version") echo "codex-cli 0.144.1" ;;
+  "login status") echo "Logged in using ChatGPT" ; exit 0 ;;
+  *) exit 1 ;;
+esac
+"""
+_FAKE_CURSOR = """#!/bin/sh
+case "$*" in
+  "--version") echo "2026.07.16-899851b" ;;
+  "about --format json") echo '{"cliVersion":"2026.07.16-899851b","subscriptionTier":"Pro","userEmail":"cursor@example.com"}' ; exit 0 ;;
+  *) exit 1 ;;
+esac
+"""
+_FAKE_GEMINI = """#!/bin/sh
+case "$*" in
+  "--version") echo "0.42.0" ;;
+  *) exit 1 ;;
+esac
+"""
+_FAKE_OPENCODE = """#!/bin/sh
+case "$*" in
+  "--version") echo "1.16.2" ;;
+  "auth list") printf 'Credentials ~/.local/share/opencode/auth.json\\n0 credentials\\n' ; exit 0 ;;
+  *) exit 1 ;;
+esac
+"""
+
+
+class CollectProvidersTests(unittest.TestCase):
+    """S1: registry-driven runtime probes. Fake binaries on a test PATH + a fake
+    HOME exercise version/auth parsing, the ready/warning/error/missing rollup,
+    email/plan extraction, the secrets rule, glueRun-integration fields, and the
+    60s cache. Probes read the injected env/home (collect_providers overrides)."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        self.repo = base / "repo"
+        (self.repo / ".gluerun-state").mkdir(parents=True)
+        (self.repo / "gluerun.config.json").write_text(
+            json.dumps({"runner": "claude-run.sh", "env": {}}))
+        # A seeded session-meta so claude reports lastUsed/exit/recentSessions.
+        run = self.repo / ".gluerun-state/runs/RUN-20260101T000000Z-1"
+        run.mkdir(parents=True)
+        (run / "session-implementer.json").write_text(json.dumps({
+            "schema": "gluerun.orchestration.session-meta.v0", "provider": "claude",
+            "exitCode": 0, "createdAt": "2026-01-01T00:00:00Z", "role": "implementer"}))
+        # Fake HOME: gemini in "gemini-api-key" mode but no key/creds -> unknown.
+        self.home = base / "home"
+        (self.home / ".gemini").mkdir(parents=True)
+        (self.home / ".gemini/settings.json").write_text(
+            json.dumps({"security": {"auth": {"selectedType": "gemini-api-key"}}}))
+        # Fake PATH: all runtimes but grok (grok stays "missing").
+        self.bindir = base / "bin"
+        self.bindir.mkdir()
+        for name, body in (("claude", _FAKE_CLAUDE), ("codex", _FAKE_CODEX),
+                           ("cursor-agent", _FAKE_CURSOR), ("gemini", _FAKE_GEMINI),
+                           ("opencode", _FAKE_OPENCODE)):
+            p = self.bindir / name
+            p.write_text(body)
+            p.chmod(0o755)
+        # Fake engine dir with only claude-run.sh present (gemini-run.sh absent).
+        self.engine_home = base / "engine-home"
+        (self.engine_home / "engine").mkdir(parents=True)
+        (self.engine_home / "engine/claude-run.sh").write_text("")
+        self.env = {"PATH": str(self.bindir), "HOME": str(self.home),
+                    "GLUERUN_ENGINE_HOME": str(self.engine_home)}
+        srv._PROVIDERS_CACHE.invalidate()
+        self.addCleanup(srv._PROVIDERS_CACHE.invalidate)
+
+    def _providers(self, env=None, home=None):
+        payload = srv.collect_providers(self.repo, env=env or self.env,
+                                        home=home or self.home)
+        return payload, {p["id"]: p for p in payload["providers"]}
+
+    def test_statuses_and_extraction(self) -> None:
+        payload, by = self._providers()
+        self.assertEqual(payload["schema"], "gluerun.providers.v0")
+        # claude: ready, version, email + plan, method
+        c = by["claude"]
+        self.assertEqual((c["status"], c["installed"], c["version"]), ("ready", True, "2.1.198"))
+        self.assertEqual((c["authStatus"], c["authMethod"]), ("authenticated", "claude.ai"))
+        self.assertEqual((c["email"], c["plan"]), ("claude@example.com", "max"))
+        # codex: ready via text probe
+        self.assertEqual((by["codex"]["status"], by["codex"]["version"]), ("ready", "0.144.1"))
+        self.assertEqual(by["codex"]["authMethod"], "ChatGPT")
+        # cursor: ready via about --format json (email + tier)
+        cur = by["cursor"]
+        self.assertEqual((cur["status"], cur["version"]), ("ready", "2026.07.16-899851b"))
+        self.assertEqual((cur["email"], cur["plan"]), ("cursor@example.com", "Pro"))
+        # gemini: installed but auth unknown -> warning
+        self.assertEqual((by["gemini"]["status"], by["gemini"]["authStatus"]), ("warning", "unknown"))
+        self.assertEqual(by["gemini"]["authMethod"], "gemini-api-key")
+        # opencode: 0 credentials -> unauthenticated -> error
+        self.assertEqual((by["opencode"]["status"], by["opencode"]["authStatus"]),
+                         ("error", "unauthenticated"))
+        # grok: not on PATH -> missing, no version, no subprocess
+        self.assertEqual((by["grok"]["status"], by["grok"]["installed"], by["grok"]["version"]),
+                         ("missing", False, None))
+        self.assertEqual(payload["summary"]["ready"], 3)
+        self.assertEqual(payload["summary"]["message"], "3 ready · 3 attention")
+
+    def test_glue_fields_roles_default_runner_sessions(self) -> None:
+        _payload, by = self._providers()
+        c = by["claude"]
+        self.assertTrue(c["isDefaultRunner"])            # runner=claude-run.sh
+        self.assertEqual(c["roles"], ["auditor", "decider", "implementer", "planner"])
+        self.assertTrue(c["runnerPresent"])              # claude-run.sh in fake engine
+        self.assertGreaterEqual(c["recentSessions"], 1)
+        self.assertEqual(c["lastExitCode"], 0)
+        self.assertEqual(c["lastUsedAt"], "2026-01-01T00:00:00Z")
+        # non-active providers: no roles, not default; gemini-run.sh absent
+        self.assertEqual(by["codex"]["roles"], [])
+        self.assertFalse(by["codex"]["isDefaultRunner"])
+        self.assertFalse(by["gemini"]["runnerPresent"])
+
+    def test_env_runner_override_wins(self) -> None:
+        # config env{} GLUERUN_RUNNER overrides top-level "runner" (lib.sh order).
+        (self.repo / "gluerun.config.json").write_text(json.dumps(
+            {"runner": "codex-run.sh", "env": {"GLUERUN_RUNNER": "gemini-run.sh"}}))
+        payload, by = self._providers()
+        self.assertEqual(payload["activeRunner"], "gemini-run.sh")
+        self.assertEqual(payload["activeProvider"], "gemini")
+        self.assertTrue(by["gemini"]["isDefaultRunner"])
+        self.assertFalse(by["codex"]["isDefaultRunner"])
+        self.assertTrue(by["gemini"]["roles"])           # active provider gets the roles
+
+    def test_env_key_presence_authenticates(self) -> None:
+        # No CLI probe for gemini; a GEMINI_API_KEY in env -> authenticated.
+        env = dict(self.env, GEMINI_API_KEY="sk-fake")
+        _payload, by = self._providers(env=env)
+        self.assertEqual(by["gemini"]["authStatus"], "authenticated")
+        self.assertIn("api-key", by["gemini"]["authMethod"])
+        self.assertTrue(by["gemini"]["envKeyPresent"]["GEMINI_API_KEY"])
+
+    def test_no_secret_values_leak(self) -> None:
+        # Seed credential files with fake tokens; the payload must never carry them.
+        (self.home / ".gemini/oauth_creds.json").write_text('{"access_token":"GEM_SECRET_TTT"}')
+        oc = self.home / ".local/share/opencode"
+        oc.mkdir(parents=True)
+        (oc / "auth.json").write_text(json.dumps(
+            {"anthropic": {"type": "oauth", "refresh": "OC_SECRET_RRR", "access": "OC_SECRET_AAA"}}))
+        payload, _by = self._providers()
+        blob = json.dumps(payload)
+        for secret in ("GEM_SECRET_TTT", "OC_SECRET_RRR", "OC_SECRET_AAA"):
+            self.assertNotIn(secret, blob)
+        # And the opencode inference itself surfaces ids/types only, never values.
+        spec = next(p for p in srv.PROVIDERS if p["id"] == "opencode")
+        res = srv._infer_opencode(self.home, spec)
+        self.assertEqual(res["authStatus"], "authenticated")
+        self.assertIn("anthropic", res["detail"])
+        self.assertEqual(res["credentialTypes"], ["oauth"])
+        self.assertNotIn("OC_SECRET_RRR", json.dumps(res))
+
+    def test_cache_ttl_and_refresh(self) -> None:
+        # Default (no override) path is cached 60s; refresh=True bypasses.
+        calls: list = []
+        orig = srv._compute_providers
+
+        def counting(repo, env, home):
+            calls.append(str(repo))
+            return {"schema": "gluerun.providers.v0", "providers": [], "summary": {}}
+
+        srv._compute_providers = counting
+        srv._PROVIDERS_CACHE.invalidate()
+        try:
+            srv.collect_providers(self.repo)
+            srv.collect_providers(self.repo)
+            self.assertEqual(len(calls), 1)            # second read served from cache
+            srv.collect_providers(self.repo, refresh=True)
+            self.assertEqual(len(calls), 2)            # refresh recomputed
+        finally:
+            srv._compute_providers = orig
+            srv._PROVIDERS_CACHE.invalidate()
+
+    def test_probes_never_use_shell(self) -> None:
+        # Guard the SECRETS/injection posture: no probe uses shell=True.
+        seen: list = []
+        real = subprocess.run
+
+        def record(*args, **kwargs):
+            seen.append(kwargs.get("shell", False))
+            return real(*args, **kwargs)
+
+        saved = subprocess.run
+        subprocess.run = record
+        try:
+            self._providers()
+        finally:
+            subprocess.run = saved
+        self.assertTrue(seen)                     # probes did run
+        self.assertFalse(any(seen))               # none with shell=True
+
+
+class ProvidersRouteTests(unittest.TestCase):
+    """S2: the HTTP layer for /api/providers + the runner-switch write path.
+    PATH is pointed at an empty dir so probes short-circuit (deterministic, fast);
+    probe correctness is covered by CollectProvidersTests."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        self.repo = base / "repo"
+        (self.repo / ".gluerun-state").mkdir(parents=True)
+        (self.repo / "gluerun.config.json").write_text(json.dumps({"env": {}}))
+        self._config_before = (self.repo / "gluerun.config.json").read_text()
+        empty = base / "empty-bin"
+        empty.mkdir()
+        self._saved_env = {k: os.environ.get(k) for k in ("PATH", "HOME")}
+        os.environ["PATH"] = str(empty)          # all runtimes -> "missing", no subprocess
+        os.environ["HOME"] = str(base / "home")
+
+        def _restore_env() -> None:
+            for k, v in self._saved_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        self.addCleanup(_restore_env)
+        for cache in (srv._PROVIDERS_CACHE, srv._CONFIG_CACHE, srv._OVERVIEW_CACHE):
+            cache.invalidate()
+        self.addCleanup(srv._PROVIDERS_CACHE.invalidate)
+        self._saved_repo = srv.Handler.repo
+        srv.Handler.repo = self.repo
+        self.server = srv.ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+        def _teardown() -> None:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join()
+            srv.Handler.repo = self._saved_repo
+
+        self.addCleanup(_teardown)
+
+    def _req(self, method: str, path: str, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
+        headers = {}
+        raw = None
+        if body is not None:
+            raw = json.dumps(body).encode()
+            headers = {"Content-Type": "application/json", "Content-Length": str(len(raw))}
+        conn.request(method, path, body=raw, headers=headers)
+        resp = conn.getresponse()
+        payload = resp.read()
+        conn.close()
+        return resp.status, (json.loads(payload) if payload else None)
+
+    def test_endpoint_payload(self) -> None:
+        status, data = self._req("GET", "/api/providers")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["schema"], "gluerun.providers.v0")
+        ids = [p["id"] for p in data["providers"]]
+        self.assertEqual(ids, ["claude", "codex", "gemini", "opencode", "cursor", "grok"])
+        for p in data["providers"]:
+            self.assertEqual(p["status"], "missing")     # empty PATH
+            self.assertIn("runnerScript", p)
+        self.assertIn("message", data["summary"])
+
+    def test_refresh_param(self) -> None:
+        status, data = self._req("GET", "/api/providers?refresh=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["schema"], "gluerun.providers.v0")
+
+    def test_plan_param_ignored_live_only(self) -> None:
+        # Unlike /api/dag, providers ignores ?plan= (live-only) -> 200, not 404.
+        status, data = self._req("GET", "/api/providers?plan=plan-20260101T000000Z-x")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["schema"], "gluerun.providers.v0")
+
+    def test_runner_switch_roundtrip(self) -> None:
+        status, resp = self._req("POST", "/api/settings",
+                                 body={"changes": {"GLUERUN_RUNNER": "gemini-run.sh"}})
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["applied"]["GLUERUN_RUNNER"], "gemini-run.sh")
+        env = json.loads((self.repo / "gluerun.config.json").read_text())["env"]
+        self.assertEqual(env["GLUERUN_RUNNER"], "gemini-run.sh")
+        # config + providers reflect the switch (caches invalidated by the write)
+        _s, cfg = self._req("GET", "/api/config")
+        self.assertEqual(cfg["provider"], "gemini")
+        _s, prov = self._req("GET", "/api/providers")
+        self.assertEqual(prov["activeRunner"], "gemini-run.sh")
+        by = {p["id"]: p for p in prov["providers"]}
+        self.assertTrue(by["gemini"]["isDefaultRunner"])
+
+    def test_runner_switch_rejects_bad_values(self) -> None:
+        for bad in ("evil.sh", "../claude-run.sh", "/etc/passwd", "claude-run.sh; rm -rf"):
+            status, data = self._req("POST", "/api/settings",
+                                     body={"changes": {"GLUERUN_RUNNER": bad}})
+            self.assertEqual(status, 400, bad)
+            self.assertIn("key", data)
+        # nothing was written
+        self.assertEqual((self.repo / "gluerun.config.json").read_text(), self._config_before)
+
+    def test_new_provider_model_and_timeout_writable(self) -> None:
+        status, resp = self._req("POST", "/api/settings", body={"changes": {
+            "GLUERUN_GEMINI_MODEL": "gemini-3-pro", "GLUERUN_CURSOR_TIMEOUT_SEC": "600"}})
+        self.assertEqual(status, 200)
+        self.assertEqual(resp["applied"]["GLUERUN_GEMINI_MODEL"], "gemini-3-pro")
+        self.assertEqual(resp["applied"]["GLUERUN_CURSOR_TIMEOUT_SEC"], "600")
+
+    def test_providers_oneshot_pure_json(self) -> None:
+        saved = {n: getattr(srv, n) for n in ADAPTER_GLOBALS}
+        self.addCleanup(lambda: [setattr(srv, n, v) for n, v in saved.items()])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = srv.main(["--repo", str(self.repo), "--providers"])
+        self.assertEqual(rc, 0)
+        data = json.loads(buf.getvalue())        # stdout is pure JSON
+        self.assertEqual(data["schema"], "gluerun.providers.v0")
+        self.assertEqual(len(data["providers"]), len(srv.PROVIDERS))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
