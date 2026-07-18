@@ -1,7 +1,8 @@
-/* core/plans.js — the plan-thread registry client (0.8.0). Fetches /api/plans
-   once at boot (and lazily on switcher focus), owns the header plan switcher and
-   the historical-mode banner, and — in historical mode — paints the archived
-   plan's gates into the Plan workbench readout.
+/* core/plans.js — the plan-thread registry client (0.8.0; sidebar threads 0.10.0).
+   Fetches /api/plans once at boot (and lazily as the pointer enters the threads
+   column), owns the sidebar threads list (#side-threads-list — the live plan plus
+   every archived plan) and the historical-mode banner, and — in historical mode —
+   paints the archived plan's gates into the Plan workbench readout.
 
    Import direction: plans.js → core/api.js only (never a surface, never app.js),
    so it sits low in the graph and any surface + main.js may import it. The tiny
@@ -54,33 +55,43 @@ export async function fetchPlans(force) {
   return inflight;
 }
 
-// name · MMM D · gates P/T
-function entryLabel(p) {
+// archived-thread meta line: MMM D · gates P/T (mirrors home/surface.js:106-109)
+function archivedMeta(p) {
   const g = p.gates || {};
   const gp = g.passed != null ? g.passed : "?";
   const gt = g.total != null ? g.total : "?";
-  return `${p.name || p.id} · ${fmtDate(p.archivedAt)} · gates ${gp}/${gt}`;
+  return `${fmtDate(p.archivedAt)} · gates ${gp}/${gt}`;
 }
 
-// ------------------------------------------------------------- switcher -------
-function populateSwitcher() {
-  const wrap = document.getElementById("plan-switcher");
-  const sel = document.getElementById("plan-switcher-select");
-  if (!wrap || !sel) return;
+// one 32px thread row: a leading tone dot, then a name over a mono meta line.
+function threadRow(id, tone, active, name, meta) {
+  return `<button class="side-thread" data-plan-switch="${esc(id)}" data-active="${active ? "true" : "false"}" title="${esc(name)}">
+    <span class="tone-dot" data-tone="${esc(tone)}"></span>
+    <span class="st-main"><span class="st-name">${esc(name)}</span><span class="st-meta mono">${esc(meta)}</span></span>
+  </button>`;
+}
+
+// ------------------------------------------------------------- threads --------
+// Paint the sidebar threads list: the live plan first (acts as back-to-live while
+// historical), then every archived plan newest-first. plansData==null (older
+// server) or an empty registry → just the live row (feature quietly minimal).
+function renderThreads() {
+  const host = document.getElementById("side-threads-list");
+  if (!host) return;
   const list = plansData || [];
-  // Older server (no endpoint) or nothing archived, and we are live → the feature
-  // is quietly absent.
-  if (!isHistorical() && (plansData == null || list.length === 0)) { wrap.hidden = true; return; }
-  wrap.hidden = false;
-  let opts = `<option value="">Current plan</option>`;
-  opts += list.map((p) =>
-    `<option value="${esc(p.id)}"${p.id === activePlan ? " selected" : ""}>${esc(entryLabel(p))}</option>`).join("");
-  // Self-heal edge: historical on an id the registry didn't return — still offer it.
-  if (isHistorical() && !list.some((p) => p.id === activePlan)) {
-    opts += `<option value="${esc(activePlan)}" selected>${esc(activePlan)}</option>`;
+  const live = !isHistorical();
+  // Live row: green (success) dot, "live" meta, active (page bg) only when live.
+  let html = threadRow("", "success", live, "Current plan", "live");
+  for (const p of list) {
+    const on = p.id === activePlan;
+    // The pinned archived plan gets the coral accent dot; the rest stay quiet.
+    html += threadRow(p.id, on ? "integration" : "idle", on, p.name || p.id, archivedMeta(p));
   }
-  sel.innerHTML = opts;
-  sel.value = activePlan || "";
+  // Self-heal edge: historical on an id the registry didn't return — still list it.
+  if (isHistorical() && !list.some((p) => p.id === activePlan)) {
+    html += threadRow(activePlan, "integration", true, activePlan, "archived");
+  }
+  host.innerHTML = html;
 }
 
 // ------------------------------------------------------------- banner ---------
@@ -114,27 +125,33 @@ export function initPlans() {
   const backBtn = document.getElementById("pb-back");
   if (backBtn) backBtn.addEventListener("click", () => switchPlan(null));
 
-  const sel = document.getElementById("plan-switcher-select");
-  if (sel) {
-    sel.addEventListener("change", () => {
-      const v = sel.value;
-      if (v) switchPlan(v);
+  // Sidebar threads list: click a row to switch plan (empty id = the live row =
+  // back-to-live while historical); refresh the registry lazily as the pointer
+  // enters the column so the list is fresh without a poll.
+  const threads = document.getElementById("side-threads");
+  if (threads) {
+    threads.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-plan-switch]");
+      if (!b) return;
+      const id = b.dataset.planSwitch;
+      if (id) switchPlan(id);
       else if (isHistorical()) switchPlan(null);   // "Current plan" while historical → back to live
     });
-    // Lazily refresh the list just before the dropdown opens.
-    sel.addEventListener("focus", () => { fetchPlans(true).then(() => populateSwitcher()); });
+    threads.addEventListener("pointerenter", () => { fetchPlans(true).then(() => renderThreads()); });
   }
 
   if (isHistorical()) {
-    // Agents + Providers are live-only surfaces — disable their nav buttons.
+    // Agents (header) + Providers (sidebar) are live-only surfaces — disable both;
+    // the selector spans navs since the two buttons now live in different bars.
     for (const surface of ["agents", "providers"]) {
-      const nav = document.querySelector(`#surface-nav [data-surface="${surface}"]`);
+      const nav = document.querySelector(`#surface-nav [data-surface="${surface}"], #side-nav [data-surface="${surface}"]`);
       if (nav) { nav.disabled = true; nav.title = "live only"; }
     }
   }
 
-  paintBanner();   // shows the id fallback immediately; refreshed once plans resolve
-  fetchPlans().then(() => { populateSwitcher(); paintBanner(); paintArchivedGates(); });
+  renderThreads();   // paints the live row (+ self-heal id) immediately
+  paintBanner();     // shows the id fallback immediately; refreshed once plans resolve
+  fetchPlans().then(() => { renderThreads(); paintBanner(); paintArchivedGates(); });
 }
 
 export { fmtDate };

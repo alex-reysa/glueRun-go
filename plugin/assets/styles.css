@@ -183,20 +183,27 @@ h1, h2, h3 { letter-spacing: -0.015em; font-weight: 600; margin: 0; }
 /* App grid                                                                 */
 /* ----------------------------------------------------------------------- */
 
+/* App-level left sidebar rail (0.10.0). --side-col is the live column width; the
+   rail toggle re-points it on <body> so the historical/live grids inherit one
+   width without a per-variant override race. */
+:root { --side-w: 224px; --side-w-rail: 52px; --side-col: var(--side-w); }
+body.side-rail { --side-col: var(--side-w-rail); }
+
 #app {
   position: fixed;
   inset: 0;
   display: grid;
   grid-template-rows: 44px minmax(0, 1fr);
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: var(--side-col) minmax(0, 1fr);
   grid-template-areas:
-    "top"
-    "main";
+    "top  top"
+    "side main";
   gap: 0;
   padding: 0;
 }
 
 #top-bar { grid-area: top; }
+#side-bar { grid-area: side; }
 
 /* ----------------------------------------------------------------------- */
 /* Top status / control bar                                                 */
@@ -269,17 +276,8 @@ h1, h2, h3 { letter-spacing: -0.015em; font-weight: 600; margin: 0; }
 #conn-dot[data-state="down"] { background: var(--tone-red); }
 #refresh-age { font-family: var(--mono); font-size: 11px; }
 
-/* ---- Plan-thread switcher (header) + historical banner (0.8.0) ---- */
-#plan-switcher { flex: 0 0 auto; }
-select.plan-switcher-select {
-  height: 26px;
-  max-width: 230px;
-  font-size: 11.5px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.5);
-  text-overflow: ellipsis;
-}
-select.plan-switcher-select:hover { color: var(--text); }
+/* ---- Historical banner (0.8.0) — the plan-thread switcher moved to the
+   sidebar's threads list in 0.10.0 (see #side-bar below). ---- */
 
 /* Slim strip under the top bar when pinned to an archived plan. */
 #plan-banner {
@@ -302,15 +300,88 @@ select.plan-switcher-select:hover { color: var(--text); }
   margin-left: auto; height: 24px; padding: 0 12px; font-size: 11.5px;
 }
 
-/* Historical mode: reserve a banner row, hide the live-only header widgets. */
+/* Historical mode: reserve a banner row over the main column only; the sidebar
+   spans banner+main rows so it stays full-height (the "side" area is a rectangle
+   down column 1). --side-col still governs the width, so the rail toggle works
+   here too. */
 body.historical #app {
   grid-template-rows: 44px auto minmax(0, 1fr);
-  grid-template-areas: "top" "banner" "main";
+  grid-template-columns: var(--side-col) minmax(0, 1fr);
+  grid-template-areas:
+    "top  top"
+    "side banner"
+    "side main";
 }
 body.historical #plan-banner { display: flex; grid-area: banner; }
 body.historical #btn-refresh,
 body.historical .conn { display: none; }
-#surface-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
+#surface-nav button:disabled,
+#side-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ----------------------------------------------------------------------- */
+/* App-level left sidebar (0.10.0) — plan threads up top, app nav pinned     */
+/* below. Flat panel with a right hairline; collapses to a 52px icon rail.   */
+/* ----------------------------------------------------------------------- */
+#side-bar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-panel);
+  border-right: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.side-eyebrow {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase;
+  color: var(--text-meta); padding: 0 8px 6px;
+}
+/* threads list grows + scrolls once there are more than ~8 plans; the app nav
+   and collapse chevron pin to the bottom. */
+#side-threads { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 10px 8px; }
+#side-threads-list { display: flex; flex-direction: column; gap: 3px; }
+
+/* one full-width row in the .plan-lenstab idiom (plan.css): a leading tone dot,
+   then a name over a mono meta line. Active row = page bg + strong border. */
+.side-thread, #side-nav button {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; min-height: 32px; padding: 4px 10px;
+  border: 1px solid transparent; border-radius: var(--radius-md);
+  background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.side-thread:hover, #side-nav button:hover { color: var(--text-primary); background: var(--surface-hover); }
+.side-thread[data-active="true"], #side-nav button[aria-pressed="true"] {
+  background: var(--surface-page); border-color: var(--border-strong); color: var(--text-primary);
+}
+.side-thread .tone-dot { flex: none; }
+.st-main { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.st-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-meta { font-family: var(--font-mono); font-size: 10px; color: var(--text-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+#side-nav { flex: 0 0 auto; border-top: 1px solid var(--border-subtle); padding: 10px; }
+#side-nav button .icon { width: 15px; height: 15px; flex: none; color: var(--text-muted); }
+#side-nav button[aria-pressed="true"] .icon { color: var(--text-primary); }
+.sn-label { font-size: 12px; font-weight: 600; }
+
+#side-collapse {
+  flex: 0 0 auto; height: 34px; display: flex; align-items: center; justify-content: center;
+  border: 0; border-top: 1px solid var(--border-subtle); background: transparent;
+  color: var(--text-muted); cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+#side-collapse:hover { background: var(--surface-hover); color: var(--text-primary); }
+/* chevron points left (toward the rail) when open, right when collapsed */
+#side-collapse .icon { width: 14px; height: 14px; transform: rotate(180deg); transition: transform var(--dur-base) var(--ease-out); }
+#side-collapse[aria-expanded="false"] .icon { transform: rotate(0deg); }
+
+/* ---- collapsed icon rail: hide the prose, center the dot/icon glyphs ---- */
+body.side-rail .side-eyebrow,
+body.side-rail .st-main,
+body.side-rail .sn-label { display: none; }
+body.side-rail #side-threads { padding: 12px 8px 8px; }
+body.side-rail #side-nav { padding: 10px 8px; }
+body.side-rail .side-thread,
+body.side-rail #side-nav button { justify-content: center; gap: 0; padding: 4px 0; }
+body.side-rail .side-thread .tone-dot { width: 8px; height: 8px; }
 
 /* Stat pills — compact inline chips in the single header row */
 .stat-strip {

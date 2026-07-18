@@ -113,17 +113,14 @@
         <span class="glyph"><svg class="icon"><use href="#i-grid"/></svg></span>
         <span>gluerun</span>
       </div>
+      <!-- Plan-level subtabs. Providers moved out to the app-level sidebar (#side-nav)
+           in 0.10.0; the plan-thread switcher moved to the sidebar's threads list. -->
       <nav id="surface-nav" aria-label="Surface switcher">
         <button type="button" data-surface="home" aria-pressed="true">Home</button>
         <button type="button" data-surface="plan" aria-pressed="false">Plan</button>
         <button type="button" data-surface="consoles" aria-pressed="false">Consoles</button>
         <button type="button" data-surface="agents" aria-pressed="false">Agents</button>
-        <button type="button" data-surface="providers" aria-pressed="false">Providers</button>
       </nav>
-      <span class="select-wrap" id="plan-switcher" hidden>
-        <select id="plan-switcher-select" class="filter plan-switcher-select" aria-label="Switch plan thread"></select>
-        <span class="chev"><svg class="icon" style="width:13px;height:13px"><use href="#i-chev"/></svg></span>
-      </span>
       <span id="health-flag" class="health-flag" data-tone="idle"><span class="tone-dot"></span><span id="health-text">loading</span></span>
       <span id="stop-chip" class="status-chip" data-tone="idle" data-present="false"><svg class="icon" style="width:13px;height:13px"><use href="#i-stop"/></svg><span id="stop-text">stop —</span></span>
       <span class="top-spacer"></span>
@@ -137,6 +134,28 @@
       <span class="pb-text">Viewing archived plan — read-only</span>
       <button id="pb-back" class="btn pb-back" type="button">Back to live</button>
     </div>
+
+    <!-- APP-LEVEL LEFT SIDEBAR (0.10.0) — plan threads (live + archived) up top,
+         app-level nav pinned to the bottom. First step toward a two-level shell;
+         future app-level slots (Projects, per-project MCPs, Settings) will sit
+         beside Providers in #side-nav. Rows are painted by core/plans.js
+         (threads) and are static markup (nav). Collapses to an icon rail. -->
+    <aside id="side-bar">
+      <div id="side-threads">
+        <div class="side-eyebrow">threads</div>
+        <div id="side-threads-list"></div>
+      </div>
+      <nav id="side-nav" aria-label="App navigation">
+        <div class="side-eyebrow">app</div>
+        <button type="button" data-surface="providers" aria-pressed="false" title="Providers">
+          <svg class="icon"><use href="#i-cpu"/></svg><span class="sn-label">Providers</span>
+        </button>
+        <!-- future app-level slots: Projects · per-project MCPs · Settings -->
+      </nav>
+      <button id="side-collapse" type="button" aria-expanded="true" title="Collapse sidebar" aria-label="Collapse sidebar">
+        <svg class="icon"><use href="#i-chev"/></svg>
+      </button>
+    </aside>
 
     <!-- MAIN VIEWPORT — three surface roots; the router shows exactly one. -->
     <section id="surface-plan" class="surface" data-active="false" hidden>

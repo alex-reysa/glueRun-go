@@ -110,7 +110,9 @@ function showSurface(name) {
     el.dataset.active = String(on);
     el.hidden = !on;
   }
-  document.querySelectorAll("#surface-nav [data-surface]").forEach((b) => {
+  // aria-pressed is mirrored across BOTH navs: the header tab row (#surface-nav)
+  // and the app-level sidebar (#side-nav, which holds Providers in 0.10.0).
+  document.querySelectorAll("#surface-nav [data-surface], #side-nav [data-surface]").forEach((b) => {
     b.setAttribute("aria-pressed", String(b.dataset.surface === name));
   });
 }
@@ -189,18 +191,22 @@ export function initRouter(options) {
   };
   bus.planVisible = () => surfaceVisible("plan");
 
-  // Surface-nav segmented control.
-  const nav = document.getElementById("surface-nav");
-  if (nav) nav.addEventListener("click", (e) => {
+  // Surface switch: delegated on BOTH the header tab row and the app-level
+  // sidebar (Providers lives in #side-nav as of 0.10.0). Same click handler.
+  const onNavClick = (e) => {
     const b = e.target.closest("[data-surface]");
-    if (!b) return;
+    if (!b || b.disabled) return;
     const name = b.dataset.surface;
     // Only the Plan surface carries a lens in its hash; Consoles/Agents must not
     // inherit a plan lens id as a session/role segment.
     const lens = name === "plan" ? (cfg.getLens ? cfg.getLens() : "timeline") : null;
     writeRoute(name, lens, null, null);
     applyRoute(currentRoute(), false);
-  });
+  };
+  for (const id of ["surface-nav", "side-nav"]) {
+    const nav = document.getElementById(id);
+    if (nav) nav.addEventListener("click", onNavClick);
+  }
 
   window.addEventListener("hashchange", () => applyRoute(currentRoute(), false));
   applyRoute(currentRoute(), true);
