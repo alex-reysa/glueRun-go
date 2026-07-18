@@ -15,6 +15,8 @@
 import { S, esc, escAttr, icon, toneOf, relTime, select, navigateToTask, renderActivityFeed } from "../app.js";
 import { getDag, fetchDag, onDag } from "../plan/data.js";
 import { feedState, subscribe as subscribeSessions } from "../core/sessions-feed.js";
+import { apiFetch, isHistorical, switchPlan } from "../core/api.js";
+import { fetchPlans, plansList, activePlanEntry, fmtDate } from "../core/plans.js";
 
 const POLL_MS = 10000;
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -34,11 +36,15 @@ const HEALTH_LABEL = { ok: "all clear", healthy: "all clear", watch: "watch", bl
 
 // ------------------------------------------------------------- data fetch -----
 async function fetchHome() {
-  if (HOME.inflight) return;
+  // Historical Home renders from the /api/plans registry entry + the archived dag
+  // (never /api/home, which is a live-only digest). Handled in setHomeActive/render.
+  if (isHistorical() || HOME.inflight) return;
   HOME.inflight = true;
   try {
-    const res = await fetch("/api/home", { cache: "no-store" });
-    if (res.ok) { HOME.data = await res.json(); render(); }
+    const res = await apiFetch("/api/home", { cache: "no-store" });
+    if (res.ok) { HOME.data = await res.json(); }
+    await fetchPlans();   // feeds the "Previous plans" card (folded into signature())
+    render();
   } catch (e) { /* keep last good; a transient miss must not blank Home */ }
   finally { HOME.inflight = false; }
 }
@@ -55,10 +61,12 @@ function signature() {
     (S.snap.git && S.snap.git.drift && (S.snap.git.drift.left + "/" + S.snap.git.drift.right)) || "-",
     (S.snap.disk && S.snap.disk.capacityPercent) || "-",
   ].join(",") : "-";
+  const pl = plansList();
+  const plansSig = pl == null ? "np" : pl.map((p) => p.id + ":" + ((p.gates && p.gates.passed) != null ? p.gates.passed : "?")).join(",");
   return [d.health, (d.attention || []).length, gates, JSON.stringify(d.taskCounts || {}),
     JSON.stringify(d.dispatch || {}), d.stop, d.breaker && d.breaker.consecFails,
     d.backoff && d.backoff.active, d.lastActivityAt, abd, stages, snapExtra,
-    (d.frontier && d.frontier.count) || 0].join("::");
+    (d.frontier && d.frontier.count) || 0, plansSig].join("::");
 }
 
 // ------------------------------------------------------------- render ---------
@@ -66,6 +74,7 @@ function render() {
   if (!HOME.visible) return;
   const host = document.getElementById("home-body");
   if (!host) return;
+  if (isHistorical()) { renderHistorical(host); return; }
   const sig = signature();
   if (sig === HOME.sig) return;
   HOME.sig = sig;
@@ -78,9 +87,107 @@ function render() {
        ${activityHtml(d)}
        ${tilesHtml(d)}
        ${linksHtml(d)}
+       ${prevPlansHtml()}
      </div>`;
   // Repaint the relocated event feed into its freshly-rebuilt host.
   renderActivityFeed();
+}
+
+// U4 — "Previous plans" card (live mode). Hidden when the endpoint is unavailable
+// (older server → plansList() null); an empty registry shows a run-hint.
+function prevPlansHtml() {
+  const list = plansList();
+  if (list == null) return "";   // endpoint absent → feature quietly hidden
+  const body = list.length
+    ? list.map((p) => {
+        const g = p.gates || {};
+        const gp = g.passed != null ? g.passed : "?";
+        const gt = g.total != null ? g.total : "?";
+        return `<button class="home-plan-chip" data-plan-switch="${escAttr(p.id)}" title="switch to ${escAttr(p.name || p.id)}">
+          <span class="hpc-name">${esc(p.name || p.id)}</span>
+          <span class="hpc-meta mono">${esc(fmtDate(p.archivedAt))} · gates ${esc(gp + "/" + gt)} · ${esc((p.taskCount != null ? p.taskCount : 0) + " tasks")}</span>
+        </button>`;
+      }).join("")
+    : `<div class="home-empty">No archived plans yet — run <code>gluerun plan archive</code> when a DAG completes.</div>`;
+  return `<section class="home-block home-prevplans">
+    <div class="home-block-head"><span class="home-eyebrow">previous plans</span></div>
+    <div class="home-plan-list">${body}</div>
+  </section>`;
+}
+
+// Archived Home variant: a hero card for the archived plan (from the /api/plans
+// registry entry), per-stage gate bars (from the archived dag), and quick links
+// into the Plan lenses + Consoles. No /api/home, no live tiles/attention/activity.
+function renderHistorical(host) {
+  const e = activePlanEntry();
+  const dag = getDag();
+  const stagesSig = dag ? (dag.stages || []).map((s) => `${s.id}:${s.passed}/${s.total}`).join("|") : "-";
+  const sig = "hist::" + (e ? e.id + ":" + JSON.stringify(e.gates || {}) : "-") + "::" + stagesSig;
+  if (sig === HOME.sig) return;
+  HOME.sig = sig;
+  host.innerHTML = `<div class="home-canvas">
+    ${histHeroHtml(e)}
+    ${histGatesHtml(e)}
+    ${histLinksHtml()}
+  </div>`;
+}
+
+function histHeroHtml(e) {
+  if (!e) return `<section class="home-hero"><div class="home-hero-head"><span class="home-headline">loading archived plan…</span></div></section>`;
+  const g = e.gates || {};
+  const gp = g.passed != null ? g.passed : "?";
+  const gt = g.total != null ? g.total : "?";
+  const meta = (label, value) => `<div class="home-hist-meta"><span class="hhm-k">${esc(label)}</span><span class="hhm-v mono">${esc(value)}</span></div>`;
+  return `<section class="home-hero home-hist-hero">
+    <div class="home-hero-head">
+      <span class="home-health status-chip" data-tone="idle"><span class="tone-dot" data-tone="idle"></span><span>archived</span></span>
+      <span class="home-headline">${esc(e.name || e.id)}</span>
+      <span class="home-hero-age mono">${esc(fmtDate(e.archivedAt))}</span>
+    </div>
+    <div class="home-hist-metarow">
+      ${meta("gates", gp + "/" + gt)}
+      ${meta("tasks", e.taskCount != null ? e.taskCount : 0)}
+      ${meta("head", e.headSha ? String(e.headSha).slice(0, 12) : "—")}
+      ${meta("branch", e.branch || "—")}
+    </div>
+  </section>`;
+}
+
+function histGatesHtml(e) {
+  const g = (e && e.gates) || {};
+  const dag = getDag();
+  const stages = dag ? (dag.stages || []) : [];
+  const bars = stages.map((s) => {
+    const pct = s.total ? Math.round(100 * s.passed / s.total) : 0;
+    const done = s.total && s.passed === s.total;
+    const shortStage = String(s.id || "").split("-")[0];
+    return `<button class="home-stage-bar" data-stage="${escAttr(s.id)}" title="${escAttr(s.id + " · " + s.passed + "/" + s.total)}">
+      <span class="hsb-label mono">${esc(shortStage)}</span>
+      <span class="hsb-track"><span class="hsb-fill${done ? " is-done" : ""}" style="width:${pct}%"></span></span>
+      <span class="hsb-count mono">${s.passed}/${s.total}</span>
+    </button>`;
+  }).join("") || `<div class="home-empty">gate detail is loading…</div>`;
+  return `<section class="home-block home-gates">
+    <div class="home-block-head"><span class="home-eyebrow">gates</span>
+      <span class="home-gates-val mono">${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}</span></div>
+    <div class="home-stage-bars">${bars}</div>
+  </section>`;
+}
+
+function histLinksHtml() {
+  const link = (hash, label) => `<button class="home-link-chip" data-hist-link="${escAttr(hash)}"><span class="tone-dot" data-tone="idle"></span>${esc(label)}</button>`;
+  return `<section class="home-block home-links home-hist-links">
+    <div class="home-links-col">
+      <div class="home-eyebrow">browse this plan</div>
+      <div class="home-link-row">
+        ${link("#plan/timeline", "Timeline")}
+        ${link("#plan/dag", "DAG")}
+        ${link("#plan/matrix", "Matrix")}
+        ${link("#plan/tasks", "Tasks")}
+        ${link("#consoles", "Consoles")}
+      </div>
+    </div>
+  </section>`;
 }
 
 // 1. Hero — health chip + headline count summary + attention list.
@@ -255,6 +362,10 @@ function mount() {
     if (node) { location.hash = "#plan/dag/NODE:" + node.dataset.nodeLink; return; }
     const sess = e.target.closest("[data-session-link]");
     if (sess) { location.hash = "#consoles/" + sess.dataset.sessionLink; return; }
+    const histLink = e.target.closest("[data-hist-link]");
+    if (histLink) { location.hash = histLink.dataset.histLink; return; }
+    const planSwitch = e.target.closest("[data-plan-switch]");
+    if (planSwitch) { switchPlan(planSwitch.dataset.planSwitch); return; }
   });
   surf.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === " ")) {
@@ -281,8 +392,14 @@ export function setHomeActive(on) {
   if (on) {
     HOME.sig = null;
     if (!getDag()) fetchDag();
-    fetchHome();
-    render();
+    if (isHistorical()) {
+      // Archived Home: registry entry (name/gates/tasks) + archived dag gate bars.
+      fetchPlans().then(() => { HOME.sig = null; render(); });
+      render();
+    } else {
+      fetchHome();
+      render();
+    }
   }
 }
 

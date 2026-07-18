@@ -118,12 +118,23 @@
         <button type="button" data-surface="consoles" aria-pressed="false">Consoles</button>
         <button type="button" data-surface="agents" aria-pressed="false">Agents</button>
       </nav>
+      <span class="select-wrap" id="plan-switcher" hidden>
+        <select id="plan-switcher-select" class="filter plan-switcher-select" aria-label="Switch plan thread"></select>
+        <span class="chev"><svg class="icon" style="width:13px;height:13px"><use href="#i-chev"/></svg></span>
+      </span>
       <span id="health-flag" class="health-flag" data-tone="idle"><span class="tone-dot"></span><span id="health-text">loading</span></span>
       <span id="stop-chip" class="status-chip" data-tone="idle" data-present="false"><svg class="icon" style="width:13px;height:13px"><use href="#i-stop"/></svg><span id="stop-text">stop —</span></span>
       <span class="top-spacer"></span>
       <span class="conn"><span id="conn-dot" data-state="down"></span><span>updated</span><span id="refresh-age">—</span></span>
       <button id="btn-refresh" class="btn primary" title="Reload snapshot"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button>
     </header>
+
+    <!-- HISTORICAL BANNER — shown only when pinned to an archived plan (?plan=). -->
+    <div id="plan-banner" hidden>
+      <span class="pb-dot" aria-hidden="true"></span>
+      <span class="pb-text">Viewing archived plan — read-only</span>
+      <button id="pb-back" class="btn pb-back" type="button">Back to live</button>
+    </div>
 
     <!-- MAIN VIEWPORT — three surface roots; the router shows exactly one. -->
     <section id="surface-plan" class="surface" data-active="false" hidden>

@@ -17,6 +17,7 @@ import { S, esc, escAttr, icon, toneOf, relTime, viewSessionPrompt } from "../ap
 import { makePaneState, fetchPaneLines, scrollPaneToBottom, resetPane } from "../core/term-core.js";
 import { subscribe as subscribeSessions, feedState, pokeFeed } from "../core/sessions-feed.js";
 import { writeRoute } from "../core/router.js";
+import { isHistorical } from "../core/api.js";
 
 const TICK_MS = 2000;
 const MAX_INFLIGHT = 4;   // line-fetches per tick
@@ -57,6 +58,7 @@ const CO = {
 
 function safeParse(s, fb) { try { return JSON.parse(s) || fb; } catch { return fb; } }
 function persist() {
+  if (isHistorical()) return;   // read-only: never persist pins/prefs for an archived plan
   localStorage.setItem("gluerun.co.auto", CO.autoOn ? "1" : "0");
   localStorage.setItem("gluerun.co.follow", CO.follow ? "1" : "0");
   localStorage.setItem("gluerun.co.raw", CO.raw ? "1" : "0");

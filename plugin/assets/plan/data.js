@@ -5,6 +5,7 @@
    refetches on each visible tick with a since-cursor. */
 
 import { S } from "../app.js";
+import { apiFetch } from "../core/api.js";
 
 // ---- DAG (gluerun.codex.dag.v0) ----
 let dag = null;
@@ -21,7 +22,7 @@ export async function fetchDag() {
   if (dagInflight) return dag;
   dagInflight = true;
   try {
-    const res = await fetch("/api/dag", { cache: "no-store" });
+    const res = await apiFetch("/api/dag", { cache: "no-store" });
     if (res.ok) { dag = await res.json(); dagSubs.forEach((fn) => { try { fn(dag); } catch (e) {} }); }
   } catch (e) { /* keep last good dag; a transient miss must not blank the lens */ }
   finally { dagInflight = false; }
@@ -62,7 +63,7 @@ export async function fetchTimeline() {
   if (tlInflight) return timeline;
   tlInflight = true;
   try {
-    const res = await fetch("/api/timeline", { cache: "no-store" });
+    const res = await apiFetch("/api/timeline", { cache: "no-store" });
     if (res.ok) timeline = await res.json();
   } catch (e) { /* keep last good timeline */ }
   finally { tlInflight = false; }

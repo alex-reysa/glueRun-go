@@ -6,8 +6,10 @@
    one poller: subscribers register a callback + a `needsPoll()` predicate, and the
    feed ticks only while at least one subscriber needs it AND the tab is visible.
 
-   Imports nothing (no app.js, no bus) — dock and Consoles both depend on it, so it
-   must sit below them in the import graph. */
+   Imports only the dependency-free core/api.js (the plan-thread fetch chokepoint) —
+   no app.js, no bus — so it still sits below the surfaces in the import graph. */
+
+import { apiFetch, isHistorical } from "./api.js";
 
 const LIMIT = 24;
 const POLL_MS = 2000;
@@ -35,7 +37,7 @@ async function poll() {
   if (![...subs].some((s) => s.needsPoll())) return;   // nobody needs it → skip
   inflight = true;
   try {
-    const res = await fetch("/api/sessions?limit=" + LIMIT, { cache: "no-store" });
+    const res = await apiFetch("/api/sessions?limit=" + LIMIT, { cache: "no-store" });
     if (!res.ok) throw new Error("http " + res.status);
     const data = await res.json();
     const sessions = data.sessions || [];
@@ -59,6 +61,9 @@ export function pokeFeed() { poll(); }
 export function startFeed() {
   if (started) return; started = true;
   poll();
+  // Archived sessions are immutable — one fetch (poked on demand when a surface
+  // activates), no 2s interval. term-core also stops polling finished sessions.
+  if (isHistorical()) return;
   timer = setInterval(poll, POLL_MS);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 }

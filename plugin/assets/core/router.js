@@ -21,6 +21,7 @@
 
 import { select, navigateToTask, setAreaFilter, S } from "../app.js";
 import { bus } from "./bus.js";
+import { isHistorical } from "./api.js";
 
 const SURFACES = ["home", "plan", "consoles", "agents"];
 const LENSES = ["timeline", "matrix", "dag", "tasks"];
@@ -135,6 +136,12 @@ function resolveSelection(route) {
 // Apply a parsed route: surface + lens now; selection now if the snapshot is in,
 // else defer to the next tick(). `initial` selections always defer.
 function applyRoute(route, initial) {
+  // Agents is a live-repo concept (config/settings) — unreachable in historical
+  // mode. Redirect any #agents route to #home before it resolves.
+  if (isHistorical() && route.surface === "agents") {
+    route = { surface: "home" };
+    try { history.replaceState(null, "", "#home"); } catch (e) {}
+  }
   applying = true;
   try {
     showSurface(route.surface);

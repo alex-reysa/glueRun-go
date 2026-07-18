@@ -7,6 +7,7 @@
 import { S, esc, escAttr, icon, toneOf, labelOf, gateTone, select, relTime } from "../app.js";
 import { writeRoute, currentRoute } from "../core/router.js";
 import { bus } from "../core/bus.js";
+import { apiFetch } from "../core/api.js";
 import { fetchDag, getDag, dagIndex, dagMaybeRefetch, onDag } from "./data.js";
 import { lens as timelineLens } from "./lens_timeline.js";
 import { lens as matrixLens } from "./lens_matrix.js";
@@ -80,7 +81,7 @@ export function selectPlanNode(id) {
 
 async function enrichNode(id) {
   try {
-    const res = await fetch("/api/node/" + encodeURIComponent(id), { cache: "no-store" });
+    const res = await apiFetch("/api/node/" + encodeURIComponent(id), { cache: "no-store" });
     if (!res.ok) return;
     nodeEnrich.set(id, await res.json());
     if (selectedNodeId === id) renderAside();

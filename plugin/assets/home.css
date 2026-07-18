@@ -134,3 +134,27 @@
   transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .home-link-chip:hover { border-color: var(--border-strong); background: var(--surface-soft); color: var(--text-primary); }
+.home-hist-links .home-link-chip { font-family: var(--sans); font-weight: 500; }
+
+/* 7. previous plans (live) — clickable archived-plan chips */
+.home-plan-list { display: flex; flex-wrap: wrap; gap: 10px; }
+.home-plan-chip {
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  padding: 10px 14px; min-width: 190px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-default); background: var(--surface-panel);
+  text-align: left; cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.home-plan-chip:hover { border-color: var(--border-strong); background: var(--surface-soft); }
+.home-plan-chip .hpc-name { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.home-plan-chip .hpc-meta { font-size: 10.5px; color: var(--text-meta); }
+.home-empty code {
+  font-family: var(--mono); font-size: 11px; padding: 1px 5px; border-radius: var(--radius-xs);
+  background: var(--surface-soft); color: var(--text-secondary);
+}
+
+/* archived Home hero meta row */
+.home-hist-metarow { display: flex; flex-wrap: wrap; gap: 22px; }
+.home-hist-meta { display: flex; flex-direction: column; gap: 2px; }
+.home-hist-meta .hhm-k { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-meta); }
+.home-hist-meta .hhm-v { font-size: 13px; color: var(--text-primary); }

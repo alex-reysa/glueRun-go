@@ -11,6 +11,7 @@
 
 import { bus } from "./core/bus.js";
 import { startFeed } from "./core/sessions-feed.js";
+import { apiFetch, isHistorical } from "./core/api.js";
 
   const POLL_MS = 10000;
   const $ = (id) => document.getElementById(id);
@@ -120,7 +121,7 @@ import { startFeed } from "./core/sessions-feed.js";
     try {
       // An explicit Refresh invalidates the slow-changing provenance caches too.
       if (fresh) { S.nodeCache.clear(); S.areaNodesCache.clear(); }
-      const res = await fetch("/api/state" + (fresh ? "?fresh=1" : ""), { cache: "no-store" });
+      const res = await apiFetch("/api/state" + (fresh ? "?fresh=1" : ""), { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       S.snap = await res.json();
       S.lastOkAt = Date.now();
@@ -150,8 +151,58 @@ import { startFeed } from "./core/sessions-feed.js";
     // If a pin survives reloads but its task vanished, drop it gracefully.
     if (S.pinnedId && S.pinnedId.startsWith("TASK-")) {
       const exists = (S.snap.l2Tasks || []).some((t) => t.id === S.pinnedId);
-      if (!exists) { S.pinnedId = null; localStorage.removeItem("gluerun.pinnedId"); }
+      if (!exists) { S.pinnedId = null; if (!isHistorical()) localStorage.removeItem("gluerun.pinnedId"); }
     }
+  }
+
+  // ---- historical (archived plan) boot ----
+  // In historical mode we never call /api/state (it would return LIVE data) and
+  // never schedule the 10s poll. Instead we do a single one-shot boot: fetch the
+  // immutable /api/timeline?plan= and synthesize a minimal S.snap so the Tasks
+  // lens, showing-count, quick-filters, and header render the archived data. The
+  // Plan lenses' own data layer (plan/data.js) fetches the archived dag+timeline
+  // directly on mount, so this snapshot only needs the l2Tasks projection.
+  function histState(status) {
+    const s = String(status || "").toLowerCase();
+    if (["integrated", "merged", "complete", "completed", "done"].includes(s)) return "integrated";
+    if (["accepted", "awaiting"].includes(s)) return "awaiting";
+    if (s === "blocked") return "blocked";
+    if (["failed", "error"].includes(s)) return "failed";
+    if (s === "stale") return "stale";
+    if (["idle", "draft", "ready"].includes(s)) return "idle";
+    return "active";
+  }
+  function taskLastEnd(t) {
+    let m = null;
+    for (const iv of (t.intervals || [])) { const e = iv.endedAt || iv.startedAt; if (e && (!m || e > m)) m = e; }
+    return m;
+  }
+  async function historicalBoot() {
+    let tl = null;
+    try {
+      const res = await apiFetch("/api/timeline", { cache: "no-store" });
+      if (res.ok) tl = await res.json();
+    } catch (e) { /* synthesize an empty snapshot if the timeline is unavailable */ }
+    const l2Tasks = ((tl && tl.tasks) || []).map((t) => ({
+      id: t.taskId, title: "", state: histState(t.status),
+      area: t.area || "", workerBranch: t.branch || "",
+      updatedAt: taskLastEnd(t) || (tl && tl.now) || null,
+    }));
+    const stateCounts = {};
+    for (const t of l2Tasks) stateCounts[t.state] = (stateCounts[t.state] || 0) + 1;
+    const activeAgents = l2Tasks.filter((t) => t.state !== "integrated" && t.state !== "idle").length;
+    S.snap = {
+      generatedAt: (tl && tl.now) || new Date().toISOString(),
+      l2Tasks,
+      summary: { stateCounts, activeAgents },
+      agents: { l0: {}, l1: [], l2: [] },
+      orchestration: { gates: {} },
+      health: "archived",
+      stop: { present: false },
+    };
+    S.lastOkAt = Date.now();
+    setConn("connected");
+    renderAll();   // the single "tick" that drives lenses + the deferred deep-link
   }
 
   // -------------------------------------------------------- filtering core ---
@@ -187,6 +238,20 @@ import { startFeed } from "./core/sessions-feed.js";
   function renderTop() {
     const d = S.snap;
 
+    // Historical (archived) mode: the live health/stop signals don't apply — show a
+    // neutral "archived" state (the Refresh button + conn dot are hidden via CSS).
+    if (isHistorical()) {
+      const hf = $("health-flag"); if (hf) hf.dataset.tone = "idle";
+      const ht = $("health-text"); if (ht) ht.textContent = "archived";
+      const stopChip = $("stop-chip");
+      if (stopChip) {
+        stopChip.dataset.present = "false"; stopChip.dataset.tone = "idle";
+        const st = $("stop-text"); if (st) st.textContent = "archived";
+      }
+      renderPlanFilters();
+      return;
+    }
+
     // health flag
     const healthTone = d.health === "healthy" ? "success" : d.health === "blocker" ? "error" : "warn";
     const hf = $("health-flag"); if (hf) hf.dataset.tone = healthTone;
@@ -215,9 +280,13 @@ import { startFeed } from "./core/sessions-feed.js";
       const pill = document.querySelector(`.qf-pill[data-qf="${stat}"]`);
       if (pill) pill.setAttribute("aria-pressed", String(S.statusFilter === stat || (stat === "blocked" && S.statusFilter === "failed")));
     }
-    const g = (d.orchestration && d.orchestration.gates) || {};
-    const val = $("plan-gates-val");
-    if (val) val.textContent = `${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}`;
+    // In historical mode the archived plan's gates are painted by core/plans.js
+    // from the /api/plans registry entry — leave the readout alone here.
+    if (!isHistorical()) {
+      const g = (d.orchestration && d.orchestration.gates) || {};
+      const val = $("plan-gates-val");
+      if (val) val.textContent = `${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}`;
+    }
   }
 
   const shortRun = (r) => String(r || "").replace(/^ORIGIN-|^RUN-/, "").slice(0, 16);
@@ -401,7 +470,7 @@ import { startFeed } from "./core/sessions-feed.js";
   // Fetch a raw record (/api/raw/<root>/<name>) and show it in the file-view.
   async function viewRaw(root, name, title) {
     try {
-      const res = await fetch("/api/raw/" + encodeURIComponent(root) + "/" + encodeURIComponent(name), { cache: "no-store" });
+      const res = await apiFetch("/api/raw/" + encodeURIComponent(root) + "/" + encodeURIComponent(name), { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       const r = await res.json();
       viewFile({ title: title || r.name || name, path: r.path, content: r.content, language: String(name).endsWith(".json") ? "json" : "md", size: r.size, mtime: r.mtime });
@@ -412,7 +481,7 @@ import { startFeed } from "./core/sessions-feed.js";
   // in the file-view — the real prompt that ran, not just the template.
   async function viewSessionPrompt(sessionId, name, label) {
     try {
-      const res = await fetch("/api/session/" + encodeURIComponent(sessionId) + "?file=" + encodeURIComponent(name) + "&raw=1&limit=5000", { cache: "no-store" });
+      const res = await apiFetch("/api/session/" + encodeURIComponent(sessionId) + "?file=" + encodeURIComponent(name) + "&raw=1&limit=5000", { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       const r = await res.json();
       const content = (r.lines || []).map((l) => typeof l === "string" ? l : (l.text != null ? l.text : (l.raw || ""))).join("\n");
@@ -423,7 +492,7 @@ import { startFeed } from "./core/sessions-feed.js";
   // Fetch a role prompt template (/api/prompt/<name>) and show it in the file-view.
   async function viewPrompt(name) {
     try {
-      const res = await fetch("/api/prompt/" + encodeURIComponent(name), { cache: "no-store" });
+      const res = await apiFetch("/api/prompt/" + encodeURIComponent(name), { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       const r = await res.json();
       viewFile({ title: name, path: r.path, content: r.content, language: "md", size: r.size, mtime: r.mtime });
@@ -516,7 +585,7 @@ import { startFeed } from "./core/sessions-feed.js";
     if (S.roleCatalog || S.roleInflight) return;
     S.roleInflight = true;
     try {
-      const r = await fetch("/api/roles");
+      const r = await apiFetch("/api/roles");
       if (r.ok) {
         S.roleCatalog = await r.json();
         if (S.selectedKind === "l0" && S.inspTab === "roles") renderInspectorL0();
@@ -617,7 +686,7 @@ import { startFeed } from "./core/sessions-feed.js";
     if (S.taskInflight.has(id)) return;
     S.taskInflight.add(id);
     try {
-      const res = await fetch("/api/task/" + encodeURIComponent(id), { cache: "no-store" });
+      const res = await apiFetch("/api/task/" + encodeURIComponent(id), { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       const detail = await res.json();
       S.taskCache.set(id, detail);
@@ -637,7 +706,7 @@ import { startFeed } from "./core/sessions-feed.js";
     if (S.nodeInflight.has(id)) return;
     S.nodeInflight.add(id);
     try {
-      const res = await fetch("/api/node/" + encodeURIComponent(id), { cache: "no-store" });
+      const res = await apiFetch("/api/node/" + encodeURIComponent(id), { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       const detail = await res.json();
       S.nodeCache.set(id, detail);
@@ -657,7 +726,7 @@ import { startFeed } from "./core/sessions-feed.js";
     if (S.areaNodesCache.has(area) || S.areaNodesInflight.has(area)) return;
     S.areaNodesInflight.add(area);
     try {
-      const res = await fetch("/api/area/" + encodeURIComponent(area) + "/nodes", { cache: "no-store" });
+      const res = await apiFetch("/api/area/" + encodeURIComponent(area) + "/nodes", { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       S.areaNodesCache.set(area, await res.json());
       if (S.selectedKind === "l1" && S.selectedId.replace(/^L1:/, "") === area) renderInspectorL1();
@@ -672,7 +741,7 @@ import { startFeed } from "./core/sessions-feed.js";
     if (S.overviewInflight) return;
     S.overviewInflight = true;
     try {
-      const res = await fetch("/api/overview", { cache: "no-store" });
+      const res = await apiFetch("/api/overview", { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       S.overview = await res.json();
       if (S.selectedKind === "overview") renderInspectorOverview();
@@ -1332,8 +1401,11 @@ import { startFeed } from "./core/sessions-feed.js";
 
   function togglePin(id) {
     S.pinnedId = S.pinnedId === id ? null : id;
-    if (S.pinnedId) localStorage.setItem("gluerun.pinnedId", S.pinnedId);
-    else localStorage.removeItem("gluerun.pinnedId");
+    // Read-only in historical mode — keep the in-session pin marker but never persist.
+    if (!isHistorical()) {
+      if (S.pinnedId) localStorage.setItem("gluerun.pinnedId", S.pinnedId);
+      else localStorage.removeItem("gluerun.pinnedId");
+    }
     applyMarkers();
     if (S.selectedId) $("insp-pin").setAttribute("aria-pressed", String(S.pinnedId === S.selectedId));
   }
@@ -1420,7 +1492,7 @@ import { startFeed } from "./core/sessions-feed.js";
       const p = new URLSearchParams();
       if (O.cursor != null) p.set("cursor", String(O.cursor));
       p.set("limit", String(OVERLAY_REQ_LIMIT));
-      const res = await fetch("/api/events?" + p.toString(), { cache: "no-store" });
+      const res = await apiFetch("/api/events?" + p.toString(), { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       const data = await res.json();
       if (data.reset || O.cursor == null) { O.rows = []; O.seen.clear(); }
@@ -1518,6 +1590,22 @@ import { startFeed } from "./core/sessions-feed.js";
     await overlayFetch();
   }
 
+  // Historical mode: the archived events.ndjson is immutable, so one bounded read
+  // of its tail (no cursor loop, no interval) fills the feed once.
+  async function overlayFetchBounded() {
+    if (O.inflight) return;
+    O.inflight = true;
+    try {
+      const res = await apiFetch("/api/events?cursor=0&limit=200", { cache: "no-store" });
+      if (!res.ok) throw new Error("http " + res.status);
+      const data = await res.json();
+      O.rows = []; O.seen.clear();
+      appendOverlayRows(data.rows || []);
+      renderOverlay();
+    } catch (e) { /* leave the feed empty on a miss */ }
+    finally { O.inflight = false; }
+  }
+
   function overlayInit() {
     if (O.started) return;
     O.started = true;
@@ -1532,6 +1620,7 @@ import { startFeed } from "./core/sessions-feed.js";
       if (area) { select("l1", "L1:" + area); return; }
       select("l0", "L0");
     });
+    if (isHistorical()) { overlayFetchBounded(); return; }   // one-shot, no 2s poll
     overlayTick();
     setInterval(overlayTick, OVERLAY_POLL_MS);
   }
@@ -1586,15 +1675,19 @@ import { startFeed } from "./core/sessions-feed.js";
       }
     });
 
-    load(false);
-    setInterval(() => { if (!document.hidden) load(false); }, POLL_MS);
-    setInterval(tickAge, 1000);
-
-    // Pause polling in backgrounded tabs; refresh immediately on return so a
-    // re-shown dashboard is never stale.
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) { load(false); overlayTick(); }
-    });
+    if (isHistorical()) {
+      // Archived plan: one-shot synthetic snapshot, no /api/state, no live timers.
+      historicalBoot();
+    } else {
+      load(false);
+      setInterval(() => { if (!document.hidden) load(false); }, POLL_MS);
+      setInterval(tickAge, 1000);
+      // Pause polling in backgrounded tabs; refresh immediately on return so a
+      // re-shown dashboard is never stale.
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) { load(false); overlayTick(); }
+      });
+    }
   }
 
   function start() {

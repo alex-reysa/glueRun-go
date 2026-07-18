@@ -6,11 +6,13 @@
 import { start } from "./app.js";
 import { bus } from "./core/bus.js";
 import { initRouter, tick as routerTick } from "./core/router.js";
+import { initPlans } from "./core/plans.js";
 import { initWorkbench, setLens, getLens, planTick } from "./plan/workbench.js";
 import { initConsoles, setConsolesActive, consolesRoute, consolesLiveCount } from "./consoles/surface.js";
 import { initAgents, setAgentsActive, agentsRoute, agentsTick } from "./agents/surface.js";
 import { initHome, setHomeActive, homeRoute, homeTick } from "./home/surface.js";
 
+initPlans();           // header plan switcher + historical banner (sets body.historical early)
 start();               // boot the core console (top bar, inspector, polling)
 initWorkbench();       // mount the stored Plan lens + register the plan bus seams
 initConsoles();        // build the Consoles surface (idle until shown)

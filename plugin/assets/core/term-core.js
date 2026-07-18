@@ -2,12 +2,15 @@
    both the bottom dock and the Consoles surface stream the same byte-cursor tail
    with identical row rendering, scroll-retention, and id-keyed row replacement.
 
-   Deliberately imports NOTHING (no app.js, no bus) so there is never a static
-   cycle: app.js → term-core, consoles/* → term-core. The few tiny pure helpers it
-   needs (esc, relTime, toneOf, eventTone) are duplicated here verbatim from app.js;
-   they are stable formatting primitives and keeping them local is what makes this
-   module dependency-free. The row HTML is byte-identical to the old dock renderer,
-   so re-pointing the dock at this module changes nothing the user can see. */
+   Imports only the dependency-free core/api.js (the plan-thread fetch chokepoint)
+   so there is still never a static cycle: app.js → term-core, consoles/* →
+   term-core. The few tiny pure helpers it needs (esc, relTime, toneOf, eventTone)
+   are duplicated here verbatim from app.js; they are stable formatting primitives
+   and keeping them local is what makes this module (near-)dependency-free. The row
+   HTML is byte-identical to the old dock renderer, so re-pointing the dock at this
+   module changes nothing the user can see. */
+
+import { apiFetch } from "./api.js";
 
 export const TERM_MAX_LINES = 600;        // per-pane ring-buffer cap (DOM nodes)
 export const TERM_LINE_LIMIT = 500;       // initial tail size requested from the server
@@ -156,7 +159,7 @@ export async function fetchPaneLines(id, pane, opts) {
     p.set("limit", String(TERM_LINE_LIMIT));
     if (opts.raw) p.set("raw", "1");
     if (opts.file) p.set("file", opts.file);
-    const res = await fetch("/api/session/" + encodeURIComponent(id) + "?" + p.toString(), { cache: "no-store" });
+    const res = await apiFetch("/api/session/" + encodeURIComponent(id) + "?" + p.toString(), { cache: "no-store" });
     if (!res.ok) throw new Error("http " + res.status);
     const data = await res.json();
     const fresh = data.reset || pane.cursor == null;

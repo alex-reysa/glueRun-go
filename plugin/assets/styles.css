@@ -269,6 +269,49 @@ h1, h2, h3 { letter-spacing: -0.015em; font-weight: 600; margin: 0; }
 #conn-dot[data-state="down"] { background: var(--tone-red); }
 #refresh-age { font-family: var(--mono); font-size: 11px; }
 
+/* ---- Plan-thread switcher (header) + historical banner (0.8.0) ---- */
+#plan-switcher { flex: 0 0 auto; }
+select.plan-switcher-select {
+  height: 26px;
+  max-width: 230px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.5);
+  text-overflow: ellipsis;
+}
+select.plan-switcher-select:hover { color: var(--text); }
+
+/* Slim strip under the top bar when pinned to an archived plan. */
+#plan-banner {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  height: 30px;
+  padding: 0 16px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--tone-coral-fg) 88%, #000 12%);
+  background: color-mix(in srgb, var(--tone-coral-bg) 70%, transparent);
+  border-bottom: 1px solid var(--tone-coral-border);
+}
+#plan-banner .pb-dot {
+  width: 7px; height: 7px; border-radius: 999px; flex: 0 0 auto;
+  background: var(--tone-coral-dot);
+}
+#plan-banner .pb-text { font-weight: 500; }
+#plan-banner .pb-back {
+  margin-left: auto; height: 24px; padding: 0 12px; font-size: 11.5px;
+}
+
+/* Historical mode: reserve a banner row, hide the live-only header widgets. */
+body.historical #app {
+  grid-template-rows: 44px auto minmax(0, 1fr);
+  grid-template-areas: "top" "banner" "main";
+}
+body.historical #plan-banner { display: flex; grid-area: banner; }
+body.historical #btn-refresh,
+body.historical .conn { display: none; }
+#surface-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* Stat pills — compact inline chips in the single header row */
 .stat-strip {
   display: flex;

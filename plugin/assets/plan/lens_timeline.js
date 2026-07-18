@@ -14,6 +14,7 @@
 
 import { S, esc, escAttr, icon, gateTone, select } from "../app.js";
 import { bus } from "../core/bus.js";
+import { isHistorical } from "../core/api.js";
 import { getDag, dagIndex, fetchTimeline, getTimeline } from "./data.js";
 
 const BAR_H = 20, GAP = 5, LANE_PAD = 8;
@@ -196,7 +197,7 @@ function build() {
         t.intervals.forEach((iv, ii) => {
           let s = Date.parse(iv.startedAt); let e = iv.endedAt ? Date.parse(iv.endedAt) : axis.nowMs;
           const amber = e < s; if (amber) e = s + M;
-          const live = t.liveNow && !iv.endedAt; if (live) e = axis.nowMs;
+          const live = !isHistorical() && t.liveNow && !iv.endedAt; if (live) e = axis.nowMs;
           pieces(s, e).forEach(([ps, pe]) => {
             const left = axis.xOf(ps); const width = Math.max(6, axis.xOf(pe) - left);
             raw.push({ left, width, amber, live });
@@ -359,7 +360,7 @@ function taskStart(t) { return Math.min(...t.intervals.map((iv) => Date.parse(iv
 function taskEnd(t) { return Math.max(...t.intervals.map((iv) => (iv.endedAt ? Date.parse(iv.endedAt) : (axis ? axis.nowMs : Date.now())) || 0)); }
 function titleOf(id) { const t = (S.snap && S.snap.l2Tasks || []).find((x) => x.id === id); return t ? t.title : ""; }
 function barState(t) {
-  if (t.liveNow) return "live";
+  if (!isHistorical() && t.liveNow) return "live";
   const s = t.status;
   if (s === "integrated") return "integrated";
   if (s === "failed" || s === "blocked") return "failed";
@@ -445,7 +446,7 @@ async function refresh(initial) {
   const data = getTimeline();
   const sig = sigOf(data);
   if (initial || sig !== sigLast) { const prev = scrollEl ? scrollEl.scrollLeft : 0; build(); if (scrollEl) scrollEl.scrollLeft = prev; }
-  else patchLive();
+  else if (!isHistorical()) patchLive();   // archived bars never extend (no liveNow)
 }
 
 export const lens = {

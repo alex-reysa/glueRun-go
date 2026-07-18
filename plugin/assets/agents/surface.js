@@ -16,6 +16,7 @@
 import { S, esc, escAttr, icon, relTime, toast, viewRaw, viewPrompt, viewSessionPrompt } from "../app.js";
 import { subscribe as subscribeSessions, feedState } from "../core/sessions-feed.js";
 import { writeRoute } from "../core/router.js";
+import { apiFetch } from "../core/api.js";
 
 const shortRun = (r) => String(r || "").replace(/^ORIGIN-|^RUN-/, "").slice(0, 16);
 
@@ -74,7 +75,7 @@ const AG = {
 async function fetchConfig(force) {
   if (AG.configInflight || (AG.config && !force)) return;
   AG.configInflight = true;
-  try { const r = await fetch("/api/config", { cache: "no-store" }); if (r.ok) AG.config = await r.json(); }
+  try { const r = await apiFetch("/api/config", { cache: "no-store" }); if (r.ok) AG.config = await r.json(); }
   catch (e) { /* leave last good */ } finally { AG.configInflight = false; render(); }
 }
 // Feature-probe + fetch the typed settings envelope (23 knobs, 4 groups). A 404
@@ -83,7 +84,7 @@ async function fetchSettings(force) {
   if (AG.settingsInflight || (AG.settings && !force) || AG.settingsUnavailable) return;
   AG.settingsInflight = true;
   try {
-    const r = await fetch("/api/settings", { cache: "no-store" });
+    const r = await apiFetch("/api/settings", { cache: "no-store" });
     if (r.status === 404 || r.status === 501) { AG.settingsUnavailable = true; }
     else if (r.ok) { AG.settings = await r.json(); }
   } catch (e) { /* leave last good */ }
@@ -111,7 +112,7 @@ async function postSettings(changes, done) {
 async function fetchPrompts() {
   if (AG.prompts || AG.promptsInflight) return;
   AG.promptsInflight = true;
-  try { const r = await fetch("/api/prompts", { cache: "no-store" }); if (r.ok) AG.prompts = await r.json(); }
+  try { const r = await apiFetch("/api/prompts", { cache: "no-store" }); if (r.ok) AG.prompts = await r.json(); }
   catch (e) { /* prompt section just hides without the library */ }
   finally { AG.promptsInflight = false; if (AG.visible) { AG.sig = null; render(); } }
 }
@@ -121,7 +122,7 @@ function ensureRoles() {
   if (S.roleCatalog) { AG.roles = S.roleCatalog; return; }
   if (AG.rolesInflight) return;
   AG.rolesInflight = true;
-  fetch("/api/roles", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((j) => { if (j) { AG.roles = j; S.roleCatalog = S.roleCatalog || j; } })
+  apiFetch("/api/roles", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((j) => { if (j) { AG.roles = j; S.roleCatalog = S.roleCatalog || j; } })
     .catch(() => {}).finally(() => { AG.rolesInflight = false; render(); });
 }
 function workerCatalog(id) { return ((AG.roles && AG.roles.workers) || []).find((w) => w.id === id) || null; }
