@@ -5867,6 +5867,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_HEAD(self) -> None:  # noqa: N802
+        """Answer reachability preflights (ranger-cli, uptime probes send HEAD;
+        BaseHTTPRequestHandler otherwise 501s the verb). Headers only, no body:
+        200 for the app root and the health route, 404 for everything else —
+        honest without duplicating the GET router."""
+        route = urlparse(self.path).path
+        if route in ("/", "/index.html"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            return
+        if route == "/api/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            return
+        self.send_response(404)
+        self.end_headers()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         route = parsed.path

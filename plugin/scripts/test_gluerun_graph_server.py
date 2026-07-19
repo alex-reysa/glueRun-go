@@ -3293,6 +3293,51 @@ class SessionsAssistantTests(unittest.TestCase):
         self.assertIn("ask-prompt.md", names)                    # prompt pane survives too
 
 
+class HeadProbeTests(unittest.TestCase):
+    """0.11.x: HEAD reachability probes (ranger-cli/uptime checks) get headers
+    instead of BaseHTTPRequestHandler's 501: 200 for / and /api/health, 404
+    elsewhere, never a body."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._saved_repo = srv.Handler.repo
+        srv.Handler.repo = Path(self._tmp.name)
+        self.server = srv.ThreadingHTTPServer(("127.0.0.1", 0), srv.Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+        def _teardown() -> None:
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join()
+            srv.Handler.repo = self._saved_repo
+        self.addCleanup(_teardown)
+
+    def _head(self, path: str):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
+        conn.request("HEAD", path)
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        return resp.status, body
+
+    def test_root_ok_no_body(self) -> None:
+        status, body = self._head("/")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"")
+
+    def test_health_ok(self) -> None:
+        status, body = self._head("/api/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"")
+
+    def test_unknown_404(self) -> None:
+        status, _ = self._head("/api/state")
+        self.assertEqual(status, 404)
+
+
 class SnapshotLoopLivenessTests(unittest.TestCase):
     """0.11.0: snap["loop"] carries honest autonomate-daemon liveness (pidfile +
     signal-0), distinct from agents.l0.state's process-count heuristic."""
