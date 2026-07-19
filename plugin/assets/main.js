@@ -30,9 +30,11 @@ initHome();            // build the Home surface (idle until shown)
 // then let the router apply any deferred initial deep-link selection.
 bus.onSnapshot = () => { planTick(); agentsTick(); providersTick(); homeTick(); dockTick(); routerTick(); updateConsoleBadge(); };
 
-// Consoles nav button carries a small live-session count badge (C4).
+// The Consoles row in the thread sub-menu carries a small live-session count
+// badge (C4). The subnav node is persistent (core/plans.js), so the dataset
+// write survives threads repaints.
 function updateConsoleBadge() {
-  const btn = document.querySelector('#surface-nav [data-surface="consoles"]');
+  const btn = document.querySelector('#thread-subnav [data-surface="consoles"]');
   if (!btn) return;
   const n = consolesLiveCount();
   btn.dataset.live = n > 0 ? String(n) : "";

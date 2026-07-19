@@ -107,24 +107,20 @@
   </svg>
 
   <main id="app">
-    <!-- STAGE HEADER (0.11.0) — over the work surface only; the brand moved into
-         the full-height rail, the conn dot + updated-age moved into the status dock.
-         Left→right: breadcrumb · segmented surface tabs · spacer · health/stop · refresh. -->
+    <!-- STAGE HEADER (0.12.0) — over the work surface only; the brand lives in
+         the full-height rail, the conn dot + updated-age in the status dock. The
+         surface tabs moved into the sidebar as the active thread's vertical
+         sub-menu (#thread-subnav, painted by core/plans.js); the breadcrumb
+         carries the full location instead: repo › thread › surface.
+         Left→right: breadcrumb · spacer · health/stop · refresh. -->
     <header id="top-bar">
       <div class="crumbs" aria-label="Location">
         <span class="crumb crumb-repo" id="crumb-repo">—</span>
         <span class="crumb-sep" aria-hidden="true">›</span>
-        <strong class="crumb-cur" id="crumb-plan">Current plan</strong>
+        <span class="crumb crumb-thread" id="crumb-plan">Current plan</span>
+        <span class="crumb-sep" aria-hidden="true">›</span>
+        <strong class="crumb-cur" id="crumb-surface">Home</strong>
       </div>
-      <!-- Plan-level subtabs, restyled as a segmented control. Providers moved out to
-           the app-level sidebar (#side-nav); the plan-thread switcher lives in the
-           sidebar's threads list. -->
-      <nav id="surface-nav" aria-label="Surface switcher">
-        <button type="button" data-surface="home" aria-pressed="true">Home</button>
-        <button type="button" data-surface="plan" aria-pressed="false">Plan</button>
-        <button type="button" data-surface="consoles" aria-pressed="false">Consoles</button>
-        <button type="button" data-surface="agents" aria-pressed="false">Agents</button>
-      </nav>
       <span class="top-spacer"></span>
       <span id="health-flag" class="health-flag" data-tone="idle"><span class="tone-dot"></span><span id="health-text">loading</span></span>
       <span id="stop-chip" class="status-chip" data-tone="idle" data-present="false"><svg class="icon" style="width:13px;height:13px"><use href="#i-stop"/></svg><span id="stop-text">stop —</span></span>

@@ -286,9 +286,12 @@ body.side-rail { --side-col: var(--side-w-rail); }
   min-height: 44px;
 }
 
-/* breadcrumb — repo basename › current thread name (painted by app/plans). */
+/* breadcrumb — repo › thread › surface (repo painted by dock, thread by plans,
+   the surface tail by the router on each route change). Earlier segments are
+   muted; only the current surface reads strong. */
 .crumbs { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 0 1 auto; }
-.crumb-repo {
+.crumb-repo,
+.crumb-thread {
   color: var(--muted); font-size: 12px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; max-width: 28ch;
 }
@@ -365,7 +368,7 @@ body.historical #app {
 }
 body.historical #plan-banner { display: flex; grid-area: banner; }
 body.historical #btn-refresh { display: none; }
-#surface-nav button:disabled,
+#thread-subnav button:disabled,
 #side-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ----------------------------------------------------------------------- */
@@ -426,6 +429,44 @@ body.historical #btn-refresh { display: none; }
 .st-name { font-size: 12.5px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st-meta { font-family: var(--font-mono); font-size: 10px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* ---- thread sub-menu (0.12.0) — the active thread's surface sections
+   (Home / Plan / Consoles / Agents) as a nested tree under its row. One
+   persistent node (core/plans.js) re-parented on each threads repaint. ---- */
+#thread-subnav {
+  position: relative;
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 2px 0 8px; padding-left: 30px;
+}
+/* tree guide — a soft hairline rail under the thread row's tone dot */
+#thread-subnav::before {
+  content: ""; position: absolute; left: 15px; top: 3px; bottom: 3px;
+  width: 1px; background: var(--line-soft);
+}
+#thread-subnav button {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; min-height: 31px; padding: 0 9px;
+  border: 0; border-radius: 7px;
+  background: transparent; color: #52525b; text-align: left; cursor: pointer;
+  font-size: 12px; font-weight: 500;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+#thread-subnav button .icon { width: 14px; height: 14px; flex: none; color: var(--muted); }
+#thread-subnav button:hover:not(:disabled) { color: var(--ink); background: rgba(0, 0, 0, 0.03); }
+#thread-subnav button[aria-pressed="true"] { color: var(--ink); background: rgba(0, 0, 0, 0.06); }
+#thread-subnav button[aria-pressed="true"] .icon { color: var(--ink); }
+.tsn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the Consoles row's live-session count badge (C4, painted by main.js) */
+#thread-subnav button[data-live]:not([data-live=""])::after {
+  content: attr(data-live);
+  margin-left: auto;
+  min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 600 9px var(--font-mono); line-height: 1;
+  color: #fff; background: var(--tone-green-solid);
+  border-radius: var(--radius-pill);
+}
+
 #side-nav { flex: 0 0 auto; border-top: 1px solid var(--line-soft); padding: 10px; }
 #side-nav button .icon { width: 15px; height: 15px; flex: none; color: var(--muted); }
 #side-nav button[aria-pressed="true"] .icon { color: var(--ink); }
@@ -453,6 +494,15 @@ body.side-rail #side-nav { padding: 10px 8px; }
 body.side-rail .side-thread,
 body.side-rail #side-nav button { justify-content: center; gap: 0; padding: 4px 0; }
 body.side-rail .side-thread .tone-dot { width: 8px; height: 8px; }
+/* sub-menu in the rail: icon-only rows, centered, no tree guide; the title
+   attribute keeps each row identifiable, the live badge pins to the corner. */
+body.side-rail #thread-subnav { padding-left: 0; margin: 2px 0 6px; }
+body.side-rail #thread-subnav::before { display: none; }
+body.side-rail .tsn-label { display: none; }
+body.side-rail #thread-subnav button { justify-content: center; gap: 0; padding: 4px 0; }
+body.side-rail #thread-subnav button[data-live]:not([data-live=""])::after {
+  position: absolute; top: 2px; right: 4px; margin-left: 0;
+}
 
 /* Stat pills — compact inline chips in the single header row */
 .stat-strip {
@@ -1209,7 +1259,8 @@ button.dock-cell:hover { background: rgba(0, 0, 0, 0.04); }
 }
 @media (max-width: 560px) {
   #top-bar { padding: 0 10px; gap: 8px; }
-  .crumb-repo, .crumb-sep { display: none; }
+  /* narrow: keep only the current surface segment of the breadcrumb */
+  .crumb-repo, .crumb-thread, .crumb-sep { display: none; }
   #dock-gates, #dock-tasks { display: none; }
   #inspector { height: 92vh; }
 }

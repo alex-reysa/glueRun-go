@@ -1,47 +1,9 @@
 /* plan.css — the Plan surface (0.6.0 console redesign). Loaded after styles.css.
-   Warm-neutral pm-go tokens only (tokens.css). Owns the surface switcher, the
-   Plan workbench grid (header · 196px lens nav · center pane · 360px aside), and
-   the shared lens chrome (detail cards, dimming classes, scroll-shadow fades). */
-
-/* ---- surface switcher (stage-header segmented control, 0.11.0) ----
-   A quiet track with a white "raised" active segment (not a dark pill). */
-#surface-nav {
-  display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 8px;
-  background: var(--tone-zinc-bg);
-  border: 0;
-}
-#surface-nav button {
-  height: 27px;
-  padding: 0 11px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 550;
-  letter-spacing: -0.005em;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
-}
-#surface-nav button:hover { color: var(--ink); }
-#surface-nav button[aria-pressed="true"] {
-  background: #fff;
-  color: var(--ink);
-  box-shadow: 0 1px 3px #00000014;
-}
-/* Consoles nav button carries a small live-session count badge (C4). */
-#surface-nav button[data-surface="consoles"] { position: relative; }
-#surface-nav button[data-live]:not([data-live=""])::after {
-  content: attr(data-live);
-  position: absolute; top: -4px; right: -4px;
-  min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box;
-  display: inline-flex; align-items: center; justify-content: center;
-  font: 600 9px var(--font-mono); line-height: 1;
-  color: #fff; background: var(--tone-green-solid);
-  border-radius: var(--radius-pill); border: 1px solid var(--surface-page);
-}
+   Warm-neutral pm-go tokens only (tokens.css). Owns the Plan workbench grid
+   (header · 196px lens nav · center pane · 360px aside) and the shared lens
+   chrome (detail cards, dimming classes, scroll-shadow fades). The former
+   header surface switcher moved into the sidebar as the thread sub-menu
+   (#thread-subnav — styles.css, with the other sidebar rules). */
 
 /* ---- surfaces occupy the main grid cell; only the active one shows ---- */
 .surface { grid-area: main; min-height: 0; min-width: 0; background: var(--surface-page); }

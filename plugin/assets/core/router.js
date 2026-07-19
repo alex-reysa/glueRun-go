@@ -1,5 +1,5 @@
 /* core/router.js — the console's hash router. Owns which #surface-* is shown,
-   which surface-nav button is pressed, and the URL grammar:
+   which thread-subnav row is pressed, and the URL grammar:
 
      #<surface>[/<lens>[/<selection>[:<tab>]]]
      #plan/timeline|matrix|dag|tasks[/NODE:<id>|TASK-XXXX[:tab]]
@@ -102,6 +102,8 @@ export function surfaceVisible(name) {
   return !!el && el.dataset.active === "true";
 }
 
+const SURFACE_LABELS = { home: "Home", plan: "Plan", consoles: "Consoles", agents: "Agents", providers: "Providers" };
+
 function showSurface(name) {
   for (const s of SURFACES) {
     const el = document.getElementById("surface-" + s);
@@ -110,11 +112,16 @@ function showSurface(name) {
     el.dataset.active = String(on);
     el.hidden = !on;
   }
-  // aria-pressed is mirrored across BOTH navs: the header tab row (#surface-nav)
-  // and the app-level sidebar (#side-nav, which holds Providers in 0.10.0).
-  document.querySelectorAll("#surface-nav [data-surface], #side-nav [data-surface]").forEach((b) => {
+  // aria-pressed is mirrored across BOTH navs: the active thread's sub-menu
+  // (#thread-subnav — a persistent node core/plans.js re-parents under the
+  // active thread row) and the app-level sidebar (#side-nav, Providers).
+  document.querySelectorAll("#thread-subnav [data-surface], #side-nav [data-surface]").forEach((b) => {
     b.setAttribute("aria-pressed", String(b.dataset.surface === name));
   });
+  // Breadcrumb tail (repo › thread › SURFACE) — the earlier segments are painted
+  // by core/dock.js (repo) and core/plans.js (thread).
+  const crumb = document.getElementById("crumb-surface");
+  if (crumb) crumb.textContent = SURFACE_LABELS[name] || name;
 }
 
 // ------------------------------------------------------------- resolve -----
@@ -191,8 +198,11 @@ export function initRouter(options) {
   };
   bus.planVisible = () => surfaceVisible("plan");
 
-  // Surface switch: delegated on BOTH the header tab row and the app-level
+  // Surface switch: delegated on BOTH the thread sub-menu and the app-level
   // sidebar (Providers lives in #side-nav as of 0.10.0). Same click handler.
+  // #thread-subnav is a persistent node (core/plans.js builds it once and
+  // re-parents it across threads repaints), so this binding survives repaints;
+  // main.js init order (initPlans before initRouter) guarantees it exists here.
   const onNavClick = (e) => {
     const b = e.target.closest("[data-surface]");
     if (!b || b.disabled) return;
@@ -203,7 +213,7 @@ export function initRouter(options) {
     writeRoute(name, lens, null, null);
     applyRoute(currentRoute(), false);
   };
-  for (const id of ["surface-nav", "side-nav"]) {
+  for (const id of ["thread-subnav", "side-nav"]) {
     const nav = document.getElementById(id);
     if (nav) nav.addEventListener("click", onNavClick);
   }

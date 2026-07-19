@@ -102,16 +102,29 @@ count() { grep -o "$1" "$dom" 2>/dev/null | grep -c . || true; }
 # --- app-shell assertions ------------------------------------------------------
 assert_contains "$html" 'id="side-bar"' "left app sidebar (#side-bar) missing"
 
+# 0.12.0: the header tab row is gone; the surface tabs live in the sidebar as
+# the active thread's vertical sub-menu (#thread-subnav, painted by plans.js).
+assert_absent   "$html" 'id="surface-nav"'   "removed header #surface-nav still present"
+assert_contains "$html" 'id="thread-subnav"' "thread sub-menu (#thread-subnav) missing"
+
+# The sub-menu (and with it every data-surface button) must be nested inside
+# #side-bar: 4 sub-menu rows + the 1 providers row in #side-nav, nothing else.
+side="${html#*id=\"side-bar\"}"; side="${side%%</aside>*}"
+assert_contains "$side" 'id="thread-subnav"' "#thread-subnav not nested inside #side-bar"
+got="$(printf '%s' "$side" | grep -o 'data-surface=' | grep -c . || true)"
+[[ "$got" -eq 5 ]] \
+  || fail "expected 5 data-surface buttons inside #side-bar (4 sub-menu rows + providers), got $got"
+
 got="$(count 'data-surface="providers"')"
 [[ "$got" -eq 1 ]] || fail "expected data-surface=\"providers\" exactly once, got $got"
 
 got="$(count 'data-surface=')"
 [[ "$got" -eq 5 ]] \
-  || fail "expected 5 data-surface buttons (4 header tabs + 1 sidebar providers), got $got"
+  || fail "expected 5 data-surface buttons (4 sub-menu rows + 1 sidebar providers), got $got"
 
 for s in home plan consoles agents; do
   got="$(count "data-surface=\"$s\"")"
-  [[ "$got" -eq 1 ]] || fail "header tab data-surface=\"$s\" not present exactly once (got $got)"
+  [[ "$got" -eq 1 ]] || fail "sub-menu row data-surface=\"$s\" not present exactly once (got $got)"
 done
 
 assert_absent "$html" "plan-switcher-select" "removed header plan-switcher-select still present"

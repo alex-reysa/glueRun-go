@@ -1,11 +1,15 @@
-/* core/plans.js — the plan-thread registry client (0.8.0; sidebar threads 0.10.0).
+/* core/plans.js — the plan-thread registry client (0.8.0; sidebar threads 0.10.0;
+   thread sub-menu 0.12.0).
    Fetches /api/plans once at boot (and lazily as the pointer enters the threads
    column), owns the sidebar threads list (#side-threads-list — the live plan plus
-   every archived plan) and the historical-mode banner, and — in historical mode —
-   paints the archived plan's gates into the Plan workbench readout.
+   every archived plan) plus the active thread's surface sub-menu (#thread-subnav,
+   nested under whichever thread row is active) and the historical-mode banner,
+   and — in historical mode — paints the archived plan's gates into the Plan
+   workbench readout.
 
-   Import direction: plans.js → core/api.js only (never a surface, never app.js),
-   so it sits low in the graph and any surface + main.js may import it. The tiny
+   Import direction: plans.js → core/api.js only (never a surface, never app.js,
+   never the router — the active surface is read from location.hash instead), so
+   it sits low in the graph and any surface + main.js may import it. The tiny
    esc/fmtDate helpers are local (kept dependency-free on purpose). */
 
 import { activePlan, isHistorical, apiFetch, switchPlan } from "./api.js";
@@ -71,10 +75,65 @@ function threadRow(id, tone, active, name, meta) {
   </button>`;
 }
 
+// ------------------------------------------------------------- sub-menu -------
+// The active thread's surface sections, vertically under its row (0.12.0 — the
+// former header tab row). data-surface values / hashes are unchanged; the router
+// delegates clicks on this nav and mirrors aria-pressed on surface switches.
+const SURFACE_ROWS = [
+  ["home", "Home", "i-grid"],
+  ["plan", "Plan", "i-graph"],
+  ["consoles", "Consoles", "i-terminal"],
+  ["agents", "Agents", "i-hub"],
+];
+
+// The active surface, read from location.hash (mirrors router.currentRoute()'s
+// surface resolution, incl. the legacy #TASK-/#NODE:/#L1:/#PLAN hashes) so this
+// module needn't import the router (which imports app.js).
+function hashSurface() {
+  let raw = "";
+  try { raw = decodeURIComponent((location.hash || "").replace(/^#/, "")); } catch (e) {}
+  const first = raw.split("/")[0];
+  if (["home", "plan", "consoles", "agents", "providers"].includes(first)) return first;
+  if (/^(TASK-\d+|NODE:|L1:|PLAN$)/.test(raw)) return "plan";
+  return "home";
+}
+
+// The sub-menu is ONE persistent node, built once and re-parented under the
+// active thread row on every threads repaint — so the router's click delegation
+// and the consoles live badge (main.js writes dataset.live) survive repaints.
+let subnavEl = null;
+function ensureSubnav() {
+  if (subnavEl) return subnavEl;
+  subnavEl = document.createElement("nav");
+  subnavEl.id = "thread-subnav";
+  subnavEl.setAttribute("aria-label", "Thread sections");
+  subnavEl.innerHTML = SURFACE_ROWS.map(([s, label, ic]) =>
+    `<button type="button" data-surface="${s}" aria-pressed="false" title="${label}">
+      <svg class="icon" aria-hidden="true"><use href="#${ic}"/></svg><span class="tsn-label">${label}</span>
+    </button>`).join("");
+  return subnavEl;
+}
+
+// Re-sync row state after a repaint: aria-pressed from the hash (the router
+// mirrors it on subsequent switches), and the historical Agents disable —
+// Agents is a live-repo surface, unreachable while pinned to an archive.
+function syncSubnav() {
+  const cur = hashSurface();
+  for (const b of ensureSubnav().querySelectorAll("[data-surface]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.surface === cur));
+    if (b.dataset.surface === "agents") {
+      b.disabled = isHistorical();
+      b.title = isHistorical() ? "live only" : "Agents";
+    }
+  }
+}
+
 // ------------------------------------------------------------- threads --------
 // Paint the sidebar threads list: the live plan first (acts as back-to-live while
 // historical), then every archived plan newest-first. plansData==null (older
 // server) or an empty registry → just the live row (feature quietly minimal).
+// The surface sub-menu nests under whichever row is active (exactly one always
+// is: the live row in live mode, the pinned archived row in historical mode).
 function renderThreads() {
   const host = document.getElementById("side-threads-list");
   if (!host) return;
@@ -92,6 +151,8 @@ function renderThreads() {
     html += threadRow(activePlan, "integration", true, activePlan, "archived");
   }
   host.innerHTML = html;
+  const active = host.querySelector('.side-thread[data-active="true"]');
+  if (active) { syncSubnav(); active.insertAdjacentElement("afterend", ensureSubnav()); }
 }
 
 // ------------------------------------------------------------- breadcrumb -----
@@ -153,12 +214,11 @@ export function initPlans() {
   }
 
   if (isHistorical()) {
-    // Agents (header) + Providers (sidebar) are live-only surfaces — disable both;
-    // the selector spans navs since the two buttons now live in different bars.
-    for (const surface of ["agents", "providers"]) {
-      const nav = document.querySelector(`#surface-nav [data-surface="${surface}"], #side-nav [data-surface="${surface}"]`);
-      if (nav) { nav.disabled = true; nav.title = "live only"; }
-    }
+    // Providers (static #side-nav) is a live-only surface — disable it once here.
+    // The Agents row lives in the repainted #thread-subnav, so its disable is
+    // applied by syncSubnav() on every repaint instead.
+    const nav = document.querySelector('#side-nav [data-surface="providers"]');
+    if (nav) { nav.disabled = true; nav.title = "live only"; }
   }
 
   renderThreads();   // paints the live row (+ self-heal id) immediately
