@@ -67,6 +67,9 @@ The loop is healthy and making progress on the core area.
 ```
 ANS
     ;;
+  envelope)
+    printf '{"answer": "unwrapped prose from the envelope.", "proposedSettings": {"GLUERUN_L2_SLICE_BUDGET": "2"}}\n' >"$out"
+    ;;
   sleep) sleep 30 ;;
 esac
 SH
@@ -120,6 +123,22 @@ grep -q "$SECRET" "$root/argv.dump" && fail "question text leaked into runner ar
 evts="$(cat "$root/.gluerun-state/events.ndjson")"
 assert_contains "$evts" '"type":"supervisor.ask_started"' "ask_started event"
 assert_contains "$evts" '"type":"supervisor.ask_answered"' "ask_answered event"
+
+# --- 1b. JSON-envelope answer is unwrapped into prose ------------------------
+ask_id_env="ASK-test-envelope"
+mkdir -p "$root/.gluerun-state/runs/$ask_id_env"
+printf '%s\n' "envelope question" >"$root/.gluerun-state/runs/$ask_id_env/question.md"
+out="$(run_env STUB_MODE=envelope bash "$SCRIPT_DIR/ask.sh" --run-id "$ask_id_env" 2>&1)"
+assert_contains "$out" "state=done" "envelope answered"
+env_dir="$root/.gluerun-state/runs/$ask_id_env"
+grep -q "unwrapped prose from the envelope" "$env_dir/answer.md" || fail "envelope answer not unwrapped"
+grep -q '"answer"' "$env_dir/answer.md" && fail "answer.md still contains the JSON envelope"
+python3 - "$env_dir/ask.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["state"] == "done", d
+assert d["proposedSettings"] == {"GLUERUN_L2_SLICE_BUDGET": "2"}, d
+PY
 
 # --- 2. timeout: sleeping stub + short budget -> state timeout --------------
 ask_id2="ASK-test-two"

@@ -190,9 +190,30 @@ try:
         text = f.read()
 except Exception:
     text = ""
+
+
+def unwrap(t):
+    # Models sometimes ignore the plain-prose instruction and wrap the whole
+    # reply as {"answer": "..."} (optionally fenced). Unwrap so answer.md and
+    # the console chat always hold the prose itself.
+    s = t.strip()
+    m = re.fullmatch(r"```(?:json)?\s*(.*?)```", s, re.DOTALL | re.IGNORECASE)
+    if m:
+        s = m.group(1).strip()
+    try:
+        obj = json.loads(s)
+    except Exception:
+        return t, {}
+    if isinstance(obj, dict) and isinstance(obj.get("answer"), str):
+        ps = obj.get("proposedSettings")
+        return obj["answer"], (ps if isinstance(ps, dict) else {})
+    return t, {}
+
+
+text, env_proposed = unwrap(text)
 with open(answer_md, "w", encoding="utf-8") as f:
     f.write(text)
-proposed = {}
+proposed = {str(k): str(v) for k, v in env_proposed.items()}
 for block in reversed(re.findall(r"```json\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)):
     try:
         obj = json.loads(block.strip())
