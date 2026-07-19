@@ -28,6 +28,7 @@ const HOME = {
   inflight: false,
   timer: null,
   sig: null,
+  entering: false,     // true for exactly one route-entry render → cards `arrive` once
   dagUnsub: null,
   prov: null,          // last /api/providers payload (quota fields only)
   provInflight: false,
@@ -90,10 +91,17 @@ function signature() {
   const gates = d.gates ? `${d.gates.passed}/${d.gates.total}` : "-";
   const dag = getDag();
   const stages = dag ? (dag.stages || []).map((s) => `${s.id}:${s.passed}/${s.total}`).join("|") : "-";
+  const disk = S.snap && S.snap.disk;
   const snapExtra = S.snap ? [
     (S.snap.git && S.snap.git.drift && (S.snap.git.drift.left + "/" + S.snap.git.drift.right)) || "-",
-    (S.snap.disk && S.snap.disk.capacityPercent) || "-",
+    // disk: 5% buckets + the watch bit — a ±1–2% df flap must not rebuild Home
+    // (the tile may read up to 4% stale until any other component changes).
+    disk && disk.capacityPercent != null ? Math.round(disk.capacityPercent / 5) * 5 + (disk.watch ? "w" : "") : "-",
   ].join(",") : "-";
+  // Live-session chips (linksHtml) — exactly the fields the card consumes, so a
+  // quiet 2s sessions poll no-ops here instead of forcing a canvas rebuild.
+  const sess = (feedState().sessions || []).filter((s) => s.live && s.id !== "origin").slice(0, 6)
+    .map((s) => s.id + ":" + (s.taskId || s.node || "")).join("|");
   const pl = plansList();
   const plansSig = pl == null ? "np" : pl.map((p) => p.id + ":" + ((p.gates && p.gates.passed) != null ? p.gates.passed : "?")).join(",");
   // Supervisor + quota fold into the signature (the chat controller does NOT —
@@ -105,7 +113,7 @@ function signature() {
   return [d.health, (d.attention || []).length, gates, JSON.stringify(d.taskCounts || {}),
     JSON.stringify(d.dispatch || {}), d.stop, d.breaker && d.breaker.consecFails,
     d.backoff && d.backoff.active, d.lastActivityAt, abd, stages, snapExtra,
-    (d.frontier && d.frontier.count) || 0, plansSig, supSig, quotaSig()].join("::");
+    (d.frontier && d.frontier.count) || 0, plansSig, supSig, quotaSig(), sess].join("::");
 }
 
 // Per-provider quota signature — id/available/rounded %/resetsAt/plan/reason +
@@ -134,7 +142,7 @@ function render() {
   // Preserve chat focus across the rebuild (the draft itself rides CHAT.draft).
   const chatFocused = document.activeElement && document.activeElement.id === "home-sup-input";
   host.innerHTML =
-    `<div class="home-canvas">
+    `<div class="home-canvas${HOME.entering ? " is-entering" : ""}">
        ${heroHtml(d)}
        ${supervisorHtml(d)}
        ${gatesHtml(d)}
@@ -144,6 +152,7 @@ function render() {
        ${linksHtml(d)}
        ${prevPlansHtml()}
      </div>`;
+  consumeEntrance(host);
   // Repaint the relocated event feed + the supervisor chat into their freshly
   // rebuilt hosts (both live outside the signature, like renderActivityFeed).
   renderActivityFeed();
@@ -152,6 +161,18 @@ function render() {
     const inp = document.getElementById("home-sup-input");
     if (inp) { inp.focus(); const n = inp.value.length; try { inp.setSelectionRange(n, n); } catch (e) {} }
   }
+}
+
+// Route-entry entrance: exactly one canvas paint per activation carries
+// .is-entering (home.css scopes the card `arrive` animation under it), so data
+// rebuilds never replay the entrance. The class is dropped on animationend
+// (bubbles up from the cards) to keep the steady-state DOM unmarked.
+function consumeEntrance(host) {
+  if (!HOME.entering) return;
+  HOME.entering = false;
+  const canvas = host.firstElementChild;
+  if (!canvas) return;
+  canvas.addEventListener("animationend", () => canvas.classList.remove("is-entering"), { once: true });
 }
 
 // U4 — "Previous plans" card (live mode). Hidden when the endpoint is unavailable
@@ -186,11 +207,12 @@ function renderHistorical(host) {
   const sig = "hist::" + (e ? e.id + ":" + JSON.stringify(e.gates || {}) : "-") + "::" + stagesSig;
   if (sig === HOME.sig) return;
   HOME.sig = sig;
-  host.innerHTML = `<div class="home-canvas">
+  host.innerHTML = `<div class="home-canvas${HOME.entering ? " is-entering" : ""}">
     ${histHeroHtml(e)}
     ${histGatesHtml(e)}
     ${histLinksHtml()}
   </div>`;
+  consumeEntrance(host);
 }
 
 function histHeroHtml(e) {
@@ -559,6 +581,7 @@ async function seedChat() {
       runId: a.runId, question: a.question, state: a.state,
       answer: a.answer, proposedSettings: a.proposedSettings || {}, applied: {},
       createdAt: a.createdAt, answeredAt: a.answeredAt,
+      painted: true,   // history, not a new send — never entrance-animate it
     }));
     renderChat();
     const last = CHAT.items[CHAT.items.length - 1];
@@ -577,6 +600,9 @@ function renderChat() {
   }
   const atBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 48;
   host.innerHTML = CHAT.items.map(chatBubble).join("");
+  // Only an item's FIRST paint carries the arrive class (chatBubble) — repaints
+  // (pending→done flips, canvas rebuilds) must not re-animate the thread.
+  for (const it of CHAT.items) it.painted = true;
   if (atBottom) host.scrollTop = host.scrollHeight;
 }
 
@@ -594,7 +620,7 @@ function cleanAnswer(ans) {
 // supervisor's answer is open prose beside a small product glyph, with a quiet
 // provenance row (when answered · run id) — never enclosed in a chat bubble.
 function chatBubble(it) {
-  const q = `<div class="hchat-user">${esc(it.question || "")}</div>`;
+  const q = `<div class="hchat-user${it.painted ? "" : " is-new"}">${esc(it.question || "")}</div>`;
   let main;
   if (it.state === "pending" || it.state === "running") {
     main = `<div class="hchat-thinking"><span class="pulse-dot"></span>Thinking…</div>`;
@@ -734,7 +760,9 @@ function enableBriefings(btn) {
       if (res.status === 404 || res.status === 405 || res.status === 501) { toast("settings are read-only on this server"); if (btn) btn.disabled = false; return; }
       if (!res.ok) { toast(data.error ? String(data.error) : "could not enable"); if (btn) btn.disabled = false; return; }
       toast("auto-briefing on · every 15 min");
-      if (HOME.data && HOME.data.supervisor) { HOME.data.supervisor.enabled = true; HOME.data.supervisor.intervalMin = 15; HOME.sig = null; render(); }
+      // supervisor.enabled folds into supSig, so the mutation repaints through
+      // the signature gate — no reset needed.
+      if (HOME.data && HOME.data.supervisor) { HOME.data.supervisor.enabled = true; HOME.data.supervisor.intervalMin = 15; render(); }
     })
     .catch(() => { toast("could not enable"); if (btn) btn.disabled = false; });
 }
@@ -796,10 +824,11 @@ function mount() {
 export function initHome() {
   if (HOME.started) return; HOME.started = true;
   mount();
-  // Re-render when the shared dag (re)loads so per-stage bars fill in.
-  HOME.dagUnsub = onDag(() => { HOME.sig = null; render(); });
-  // A live-session change repaints the quick-links row (cheap; signature-gated).
-  subscribeSessions(() => { if (HOME.visible) { HOME.sig = null; render(); } }, () => HOME.visible);
+  // Dag stages and live-session chips are FOLDED INTO signature(), so these
+  // events just request a render — the sig gate no-ops a quiet poll instead of
+  // rebuilding an identical canvas (and replaying the entrance animation).
+  HOME.dagUnsub = onDag(() => render());
+  subscribeSessions(() => { if (HOME.visible) render(); }, () => HOME.visible);
   // Independent 10s poll — only ticks while Home is visible + the tab is shown.
   // Providers ride every 6th tick (~60s, aligned with the server's quota cache).
   HOME.timer = setInterval(() => {
@@ -813,11 +842,16 @@ export function initHome() {
 export function setHomeActive(on) {
   HOME.visible = on;
   if (on) {
+    // Route entry: the one legitimate signature reset (a fresh paint is due) and
+    // the only point that arms the entrance animation.
     HOME.sig = null;
+    HOME.entering = true;
     if (!getDag()) fetchDag();
     if (isHistorical()) {
       // Archived Home: registry entry (name/gates/tasks) + archived dag gate bars.
-      fetchPlans().then(() => { HOME.sig = null; render(); });
+      // The registry entry folds into the historical sig, so resolution repaints
+      // through the gate — no signature reset needed.
+      fetchPlans().then(() => render());
       render();
     } else {
       fetchHome();

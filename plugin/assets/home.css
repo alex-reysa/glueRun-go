@@ -26,8 +26,11 @@
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 15px;
-  animation: arrive 200ms var(--ease-out);
 }
+/* Cards rise in on ROUTE ENTRY only — surface.js marks the canvas .is-entering
+   for its first paint per activation and drops it on animationend. Data
+   rebuilds repaint without the class, so they never replay the entrance. */
+.home-canvas.is-entering .home-block { animation: arrive 200ms var(--ease-out); }
 .home-block-head {
   display: flex; align-items: center; gap: 10px;
   min-height: 42px; padding: 0 16px;
@@ -271,8 +274,10 @@
   background: #27272a; color: #fff;
   border-radius: 16px 16px 4px 16px; padding: 10px 14px;
   font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
-  animation: arrive 180ms var(--ease-out);
 }
+/* Only a NEWLY APPENDED bubble arrives (renderChat marks an item's first paint);
+   pending→done repaints and canvas rebuilds must not re-animate the thread. */
+.hchat-user.is-new { animation: arrive 180ms var(--ease-out); }
 /* assistant turn → glyph tile + open prose (no bubble) + a quiet metadata row */
 .hchat-agent { display: flex; align-items: flex-start; gap: 11px; }
 .hchat-glyph {
