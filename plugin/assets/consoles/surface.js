@@ -182,7 +182,8 @@ function renderPaneHead(rec) {
   const pf = promptFile(s);
   const promptChip = pf ? `<button class="co-prompt-chip" data-co-prompt="${escAttr(rec.el.dataset.id)}" data-co-prompt-file="${escAttr(pf)}" title="view the rendered prompt for this run">${icon("i-file")}prompt</button>` : "";
   rec.head.innerHTML =
-    `<span class="co-badge" data-layer="${b.layer}">${esc(b.txt)}<span class="tone-dot" data-tone="${dot}"></span></span>
+    `<span class="co-traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+     <span class="co-badge" data-layer="${b.layer}">${esc(b.txt)}<span class="tone-dot" data-tone="${dot}"></span></span>
      <span class="co-ident mono">${esc(ident(s))}</span>
      ${phase}${model}${promptChip}
      <span class="co-age mono">${esc(age)}</span>

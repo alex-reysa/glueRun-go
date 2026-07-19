@@ -234,7 +234,7 @@ function modelKnobHtml(p) {
     <span class="pv-model-label">model</span>
     <input class="pv-model-input" type="text" ${vocab.length ? `list="${listId}"` : ""} data-pv-model="${escAttr(p.id)}" data-key="${escAttr(key)}" data-baseline="${escAttr(cur)}" value="${escAttr(cur)}" placeholder="${escAttr(placeholder)}" autocomplete="off" spellcheck="false">
     ${vocab.length ? `<datalist id="${listId}">${vocab.map((m) => `<option value="${escAttr(m)}"></option>`).join("")}</datalist>` : ""}
-    <button class="pv-model-save" data-pv-model-save="${escAttr(p.id)}" disabled>Save</button>
+    <button class="primary-button compact pv-model-save" data-pv-model-save="${escAttr(p.id)}" disabled>Save</button>
     <code class="pv-model-key mono">${esc(key)}</code>
   </div>`;
 }
@@ -245,13 +245,13 @@ function actionButtonHtml(p) {
   if (p.isDefaultRunner) return `<span class="pv-default-cur"><span class="tone-dot" data-tone="success"></span>current default runner</span>`;
   const ok = p.installed && p.runnerPresent;
   const why = !p.installed ? "not installed" : !p.runnerPresent ? "no runner script" : "";
-  return `<button class="pv-default-btn" data-pv-default="${escAttr(p.id)}"${ok ? "" : " disabled"}${why ? ` title="${escAttr(why)}"` : ""}>Use as default runner</button>`;
+  return `<button class="secondary-button pv-default-btn" data-pv-default="${escAttr(p.id)}"${ok ? "" : " disabled"}${why ? ` title="${escAttr(why)}"` : ""}>Use as default runner</button>`;
 }
 function confirmHtml(p) {
   return `<span class="pv-confirm">
     <span class="pv-confirm-text">Make ${esc(p.name)} the default runner?</span>
-    <button class="pv-confirm-yes" data-pv-default-confirm="${escAttr(p.id)}">Confirm</button>
-    <button class="pv-confirm-no" data-pv-default-cancel="1">Cancel</button>
+    <button class="primary-button compact pv-confirm-yes" data-pv-default-confirm="${escAttr(p.id)}">Confirm</button>
+    <button class="secondary-button compact pv-confirm-no" data-pv-default-cancel="1">Cancel</button>
   </span>`;
 }
 
@@ -263,6 +263,7 @@ function cardHtml(p) {
   return `<article class="pv-card" data-provider="${escAttr(p.id)}" data-status="${escAttr(p.status || "")}" data-missing="${missing}" data-selected="${selected}" id="pv-card-${escAttr(p.id)}">
     <header class="pv-card-head">
       <span class="tone-dot pv-status-dot" data-tone="${tone}"></span>
+      ${p.status && !missing ? `<span class="pv-status-word">${esc(p.status)}</span>` : ""}
       <span class="pv-name">${esc(p.name || p.id)}</span>
       <span class="pv-binary mono">${esc(p.binary || p.id)}</span>
       <span class="pv-version mono" data-missing="${missing}">${esc(version)}</span>
@@ -279,7 +280,7 @@ function cardHtml(p) {
 // ------------------------------------------------------------- header ---------
 function summaryHtml(sum) {
   if (!sum) return "";
-  const chip = (n, label, tone) => n ? `<span class="pv-sum-chip"><span class="tone-dot" data-tone="${tone}"></span>${n} ${label}</span>` : "";
+  const chip = (n, label, tone) => n ? `<span class="pv-sum-chip" data-tone="${tone}"><span class="tone-dot" data-tone="${tone}"></span>${n} ${label}</span>` : "";
   return `<span class="pv-summary">
     ${chip(sum.ready, "ready", "success")}
     ${chip(sum.warning, "warning", "warn")}
@@ -297,7 +298,7 @@ function headHtml(d) {
     </div>
     <div class="pv-head-actions">
       ${checked ? `<span class="pv-checked mono">${esc(checked)}</span>` : ""}
-      <button class="pv-recheck" data-pv-recheck="1" title="re-probe every provider">${icon("i-refresh")}Recheck all</button>
+      <button class="secondary-button compact pv-recheck" data-pv-recheck="1" title="re-probe every provider">${icon("i-refresh")}Recheck all</button>
     </div>
   </div>`;
 }

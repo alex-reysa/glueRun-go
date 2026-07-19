@@ -134,7 +134,7 @@ function build() {
          </div>
        </div>
        <div class="pm-toolbar"${fitX && fitY ? " hidden" : ""}>
-         <button class="pm-follow" aria-pressed="${followOn}" title="Follow diagonal — scrolling right also scrolls down so the eye tracks the diagonal">${icon("i-arrowdown")}<span>Follow diagonal</span></button>
+         <button class="secondary-button pm-follow" aria-pressed="${followOn}" title="Follow diagonal — scrolling right also scrolls down so the eye tracks the diagonal">${icon("i-arrowdown")}<span>Follow diagonal</span></button>
        </div>
        <div class="plan-detail-card pm-detail" hidden></div>
      </div>`;

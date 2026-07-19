@@ -242,7 +242,7 @@ function renderGrid() {
        <span class="co-eyebrow">agent roles</span>
        <span class="ag-head-actions">
          <button class="insp-raw-btn" data-ag-rawconfig="1" title="view source · gluerun.config.json">{ }<span class="irb-label">config</span></button>
-         <button class="ag-sys-btn" id="ag-sys-btn" title="Edit all orchestration settings">${icon("i-cpu")}System settings</button>
+         <button class="secondary-button compact ag-sys-btn" id="ag-sys-btn" title="Edit all orchestration settings">${icon("i-cpu")}System settings</button>
        </span>
      </div>
      <div class="ag-grid" id="ag-grid">${CARDS.map(cardHtml).join("")}</div>
@@ -289,7 +289,7 @@ function detailHtml(card) {
   const pf = promptFileForCard(card);
   const promptSection = pf
     ? `<section class="ag-section"><div class="co-eyebrow">prompt</div>
-        <button class="ag-prompt-btn" data-ag-role-prompt="${escAttr(pf)}">${icon("i-file")}view role prompt<span class="ag-prompt-name mono">${esc(pf)}</span></button></section>`
+        <button class="secondary-button ag-prompt-btn" data-ag-role-prompt="${escAttr(pf)}">${icon("i-file")}view role prompt<span class="ag-prompt-name mono">${esc(pf)}</span></button></section>`
     : "";
 
   return `
@@ -378,7 +378,7 @@ function renderSettingEditor(rows, opts) {
   return `<div class="ag-set-editor" data-editor="${escAttr(opts.editorId || "ed")}">
     <datalist id="ag-model-list">${KNOWN_MODELS.map((m) => `<option value="${escAttr(m)}"></option>`).join("")}</datalist>
     ${body}
-    <div class="ag-set-editor-foot"><span class="ag-set-hint" hidden>unsaved changes</span><button class="ag-set-save" type="button" data-ag-save="${escAttr(opts.editorId || "ed")}" disabled>Save</button></div>
+    <div class="ag-set-editor-foot"><span class="ag-set-hint" hidden>unsaved changes</span><button class="primary-button compact ag-set-save" type="button" data-ag-save="${escAttr(opts.editorId || "ed")}" disabled>Save</button></div>
   </div>`;
 }
 
