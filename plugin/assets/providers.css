@@ -50,7 +50,7 @@
   border-radius: 15px;
   transition: box-shadow var(--dur-base) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
-.pv-card:hover { border-color: #616168; box-shadow: 0 4px 16px #64748b17; }
+.pv-card:hover { border-color: var(--muted); box-shadow: 0 4px 16px #64748b17; }
 .pv-card[data-missing="true"] {
   border-style: dashed; border-color: var(--line-strong);
   background: var(--surface-sunken); opacity: 0.72;
@@ -151,7 +151,7 @@
 .pv-quota[data-tone="warn"] .pvq-pct { color: var(--tone-amber-fg); }
 .pv-quota[data-tone="error"] .pvq-pct { color: var(--tone-red-fg); }
 .pvq-tracks { display: flex; flex-direction: column; gap: 4px; }
-.pvq-track { height: 3px; border-radius: 5px; background: #e4e4e7; overflow: hidden; }
+.pvq-track { height: 3px; border-radius: 5px; background: var(--track); overflow: hidden; }
 .pvq-track-sec { height: 3px; opacity: 0.7; }
 .pvq-fill { display: block; height: 100%; border-radius: 5px; background: var(--tone-blue-fg); transition: width var(--dur-base) var(--ease-out); }
 .pv-quota[data-tone="warn"] .pvq-fill { background: var(--tone-amber-dot); }

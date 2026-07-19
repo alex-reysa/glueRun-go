@@ -1391,6 +1391,7 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
         "l1Leases": l1_leases,
         "l2Tasks": l2_tasks,
         "agents": agents,
+        "loop": _snapshot_loop_liveness(repo),
         "summary": {
             "tasksTotal": len(tasks),
             "leasesTotal": len(leases),
@@ -4884,6 +4885,21 @@ def collect_raw(repo: Path, root: str, name: str) -> dict[str, Any] | None:
 # deliberately avoided so collect_home stays subprocess-free.
 
 HOME_L1_STALE_MINUTES = 120
+
+
+def _snapshot_loop_liveness(repo: Path) -> dict:
+    """Honest autonomate-daemon liveness for the status dock (0.11.0, additive).
+    agents.l0.state counts engine *processes* — tests and manual ops inflate
+    it — while this field answers only "is the loop daemon itself alive"
+    (pidfile + signal-0 probe, the same authority ops_health uses)."""
+    path = state_path(repo, "autonomate.pid")
+    pid: int | None = None
+    alive = False
+    if path.is_file():
+        m = re.search(r"\d+", path.read_text(errors="replace"))
+        pid = int(m.group(0)) if m else None
+        alive = _pid_alive(pid)
+    return {"pid": pid, "alive": alive}
 
 
 def _pid_alive(pid: Any) -> bool:

@@ -113,19 +113,21 @@ function renderCells() {
   const active = sc.active || 0;
   const blockedFailed = (sc.blocked || 0) + (sc.failed || 0);
 
-  // loop — the honest "alive" authority is the L0 state (active = live origin
-  // processes / lock; stopped = STOP sentinel + no processes; else idle). A calm
-  // blue pulse-dot while alive, a flat dot otherwise; the iteration number rides
-  // along from the overview loop status when it exists.
+  // loop — the daemon pidfile is the honest authority (snap.loop, additive
+  // 0.11.0 server field). agents.l0.state counts engine *processes*, which
+  // test suites and manual ops inflate — that reads as "engine busy", and only
+  // a live autonomate pid earns the blue pulse + "running".
   const l0 = (snap.agents && snap.agents.l0) || {};
-  const running = l0.state === "active";
+  const alive = !!(snap.loop && snap.loop.alive);
+  const busy = !alive && l0.state === "active";
   const iter = (ov && ov.pulse && ov.pulse.iteration != null) ? ov.pulse.iteration
     : (ov && ov.loop ? ov.loop.iteration : null);
   const loopDot = el("dock-loop-dot");
-  if (loopDot) loopDot.className = running ? "pulse-dot" : "state-dot";
-  setText("dock-loop-text", running
+  if (loopDot) loopDot.className = alive ? "pulse-dot" : "state-dot";
+  setText("dock-loop-text", alive
     ? ("running" + (iter != null ? " · iter " + iter : ""))
-    : (l0.state === "stopped" ? "loop stopped" : "loop idle"));
+    : busy ? "engine busy"
+      : (l0.state === "stopped" ? "loop stopped" : "loop idle"));
 
   // tasks — active (snapshot state counts) · ready (origin state / loop status).
   const ready = readyCount(snap, ov);

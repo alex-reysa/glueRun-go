@@ -91,7 +91,7 @@
 }
 .home-stage-bar:hover { background: var(--surface-hover); }
 .hsb-label { font-size: 10.5px; color: var(--muted); font-weight: 600; }
-.hsb-track { height: 3px; border-radius: 5px; background: #e4e4e7; overflow: hidden; }
+.hsb-track { height: 3px; border-radius: 5px; background: var(--track); overflow: hidden; }
 .hsb-fill { display: block; height: 100%; border-radius: 5px; background: var(--tone-blue-fg); transition: width var(--dur-base) var(--ease-out); }
 .hsb-fill.is-done { background: var(--tone-green-solid); }
 .hsb-count { font-size: 10.5px; color: var(--muted); }
@@ -198,7 +198,7 @@
 .hq-item + .hq-item { border-top: 1px solid var(--line-soft); }
 .hq-name { font-size: 12px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hq-tracks { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.hq-track { height: 3px; border-radius: 5px; background: #e4e4e7; overflow: hidden; }
+.hq-track { height: 3px; border-radius: 5px; background: var(--track); overflow: hidden; }
 .hq-track-sec { height: 3px; opacity: 0.7; }
 .hq-fill { display: block; height: 100%; border-radius: 5px; background: var(--tone-blue-fg); transition: width var(--dur-base) var(--ease-out); }
 .hq-item[data-tone="warn"] .hq-fill { background: var(--tone-amber-dot); }
@@ -324,5 +324,5 @@
   transition: background var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
 .hchat-send .icon { width: 15px; height: 15px; transform: rotate(180deg); }
-.hchat-send:hover:not(:disabled) { background: #3f3f46; }
+.hchat-send:hover:not(:disabled) { background: var(--body); }
 .hchat-send:disabled { opacity: 0.4; cursor: not-allowed; }

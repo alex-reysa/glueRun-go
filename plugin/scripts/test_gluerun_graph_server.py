@@ -3293,5 +3293,34 @@ class SessionsAssistantTests(unittest.TestCase):
         self.assertIn("ask-prompt.md", names)                    # prompt pane survives too
 
 
+class SnapshotLoopLivenessTests(unittest.TestCase):
+    """0.11.0: snap["loop"] carries honest autonomate-daemon liveness (pidfile +
+    signal-0), distinct from agents.l0.state's process-count heuristic."""
+
+    def test_no_pidfile(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / ".gluerun-state").mkdir()
+            self.assertEqual(srv._snapshot_loop_liveness(repo), {"pid": None, "alive": False})
+
+    def test_dead_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / ".gluerun-state").mkdir()
+            (repo / ".gluerun-state" / "autonomate.pid").write_text("999999999\n")
+            out = srv._snapshot_loop_liveness(repo)
+            self.assertEqual(out["pid"], 999999999)
+            self.assertFalse(out["alive"])
+
+    def test_live_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / ".gluerun-state").mkdir()
+            (repo / ".gluerun-state" / "autonomate.pid").write_text(f"{os.getpid()}\n")
+            out = srv._snapshot_loop_liveness(repo)
+            self.assertEqual(out["pid"], os.getpid())
+            self.assertTrue(out["alive"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

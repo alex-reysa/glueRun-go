@@ -1,8 +1,8 @@
 /* consoles.css — the Consoles surface (0.11.0 "Quiet Instrument").
    THE dark island of the console: the L0 supervisor pane and every session pane
-   are dark terminals (#18181b, #e4e4e7 mono) with #27272a title bars carrying
+   are dark terminals (var(--term-bg), var(--term-fg) mono) with var(--term-chrome) title bars carrying
    three traffic dots + a mono label + quiet controls. The streaming marker glows
-   mint (#6ee7b7, calm pulse). Everything AROUND the panes — the toggle bar and
+   mint (var(--term-accent), calm pulse). Everything AROUND the panes — the toggle bar and
    the recent rail — stays light, so the dark surface reads as a deliberate,
    bounded region, not the whole screen. Terminal row styles (.tl-*) come from
    styles.css and are re-inked here, scoped to .co-pane-body only (the light dock
@@ -22,8 +22,8 @@
 /* ---------------------------------------------------------------- L0 pane --- */
 .co-l0 {
   display: flex; flex-direction: column; min-height: 0; min-width: 0;
-  background: #18181b;
-  border: 1px solid #27272a;
+  background: var(--term-bg);
+  border: 1px solid var(--term-chrome);
   border-radius: 14px;
   overflow: hidden;
 }
@@ -48,19 +48,19 @@
 
 .co-l0-streams { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .co-stream { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.co-stream-events { flex: 3 1 0; border-bottom: 1px solid #27272a; }
+.co-stream-events { flex: 3 1 0; border-bottom: 1px solid var(--term-chrome); }
 .co-stream-sup { flex: 2 1 0; }
 .co-stream-sup[data-collapsed="true"] { flex: 0 0 28px; }
 .co-stream-sup[data-collapsed="true"] .co-pane-body { display: none; }
 .co-stream-label {
   flex: 0 0 auto; padding: 5px 12px;
   font: 600 10px var(--font-sans); letter-spacing: 0.1em; text-transform: uppercase;
-  color: #a1a1aa; background: #27272a;
+  color: var(--term-muted); background: var(--term-chrome);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   display: flex; align-items: center; gap: 6px;
 }
 .co-sup-toggle { border: 0; text-align: left; cursor: pointer; width: 100%; }
-.co-sup-toggle:hover { color: #e4e4e7; }
+.co-sup-toggle:hover { color: var(--term-fg); }
 .co-sup-toggle .icon { width: 12px; height: 12px; transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease-out); }
 .co-stream-sup[data-collapsed="true"] .co-sup-toggle .icon { transform: rotate(0deg); }
 
@@ -68,27 +68,27 @@
 .co-pane-body {
   flex: 1 1 auto; min-height: 0; overflow: auto;
   padding: 8px 12px 12px;
-  background: #18181b; color: #e4e4e7;
+  background: var(--term-bg); color: var(--term-fg);
   font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
 }
-.co-sup-empty { color: #71717a; font-size: 11px; font-family: var(--font-sans); padding: 6px 2px; }
-.co-pane-body .term-pane-loading { color: #71717a; }
+.co-sup-empty { color: var(--term-faint); font-size: 11px; font-family: var(--font-sans); padding: 6px 2px; }
+.co-pane-body .term-pane-loading { color: var(--term-faint); }
 
 /* re-ink the terminal rows for the dark surface (scoped — the dock stays light) */
 .co-pane-body .tl-message .tl-text,
-.co-pane-body .tl-cmd-line .tl-cmd-text { color: #e4e4e7; }
-.co-pane-body .tl-reasoning .tl-text { color: #a1a1aa; }
+.co-pane-body .tl-cmd-line .tl-cmd-text { color: var(--term-fg); }
+.co-pane-body .tl-reasoning .tl-text { color: var(--term-muted); }
 .co-pane-body .tl-message .tl-gutter { color: #93b4f5; }
-.co-pane-body .tl-cmd-line .tl-prompt { color: #6ee7b7; }
-.co-pane-body .tl-running { color: #6ee7b7; animation: calm-pulse 1.8s var(--ease-out) infinite; }
-.co-pane-body .tl-output { color: #a1a1aa; border-left-color: rgba(255, 255, 255, 0.12); }
+.co-pane-body .tl-cmd-line .tl-prompt { color: var(--term-accent); }
+.co-pane-body .tl-running { color: var(--term-accent); animation: calm-pulse 1.8s var(--ease-out) infinite; }
+.co-pane-body .tl-output { color: var(--term-muted); border-left-color: rgba(255, 255, 255, 0.12); }
 .co-pane-body .tl-file { color: #c4b5fd; }
-.co-pane-body .tl-file .tl-fkind { color: #71717a; }
-.co-pane-body .tl-event .tl-ev-ts { color: #71717a; }
-.co-pane-body .tl-event .tl-ev-type { color: var(--tone, #a1a1aa); }
-.co-pane-body .tl-event .tl-ev-msg { color: #a1a1aa; }
-.co-pane-body .tl-meta { color: #71717a; }
-.co-pane-body .tl-log { color: #a1a1aa; }
+.co-pane-body .tl-file .tl-fkind { color: var(--term-faint); }
+.co-pane-body .tl-event .tl-ev-ts { color: var(--term-faint); }
+.co-pane-body .tl-event .tl-ev-type { color: var(--tone, var(--term-muted)); }
+.co-pane-body .tl-event .tl-ev-msg { color: var(--term-muted); }
+.co-pane-body .tl-meta { color: var(--term-faint); }
+.co-pane-body .tl-log { color: var(--term-muted); }
 .co-pane-body .tl-output { background: transparent; }
 
 /* --------------------------------------------------------------- dynamic --- */
@@ -118,8 +118,8 @@
 /* pane — a dark terminal card */
 .co-pane {
   display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden;
-  background: #18181b;
-  border: 1px solid #27272a;
+  background: var(--term-bg);
+  border: 1px solid var(--term-chrome);
   border-radius: 14px;
   transition: opacity var(--dur-base) var(--ease-out), transform var(--dur-slow) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
@@ -129,41 +129,41 @@
 .co-pane.co-entering { opacity: 0; transform: translateY(6px); }
 .co-pane.co-solo { grid-column: 1 / -1; grid-row: 1 / -1; }
 
-/* title bar — #27272a with three traffic dots, mono label, quiet controls */
+/* title bar — var(--term-chrome) with three traffic dots, mono label, quiet controls */
 .co-pane-head {
   flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
   padding: 7px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: #27272a;
+  background: var(--term-chrome);
 }
 .co-traffic { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; margin-right: 2px; }
-.co-traffic i { width: 8px; height: 8px; border-radius: 999px; background: #f87171; }
-.co-traffic i:nth-child(2) { background: #fbbf24; }
-.co-traffic i:nth-child(3) { background: #34d399; }
+.co-traffic i { width: 8px; height: 8px; border-radius: 999px; background: var(--term-dot-red); }
+.co-traffic i:nth-child(2) { background: var(--term-dot-amber); }
+.co-traffic i:nth-child(3) { background: var(--term-dot-green); }
 .co-badge {
   display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
   padding: 1px 6px; border-radius: 5px;
   font: 700 10px var(--font-mono); letter-spacing: 0.04em;
-  background: rgba(255, 255, 255, 0.08); color: #e4e4e7;
+  background: rgba(255, 255, 255, 0.08); color: var(--term-fg);
 }
 .co-badge[data-layer="l1"] { background: color-mix(in srgb, var(--tone-blue-dot) 22%, transparent); color: #bcd3f7; }
-.co-ident { flex: 1 1 auto; min-width: 0; font-size: 11px; color: #a1a1aa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.co-phase { flex: 0 0 auto; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 5px; background: rgba(255, 255, 255, 0.08); color: #a1a1aa; }
+.co-ident { flex: 1 1 auto; min-width: 0; font-size: 11px; color: var(--term-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.co-phase { flex: 0 0 auto; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 5px; background: rgba(255, 255, 255, 0.08); color: var(--term-muted); }
 .co-phase-gate { background: color-mix(in srgb, var(--tone-amber-dot) 24%, transparent); color: #e8c98a; }
-.co-model { flex: 0 0 auto; font-size: 9.5px; color: #71717a; }
+.co-model { flex: 0 0 auto; font-size: 9.5px; color: var(--term-faint); }
 .co-prompt-chip {
   flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px;
   border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 5px;
-  background: transparent; color: #a1a1aa; font-size: 10px; cursor: pointer;
+  background: transparent; color: var(--term-muted); font-size: 10px; cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.co-prompt-chip:hover { border-color: rgba(255, 255, 255, 0.28); color: #e4e4e7; }
+.co-prompt-chip:hover { border-color: rgba(255, 255, 255, 0.28); color: var(--term-fg); }
 .co-prompt-chip .icon { width: 11px; height: 11px; }
-.co-age { flex: 0 0 auto; font-size: 10px; color: #71717a; }
+.co-age { flex: 0 0 auto; font-size: 10px; color: var(--term-faint); }
 .co-pane-ctls { display: inline-flex; gap: 2px; flex: 0 0 auto; }
 .co-ctl {
   display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 20px;
   border: 1px solid transparent; border-radius: 5px;
-  background: transparent; color: #a1a1aa;
+  background: transparent; color: var(--term-muted);
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .co-ctl .icon { width: 12px; height: 12px; }
@@ -176,8 +176,8 @@
   padding: 4px 10px; font-size: 10.5px; font-weight: 600;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
-.co-term-band[data-tone="success"] { background: color-mix(in srgb, var(--tone-green-dot) 20%, #18181b); color: #7bdcae; }
-.co-term-band[data-tone="error"] { background: color-mix(in srgb, var(--tone-red-dot) 22%, #18181b); color: #f4a3b4; }
+.co-term-band[data-tone="success"] { background: color-mix(in srgb, var(--tone-green-dot) 20%, var(--term-bg)); color: #7bdcae; }
+.co-term-band[data-tone="error"] { background: color-mix(in srgb, var(--tone-red-dot) 22%, var(--term-bg)); color: #f4a3b4; }
 
 /* idle card — an .absence-style empty state (light, outside the island) */
 .co-idle {

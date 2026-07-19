@@ -256,3 +256,18 @@
   --sans: var(--font-sans);
   --mono: var(--font-mono);
 }
+
+/* Terminal island — the one routine dark surface (consoles panes).
+   Quiet Instrument keeps all other chrome light; these tokens bound it. */
+:root {
+  --term-bg: #18181b;
+  --term-chrome: #27272a;
+  --term-fg: #e4e4e7;
+  --term-muted: #a1a1aa;
+  --term-faint: #71717a;
+  --term-accent: #6ee7b7;
+  --term-dot-red: #f87171;
+  --term-dot-amber: #fbbf24;
+  --term-dot-green: #34d399;
+  --track: #e4e4e7; /* progress/gauge track + kbd border gray */
+}

@@ -26,7 +26,7 @@
   transition: box-shadow var(--dur-base) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .ag-card[data-active="false"] { opacity: 0.72; }
-.ag-card:hover { border-color: #616168; box-shadow: 0 4px 16px #64748b17; }
+.ag-card:hover { border-color: var(--muted); box-shadow: 0 4px 16px #64748b17; }
 
 .ag-avatar-wrap { position: relative; }
 .ag-avatar {
@@ -152,7 +152,7 @@ select.ag-set-input { appearance: none; padding-right: 26px; }
 .ag-set-unit { position: absolute; right: 10px; font-size: 10.5px; color: var(--text-faint); pointer-events: none; }
 .ag-set-toggle {
   width: 42px; height: 24px; border-radius: 999px; border: 1px solid var(--line-soft);
-  background: #f4f4f5; position: relative; cursor: pointer; flex: none; padding: 0;
+  background: var(--tone-zinc-bg); position: relative; cursor: pointer; flex: none; padding: 0;
   transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .ag-set-toggle[aria-checked="true"] { background: var(--tone-green-solid); border-color: var(--tone-green-solid); }
