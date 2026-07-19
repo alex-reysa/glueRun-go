@@ -172,7 +172,7 @@ function prevPlansHtml() {
     : `<div class="home-empty">No archived plans yet — run <code>gluerun plan archive</code> when a DAG completes.</div>`;
   return `<section class="home-block home-prevplans">
     <div class="home-block-head"><span class="home-eyebrow">previous plans</span></div>
-    <div class="home-plan-list">${body}</div>
+    <div class="hb-body"><div class="home-plan-list">${body}</div></div>
   </section>`;
 }
 
@@ -231,21 +231,23 @@ function histGatesHtml(e) {
   return `<section class="home-block home-gates">
     <div class="home-block-head"><span class="home-eyebrow">gates</span>
       <span class="home-gates-val mono">${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}</span></div>
-    <div class="home-stage-bars">${bars}</div>
+    <div class="hb-body"><div class="home-stage-bars">${bars}</div></div>
   </section>`;
 }
 
 function histLinksHtml() {
   const link = (hash, label) => `<button class="home-link-chip" data-hist-link="${escAttr(hash)}"><span class="tone-dot" data-tone="idle"></span>${esc(label)}</button>`;
   return `<section class="home-block home-links home-hist-links">
-    <div class="home-links-col">
-      <div class="home-eyebrow">browse this plan</div>
-      <div class="home-link-row">
-        ${link("#plan/timeline", "Timeline")}
-        ${link("#plan/dag", "DAG")}
-        ${link("#plan/matrix", "Matrix")}
-        ${link("#plan/tasks", "Tasks")}
-        ${link("#consoles", "Consoles")}
+    <div class="hb-body home-links-body">
+      <div class="home-links-col">
+        <div class="home-eyebrow">browse this plan</div>
+        <div class="home-link-row">
+          ${link("#plan/timeline", "Timeline")}
+          ${link("#plan/dag", "DAG")}
+          ${link("#plan/matrix", "Matrix")}
+          ${link("#plan/tasks", "Tasks")}
+          ${link("#consoles", "Consoles")}
+        </div>
       </div>
     </div>
   </section>`;
@@ -266,7 +268,12 @@ function heroHtml(d) {
           <span class="tone-dot" data-tone="${sev}"></span>
           <span class="home-att-text">${esc(a.text)}</span>${raw}</div>`;
       }).join("")
-    : `<div class="home-att-clear"><span class="tone-dot" data-tone="success"></span>all clear — no attention items</div>`;
+    // The walk-away moment: nothing is in the operator's action queue.
+    : `<div class="home-clear">
+         <span class="home-clear-tile">${icon("i-check")}</span>
+         <span class="home-clear-title">All clear</span>
+         <p class="home-clear-sub">Nothing needs you — no blocked or failed work in the queue.</p>
+       </div>`;
   return `<section class="home-hero">
     <div class="home-hero-head">
       <span class="home-health status-chip" data-tone="${tone}"><span class="tone-dot" data-tone="${tone}"></span><span>${esc(label)}</span></span>
@@ -321,7 +328,7 @@ function supervisorHtml(d) {
   } else if (!sup.enabled) {
     body = `<div class="home-sup-off">
       <span class="home-sup-offtext">periodic briefings are off</span>
-      <button class="home-sup-enable" data-sup-enable title="set GLUERUN_SUPERVISOR_INTERVAL_MIN=15">enable auto-briefing</button>
+      <button class="secondary-button compact home-sup-enable" data-sup-enable title="set GLUERUN_SUPERVISOR_INTERVAL_MIN=15">enable auto-briefing</button>
     </div>`;
   } else {
     body = `<div class="home-sup-off"><span class="home-sup-offtext">no briefing yet — refresh to generate one</span></div>`;
@@ -331,15 +338,19 @@ function supervisorHtml(d) {
     <div class="home-block-head">
       <span class="home-eyebrow">supervisor</span>
       <span class="home-sup-stage">${esc(stage)}</span>
-      <button class="home-sup-refresh" data-sup-refresh title="request a fresh briefing">${icon("i-refresh")}refresh briefing</button>
+      <button class="secondary-button compact home-sup-refresh" data-sup-refresh title="request a fresh briefing">${icon("i-refresh")}refresh briefing</button>
     </div>
-    ${loopNote}
-    ${body}
-    <div class="home-sup-chatwrap">
-      <div class="hchat-thread" id="home-sup-chat" role="log" aria-live="polite" aria-label="Supervisor chat"></div>
-      <div class="hchat-inputrow">
-        <textarea id="home-sup-input" class="hchat-input" rows="1" placeholder="ask the supervisor…" autocomplete="off" spellcheck="false">${esc(CHAT.draft)}</textarea>
-        <button class="hchat-send" data-sup-send>Send</button>
+    <div class="hb-body">
+      ${loopNote}
+      ${body}
+      <div class="home-sup-chatwrap">
+        <div class="hchat-thread" id="home-sup-chat" role="log" aria-live="polite" aria-label="Supervisor chat"></div>
+        <div class="hchat-composer">
+          <textarea id="home-sup-input" class="hchat-input" rows="1" placeholder="ask the supervisor…" autocomplete="off" spellcheck="false">${esc(CHAT.draft)}</textarea>
+          <div class="hchat-composer-rail">
+            <button class="hchat-send" data-sup-send aria-label="Send">${icon("i-arrowdown")}</button>
+          </div>
+        </div>
       </div>
     </div>
   </section>`;
@@ -363,7 +374,7 @@ function quotaHtml() {
   if (!rows.length) return "";
   return `<section class="home-block home-quota">
     <div class="home-block-head"><span class="home-eyebrow">provider quotas</span></div>
-    <div class="hq-list">${rows.join("")}</div>
+    <div class="hb-body"><div class="hq-list">${rows.join("")}</div></div>
   </section>`;
 }
 
@@ -433,24 +444,26 @@ function gatesHtml(d) {
   return `<section class="home-block home-gates">
     <div class="home-block-head"><span class="home-eyebrow">gates</span>
       <span class="home-gates-val mono">${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}</span></div>
-    <div class="home-stage-bars">${bars}</div>
+    <div class="hb-body"><div class="home-stage-bars">${bars}</div></div>
   </section>`;
 }
 
-// 3. Activity — relocated live feed (left) + 14-day sparkline (right).
+// 3. Activity — relocated live feed (left) + 14-day sparkline (right), one card.
 function activityHtml(d) {
   return `<section class="home-block home-activity">
-    <div class="home-activity-events">
-      <div class="home-block-head">
-        <span class="home-eyebrow">activity</span>
-        <span class="home-activity-pulse" id="home-activity-pulse" data-state="idle"><span class="tone-dot" data-tone="idle"></span><span id="home-activity-pulse-text">—</span></span>
-        <span class="home-activity-rate mono" id="home-activity-rate"></span>
-      </div>
-      <div class="home-feed ov-feed" id="home-activity-feed" role="log" aria-live="polite" aria-label="Live orchestration events"></div>
+    <div class="home-block-head">
+      <span class="home-eyebrow">activity</span>
+      <span class="home-activity-pulse" id="home-activity-pulse" data-state="idle"><span class="tone-dot" data-tone="idle"></span><span id="home-activity-pulse-text">—</span></span>
+      <span class="home-activity-rate mono" id="home-activity-rate"></span>
     </div>
-    <div class="home-activity-chart">
-      <div class="home-block-head"><span class="home-eyebrow">last 14 days</span></div>
-      ${sparklineHtml(d.activityByDay || [])}
+    <div class="hb-body home-activity-body">
+      <div class="home-activity-events">
+        <div class="home-feed ov-feed" id="home-activity-feed" role="log" aria-live="polite" aria-label="Live orchestration events"></div>
+      </div>
+      <div class="home-activity-chart">
+        <div class="home-eyebrow">last 14 days</div>
+        ${sparklineHtml(d.activityByDay || [])}
+      </div>
     </div>
   </section>`;
 }
@@ -494,7 +507,7 @@ function tilesHtml(d) {
   };
   return `<section class="home-block home-tiles">
     <div class="home-block-head"><span class="home-eyebrow">throughput &amp; limits</span></div>
-    <div class="home-tile-row">
+    <div class="hb-body"><div class="home-tile-row">
       ${tile("dispatched", `${dp.launched != null ? dp.launched : 0}`)}
       ${tile("pid alive", `${dp.pidAlive != null ? dp.pidAlive : 0}`)}
       ${tile("active", `${tc.active || 0}`, { filter: "active", tone: (tc.active || 0) > 0 ? "active" : "" })}
@@ -503,7 +516,7 @@ function tilesHtml(d) {
       ${tile("failed", `${tc.failed || 0}`, { filter: "failed", tone: (tc.failed || 0) > 0 ? "error" : "" })}
       ${tile("drift", drift ? `${drift.left} · ${drift.right}` : "—")}
       ${tile("disk", disk && disk.capacityPercent != null ? disk.capacityPercent + "%" : "—", { tone: disk && disk.watch ? "warn" : "" })}
-    </div>
+    </div></div>
   </section>`;
 }
 
@@ -518,13 +531,15 @@ function linksHtml(d) {
     `<button class="home-link-chip" data-session-link="${escAttr(s.id)}"><span class="tone-dot" data-tone="success"></span>${esc(s.taskId || s.node || s.id)}</button>`).join("")
     || `<span class="home-empty">no live sessions</span>`;
   return `<section class="home-block home-links">
-    <div class="home-links-col">
-      <div class="home-eyebrow">frontier nodes</div>
-      <div class="home-link-row">${frChips}</div>
-    </div>
-    <div class="home-links-col">
-      <div class="home-eyebrow">live sessions</div>
-      <div class="home-link-row">${sessChips}</div>
+    <div class="hb-body home-links-body">
+      <div class="home-links-col">
+        <div class="home-eyebrow">frontier nodes</div>
+        <div class="home-link-row">${frChips}</div>
+      </div>
+      <div class="home-links-col">
+        <div class="home-eyebrow">live sessions</div>
+        <div class="home-link-row">${sessChips}</div>
+      </div>
     </div>
   </section>`;
 }
@@ -543,6 +558,7 @@ async function seedChat() {
     CHAT.items = (data.asks || []).slice().reverse().map((a) => ({
       runId: a.runId, question: a.question, state: a.state,
       answer: a.answer, proposedSettings: a.proposedSettings || {}, applied: {},
+      createdAt: a.createdAt, answeredAt: a.answeredAt,
     }));
     renderChat();
     const last = CHAT.items[CHAT.items.length - 1];
@@ -574,14 +590,17 @@ function cleanAnswer(ans) {
   return s.trim();
 }
 
+// AI-thread archetype: the user instruction is a compact dark block, the
+// supervisor's answer is open prose beside a small product glyph, with a quiet
+// provenance row (when answered · run id) — never enclosed in a chat bubble.
 function chatBubble(it) {
-  const q = `<div class="hchat-q"><div class="hchat-role">you</div><div class="hchat-text">${esc(it.question || "")}</div></div>`;
-  let a;
+  const q = `<div class="hchat-user">${esc(it.question || "")}</div>`;
+  let main;
   if (it.state === "pending" || it.state === "running") {
-    a = `<div class="hchat-a hchat-pending"><div class="hchat-role">supervisor</div><div class="hchat-text"><span class="hchat-dots"><span></span><span></span><span></span></span>thinking…</div></div>`;
+    main = `<div class="hchat-thinking"><span class="pulse-dot"></span>Thinking…</div>`;
   } else if (it.state === "error" || it.state === "timeout") {
     const msg = it.state === "timeout" ? "the supervisor ran out of time" : "the supervisor could not answer";
-    a = `<div class="hchat-a" data-state="${esc(it.state)}"><div class="hchat-role">supervisor</div><div class="hchat-text hchat-err">${esc(msg)}</div></div>`;
+    main = `<p class="hchat-prose hchat-err">${esc(msg)}</p>`;
   } else {
     const ans = cleanAnswer(it.answer);
     const body = ans ? esc(ans).replace(/\n/g, "<br>") : "(no answer)";
@@ -589,11 +608,26 @@ function chatBubble(it) {
     const chips = keys.map((k) => {
       const v = it.proposedSettings[k];
       const done = it.applied && it.applied[k];
-      return `<button class="hchat-apply" data-apply-key="${escAttr(k)}" data-apply-value="${escAttr(v)}" data-apply-run="${escAttr(it.runId)}"${done ? " disabled data-applied=\"true\"" : ""}>${done ? "applied" : "apply"} <code class="mono">${esc(shortKey(k))} → ${esc(v)}</code></button>`;
+      return `<button class="hchat-apply" data-apply-key="${escAttr(k)}" data-apply-value="${escAttr(v)}" data-apply-run="${escAttr(it.runId)}"${done ? " disabled data-applied=\"true\"" : ""}>${done ? "applied" : "apply"} <code>${esc(shortKey(k))} → ${esc(v)}</code></button>`;
     }).join("");
-    a = `<div class="hchat-a"><div class="hchat-role">supervisor</div><div class="hchat-text">${body}</div>${chips ? `<div class="hchat-applies">${chips}</div>` : ""}</div>`;
+    main = `<p class="hchat-prose">${body}</p>${chips ? `<div class="hchat-applies">${chips}</div>` : ""}${chatMetaHtml(it)}`;
   }
-  return `<div class="hchat-turn">${q}${a}</div>`;
+  return `<div class="hchat-turn">${q}
+    <div class="hchat-agent">
+      <span class="hchat-glyph">${icon("i-grid")}</span>
+      <div class="hchat-agent-main">${main}</div>
+    </div></div>`;
+}
+
+// The quiet provenance row under a supervisor answer: honest fields only —
+// when it was answered, and the ask run id (no fabricated model / links).
+function chatMetaHtml(it) {
+  const bits = [];
+  const when = it.answeredAt || it.createdAt;
+  if (when) bits.push(`briefed ${esc(relTime(when))} ago`);
+  if (it.runId && !/^pending-/.test(it.runId)) bits.push(`<span class="hchat-run">${esc(it.runId)}</span>`);
+  if (!bits.length) return "";
+  return `<div class="hchat-meta">${bits.join('<span aria-hidden="true">·</span>')}</div>`;
 }
 
 // Send the current draft: optimistic pending bubble → POST /api/ask → poll to a
@@ -649,6 +683,7 @@ async function pollAsk(runId) {
     const it = CHAT.items.find((x) => x.runId === runId);
     if (!it) { stopPoll(); return; }
     it.state = d.state; it.answer = d.answer; it.proposedSettings = d.proposedSettings || {};
+    it.answeredAt = d.answeredAt || it.answeredAt; it.createdAt = it.createdAt || d.createdAt;
     renderChat();
     if (d.state === "done" || d.state === "error" || d.state === "timeout") stopPoll();
   } catch (e) { /* transient — keep polling until the cap */ }

@@ -27,6 +27,26 @@ const setText = (id, t) => { const n = el(id); if (n) n.textContent = t; };
 const toggleClass = (id, cls, on) => { const n = el(id); if (n) n.classList.toggle(cls, !!on); };
 const basename = (p) => String(p || "").replace(/\/+$/, "").split("/").pop() || "";
 
+// Codex subscription-quota cell (0.11.0). The dock fetches /api/providers on init
+// and every 150 snapshot ticks (~5min; the server caches the quota probe for 60s),
+// reading ONLY codex's headless-usage percent — the one provider that exposes it.
+// Plain GET, never in historical mode. When codex has no usable percent the cell
+// is omitted entirely rather than fabricate a value. See renderCells() for paint.
+let provTick = 0;
+let codexPct = null;   // rounded used-percent, or null when unavailable
+async function fetchDockQuota() {
+  if (isHistorical()) { codexPct = null; renderCells(); return; }
+  try {
+    const res = await fetch("/api/providers", { cache: "no-store" });
+    if (!res.ok) return;   // keep last-known on a transient miss
+    const d = await res.json();
+    const codex = (d.providers || []).find((p) => p.id === "codex");
+    const q = codex && codex.quota;
+    codexPct = (q && q.available && q.usedPercent != null) ? Math.max(0, Math.round(q.usedPercent)) : null;
+    renderCells();
+  } catch (e) { /* quota is a quiet cell; a miss just keeps the last value */ }
+}
+
 // Ready-task count: the /api/state origin-state projection when present (it may be
 // a list of ids OR a count, depending on the origin-state version), else the
 // /api/overview loop status. Both are already in the store — no new fetch.
@@ -73,6 +93,20 @@ function renderCells() {
     setText("dock-hist-text", "viewing archived plan " + name);
     return;
   }
+
+  // codex quota — omitted entirely when unavailable; ochre attention ≥75%.
+  const qEl = el("dock-quota");
+  if (qEl) {
+    if (codexPct == null) { qEl.hidden = true; }
+    else {
+      qEl.hidden = false;
+      setText("dock-quota-text", "codex " + codexPct + "%");
+      const qd = el("dock-quota-dot");
+      if (qd) qd.className = "state-dot" + (codexPct >= 75 ? " needs-you" : "");
+      qEl.classList.toggle("attention-cell", codexPct >= 75);
+    }
+  }
+
   if (!snap) return;
 
   const sc = (snap.summary && snap.summary.stateCounts) || {};
@@ -129,7 +163,12 @@ export function initDock() {
     if (cell) { location.hash = cell.dataset.dockNav; }
   });
   renderCells();   // paint immediately (pre-snapshot → placeholders; fills on first tick)
+  fetchDockQuota();   // one codex-quota probe on init; refreshed every 150 ticks
 }
 
-// Called from the shared snapshot dispatcher (main.js) — no independent polling.
-export function dockTick() { renderCells(); }
+// Called from the shared snapshot dispatcher (main.js). The only fetch is the
+// codex-quota probe every 150 ticks (~5min); every other cell is snapshot-derived.
+export function dockTick() {
+  renderCells();
+  if ((++provTick) % 150 === 0) fetchDockQuota();
+}

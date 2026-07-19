@@ -240,9 +240,12 @@
         <button class="dock-cell" id="dock-breaker" type="button" data-dock-nav="#home" title="Circuit breaker" hidden>
           <span id="dock-breaker-text"></span>
         </button>
-        <!-- TODO(phase2): a "codex NN%" quota cell — needs the /api/providers quota
-             payload cached client-side off the Home surface before it can render an
-             honest value; omitted in Phase 1 rather than fabricate one. -->
+        <!-- codex subscription quota (0.11.0) — painted by core/dock.js from its own
+             /api/providers probe (codex is the only provider exposing headless usage).
+             Hidden until a usable percent exists; never fabricated. -->
+        <button class="dock-cell" id="dock-quota" type="button" data-dock-nav="#providers" title="Codex subscription usage" hidden>
+          <span class="state-dot" id="dock-quota-dot"></span><span id="dock-quota-text"></span>
+        </button>
       </div>
       <div class="dock-hist" id="dock-hist" hidden>
         <span class="dock-cell dock-hist-msg" id="dock-hist-text">viewing archived plan</span>
