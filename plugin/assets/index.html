@@ -107,32 +107,35 @@
   </svg>
 
   <main id="app">
-    <!-- TOP STATUS / CONTROL BAR — single row -->
-    <header id="top-bar" class="glass">
-      <div class="brand">
-        <span class="glyph"><svg class="icon"><use href="#i-grid"/></svg></span>
-        <span>gluerun</span>
+    <!-- STAGE HEADER (0.11.0) — over the work surface only; the brand moved into
+         the full-height rail, the conn dot + updated-age moved into the status dock.
+         Left→right: breadcrumb · segmented surface tabs · spacer · health/stop · refresh. -->
+    <header id="top-bar">
+      <div class="crumbs" aria-label="Location">
+        <span class="crumb crumb-repo" id="crumb-repo">—</span>
+        <span class="crumb-sep" aria-hidden="true">›</span>
+        <strong class="crumb-cur" id="crumb-plan">Current plan</strong>
       </div>
-      <!-- Plan-level subtabs. Providers moved out to the app-level sidebar (#side-nav)
-           in 0.10.0; the plan-thread switcher moved to the sidebar's threads list. -->
+      <!-- Plan-level subtabs, restyled as a segmented control. Providers moved out to
+           the app-level sidebar (#side-nav); the plan-thread switcher lives in the
+           sidebar's threads list. -->
       <nav id="surface-nav" aria-label="Surface switcher">
         <button type="button" data-surface="home" aria-pressed="true">Home</button>
         <button type="button" data-surface="plan" aria-pressed="false">Plan</button>
         <button type="button" data-surface="consoles" aria-pressed="false">Consoles</button>
         <button type="button" data-surface="agents" aria-pressed="false">Agents</button>
       </nav>
+      <span class="top-spacer"></span>
       <span id="health-flag" class="health-flag" data-tone="idle"><span class="tone-dot"></span><span id="health-text">loading</span></span>
       <span id="stop-chip" class="status-chip" data-tone="idle" data-present="false"><svg class="icon" style="width:13px;height:13px"><use href="#i-stop"/></svg><span id="stop-text">stop —</span></span>
-      <span class="top-spacer"></span>
-      <span class="conn"><span id="conn-dot" data-state="down"></span><span>updated</span><span id="refresh-age">—</span></span>
-      <button id="btn-refresh" class="btn primary" title="Reload snapshot"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button>
+      <button id="btn-refresh" class="primary-button compact" title="Reload snapshot"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button>
     </header>
 
     <!-- HISTORICAL BANNER — shown only when pinned to an archived plan (?plan=). -->
     <div id="plan-banner" hidden>
       <span class="pb-dot" aria-hidden="true"></span>
       <span class="pb-text">Viewing archived plan — read-only</span>
-      <button id="pb-back" class="btn pb-back" type="button">Back to live</button>
+      <button id="pb-back" class="secondary-button compact pb-back" type="button">Back to live</button>
     </div>
 
     <!-- APP-LEVEL LEFT SIDEBAR (0.10.0) — plan threads (live + archived) up top,
@@ -141,6 +144,13 @@
          beside Providers in #side-nav. Rows are painted by core/plans.js
          (threads) and are static markup (nav). Collapses to an icon rail. -->
     <aside id="side-bar">
+      <div class="side-brand">
+        <span class="brand-mark"><svg class="icon"><use href="#i-grid"/></svg></span>
+        <span class="brand-copy">
+          <strong>gluerun</strong>
+          <small id="brand-repo">—</small>
+        </span>
+      </div>
       <div id="side-threads">
         <div class="side-eyebrow">threads</div>
         <div id="side-threads-list"></div>
@@ -206,6 +216,42 @@
     <section id="surface-home" class="surface" data-active="false" hidden>
       <div class="home-body" id="home-body"></div>
     </section>
+
+    <!-- PERSISTENT STATUS DOCK (0.11.0) — the ambient system-state layer, painted
+         each snapshot tick by core/dock.js from the app.js store (S.snap + the
+         already-polled S.overview). Cells navigate via hash (no data-surface, so the
+         shell test's tab count is unaffected). Right cluster holds repo·branch and
+         the relocated conn dot + updated-age (#conn-dot / #refresh-age keep the ids
+         app.js writes to). -->
+    <footer id="status-dock" aria-label="System status">
+      <div class="dock-live" id="dock-live">
+        <button class="dock-cell" id="dock-loop" type="button" data-dock-nav="#home" title="Autonomous loop">
+          <span class="state-dot" id="dock-loop-dot"></span><span id="dock-loop-text">loop —</span>
+        </button>
+        <button class="dock-cell" id="dock-tasks" type="button" data-dock-nav="#plan/tasks" title="Open tasks">
+          <span id="dock-tasks-text">— active · — ready</span>
+        </button>
+        <button class="dock-cell" id="dock-gates" type="button" data-dock-nav="#plan/timeline" title="Gate progress">
+          <span id="dock-gates-text">gates —/—</span>
+        </button>
+        <button class="dock-cell" id="dock-attention" type="button" data-dock-nav="#home" title="Items that need you">
+          <span class="state-dot" id="dock-attention-dot"></span><span id="dock-attention-text">—</span>
+        </button>
+        <button class="dock-cell" id="dock-breaker" type="button" data-dock-nav="#home" title="Circuit breaker" hidden>
+          <span id="dock-breaker-text"></span>
+        </button>
+        <!-- TODO(phase2): a "codex NN%" quota cell — needs the /api/providers quota
+             payload cached client-side off the Home surface before it can render an
+             honest value; omitted in Phase 1 rather than fabricate one. -->
+      </div>
+      <div class="dock-hist" id="dock-hist" hidden>
+        <span class="dock-cell dock-hist-msg" id="dock-hist-text">viewing archived plan</span>
+        <button class="dock-cell dock-back" id="dock-hist-back" type="button">back to live</button>
+      </div>
+      <span class="status-spacer"></span>
+      <span class="dock-cell dock-repo"><span id="dock-repo-text">—</span></span>
+      <span class="dock-cell dock-conn"><span id="conn-dot" data-state="down"></span><span class="dock-conn-lbl">updated</span><span id="refresh-age" class="mono">—</span></span>
+    </footer>
   </main>
 
   <!-- NODE INSPECTOR — bottom-sheet modal (slides up over everything, scrim to dismiss) -->

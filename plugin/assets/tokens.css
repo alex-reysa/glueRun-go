@@ -1,71 +1,150 @@
-/* glueRun console — design tokens (0.6.0).
-   Warm-neutral "printer's grid" language adopted from the pm-go token system:
-   every structural surface, border, and most text is a warm grey; color is a
-   signal, never decoration. Coral is the one accent (attention, gates, the
-   human's voice); green/blue/amber/red are reserved status tones. No violet.
-   Loaded BEFORE styles.css; the legacy alias block at the bottom re-points the
-   0.5.x token names so retained chrome restyles without markup edits. */
+/* glueRun console — design tokens (0.11.0 "Quiet Instrument").
+   Reconciled to the Singular design authority (design.md): layered warm/cool
+   near-whites, hairline structure, one saturated accent, low-saturation pastel
+   status pairs. Color is a signal, never decoration.
+
+   Two contracts live here and MUST both hold:
+     1. The CANONICAL tokens (--canvas/--chrome/--paper/--ink/--line/--accent/…)
+        are the vocabulary new chrome is written against.
+     2. Every LEGACY name the retained surfaces reference (--n-*, --surface-page,
+        --border-*, --tone-*, --glass, --r-*, --d-*) is kept DEFINED and re-pointed
+        at a canonical value, so untouched surface CSS inherits the new palette
+        without a markup edit. Coral retires → its slot maps to LAVENDER (special /
+        evaluation semantics). Loaded BEFORE styles.css. */
 
 :root {
   color-scheme: light;
 
-  /* ---- 1 · Warm neutral ramp (paper → ink) ---- */
-  --n-0:    #ffffff;   /* panel / card surface                  */
-  --n-25:   #fbfaf8;   /* app canvas                            */
-  --n-50:   #faf9f6;   /* sunken inset surface                  */
-  --n-100:  #f4f2ee;   /* soft fill (chips, wells)              */
-  --n-150:  #f3f1ec;   /* hover fill on ghost surfaces          */
-  --n-200:  #f1efea;   /* divider, progress track               */
-  --n-250:  #e9e6e1;   /* default border                        */
-  --n-300:  #e2ded7;   /* strong border, scrollbar thumb        */
-  --n-400:  #cfc9bf;   /* disabled text, faint icon             */
-  --n-500:  #b8b2a8;   /* faint meta, placeholder, idle dot     */
-  --n-600:  #9b958c;   /* meta label, secondary icon            */
-  --n-700:  #8a857d;   /* muted UI icon                         */
-  --n-800:  #6f6a62;   /* muted body text                       */
-  --n-850:  #4a443c;   /* strong body / secondary text          */
-  --n-900:  #332e28;   /* deep text on tinted surfaces          */
-  --ink:    #1c1b19;   /* primary ink, primary action surface   */
+  /* ============================================================ CANONICAL == */
+  /* ---- Layered near-whites (canvas → chrome → paper) ---- */
+  --canvas:          #fbfaf8;   /* app canvas / stage backdrop            */
+  --chrome:          #f7f6f3;   /* navigation rail / structural chrome    */
+  --paper:           #ffffff;   /* panel / card surface                   */
+  --surface-subtle:  #fafafa;   /* faint raised inset                     */
+  --surface-sunken:  #f3f3f1;   /* sunken well                            */
+  --surface-hover:   rgba(24, 24, 27, 0.035);   /* translucent row hover  */
+  --surface-selected:rgba(24, 24, 27, 0.065);   /* translucent selection  */
+  --surface-dock:    #f5f4f1;   /* the persistent bottom status dock      */
 
-  /* ---- 2 · Semantic tones: fg / bg / border / dot / solid ---- */
+  /* ---- Type ---- */
+  --ink:    #18181b;   /* primary ink + primary action surface           */
+  --body:   #3f3f46;   /* reading / body text                            */
+  --muted:  #616168;   /* muted labels + secondary UI text               */
+  --faint:  #85858d;   /* metadata, timestamps, placeholder              */
+  --ghost:  #85858d;   /* alias of faint (recipe parity)                 */
+  --on-dark:#fafafa;   /* text on ink / dark terminal                    */
 
-  /* coral — THE accent: attention, gates, frontier, needs-human */
-  --tone-coral-fg:     #bf5526;
-  --tone-coral-bg:     #fbeee6;
-  --tone-coral-border: #f3e0d4;
-  --tone-coral-dot:    #e0682f;
-  --tone-coral-solid:  #e0682f;
-  --tone-coral-ink:    #7a4a33;
+  /* ---- Structure ---- */
+  --line:        rgba(212, 212, 216, 0.78);   /* primary hairline         */
+  --line-soft:   rgba(228, 228, 231, 0.75);   /* soft in-panel divider    */
+  --line-strong: #c7c7cc;                     /* strong layout boundary   */
+  --scrim:       rgba(24, 24, 27, 0.32);      /* modal dim                 */
 
-  /* green — live, healthy, passed, integrated */
-  --tone-green-fg:     #1f9d57;
-  --tone-green-bg:     #e7f4ec;
-  --tone-green-border: #c9e6d4;
-  --tone-green-dot:    #1f9d57;
-  --tone-green-solid:  #33853d;
-  --tone-green-pulse:  #22c55e;
+  /* ---- Accent (use sparingly — status, selection, links) ---- */
+  --accent:      #2563eb;
+  --accent-soft: #e8f0fe;
 
-  /* blue — in-progress, running, deps/upstream, links */
-  --tone-blue-fg:      #2f6fd0;
-  --tone-blue-bg:      #e8effb;
-  --tone-blue-border:  #d4e2f7;
-  --tone-blue-dot:     #2f6fd0;
+  /* ---- Semantic tone PAIRS (low-saturation pastel fill · saturated text) ---- */
+  /* sage — live / healthy / passed / integrated */
+  --success:      #047857;   --success-soft: #e3ebe3;
+  /* steel — running / in-progress / links */
+  /* ochre — warnings / stale */
+  --warning:      #854d0e;   --warning-soft: #efe9d9;
+  /* rose — error / blocked / failed */
+  --danger:       #be123c;   --danger-soft:  #ebe2e2;
+  /* lavender — special / evaluation (coral's retired slot) */
+  --special:      #6d28d9;   --special-soft: #e6e4ea;
+
+  /* ---- Status dot colors (paired with a label — never color alone) ---- */
+  --dot-running: #3b82f6;
+  --dot-needs:   #f59e0b;
+  --dot-passed:  #10b981;
+
+  /* ---- Neutral tag pair (zinc) ---- */
+  --tone-zinc-bg: #f4f4f5;   --tone-zinc-fg: #52525b;
+
+  /* ---- Geometry ---- */
+  --radius-xs:   4px;
+  --radius-sm:   7px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   20px;
+  --radius-2xl:  20px;   /* modal / hero (retained name) */
+  --radius-pill: 999px;
+
+  /* ---- Motion ---- */
+  --duration-fast:     120ms;
+  --duration-default:  180ms;
+  --duration-layout:   240ms;
+  --duration-emphasis: 360ms;
+  --ease-standard:   cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0.9, 0.2, 1);
+
+  /* ---- Elevation — overlays only ---- */
+  --shadow-popover: 0 8px 24px rgba(24, 24, 27, 0.10), 0 1px 3px rgba(24, 24, 27, 0.06);
+  --shadow-modal:   0 24px 70px rgba(24, 24, 27, 0.16), 0 3px 10px rgba(24, 24, 27, 0.07);
+  --shadow-card-hover: 0 4px 16px #64748b17;
+
+  /* ============================================================ RAMP ======= */
+  /* Retuned to cool near-whites + zinc grays; retained names, new values so any
+     direct var(--n-*) reference inherits the Quiet-Instrument palette. */
+  --n-0:    #ffffff;   /* paper                                  */
+  --n-25:   #fbfaf8;   /* canvas                                 */
+  --n-50:   #f3f3f1;   /* sunken inset                           */
+  --n-100:  #f4f4f5;   /* soft fill (chips, wells, seg track)    */
+  --n-150:  #f1f1f2;   /* quiet hover fill                       */
+  --n-200:  #ededf0;   /* divider, progress track                */
+  --n-250:  #e4e4e7;   /* default border                         */
+  --n-300:  #d4d4d8;   /* strong border, scrollbar thumb         */
+  --n-400:  #c7c7cc;   /* line-strong / faint icon               */
+  --n-500:  #a1a1aa;   /* faint meta, placeholder, idle dot      */
+  --n-600:  #85858d;   /* meta label, secondary icon             */
+  --n-700:  #71717a;   /* muted UI icon                          */
+  --n-800:  #5f5f67;   /* muted body text                        */
+  --n-850:  #3f3f46;   /* strong body / secondary text           */
+  --n-900:  #27272a;   /* deep text on tinted surfaces           */
+
+  /* ============================================================ TONES ====== */
+  /* Each family: fg (saturated text) / bg (pastel fill) / border / dot / solid.
+     Coral is retired — its slot now carries LAVENDER (special / evaluation). */
+
+  /* coral slot → LAVENDER: special, evaluation, frontier accent */
+  --tone-coral-fg:     #6d28d9;
+  --tone-coral-bg:     #e6e4ea;
+  --tone-coral-border: #d8d3e2;
+  --tone-coral-dot:    #7c3aed;
+  --tone-coral-solid:  #6d28d9;
+  --tone-coral-ink:    #4c2a80;
+
+  /* green → SAGE: live, healthy, passed, integrated */
+  --tone-green-fg:     #047857;
+  --tone-green-bg:     #e3ebe3;
+  --tone-green-border: #cde0d2;
+  --tone-green-dot:    #10b981;
+  --tone-green-solid:  #047857;
+  --tone-green-pulse:  #10b981;
+
+  /* blue → STEEL: in-progress, running, deps/upstream, links */
+  --tone-blue-fg:      #1d4ed8;
+  --tone-blue-bg:      #e0e6ed;
+  --tone-blue-border:  #cdd8e6;
+  --tone-blue-dot:     #3b82f6;
   --tone-blue-solid:   #2563eb;
   --tone-blue-ink:     #3d5a8a;
 
-  /* amber — warnings, stale (warm, never yellow) */
-  --tone-amber-fg:     #a95711;
-  --tone-amber-bg:     #fbf1e7;
-  --tone-amber-border: #f1ddc6;
-  --tone-amber-dot:    #d17018;
+  /* amber → OCHRE: warnings, stale (warm, never yellow) */
+  --tone-amber-fg:     #854d0e;
+  --tone-amber-bg:     #efe9d9;
+  --tone-amber-border: #e4d9bf;
+  --tone-amber-dot:    #f59e0b;
 
-  /* red — error / blocked / failed (distinct from coral accent) */
-  --tone-red-fg:       #cf4b3f;
-  --tone-red-bg:       #fcecea;
-  --tone-red-border:   #f5d6d1;
-  --tone-red-dot:      #ef4444;
+  /* red → ROSE: error / blocked / failed */
+  --tone-red-fg:       #be123c;
+  --tone-red-bg:       #ebe2e2;
+  --tone-red-border:   #e2cdd1;
+  --tone-red-dot:      #e11d48;
 
-  /* ---- 3 · Semantic aliases ---- */
+  /* ============================================================ SEMANTIC === */
   --text-primary:   var(--ink);
   --text-secondary: var(--n-850);
   --text-muted:     var(--n-800);
@@ -76,31 +155,29 @@
   --text-accent:    var(--tone-coral-fg);
   --text-link:      var(--tone-blue-fg);
 
-  --surface-page:   var(--n-25);
-  --surface-panel:  var(--n-0);
-  --surface-sunken: var(--n-50);
+  --surface-page:   var(--canvas);   /* → canvas   */
+  --surface-panel:  var(--paper);    /* → paper    */
   --surface-soft:   var(--n-100);
-  --surface-hover:  var(--n-150);
 
-  --border-subtle:  var(--n-200);
-  --border-default: var(--n-250);
-  --border-strong:  var(--n-300);
-  --hairline:       rgba(28, 27, 25, 0.06);
+  --border-subtle:  var(--line-soft);   /* → line-soft   */
+  --border-default: var(--line);        /* → line        */
+  --border-strong:  var(--line-strong); /* → line-strong */
+  --hairline:       rgba(24, 24, 27, 0.06);
 
   --action-bg:        var(--ink);
-  --action-bg-hover:  #2b2a27;
+  --action-bg-hover:  #3f3f46;
   --action-bg-active: #000000;
   --action-fg:        #ffffff;
 
-  --focus-ring: rgba(47, 111, 208, 0.45);
+  --focus-ring: rgba(24, 24, 27, 0.18);
 
-  /* ---- 4 · Typography ---- */
+  /* ---- Typography ---- */
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --tracking-tight: -0.011em;
 
-  --t-title-size: 22px;   --t-title-weight: 700;  --t-title-tracking: -0.02em;
-  --t-h2-size: 18px;      --t-h2-weight: 700;     --t-h2-tracking: -0.02em;
+  --t-title-size: 22px;   --t-title-weight: 650;  --t-title-tracking: -0.02em;
+  --t-h2-size: 18px;      --t-h2-weight: 650;     --t-h2-tracking: -0.018em;
   --t-h3-size: 15px;      --t-h3-weight: 600;     --t-h3-tracking: -0.01em;
   --t-card-size: 14px;    --t-card-weight: 600;   --t-card-tracking: -0.012em;
   --t-label-size: 13px;   --t-label-weight: 600;
@@ -110,76 +187,69 @@
   --t-mono-size: 11.5px;  --t-mono-sm-size: 10px;
   --t-mono-stat-size: 18px; --t-mono-stat-weight: 500;
 
-  /* ---- 5 · Spacing & shape (4px base; corners never sharp) ---- */
+  /* ---- Spacing (4px base) ---- */
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
 
-  --radius-xs:   5px;
-  --radius-sm:   7px;
-  --radius-md:   9px;
-  --radius-lg:   11px;
-  --radius-xl:   14px;
-  --radius-2xl:  20px;
-  --radius-pill: 999px;
+  /* ---- Elevation (near-flat; lifts, never looms) ---- */
+  --shadow-xs:   0 1px 2px rgba(24, 24, 27, 0.04);
+  --shadow-sm:   0 1px 3px rgba(24, 24, 27, 0.06);
+  --shadow-md:   0 4px 16px rgba(24, 24, 27, 0.08);
+  --shadow-lg:   0 12px 32px rgba(24, 24, 27, 0.12);
+  --shadow-xl:   0 24px 56px rgba(24, 24, 27, 0.18);
+  --shadow-inset: inset 0 1px 2px rgba(24, 24, 27, 0.05);
 
-  /* ---- 6 · Elevation & motion (near-flat; lifts, never looms) ---- */
-  --shadow-xs:   0 1px 2px rgba(28, 27, 25, 0.04);
-  --shadow-sm:   0 1px 3px rgba(28, 27, 25, 0.06);
-  --shadow-md:   0 4px 16px rgba(28, 27, 25, 0.08);
-  --shadow-lg:   0 12px 32px rgba(28, 27, 25, 0.12);
-  --shadow-xl:   0 24px 56px rgba(28, 27, 25, 0.18);
-  --shadow-inset: inset 0 1px 2px rgba(28, 27, 25, 0.05);
-
+  /* ---- Motion (retained names) ---- */
   --ease-settle: cubic-bezier(0.2, 0.7, 0.3, 1);
-  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out:    cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-inout:  cubic-bezier(0.4, 0, 0.2, 1);
   --dur-fast:   120ms;
   --dur-base:   180ms;
-  --dur-slow:   260ms;
-  --dur-slower: 500ms;
+  --dur-slow:   240ms;
+  --dur-slower: 360ms;
 
-  /* The 24px printer's-grid line color (body backgrounds) */
-  --grid-line: rgba(28, 27, 25, 0.022);
+  /* The faint 24px printer's-grid line (body backdrop) */
+  --grid-line: rgba(24, 24, 27, 0.018);
 }
 
-/* ---- Legacy aliases (0.5.x styles.css names) ----
-   Retained chrome references these; each resolves to a pm-go token. Violet is
-   retired: the "integration/frontier" tone maps to coral (= attention). Glass
-   is retired: panels are flat white with hairline borders and resting shadows. */
+/* ---- Legacy aliases (0.5.x–0.10.x names) ----
+   Retained chrome references these; each re-points at a canonical value so the
+   Quiet-Instrument palette flows through untouched. Violet/frontier + integration
+   ("coral") map to LAVENDER; glass becomes a translucent canvas veil. */
 :root {
-  --bg: var(--surface-page);
+  --bg: var(--canvas);
   --grid: var(--grid-line);
   --text: var(--text-primary);
   --muted: var(--text-muted);
   --faint: var(--text-meta);
-  --ink-90: rgba(28, 27, 25, 0.9);
+  --ink-90: rgba(24, 24, 27, 0.92);
 
   --hair: var(--hairline);
   --rule: var(--border-subtle);
   --rule-strong: var(--border-strong);
 
-  --glass: var(--surface-panel);
-  --glass-solid: var(--surface-panel);
+  --glass: rgba(251, 250, 248, 0.94);
+  --glass-solid: var(--paper);
   --glass-border: var(--border-default);
   --glass-shadow: var(--shadow-xs);
   --glass-shadow-lift: var(--shadow-md);
 
-  --tone-gray: var(--n-500);
+  --tone-gray:   #a1a1aa;
   --tone-cobalt: var(--tone-blue-dot);
-  --tone-amber: var(--tone-amber-dot);
+  --tone-amber:  var(--tone-amber-dot);
   --tone-forest: var(--tone-green-dot);
   --tone-violet: var(--tone-coral-dot);
-  --tone-red: var(--tone-red-dot);
+  --tone-red:    var(--tone-red-dot);
 
   --r-chip: var(--radius-sm);
-  --r-btn: var(--radius-md);
-  --r-12: var(--radius-lg);
-  --r-card: var(--radius-xl);
-  --r-hero: var(--radius-2xl);
+  --r-btn:  var(--radius-md);
+  --r-12:   var(--radius-md);
+  --r-card: var(--radius-lg);
+  --r-hero: var(--radius-xl);
 
-  --ease: var(--ease-out);
-  --d-color: var(--dur-fast);
-  --d-base: var(--dur-base);
+  --ease:     var(--ease-out);
+  --d-color:  var(--dur-fast);
+  --d-base:   var(--dur-base);
   --d-struct: var(--dur-slow);
   --d-reveal: var(--dur-slower);
 

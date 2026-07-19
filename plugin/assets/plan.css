@@ -3,31 +3,33 @@
    Plan workbench grid (header · 196px lens nav · center pane · 360px aside), and
    the shared lens chrome (detail cards, dimming classes, scroll-shadow fades). */
 
-/* ---- surface switcher (top bar segmented control) ---- */
+/* ---- surface switcher (stage-header segmented control, 0.11.0) ----
+   A quiet track with a white "raised" active segment (not a dark pill). */
 #surface-nav {
   display: inline-flex;
   gap: 2px;
-  padding: 2px;
-  border-radius: var(--radius-md);
-  background: var(--surface-soft);
-  border: 1px solid var(--border-subtle);
+  padding: 3px;
+  border-radius: 8px;
+  background: #f4f4f5;
+  border: 0;
 }
 #surface-nav button {
-  height: 24px;
-  padding: 0 12px;
+  height: 27px;
+  padding: 0 11px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 6px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  font-weight: 550;
+  letter-spacing: -0.005em;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
-#surface-nav button:hover { color: var(--text-primary); }
+#surface-nav button:hover { color: var(--ink); }
 #surface-nav button[aria-pressed="true"] {
-  background: var(--action-bg);
-  color: var(--action-fg);
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 1px 3px #00000014;
 }
 /* Consoles nav button carries a small live-session count badge (C4). */
 #surface-nav button[data-surface="consoles"] { position: relative; }

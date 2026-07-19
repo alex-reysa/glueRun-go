@@ -94,6 +94,18 @@ function renderThreads() {
   host.innerHTML = html;
 }
 
+// ------------------------------------------------------------- breadcrumb -----
+// The stage-header breadcrumb's current-thread name (0.11.0): "Current plan" while
+// live, else the archived plan's name. plans.js owns both, so it paints it here;
+// the breadcrumb's repo basename is painted by core/dock.js from the snapshot.
+function paintBreadcrumb() {
+  const cur = document.getElementById("crumb-plan");
+  if (!cur) return;
+  if (!isHistorical()) { cur.textContent = "Current plan"; return; }
+  const entry = activePlanEntry();
+  cur.textContent = (entry && entry.name) || activePlan || "archived plan";
+}
+
 // ------------------------------------------------------------- banner ---------
 function paintBanner() {
   const banner = document.getElementById("plan-banner");
@@ -151,7 +163,8 @@ export function initPlans() {
 
   renderThreads();   // paints the live row (+ self-heal id) immediately
   paintBanner();     // shows the id fallback immediately; refreshed once plans resolve
-  fetchPlans().then(() => { renderThreads(); paintBanner(); paintArchivedGates(); });
+  paintBreadcrumb(); // stage-header current-thread name (live label immediately)
+  fetchPlans().then(() => { renderThreads(); paintBanner(); paintBreadcrumb(); paintArchivedGates(); });
 }
 
 export { fmtDate };
