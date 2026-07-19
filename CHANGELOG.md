@@ -7,6 +7,22 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.11.1] — 2026-07-19 — Thread sub-menu; home flicker fix
+
+- **IA**: the header surface-tab row is gone — Home / Plan / Consoles / Agents
+  are now a vertical sub-menu nested under the ACTIVE thread in the sidebar
+  (tree rail, 31px rows, existing-sprite icons, icon-only in rail mode; the
+  consoles live badge rides along). Breadcrumb extends to
+  `repo › thread › Surface`.
+- **fix**: Home no longer flickers — dag/sessions events fed a signature
+  bypass that rebuilt the page every ~2s and replayed the `arrive` entrance;
+  live-session fields now fold into the signature, `arrive` plays only on
+  route entry, chat bubbles animate only on first paint (CDP-verified: 10
+  identical rebuilds per 20s → 0).
+- **fix**: console answers HEAD probes for `/` and `/api/health` (was 501).
+
+Suites: bash 157, python 206.
+
 ## [0.11.0] — 2026-07-19 — Quiet Instrument: console design-language overhaul
 
 Visual/IA polish pass adopting the Singular "Quiet Instrument" design system

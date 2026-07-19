@@ -1,6 +1,6 @@
 {
   "name": "singular-orchestration",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Operate Singular (CLI: gluerun) multi-agent orchestration — author DAG plans, run autonomous parallel agent loops, and monitor L0/L1/L2 state through the read-only console/dashboard.",
   "author": {
     "name": "Singular local tools"
