@@ -7,6 +7,54 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.11.0] — 2026-07-19 — Quiet Instrument: console design-language overhaul
+
+Visual/IA polish pass adopting the Singular "Quiet Instrument" design system
+(normative spec: layered warm near-whites, hairline structure, ≤5% semantic
+color, honest states). No engine behavior changes; one additive API field.
+
+### Shell
+- Full-height chrome rail (`#f7f6f3`) with the brand block moved into the
+  sidebar; stage header gains a `repo › thread` breadcrumb; surface tabs
+  restyled as a segmented control (white raised active pill).
+- New persistent 32px **status dock** spanning the full width: loop cell
+  (running / engine busy / stopped), active·ready tasks, gates, attention
+  ("N needs you", ochre when nonzero), breaker (only when tripped), codex
+  quota (hidden when unavailable), repo·branch, conn + updated age.
+  Historical mode swaps the left cluster for "viewing archived plan" +
+  back-to-live.
+- Tokens reconciled to the Quiet Instrument palette with every legacy alias
+  preserved (`--surface-*`, `--border-*`, `--tone-*`, `--n-*` remapped);
+  coral retires → lavender (special/evaluation). Global `:focus-visible`
+  ring, `::selection`, tabular numerals, `arrive`/`calm-pulse` keyframes,
+  reduced-motion killswitch.
+
+### Surfaces
+- Home: card grammar (paper, hairline, radius 14–16, 42px headers, dashed
+  action footers), calm sage "All clear" walk-away state, supervisor chat
+  re-patterned to the AI-thread archetype (dark right-aligned user block,
+  open-prose assistant with ink glyph + quiet provenance row), composer as a
+  white radius-16 card with circular ink send, 3px steel quota/gauge tracks.
+- Providers: interactive paper cards (hover border+shadow), 7px status dots
+  with explicit words, tone-pair chips, lavender DEFAULT RUNNER badge.
+- Consoles: the one routine dark surface formalized — `--term-*` island
+  tokens, `#27272a` pane title bars with traffic dots, mint streaming cursor;
+  recent rail as nav rows; light chrome around it.
+- Plan: dotted-grid DAG canvas with running-node ring, lens nav rows +
+  eyebrow, 36px muted table headers, filter-chip/quickfilter recipes,
+  matrix Follow-diagonal adopts the shared button recipes.
+- Agents: card grammar, 34px inputs, segmented toggles, tone-pair chips.
+
+### Fixes
+- Snapshot payload gains additive `loop: {pid, alive}` (autonomate pidfile +
+  signal-0) so the dock never reads test-suite processes as the loop
+  "running" (agents.l0.state counts processes; the dock now labels that
+  state "engine busy").
+- Terminal-island + shared grays tokenized (mechanical sweep; opencode k3
+  was attempted twice and produced no edits — applied deterministically).
+
+Suites: bash 157 (+ DOM shell test), python 203.
+
 ## [0.10.0] — 2026-07-18 — App shell (threads sidebar), matrix rebuild, provider quotas, supervisor briefing + chat
 
 Four requests in one release, moving the console from viewer toward platform:
