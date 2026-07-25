@@ -253,4 +253,46 @@ MOCK_RESULT='{"status":"x"}' MOCK_SESSION_ID="s" MOCK_ARGS_OUT="$args" \
 grep -q -- "-r s" "$args" || fail "c17: -r <id> not in argv on matching meta"
 pass "c17 matching model/effort -> proceeds with resume"
 
+# --- Case 18: readonly guard restores a file that was ALREADY dirty -----------
+# The defect that mattered most in the old path-diff guard. A file dirty before
+# the run appeared in its "before" list, so the diff saw no change when the agent
+# overwrote it and the agent's write survived — in $GLUERUN_ROOT, over an
+# operator's uncommitted work.
+r="$workroot/c18"; new_repo "$r"; o="$(out)"
+printf 'committed\n' >"$r/wip.txt"
+( cd "$r" && git add wip.txt && git commit -qm wip )
+printf 'OPERATOR-WIP\n' >"$r/wip.txt"
+MOCK_RESULT='{"ok":true}' MOCK_WRITE="$r/wip.txt" \
+  run_claude_run "$r" --level readonly -C "$r" --output-last-message "$o" >/dev/null 2>&1
+[[ "$(cat "$r/wip.txt")" == "OPERATOR-WIP" ]] \
+  || fail "c18: readonly run overwrote uncommitted work (got: $(cat "$r/wip.txt"))"
+pass "c18 readonly guard restores an already-dirty file to its pre-run bytes"
+
+# --- Case 19: the guard runs when the runner is killed, not just when it ends --
+# ask/supervise/decide background this runner and kill it on timeout. The old
+# guard was straight-line code after the run, so on that path it never executed
+# at all and every mutation persisted. It lives in the EXIT trap now, which a
+# SIGTERM handler reaches on its way out.
+r="$workroot/c19"; new_repo "$r"; o="$(out)"
+printf 'committed\n' >"$r/killed.txt"
+( cd "$r" && git add killed.txt && git commit -qm killed )
+# Invoked directly rather than through run_claude_run: that helper wraps the
+# runner in a subshell, and $! would name the subshell, so the SIGTERM would
+# never reach claude-run.sh's trap at all.
+( cd "$r" && MOCK_RESULT='{"ok":true}' MOCK_WRITE="$r/killed.txt" MOCK_SLEEP=20 \
+    GLUERUN_CLAUDE_TIMEOUT_SEC=0 GLUERUN_ROOT="$r" GLUERUN_STATE_DIR="$r/.gluerun-state" \
+    exec "$CLAUDE_RUN" --level readonly -C "$r" --output-last-message "$o" ) \
+  >/dev/null 2>&1 &
+kill_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  [[ "$(cat "$r/killed.txt" 2>/dev/null)" == "MUTATED" ]] && break
+  sleep 1
+done
+[[ "$(cat "$r/killed.txt")" == "MUTATED" ]] || fail "c19: mock never mutated the tree"
+kill -TERM "$kill_pid" 2>/dev/null || true
+wait "$kill_pid" 2>/dev/null || true
+[[ "$(cat "$r/killed.txt")" == "committed" ]] \
+  || fail "c19: a killed readonly run left its mutation behind (got: $(cat "$r/killed.txt"))"
+pass "c19 readonly guard restores on SIGTERM, not only on a clean exit"
+
 echo "ALL CLAUDE-RUN CONTRACT TESTS PASSED"

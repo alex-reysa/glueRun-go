@@ -77,9 +77,23 @@ if [[ -z "$result_file" ]]; then
   result_file="$(gluerun_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
+ro_journal=""
 gluerun_claude_result_on_exit() {
   local rc=$?
   trap - EXIT
+  # An interrupted run leaves claude and its descendants alive; they would keep
+  # writing to the worktree while the guard restores it, and the restore would
+  # lose the race. Kill first, then restore.
+  if [[ -n "${cl_pid:-}" ]] && declare -f gluerun_claude_kill_tree >/dev/null 2>&1; then
+    gluerun_claude_kill_tree "$cl_pid" 2>/dev/null || true
+    wait "$cl_pid" 2>/dev/null || true
+  fi
+  # First, because a containment failure that outlives the process is the worse
+  # outcome. This is the path that matters: ask/supervise/decide background this
+  # runner and kill it on timeout, and the old guard was straight-line code
+  # after the run, so on every timeout it simply never executed.
+  gluerun_readonly_guard_restore "${ro_journal:-}" || true
+  ro_journal=""
   if [[ "$runner_result_written" != "yes" ]]; then
     gluerun_runner_result_write claude "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
@@ -89,6 +103,12 @@ gluerun_claude_result_on_exit() {
   exit "$rc"
 }
 trap gluerun_claude_result_on_exit EXIT
+# Exiting from a signal handler runs the EXIT trap, so these buy the guard a
+# chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
+# itself remains uncoverable; `gluerun_readonly_guard_sweep` is the answer there.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -276,11 +296,8 @@ if [[ -n "${GLUERUN_CLAUDE_EXTRA_ARGS:-}" ]]; then
 fi
 
 # --- Read-only snapshot (for restore-after) -------------------------------------
-ro_before_untracked=""
-ro_before_mod=""
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_before_untracked="$(git -C "$worktree" ls-files --others --exclude-standard 2>/dev/null | sort || true)"
-  ro_before_mod="$(git -C "$worktree" diff --name-only HEAD 2>/dev/null | sort || true)"
+  ro_journal="$(gluerun_readonly_guard_capture "$worktree" "claude-$run_id")"
 fi
 
 # --- Run claude in the working directory ----------------------------------------
@@ -337,8 +354,13 @@ echo "claude-run: level=$level model=$claude_model worktree=$worktree run_id=$ru
 # bound it (default 1200s) and kill the whole process tree on timeout so a stuck
 # run never holds a worker slot indefinitely. Set GLUERUN_CLAUDE_TIMEOUT_SEC=0 to disable.
 claude_timeout="${GLUERUN_CLAUDE_TIMEOUT_SEC:-1200}"
+# claude always runs in the BACKGROUND, even with the timeout disabled. bash
+# defers a trapped signal until the foreground child finishes, so a foreground
+# `run_claude` would swallow the SIGTERM that ask/supervise/decide send on their
+# way to a kill — and with it the read-only guard's only chance to run. `wait`
+# is interruptible by a trapped signal; a foreground child is not.
+run_claude & cl_pid=$!
 if [[ "$claude_timeout" =~ ^[0-9]+$ && "$claude_timeout" -gt 0 ]]; then
-  run_claude & cl_pid=$!
   cl_deadline=$((SECONDS + claude_timeout)); cl_timed_out="no"
   while kill -0 "$cl_pid" 2>/dev/null; do
     if [[ "$SECONDS" -ge "$cl_deadline" ]]; then
@@ -356,8 +378,9 @@ if [[ "$claude_timeout" =~ ^[0-9]+$ && "$claude_timeout" -gt 0 ]]; then
     echo "claude-run: TIMED OUT after ${claude_timeout}s; killed run $run_id (output left empty so the caller treats it as a soft failure)" >&2
   fi
 else
-  run_claude || exit_code=$?
+  cl_ec=0; wait "$cl_pid" || cl_ec=$?; exit_code="$cl_ec"
 fi
+cl_pid=""
 
 # Surface stdout (the envelope — also the source for retry fix-hints) then any
 # stderr (CLI notices/errors) into the caller's log, and keep a copy under run dir.
@@ -420,22 +443,13 @@ PY
 fi
 
 # --- Read-only restore guard: revert anything the run mutated -------------------
+# Explicitly here, and not only from the EXIT trap, because scope-check.sh below
+# must see the restored tree — tests c8/c9 pin that ordering. The trap still
+# holds the timeout and signal paths; a second restore of a consumed journal is
+# a no-op.
 if [[ "$readonly_run" == "yes" ]]; then
-  # Remove untracked (non-ignored) files the run created (preserve pre-existing).
-  ro_after_untracked="$(git -C "$worktree" ls-files --others --exclude-standard 2>/dev/null | sort || true)"
-  comm -13 <(printf '%s\n' "$ro_before_untracked") <(printf '%s\n' "$ro_after_untracked") \
-    | while IFS= read -r f; do
-        [[ -n "$f" ]] && rm -rf "$worktree/$f" 2>/dev/null || true
-      done
-  # Revert ONLY the tracked files this run modified (surgical). Never a repo-wide
-  # checkout and never touches files that were already dirty before the run, so
-  # concurrent readonly runs sharing a root (e.g. parallel L1 planners in
-  # $GLUERUN_ROOT) cannot clobber each other or in-flight work.
-  ro_after_mod="$(git -C "$worktree" diff --name-only HEAD 2>/dev/null | sort || true)"
-  comm -13 <(printf '%s\n' "$ro_before_mod") <(printf '%s\n' "$ro_after_mod") \
-    | while IFS= read -r f; do
-        [[ -n "$f" ]] && git -C "$worktree" checkout -- "$f" 2>/dev/null || true
-      done
+  gluerun_readonly_guard_restore "$ro_journal" || true
+  ro_journal=""
 fi
 
 # --- Scope enforcement for L0/L1 (mirrors codex-run.sh) -------------------------
