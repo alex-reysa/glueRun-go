@@ -121,6 +121,13 @@ trap 'gluerun_release_lock "$run_id"' EXIT
 run_dir="$GLUERUN_STATE_DIR/runs/$run_id"
 mkdir -p "$run_dir"
 
+# Finish the read-only restores that SIGKILLed runs could not. Nothing executes
+# in a killed process, so its guard journal is still on disk with its owner pid
+# recorded; this is the only thing that ever puts those trees back. Under the
+# lock and before the dirty-count below, so reconcile does not then report the
+# leftovers as operator changes.
+gluerun_readonly_guard_sweep
+
 current_branch="$(gluerun_current_branch)"
 head_sha="$(git -C "$GLUERUN_ROOT" rev-parse --short HEAD)"
 dirty_count="$(git -C "$GLUERUN_ROOT" status --short | wc -l | tr -d ' ')"

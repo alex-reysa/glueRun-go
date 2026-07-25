@@ -120,4 +120,63 @@ out="$(DOCTOR_CODEX_SLEEP=1 doctor)" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "hung selected Codex must fail doctor"
 assert_contains "$out" "probe timed out after 10s" "spawn timeout surfaced"
 
+# 9. `bootstrap.required: true` with no commands guarantees nothing, and doctor
+# used to report it as passing. templates/gluerun.config.json shipped exactly
+# that block, so every `gluerun init` inherited the empty promise.
+cp "$root/gluerun.config.json" "$tmp/config.backup"
+python3 - "$root/gluerun.config.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["bootstrap"] = {"required": True, "commands": []}
+json.dump(data, open(path, "w"), indent=2)
+PY
+out="$(doctor)" || true
+assert_contains "$out" "required: true but defines no commands" \
+  "empty required bootstrap must warn"
+
+# The same block WITH a command is a real guarantee and must not warn.
+python3 - "$root/gluerun.config.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["bootstrap"] = {"required": True, "commands": [{"command": "true"}]}
+json.dump(data, open(path, "w"), indent=2)
+PY
+out="$(doctor)" || true
+[[ "$out" != *"required: true but defines no commands"* ]] \
+  || fail "a bootstrap with commands must not warn"
+
+# The shipped template must not carry the empty promise it used to: every
+# `gluerun init` copies this file, so a vacuous required:true there put the
+# warning above into every new repo.
+python3 - "$ENGINE_HOME/templates/gluerun.config.json" <<'PY' \
+  || fail "templates/gluerun.config.json ships bootstrap.required: true with no commands"
+import json, sys
+data = json.load(open(sys.argv[1]))
+bootstrap = data.get("bootstrap") or {}
+commands = bootstrap.get("commands") or []
+raise SystemExit(
+    1 if bootstrap.get("required") and not (bootstrap.get("command") or commands) else 0
+)
+PY
+cp "$tmp/config.backup" "$root/gluerun.config.json"
+
+# 10. A read-only guard journal whose owner is gone means some worktree still
+# holds changes a read-only run made. Only `gluerun reconcile` applies those, so
+# doctor has to say so rather than let the repo sit in that state silently.
+mkdir -p "$root/.gluerun-state/readonly-guard/orphan-run"
+cat >"$root/.gluerun-state/readonly-guard/orphan-run/journal.json" <<'EOF'
+{"schema":"gluerun.orchestration.readonly-guard.v0","ownerPid":999999,
+ "worktree":"/nonexistent","entries":{},"trackedBefore":[],"excludes":[]}
+EOF
+out="$(doctor)" || true
+# Asserted on the distinguishing clause, not on "read-only guard journal" — the
+# PASS message ("no read-only guard journals are pending") contains that too, so
+# the looser substring made this case pass with the warn removed entirely.
+assert_contains "$out" "were never applied" "orphaned guard journal must warn"
+rm -rf "$root/.gluerun-state/readonly-guard"
+out="$(doctor)" || true
+[[ "$out" != *"were never applied"* ]] || fail "no journals must not warn"
+
 echo "PASS: test-doctor"

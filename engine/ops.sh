@@ -644,6 +644,63 @@ for base in dirs:
 prefix = "would-" if dry == "yes" else ""
 print(f"gc: quarantine: {prefix}removed {removed} file(s) older than 30d")
 PY
+
+  # 5. Read-only guard journals (>30 days).
+  # A journal directory holds what the guard moved aside when it put a worktree
+  # back, so it is operator-recoverable data, not scratch — same retention as
+  # the quarantines above. A journal whose owner process is still alive belongs
+  # to a run in flight and is never touched, no matter how old the timestamp
+  # looks; `reconcile` is what restores the ones whose owner is gone.
+  python3 - "$GLUERUN_STATE_DIR/readonly-guard" \
+    "${GLUERUN_READONLY_GUARD_KEEP_DAYS:-30}" "$dry" <<'PY'
+import json
+import os
+import shutil
+import sys
+import time
+
+base, keep_days_raw, dry = sys.argv[1:4]
+try:
+    keep_s = int(keep_days_raw) * 86400
+except ValueError:
+    keep_s = 30 * 86400
+now = time.time()
+removed = 0
+live = 0
+if os.path.isdir(base):
+    for name in sorted(os.listdir(base)):
+        path = os.path.join(base, name)
+        if not os.path.isdir(path):
+            continue
+        owner = 0
+        try:
+            with open(os.path.join(path, "journal.json"), encoding="utf-8") as stream:
+                owner = int(json.load(stream).get("ownerPid") or 0)
+        except (OSError, ValueError):
+            owner = 0
+        if owner > 0:
+            try:
+                os.kill(owner, 0)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                live += 1
+                continue
+            else:
+                live += 1
+                continue
+        try:
+            if now - os.path.getmtime(path) > keep_s:
+                if dry == "no":
+                    shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+prefix = "would-" if dry == "yes" else ""
+days = keep_s // 86400
+print(f"gc: readonly-guard: {prefix}removed {removed} journal(s) older than {days}d"
+      + (f"; {live} in flight" if live else ""))
+PY
   [[ "$dry" == "no" ]] && gluerun_append_event "gc.completed" "gc run completed" "{}"
   return 0
 }

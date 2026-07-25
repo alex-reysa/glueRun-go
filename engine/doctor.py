@@ -1614,6 +1614,27 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 remediation="Repair the bootstrap section in gluerun.config.json.",
             )
             return
+        # `required: true` with nothing to run is a no-op that reads like a
+        # guarantee. The dry-run below validates it happily, so it reported as
+        # passing while bootstrapping nothing — and templates/gluerun.config.json
+        # shipped exactly this block, so every `gluerun init` inherited it.
+        declared_commands = config.get("commands")
+        has_commands = bool(config.get("command")) or (
+            isinstance(declared_commands, list) and len(declared_commands) > 0
+        )
+        if config.get("required") and not has_commands:
+            self.add(
+                "bootstrap.required-no-op",
+                "warn",
+                "bootstrap declares required: true but defines no commands, so it "
+                "guarantees nothing",
+                required_for=("worker-runs",),
+                remediation=(
+                    "Add the commands that must succeed before a worker runs "
+                    "(for example npm ci), or drop required: true."
+                ),
+            )
+
         helper = self.engine / "engine/bootstrap-worktree.sh"
         env = dict(self.runtime_env)
         env["GLUERUN_ROOT"] = str(self.repo)
@@ -1648,6 +1669,68 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 f"bootstrap dry-run failed: {first_line(result.stderr or result.stdout)}",
                 required_for=("worker-runs",),
                 remediation="Repair lockfiles, shared-store allowlists, or bootstrap paths.",
+            )
+
+    def readonly_guard_check(self) -> None:
+        """Report worktrees a read-only run left changed and nobody put back.
+
+        A guard journal survives its run on purpose: SIGKILL executes no
+        handler, so the journal is the only remaining record of what the tree
+        looked like before. `gluerun reconcile` sweeps the ones whose owner is
+        gone. One that is still here with a dead owner means a repository is
+        sitting in a state a read-only run left it in.
+        """
+        if not self.repo:
+            return
+        base = self.repo / ".gluerun-state" / "readonly-guard"
+        raw = self.runtime_env.get("GLUERUN_STATE_DIR", "")
+        if raw:
+            base = Path(raw) / "readonly-guard"
+        if not base.is_dir():
+            self.add(
+                "readonly-guard.pending",
+                "pass",
+                "no read-only guard journals are pending",
+            )
+            return
+        pending: list[str] = []
+        in_flight = 0
+        for entry in sorted(base.iterdir()):
+            journal = entry / "journal.json"
+            if not journal.is_file():
+                continue
+            try:
+                owner = int(json.loads(journal.read_text(encoding="utf-8")).get("ownerPid") or 0)
+            except (OSError, ValueError, json.JSONDecodeError):
+                owner = 0
+            if owner > 0:
+                try:
+                    os.kill(owner, 0)
+                except ProcessLookupError:
+                    pending.append(entry.name)
+                    continue
+                except OSError:
+                    in_flight += 1
+                    continue
+                else:
+                    in_flight += 1
+                    continue
+            pending.append(entry.name)
+        if pending:
+            self.add(
+                "readonly-guard.pending",
+                "warn",
+                f"{len(pending)} read-only guard journal(s) were never applied; a "
+                "worktree may still hold changes a read-only run made",
+                remediation="Run `gluerun reconcile` to apply them.",
+                details={"journals": pending[:20], "inFlight": in_flight},
+            )
+        else:
+            self.add(
+                "readonly-guard.pending",
+                "pass",
+                "no read-only guard journals are pending"
+                + (f" ({in_flight} run(s) in flight)" if in_flight else ""),
             )
 
     def resource_check(self) -> None:
@@ -1889,6 +1972,7 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         self.disposable_worktree()
         self.capability_profiles()
         self.bootstrap_check()
+        self.readonly_guard_check()
         self.resource_check()
         self.governance_checks()
         self.deployment_credentials()

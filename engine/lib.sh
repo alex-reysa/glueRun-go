@@ -672,14 +672,23 @@ gluerun_pid_alive() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
-# SIGKILL a pid and every transitive descendant. Snapshots the full ps tree
+# Kill a pid and every transitive descendant. Snapshots the full ps tree
 # (intact at kill time, before anything exits) so reparenting can't let a child
 # escape — more reliable than recursive pgrep -P or a process-group kill.
 # Shared by claude-run.sh / codex-run.sh / decide.sh guards.
+#
+# The optional second argument is a grace period in seconds. With a grace, the
+# tree gets SIGTERM first and SIGKILL only for whatever is still alive when it
+# expires. That matters because the runners hold a read-only restore guard in
+# their EXIT trap: a bare SIGKILL runs no handler, so the mutations of a run
+# that timed out used to persist and the guard's own journal was left for
+# `sweep` to find later. Default 0 keeps the old immediate-SIGKILL behaviour for
+# every caller that has nothing to clean up.
 gluerun_kill_tree() {
-  python3 - "$1" <<'PY' 2>/dev/null || true
-import os, signal, subprocess, sys
+  python3 - "$1" "${2:-0}" <<'PY' 2>/dev/null || true
+import os, signal, subprocess, sys, time
 root = int(sys.argv[1])
+grace = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0
 out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
                      capture_output=True, text=True).stdout
 children = {}
@@ -698,12 +707,59 @@ while stack:
     for c in children.get(p, []):
         order.append(c)
         stack.append(c)
-for pid in list(reversed(order)) + [root]:
+# Leaves first so a parent cannot spawn a replacement for a child it just lost.
+targets = list(reversed(order)) + [root]
+
+
+def signal_all(sig):
+    for pid in targets:
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
+
+
+def alive():
+    for pid in targets:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except OSError:
+            return True
+        else:
+            return True
+    return False
+
+
+if grace > 0:
+    # The root goes LAST here: it is the bash runner holding the EXIT trap, and
+    # signalling it before its children would have it restore the worktree while
+    # the provider is still writing to it.
+    for pid in list(reversed(order)):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(root, signal.SIGTERM)
     except OSError:
         pass
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not alive():
+            raise SystemExit(0)
+        time.sleep(0.2)
+signal_all(signal.SIGKILL)
 PY
+}
+
+# Seconds a timed-out runner gets to run its EXIT trap — which is where the
+# read-only restore guard lives — before the tree is SIGKILLed.
+gluerun_kill_grace_sec() {
+  local grace="${GLUERUN_KILL_GRACE_SEC:-10}"
+  [[ "$grace" =~ ^[0-9]+$ ]] || grace=10
+  printf '%s\n' "$grace"
 }
 
 gluerun_acquire_lock() {

@@ -135,13 +135,14 @@ if ! [[ "$decider_timeout_sec" =~ ^[0-9]+$ && "$decider_timeout_sec" -gt 0 ]]; t
   decider_timeout_sec=1200
 fi
 
+# Was a local recursive-pgrep walk that sent SIGTERM and nothing else, so a
+# process that ignored or was slow to handle TERM survived the decider timeout
+# indefinitely — and recursive pgrep loses children that reparent mid-walk.
+# gluerun_kill_tree snapshots the tree first and escalates to SIGKILL after the
+# grace period, which is also what gives the runner's EXIT trap (and with it the
+# read-only restore guard) a chance to run against $GLUERUN_ROOT.
 gluerun_decider_kill_tree() {
-  local pid="$1" child
-  while IFS= read -r child; do
-    [[ -n "$child" ]] || continue
-    gluerun_decider_kill_tree "$child"
-  done < <(pgrep -P "$pid" 2>/dev/null || true)
-  kill -TERM "$pid" 2>/dev/null || true
+  gluerun_kill_tree "$1" "$(gluerun_kill_grace_sec)"
 }
 
 gluerun_decider_timeout_action() {

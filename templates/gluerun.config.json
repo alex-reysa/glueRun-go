@@ -100,7 +100,7 @@
     "auditInputTokenCanary": 100000
   },
   "bootstrap": {
-    "required": true,
+    "required": false,
     "command": "",
     "commands": [],
     "lockfiles": [],
