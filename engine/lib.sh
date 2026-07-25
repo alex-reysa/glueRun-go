@@ -67,6 +67,8 @@ mods = cfg.get("modules")
 if isinstance(mods, list): setv("GLUERUN_MODULES", " ".join(mods))
 ssl = cfg.get("singleSliceLayers")
 if isinstance(ssl, list): setv("GLUERUN_SINGLE_SLICE_LAYERS", ",".join(ssl))
+wcp = cfg.get("worktreeCopyPaths")
+if isinstance(wcp, list): setv("GLUERUN_WORKTREE_COPY_PATHS_JSON", json.dumps(wcp, separators=(",", ":")))
 pf = cfg.get("provisionFiles")
 if isinstance(pf, list): setv("GLUERUN_PROVISION_FILES_JSON", json.dumps(pf, separators=(",", ":")))
 ea = cfg.get("envAllowlist")
@@ -6256,6 +6258,159 @@ PY
 
 gluerun_worktree_env_configured() {
   [[ -n "${GLUERUN_ENV_ALLOWLIST_JSON:-}" && "${GLUERUN_ENV_ALLOWLIST_JSON:-[]}" != "[]" ]]
+}
+
+# Dependency trees to copy into a fresh worktree, as a JSON array of clean
+# relative paths. node_modules is always included: it used to be a DEFAULT that
+# the config REPLACED, so a monorepo that declared a nested path
+# (["apps/web/node_modules"]) silently stopped copying the root one and got a
+# worktree that was worse than the one it was trying to fix.
+gluerun_worktree_copy_paths_json() {
+  local configured="${GLUERUN_WORKTREE_COPY_PATHS_JSON:-${GLUERUN_AUDIT_VERIFY_COPY_PATHS_JSON:-[]}}"
+  python3 - "$configured" <<'PY'
+import json
+import pathlib
+import sys
+
+try:
+    values = json.loads(sys.argv[1] or "[]")
+except Exception:
+    raise SystemExit(2)
+if not isinstance(values, list):
+    raise SystemExit(2)
+paths = ["node_modules"]
+for value in values:
+    if not isinstance(value, str) or not value:
+        raise SystemExit(2)
+    path = pathlib.PurePosixPath(value)
+    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+        raise SystemExit(2)
+    if value not in paths:
+        paths.append(value)
+print(json.dumps(paths, separators=(",", ":")))
+PY
+}
+
+# Copy the declared dependency trees from $1 into $2. macOS clonefile copies are
+# copy-on-write; other platforms use GNU reflinks when available, then a plain
+# recursive copy. A declared path that does not exist in the source is reported
+# rather than skipped in silence — "I did not copy what you asked for" is
+# precisely the information missing when an audit worktree fails a gate the
+# worker passed.
+gluerun_worktree_copy_paths() {
+  local source_worktree="$1" target_worktree="$2"
+  local paths_json relative source_path target_path copy_ok rc=0
+  paths_json="$(gluerun_worktree_copy_paths_json)" || {
+    echo "worktree copy paths are not a clean relative-path array" >&2
+    return 2
+  }
+  local -a relatives=()
+  mapfile -t relatives < <(python3 -c 'import json,sys;[print(p) for p in json.loads(sys.argv[1])]' "$paths_json")
+  for relative in "${relatives[@]}"; do
+    [[ -n "$relative" ]] || continue
+    source_path="$source_worktree/$relative"
+    target_path="$target_worktree/$relative"
+    if [[ ! -e "$source_path" ]]; then
+      # node_modules is implicit, so its absence is normal for a repo that has
+      # none; anything the operator asked for by name is not.
+      if [[ "$relative" != "node_modules" ]]; then
+        echo "worktree copy: declared path is absent in the source worktree: $relative" >&2
+        gluerun_append_event "worktree.copy_path_absent" \
+          "declared worktree copy path is absent in the source worktree" \
+          "{\"path\":\"$relative\",\"source\":\"$source_worktree\"}" || true
+      fi
+      continue
+    fi
+    [[ -e "$target_path" ]] && continue
+    mkdir -p "$(dirname "$target_path")"
+    copy_ok="no"
+    if cp -cR "$source_path" "$target_path" >/dev/null 2>&1; then
+      copy_ok="yes"
+    else
+      rm -rf "$target_path"
+      if cp -a --reflink=auto "$source_path" "$target_path" >/dev/null 2>&1; then
+        copy_ok="yes"
+      else
+        rm -rf "$target_path"
+        if cp -R "$source_path" "$target_path" >/dev/null 2>&1; then
+          copy_ok="yes"
+        fi
+      fi
+    fi
+    if [[ "$copy_ok" != "yes" ]]; then
+      echo "worktree copy: failed to copy $relative" >&2
+      GLUERUN_WORKTREE_PREPARE_DETAIL="dependency-copy-failed:$relative"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+# The one way a worktree becomes runnable. Three sites used to build worktrees
+# three different ways, and the differences decided outcomes: the AUDITOR
+# re-runs the gate whose result accepts or rejects the work, in the one worktree
+# that never received `prewarm`, while the worker that produced the green result
+# did. accept-existing-packet got neither prewarm nor the dependency copies. An
+# environment difference between those worktrees is indistinguishable, from the
+# outside, from the work being wrong.
+#
+#   $1 worktree, $2 run_dir (may be empty), $3 source worktree for dependency
+#   copies (empty to skip), $4 log file.
+#
+# Sets GLUERUN_WORKTREE_PREPARE_STAGE to the stage that failed, and
+# GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED when bootstrap failed under
+# GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FATAL=no. Callers pass extra environment
+# for the bootstrap/prewarm children in the GLUERUN_WORKTREE_PREPARE_ENV array.
+gluerun_worktree_prepare() {
+  local worktree="$1" run_dir="${2:-}" source_worktree="${3:-}" log="${4:-/dev/null}"
+  local bootstrap_fatal="${GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FATAL:-yes}"
+  GLUERUN_WORKTREE_PREPARE_STAGE=""
+  GLUERUN_WORKTREE_PREPARE_DETAIL=""
+  GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED="no"
+  local -a child_env=()
+  if [[ "$(declare -p GLUERUN_WORKTREE_PREPARE_ENV 2>/dev/null)" == "declare -a"* ]]; then
+    child_env=("${GLUERUN_WORKTREE_PREPARE_ENV[@]}")
+  fi
+
+  GLUERUN_WORKTREE_PREPARE_STAGE="provision"
+  gluerun_worktree_provision "$worktree" "$run_dir" >>"$log" 2>&1 || return 1
+
+  if [[ -n "$source_worktree" ]]; then
+    GLUERUN_WORKTREE_PREPARE_STAGE="copy-paths"
+    gluerun_worktree_copy_paths "$source_worktree" "$worktree" >>"$log" 2>&1 || return 1
+  fi
+
+  GLUERUN_WORKTREE_PREPARE_STAGE="bootstrap"
+  local bootstrap_rc=0
+  if [[ "${#child_env[@]}" -gt 0 ]]; then
+    env "${child_env[@]}" "$GLUERUN_ENGINE_DIR/bootstrap-worktree.sh" \
+      --worktree "$worktree" >>"$log" 2>&1 || bootstrap_rc=$?
+  else
+    "$GLUERUN_ENGINE_DIR/bootstrap-worktree.sh" --worktree "$worktree" \
+      >>"$log" 2>&1 || bootstrap_rc=$?
+  fi
+  if [[ "$bootstrap_rc" -ne 0 ]]; then
+    GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED="yes"
+    [[ "$bootstrap_fatal" == "no" ]] || return 1
+  fi
+
+  # Legacy optional prewarm, non-fatal wherever it runs — but it now runs
+  # EVERYWHERE, which is the point of this function.
+  GLUERUN_WORKTREE_PREPARE_STAGE="prewarm"
+  if [[ -n "${GLUERUN_PREWARM_CMD:-}" ]]; then
+    if [[ "${#child_env[@]}" -gt 0 ]]; then
+      env "${child_env[@]}" "$(gluerun_bash_bin)" -c \
+        "cd $(printf '%q' "$worktree") && $GLUERUN_PREWARM_CMD" >>"$log" 2>&1 \
+        || echo "  warning: prewarm command failed (exit $?); continuing" >&2
+    else
+      gluerun_run_in_worktree_env "$worktree" "$(gluerun_bash_bin)" -c \
+        "$GLUERUN_PREWARM_CMD" >>"$log" 2>&1 \
+        || echo "  warning: prewarm command failed (exit $?); continuing" >&2
+    fi
+  fi
+
+  GLUERUN_WORKTREE_PREPARE_STAGE=""
+  return 0
 }
 
 gluerun_run_in_worktree_env() {

@@ -217,16 +217,32 @@ gluerun experiment-report tables
 All per-repo variation lives in the consumer repo, never in engine files:
 
 - **`gluerun.config.json`** — declarative: `targetBranch`, `gateCommand`, `runner`,
-  `areas{}`, `areaPrefix`, `prewarm`, `modules[]`, `identity{}`, `env{}`,
-  `provisionFiles[]`, `envAllowlist[]`, `capabilityProfiles{}`, `roleProfiles{}`,
-  `evidence{}`, `bootstrap{}`, `resources{}`, `controlState{}`, and
-  `legacyCompatibility{}`.
+  `areas{}`, `areaPrefix`, `prewarm`, `worktreeCopyPaths[]`, `modules[]`,
+  `identity{}`, `env{}`, `provisionFiles[]`, `envAllowlist[]`,
+  `capabilityProfiles{}`, `roleProfiles{}`, `evidence{}`, `bootstrap{}`,
+  `resources{}`, `controlState{}`, and `legacyCompatibility{}`.
 - **`gluerun.config.sh`** — optional shell extras (computed values, functions).
 - **`.gluerun-state/config.local.sh`** — gitignored operator overrides and secrets.
 
 The starter config deliberately sets `gateCommand` to `false` so a newly
 scaffolded repo fails closed until you replace it with the command that proves
 the repo is healthy.
+
+`worktreeCopyPaths[]` names dependency trees to copy into every fresh worktree —
+the worker's, the auditor's disposable one, and the deterministic acceptance
+one. All three are prepared by the same code path, so a gate that passes for the
+worker is running in the same environment when the auditor re-runs it. Copies
+are copy-on-write where the filesystem supports it (macOS clonefile, GNU
+reflink), falling back to a plain recursive copy. `node_modules` is always
+included; the listed paths are **added** to it, so a monorepo declares only its
+nested trees:
+
+```json
+"worktreeCopyPaths": ["apps/web/node_modules", "packages/ui/node_modules"]
+```
+
+A declared path that does not exist in the source worktree is reported and
+recorded as a `worktree.copy_path_absent` event rather than skipped silently.
 
 The v2 starter profile is local-only and lazy: each runner role requires the
 filesystem, Git, schema bundle, runner contract, and selected provider

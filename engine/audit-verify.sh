@@ -210,65 +210,19 @@ if [[ "$resolved_head" != "$head_sha" ]]; then
   exit $?
 fi
 
-if ! gluerun_worktree_provision "$verify_worktree" "" >>"$log" 2>&1; then
-  emit_setup_failure "worktree-provision-failed"
-  exit $?
-fi
-# Copy dependency trees into the disposable root. macOS clonefile copies are
-# copy-on-write; other platforms use GNU reflinks when available, then a plain
-# recursive copy. The default covers the common Turbo/Vitest/Bun root layout;
-# monorepos may add clean relative paths through the JSON knob.
-mirror_json="${GLUERUN_AUDIT_VERIFY_COPY_PATHS_JSON:-[\"node_modules\"]}"
-mapfile -t mirror_paths < <(python3 - "$mirror_json" <<'PY'
-import json
-import pathlib
-import sys
-try:
-    values = json.loads(sys.argv[1])
-except Exception:
-    raise SystemExit(2)
-if not isinstance(values, list):
-    raise SystemExit(2)
-for value in values:
-    if not isinstance(value, str) or not value:
-        raise SystemExit(2)
-    path = pathlib.PurePosixPath(value)
-    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
-        raise SystemExit(2)
-    print(value)
-PY
-) || {
-  emit_setup_failure "invalid-copy-paths-json"
-  exit $?
-}
-
-for relative in "${mirror_paths[@]}"; do
-  source_path="$source_worktree/$relative"
-  target_path="$verify_worktree/$relative"
-  [[ -e "$source_path" ]] || continue
-  mkdir -p "$(dirname "$target_path")"
-  copy_ok="no"
-  if cp -cR "$source_path" "$target_path" >/dev/null 2>&1; then
-    copy_ok="yes"
-  else
-    rm -rf "$target_path"
-    if cp -a --reflink=auto "$source_path" "$target_path" >/dev/null 2>&1; then
-      copy_ok="yes"
-    else
-      rm -rf "$target_path"
-      if cp -R "$source_path" "$target_path" >/dev/null 2>&1; then
-        copy_ok="yes"
-      fi
-    fi
-  fi
-  if [[ "$copy_ok" != "yes" ]]; then
-    emit_setup_failure "dependency-copy-failed:$relative"
-    exit $?
-  fi
-done
-
-if ! "$SCRIPT_DIR/bootstrap-worktree.sh" --worktree "$verify_worktree" >>"$log" 2>&1; then
-  emit_setup_failure "worktree-bootstrap-failed"
+# One shared preparer for provision -> dependency copies -> bootstrap -> prewarm,
+# so this disposable worktree is environment-equivalent to the worker's by
+# construction rather than by two code paths happening to agree. They did not:
+# this one never ran `prewarm`, and it is the worktree where the auditor re-runs
+# the gate whose result decides whether the work is accepted. A green worker gate
+# that fails here is indistinguishable, from the outside, from broken work.
+if ! gluerun_worktree_prepare "$verify_worktree" "" "$source_worktree" "$log"; then
+  case "$GLUERUN_WORKTREE_PREPARE_STAGE" in
+    provision) emit_setup_failure "worktree-provision-failed" ;;
+    copy-paths) emit_setup_failure "${GLUERUN_WORKTREE_PREPARE_DETAIL:-dependency-copy-failed}" ;;
+    bootstrap) emit_setup_failure "worktree-bootstrap-failed" ;;
+    *) emit_setup_failure "worktree-prepare-failed" ;;
+  esac
   exit $?
 fi
 

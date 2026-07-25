@@ -448,7 +448,12 @@ fi
 gluerun_append_event "l1.worktree_created" "worker worktree created" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"worktree\":\"$worktree\"}"
 provision_log="$run_dir/worktree-provision.log"
-if ! gluerun_worktree_provision "$worktree" "$run_dir" >"$provision_log" 2>&1; then
+# The shared preparer, so the worker worktree and the auditor's disposable
+# worktree are built the same way by construction. Bootstrap stays non-fatal
+# here (it is fatal in the audit path) and the failure is reported through
+# GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED below.
+GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FATAL=no
+if ! gluerun_worktree_prepare "$worktree" "$run_dir" "$GLUERUN_ROOT" "$provision_log"; then
   provision_out="$(cat "$provision_log" 2>/dev/null || true)"
   _l1_outcome="terminal"
   l1_status terminal failed "Worker workspace provisioning failed" true \
@@ -476,8 +481,8 @@ print(json.dumps({"taskId": task_id, "runId": run_id, "envFile": env_file}, sepa
 PY
 )"
 bootstrap_failure=""
-bootstrap_log="$run_dir/worktree-bootstrap.log"
-if ! "$SCRIPT_DIR/bootstrap-worktree.sh" --worktree "$worktree" >"$bootstrap_log" 2>&1; then
+bootstrap_log="$provision_log"
+if [[ "$GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED" == "yes" ]]; then
   bootstrap_failure="required-bootstrap-failed"
   gluerun_append_event "l1.bootstrap_failed" \
     "required worktree bootstrap failed (infrastructure)" \
@@ -485,12 +490,6 @@ if ! "$SCRIPT_DIR/bootstrap-worktree.sh" --worktree "$worktree" >"$bootstrap_log
 else
   gluerun_append_event "l1.bootstrap_completed" "worktree bootstrap completed" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"log\":\"$bootstrap_log\"}" || true
-fi
-# Legacy optional prewarm remains additive for existing v1 consumers. New
-# required bootstrap behavior belongs in GLUERUN_BOOTSTRAP_JSON.
-if [[ -n "${GLUERUN_PREWARM_CMD:-}" ]]; then
-  gluerun_run_in_worktree_env "$worktree" "$(gluerun_bash_bin)" -c "$GLUERUN_PREWARM_CMD" >"$run_dir/prewarm.log" 2>&1 \
-    || echo "  warning: prewarm command failed (exit $?); continuing" >&2
 fi
 
 # ---- One attempt: worker -> scope -> gate -> commit -> stamp -> audit ----

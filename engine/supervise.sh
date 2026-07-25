@@ -106,7 +106,11 @@ deadline=$((SECONDS + timeout_sec))
 while kill -0 "$runner_pid" 2>/dev/null; do
   if [[ "$SECONDS" -ge "$deadline" ]]; then
     timed_out="yes"
-    gluerun_kill_tree "$runner_pid"
+    # With a grace period, so the runner's EXIT trap — which holds the read-only
+    # restore guard — gets to run. autonomate.sh backgrounds this supervisor
+    # every cycle against $GLUERUN_ROOT for up to 900s; a bare SIGKILL here left
+    # every mutation it made in the operator's repo.
+    gluerun_kill_tree "$runner_pid" "$(gluerun_kill_grace_sec)"
     wait "$runner_pid" 2>/dev/null || true
     break
   fi

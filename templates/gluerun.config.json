@@ -15,6 +15,7 @@
   "proofLayers": [],
   "proofGrandfather": [],
   "prewarm": "",
+  "worktreeCopyPaths": [],
   "capabilityProfiles": {
     "planner-core": {
       "startup": "lazy",

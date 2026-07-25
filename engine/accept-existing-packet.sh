@@ -220,35 +220,45 @@ mkdir -p "$verification_cache/tmp" "$verification_cache/xdg" \
   "$verification_cache/go" "$verification_cache/home" \
   "$verification_cache/bun-install" "$verification_sandbox/state"
 bootstrap_log="$run_dir/accept-existing-packet-bootstrap.log"
-if ! gluerun_worktree_provision "$verification_worktree" "" >"$bootstrap_log" 2>&1; then
+# Same shared preparer as l1-drive and audit-verify. This site previously got
+# neither the dependency copies nor prewarm, so it was the least like the
+# worktree whose work it is deciding to accept.
+GLUERUN_WORKTREE_PREPARE_ENV=(
+  GLUERUN_ROOT="$verification_worktree"
+  GLUERUN_STATE_DIR="$verification_sandbox/state"
+  TMPDIR="$verification_cache/tmp/"
+  TMP="$verification_cache/tmp"
+  TEMP="$verification_cache/tmp"
+  XDG_CACHE_HOME="$verification_cache/xdg"
+  TURBO_CACHE_DIR="$verification_cache/turbo"
+  VITE_CACHE_DIR="$verification_cache/vite"
+  BUN_INSTALL="$verification_cache/bun-install"
+  BUN_INSTALL_CACHE_DIR="$verification_cache/bun"
+  BUN_TMPDIR="$verification_cache/tmp"
+  npm_config_cache="$verification_cache/npm"
+  YARN_CACHE_FOLDER="$verification_cache/yarn"
+  COREPACK_HOME="$verification_cache/corepack"
+  NODE_COMPILE_CACHE="$verification_cache/node"
+  CARGO_TARGET_DIR="$verification_cache/cargo"
+  GOCACHE="$verification_cache/go"
+)
+if ! gluerun_worktree_prepare "$verification_worktree" "" "$GLUERUN_ROOT" "$bootstrap_log"; then
   cat "$bootstrap_log" >&2
-  echo "disposable deterministic acceptance worktree provisioning failed" >&2
+  # Per-stage wording preserved verbatim: these strings are the infrastructure
+  # rejection reasons callers and tests match on.
+  case "$GLUERUN_WORKTREE_PREPARE_STAGE" in
+    provision)
+      echo "disposable deterministic acceptance worktree provisioning failed" >&2 ;;
+    copy-paths)
+      echo "deterministic acceptance dependency copy failed: ${GLUERUN_WORKTREE_PREPARE_DETAIL:-unknown}" >&2 ;;
+    bootstrap)
+      echo "required deterministic acceptance bootstrap failed" >&2 ;;
+    *)
+      echo "deterministic acceptance worktree preparation failed" >&2 ;;
+  esac
   exit 2
 fi
-if ! env \
-  GLUERUN_ROOT="$verification_worktree" \
-  GLUERUN_STATE_DIR="$verification_sandbox/state" \
-  TMPDIR="$verification_cache/tmp/" \
-  TMP="$verification_cache/tmp" \
-  TEMP="$verification_cache/tmp" \
-  XDG_CACHE_HOME="$verification_cache/xdg" \
-  TURBO_CACHE_DIR="$verification_cache/turbo" \
-  VITE_CACHE_DIR="$verification_cache/vite" \
-  BUN_INSTALL="$verification_cache/bun-install" \
-  BUN_INSTALL_CACHE_DIR="$verification_cache/bun" \
-  BUN_TMPDIR="$verification_cache/tmp" \
-  npm_config_cache="$verification_cache/npm" \
-  YARN_CACHE_FOLDER="$verification_cache/yarn" \
-  COREPACK_HOME="$verification_cache/corepack" \
-  NODE_COMPILE_CACHE="$verification_cache/node" \
-  CARGO_TARGET_DIR="$verification_cache/cargo" \
-  GOCACHE="$verification_cache/go" \
-  "$SCRIPT_DIR/bootstrap-worktree.sh" --worktree "$verification_worktree" \
-  >>"$bootstrap_log" 2>&1; then
-  cat "$bootstrap_log" >&2
-  echo "required deterministic acceptance bootstrap failed" >&2
-  exit 2
-fi
+unset GLUERUN_WORKTREE_PREPARE_ENV
 bootstrap_head="$(git -C "$verification_worktree" rev-parse HEAD 2>/dev/null || true)"
 mapfile -t bootstrap_changed_paths < <(
   git -C "$verification_worktree" status --porcelain=v1 --untracked-files=all 2>/dev/null \
