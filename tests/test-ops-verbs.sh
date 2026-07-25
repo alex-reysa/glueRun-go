@@ -162,4 +162,94 @@ assert_contains "$out" "STOP removed" "wake drops STOP"
 assert_contains "$out" "wake requested" "wake touches WAKE"
 [[ -f "$root/.gluerun-state/WAKE" ]] || fail "WAKE file present"
 
+# --- unpark ------------------------------------------------------------------
+# A transient environment fault used to kill a task permanently: escalate-parked
+# writes Status: blocked, dispatch selects only Status: ready, recover.sh filters
+# to running|planned|needs-review before it could help, and the only operator
+# verb was `supersede` — which buries the task in tasks/superseded/ rather than
+# repairing it.
+cat >"$root/docs/orchestration/tasks/TASK-0010.md" <<'EOF'
+# TASK-0010: parked on a missing dependency
+
+Status: blocked
+Area: core
+DAG node: node-z
+Dispatch mode: canonical
+
+## Objective
+
+Parked by audit-infra.
+
+## Scope
+
+Owned files:
+
+- `src/z.ts`
+EOF
+# retryCount at the ceiling and a refusals counter: both are what make an
+# unpark that only flips the task status useless.
+printf '%s\n' '{"taskId":"TASK-0010","status":"blocked","retryCount":3,"branch":"agent/core/TASK-0010"}' \
+  >"$root/.gluerun-state/leases/TASK-0010.json"
+printf '3\n' >"$root/.gluerun-state/dispatch/TASK-0010.refusals"
+
+out="$(ops unpark TASK-0010 --reason "dependency installed")"
+assert_contains "$out" "unparked TASK-0010" "unpark completes"
+grep -q "^Status: ready" "$root/docs/orchestration/tasks/TASK-0010.md" || fail "unpark: task status"
+[[ -f "$root/docs/orchestration/tasks/TASK-0010.md" ]] || fail "unpark: task file must stay in place"
+lease_json="$root/.gluerun-state/leases/TASK-0010.json"
+[[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["status"])' "$lease_json")" == "ready" ]] \
+  || fail "unpark: lease status"
+# Nothing else in the engine ever resets retryCount, and decide.sh reads it to
+# decide whether any budget remains — an unpark that leaves it at the ceiling
+# parks again on the first failure with no attempt left to spend.
+[[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["retryCount"])' "$lease_json")" == "0" ]] \
+  || fail "unpark: retryCount not reset"
+# Only cleared on a successful dispatch otherwise, so an unparked task would
+# inherit the old count and re-park at the threshold.
+[[ ! -f "$root/.gluerun-state/dispatch/TASK-0010.refusals" ]] || fail "unpark: refusals counter"
+grep -q "unpark" "$root/docs/orchestration/decisions.md" || fail "unpark: decision recorded"
+assert_contains "$(cat "$root/.gluerun-state/events.ndjson")" '"type":"task.unparked"' "unpark event"
+
+# The task is dispatch-eligible again — the point of the whole verb.
+readyish="$(env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
+  GLUERUN_ORCH_DIR="$root/docs/orchestration" GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
+  GLUERUN_LEASES_DIR="$root/.gluerun-state/leases" GLUERUN_TARGET_BRANCH=target \
+  bash -c 'source "$0"/lib.sh; gluerun_list_status_ready_tasks' "$SCRIPT_DIR")"
+assert_contains "$readyish" "TASK-0010" "unpark returns the task to the ready set"
+
+# Idempotent.
+out="$(ops unpark TASK-0010)"
+assert_contains "$out" "already ready" "unpark idempotent"
+
+# It must not override a live status — that would race a running worker.
+# A task of its own: the supersede cases above have already moved TASK-0003 into
+# tasks/superseded/, so reusing it would exercise the wrong refusal.
+cat >"$root/docs/orchestration/tasks/TASK-0011.md" <<'EOF'
+# TASK-0011: live worker
+
+Status: running
+Area: core
+Dispatch mode: canonical
+
+## Objective
+
+In flight.
+
+## Scope
+
+Owned files:
+
+- `src/live.ts`
+EOF
+rc=0
+out="$(ops unpark TASK-0011 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "unpark: must refuse a running task"
+assert_contains "$out" "refusing to override a live status" "unpark refuses running"
+
+# A superseded task is buried, not parked; say so instead of resurrecting it.
+rc=0
+out="$(ops unpark TASK-0001 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "unpark: must refuse a superseded task"
+assert_contains "$out" "is superseded, not parked" "unpark refuses superseded"
+
 echo "PASS: test-ops-verbs"

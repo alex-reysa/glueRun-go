@@ -7,6 +7,7 @@ set -euo pipefail
 # verbs make each of those a single audited command.
 #
 #   ops.sh supersede TASK-XXXX [--by TASK-YYYY] [--reason TEXT] [--force]
+#   ops.sh unpark TASK-XXXX [--reason TEXT]
 #   ops.sh clear-backoff
 #   ops.sh breaker [show|reset]
 #   ops.sh stop [--wait[=SECS]]
@@ -35,6 +36,87 @@ source "$SCRIPT_DIR/lib.sh"
 
 verb="${1:-}"
 shift || true
+
+# --- unpark -------------------------------------------------------------------
+# Return a parked task to the dispatch frontier: task Status, lease status and
+# retryCount, the refusals counter, a decision record and an event.
+#
+# Until this existed a transient environment fault killed a task permanently.
+# `escalate-parked` writes Status: blocked and a blocked lease; dispatch selects
+# only Status: ready; recover.sh filters to running|planned|needs-review before
+# it could ever help. The single supported operator action was `supersede`,
+# which MOVES the file to tasks/superseded/ — burial, not repair. The engine
+# could park a task for a missing dependency and offered no way to say the
+# dependency is there now.
+#
+# Resetting retryCount is the part that is easy to miss. Nothing in the engine
+# ever resets it, and decide.sh reads it from the lease to decide whether any
+# budget remains — so a task unparked at retryCount == maxRetries would park
+# again on its first failure, with no attempt left to spend. Same for the
+# refusals counter, which is only cleared on a successful dispatch.
+ops_unpark() {
+  local task_id="" reason=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --reason) reason="$2"; shift 2 ;;
+      TASK-*) task_id="$1"; shift ;;
+      *) echo "usage: gluerun unpark TASK-XXXX [--reason TEXT]" >&2; return 2 ;;
+    esac
+  done
+  [[ -n "$task_id" ]] || { echo "usage: gluerun unpark TASK-XXXX [--reason TEXT]" >&2; return 2; }
+
+  local task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+  if [[ ! -f "$task_file" ]]; then
+    if [[ -f "$GLUERUN_TASKS_DIR/superseded/$task_id.md" ]]; then
+      echo "unpark: $task_id is superseded, not parked; move it back by hand if that was wrong" >&2
+      return 2
+    fi
+    echo "unpark: no task file $task_file" >&2
+    return 2
+  fi
+  local current
+  current="$(gluerun_task_status "$task_file" 2>/dev/null || true)"
+  if [[ "$current" == "ready" ]]; then
+    echo "unpark: $task_id is already ready (idempotent no-op)"
+    return 0
+  fi
+  case "$current" in
+    blocked|failed|"") ;;
+    *)
+      echo "unpark: $task_id is '$current', not parked; refusing to override a live status" >&2
+      return 2 ;;
+  esac
+
+  local run_id
+  run_id="$(gluerun_run_id)"
+  gluerun_acquire_lock "$run_id" || { echo "unpark: origin lock busy" >&2; return 2; }
+  # shellcheck disable=SC2064
+  trap "gluerun_release_lock '$run_id' 2>/dev/null || true" EXIT
+
+  local rationale="${reason:-unparked via gluerun unpark}"
+  # Surface 1 — decisions (durable intent first, as in supersede).
+  "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision unpark \
+    --rationale "$rationale" --run "$run_id" --authority operator 2>/dev/null \
+    && echo "unpark: decision recorded" || echo "unpark: decision record FAILED (continuing)" >&2
+  # Surface 2 — task file.
+  gluerun_task_set_status "$task_file" "ready" \
+    && echo "unpark: task -> ready" \
+    || { echo "unpark: task status update FAILED" >&2; return 2; }
+  # Surface 3 — lease: status plus the retry budget it carries.
+  if gluerun_lease_unpark "$task_id" 2>/dev/null; then
+    echo "unpark: lease -> ready, retryCount reset"
+  else
+    echo "unpark: no lease (ok)"
+  fi
+  # Surface 4 — refusals counter.
+  if [[ -f "$GLUERUN_DISPATCH_DIR/$task_id.refusals" ]]; then
+    rm -f "$GLUERUN_DISPATCH_DIR/$task_id.refusals"
+    echo "unpark: refusals counter cleared"
+  fi
+  gluerun_append_event "task.unparked" "task returned to the frontier via operator verb" \
+    "{\"taskId\":\"$task_id\",\"previousStatus\":\"$current\"}"
+  echo "unparked $task_id"
+}
 
 # --- supersede ----------------------------------------------------------------
 # The "four resurrection surfaces" atomically: decisions.md entry, task file
@@ -1117,6 +1199,7 @@ ops_report() {
 
 case "$verb" in
   supersede)     ops_supersede "$@" ;;
+  unpark)        ops_unpark "$@" ;;
   clear-backoff) gluerun_planner_backoff_clear ;;
   breaker)       ops_breaker "$@" ;;
   stop)          ops_stop "$@" ;;
@@ -1129,6 +1212,6 @@ case "$verb" in
   ask)           ops_ask "$@" ;;
   report)        ops_report "$@" ;;
   *)
-    echo "usage: ops.sh supersede|clear-backoff|breaker|stop|resume|wake|gates|health|gc|plan|ask|report ..." >&2
+    echo "usage: ops.sh supersede|unpark|clear-backoff|breaker|stop|resume|wake|gates|health|gc|plan|ask|report ..." >&2
     exit 2 ;;
 esac

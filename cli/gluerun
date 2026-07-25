@@ -857,6 +857,7 @@ Operate / recover:
   gates [--json]       per-node gate table from gate-result files
   human-gate request|approve|status                    hash-bound human approval records
   supersede TASK-XXXX [--by TASK-YYYY] [--force]      atomically supersede a task (all four surfaces)
+  unpark TASK-XXXX [--reason TEXT]   return a parked task to the frontier (status, lease, retry budget)
   clear-backoff        remove the planner backoff (with event)
   breaker [show|reset] circuit-breaker state
   stop [--wait[=S]]    write STOP (and optionally wait for autonomate to exit)
@@ -912,6 +913,7 @@ main() {
     promote-gate)  run_engine promote-gate.sh "$@" ;;   # sources lib.sh -> honors config "promoter"
     human-gate)    run_engine human-gate.sh "$@" ;;
     supersede)     run_engine ops.sh supersede "$@" ;;
+    unpark)        run_engine ops.sh unpark "$@" ;;
     clear-backoff) run_engine ops.sh clear-backoff "$@" ;;
     breaker)       run_engine ops.sh breaker "$@" ;;
     stop)          run_engine ops.sh stop "$@" ;;

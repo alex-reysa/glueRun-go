@@ -3303,6 +3303,38 @@ os.replace(tmp, path)
 PY
 }
 
+# Return a lease to a dispatchable state and give the task its retry budget back.
+#
+# retryCount is the part that matters. Nothing else in the engine ever resets
+# it, and decide.sh reads it from here to decide whether any budget remains — so
+# a task unparked at retryCount == maxRetries would park again on its first
+# failure with no attempt left to spend, which looks exactly like the unpark not
+# having worked.
+gluerun_lease_unpark() {
+  local task_id="$1"
+  local lease
+  lease="$(gluerun_lease_path "$task_id")"
+  [[ -f "$lease" ]] || return 1
+  python3 - "$lease" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+data["status"] = "ready"
+data["retryCount"] = 0
+data["updatedAt"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+}
+
 # Increment a lease's retryCount; echo the new count.
 gluerun_lease_bump_retry() {
   local task_id="$1"
@@ -6053,6 +6085,21 @@ for l in sys.stdin:
 }
 
 # Set the Status: header of a task markdown file in place.
+# Read the `Status:` header of a task file, lowercased. Empty when absent.
+gluerun_task_status() {
+  local task_file="$1"
+  [[ -f "$task_file" ]] || return 1
+  python3 - "$task_file" <<'PY'
+import sys
+
+with open(sys.argv[1], encoding="utf-8", errors="replace") as stream:
+    for line in stream:
+        if line.lower().startswith("status:"):
+            print(line.split(":", 1)[1].strip().lower())
+            break
+PY
+}
+
 gluerun_task_set_status() {
   local task_file="$1" status="$2"
   python3 - "$task_file" "$status" <<'PY'
