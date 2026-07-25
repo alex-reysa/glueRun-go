@@ -391,12 +391,22 @@ ops_health() {
   [[ "${1:-}" == "--json" ]] && json="yes"
   local gates_json frontier_json ready_count active_count l1_active l1_stale
   gates_json="$(ops_gates --json 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps({"passed":d["passed"],"total":d["total"]}))' 2>/dev/null || echo '{"passed":null,"total":null}')"
-  frontier_json="$("$SCRIPT_DIR/dag.sh" next-areas 2>/dev/null | python3 -c 'import json,sys
+  # "null" here used to mean two different things -- no ready work, and a DAG
+  # that could not be evaluated at all -- and health printed the same line for
+  # both. gluerun_dag_next_areas_json separates them: a non-zero exit is an
+  # evaluation failure, which health must name.
+  local frontier_raw frontier_rc=0
+  frontier_raw="$(gluerun_dag_next_areas_json)" || frontier_rc=$?
+  if [[ "$frontier_rc" -ne 0 ]]; then
+    frontier_json="unavailable"
+  else
+    frontier_json="$(printf '%s' "$frontier_raw" | python3 -c 'import json,sys
 try:
     d=json.load(sys.stdin)
     print(len(d.get("frontier",[])))
 except Exception:
     print("null")' || echo null)"
+  fi
   ready_count="$(gluerun_list_ready_tasks 2>/dev/null | grep -c . || true)"
   active_count="$(gluerun_active_lease_count 2>/dev/null || echo 0)"
   l1_active="$(gluerun_l1_list_active 2>/dev/null | grep -c . || true)"
@@ -497,6 +507,11 @@ except Exception:
     }
 
 attention = []
+if frontier == "unavailable":
+    attention.append(
+        "DAG frontier could not be evaluated (run `gluerun next-areas` for the "
+        "diagnostic); an empty frontier here does NOT mean there is no work"
+    )
 if stop == "true":
     attention.append("STOP sentinel present")
 if backoff:
@@ -515,7 +530,12 @@ if resources and resources.get("effectiveSlots") == 0:
 doc = {
     "ok": not attention,
     "gates": gates,
-    "frontier": {"ready": num(frontier)},
+    # `ready: null` means "counted, and the count was unreadable"; evaluable
+    # false means the DAG could not be evaluated at all. Collapsing those two
+    # into one line is what let an invalid DAG read as "no work to do".
+    "frontier": ({"ready": None, "evaluable": False}
+                 if frontier == "unavailable" else
+                 {"ready": num(frontier), "evaluable": True}),
     "tasks": {"ready": num(ready)},
     "leases": {"l2Active": num(active), "l1Active": num(l1a), "l1Stale": num(l1s),
                "implementersActive": lifecycle.get("implementersActive", 0)},
@@ -555,7 +575,10 @@ else:
     g = doc["gates"]
     print(f"ok:         {doc['ok']}")
     print(f"gates:      {g.get('passed')}/{g.get('total')}")
-    print(f"frontier:   {doc['frontier']['ready']} ready node(s)")
+    if doc["frontier"].get("evaluable") is False:
+        print("frontier:   UNEVALUABLE (see dag.evaluation_failed; this is not 'no work')")
+    else:
+        print(f"frontier:   {doc['frontier']['ready']} ready node(s)")
     print(f"tasks:      {doc['tasks']['ready']} ready; leases l2={doc['leases']['l2Active']} l1={doc['leases']['l1Active']} (stale {doc['leases']['l1Stale']})")
     print(f"breaker:    {doc['breaker']['consecFails']}/{doc['breaker']['threshold']}"
           + (" OPEN" if doc["breaker"]["open"] else ""))
@@ -877,7 +900,10 @@ ops_plan_archive() {
   fi
   # 4. Plan incomplete (dag frontier not fully gate-passed).
   local frontier_out all_complete
-  frontier_out="$("$SCRIPT_DIR/dag.sh" next-areas 2>/dev/null || true)"
+  # Fails safe either way (an unreadable frontier is not allComplete, so archive
+  # refuses), but the operator should still be told WHY rather than being sent to
+  # finish a DAG that cannot be parsed.
+  frontier_out="$(gluerun_dag_next_areas_json || true)"
   all_complete="$(printf '%s' "$frontier_out" | python3 -c 'import json,sys
 try:
     print("true" if json.load(sys.stdin).get("allComplete") else "false")

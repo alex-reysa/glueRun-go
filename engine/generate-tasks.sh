@@ -382,7 +382,7 @@ fi
 if [[ "$codex_exit" -ne 0 ]]; then
   failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out" "$runner_result")"
   case "$failure_class" in
-    quota) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
+    quota|provider-overloaded) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
     timeout|codex-exit) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
   esac
   event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$failure_class" "$codex_exit" "$codex_log" "$out" "$runner_result" <<'PY'
@@ -410,7 +410,7 @@ fi
 if [[ ! -s "$out" ]]; then
   failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out" "$runner_result")"
   case "$failure_class" in
-    quota) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
+    quota|provider-overloaded) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
     timeout|codex-exit) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
   esac
   event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$failure_class" "$codex_exit" "$codex_log" "$out" "$runner_result" <<'PY'

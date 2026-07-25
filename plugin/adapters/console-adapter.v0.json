@@ -701,6 +701,22 @@
           "kind": "duration",
           "unit": "s",
           "meaning": "longer wait after a planner quota / rate-limit rejection"
+        },
+        {
+          "envKey": "GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS",
+          "label": "planner overload backoff",
+          "default": "180",
+          "kind": "duration",
+          "unit": "s",
+          "meaning": "short wait after a provider 503/529; transient capacity, not a usage limit"
+        },
+        {
+          "envKey": "GLUERUN_OVERLOAD_WAIT_BUDGET",
+          "label": "overload wait budget",
+          "default": "3600",
+          "kind": "duration",
+          "unit": "s",
+          "meaning": "total overload sleep-through before the loop writes STOP (separate from the quota budget)"
         }
       ]
     },

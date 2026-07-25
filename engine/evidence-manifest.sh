@@ -374,7 +374,12 @@ if gate_record_path is not None:
     gate_integrity = gate.get("sourceIntegrity")
     gate_valid = gate_valid and isinstance(gate_integrity, dict)
     gate_valid = gate_valid and gate_integrity.get("status") == "verified"
-    gate_log_ref = gate.get("logRef")
+    # logPath (0.15.1) is the absolute filesystem location; logRef is a
+    # REPOSITORY-relative citation for dag.sh. This reader resolves a relative
+    # ref against the RUN directory, so once logRef went repo-relative the
+    # lookup missed and every gate check silently downgraded to inconclusive.
+    # Prefer logPath and keep the old resolution as the fallback.
+    gate_log_ref = gate.get("logPath") or gate.get("logRef")
     gate_log_sha = gate.get("logSha256")
     if isinstance(gate_log_ref, str) and gate_log_ref:
         gate_log_path = pathlib.Path(gate_log_ref)

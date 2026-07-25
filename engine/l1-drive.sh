@@ -1417,10 +1417,12 @@ PY
     fi
     audit_fc="$(gluerun_planner_failure_class "$auditor_log" "$audit_rc" \
       "$audit_record" "$audit_result_file")"
-    # Structured provider results take precedence. Quota is not retried here;
-    # the cycle-level validated-provider-evidence path owns any backoff.
-    if [[ "$audit_fc" == "quota" ]]; then
-      infra_reason="quota"
+    # Structured provider results take precedence. Neither provider-window class
+    # is retried here; the cycle-level validated-provider-evidence path owns any
+    # backoff. Without the provider-overloaded arm a 529 fell through to the
+    # `! -f "$audit_record"` branch below and was mislabelled `no-record`.
+    if [[ "$audit_fc" == "quota" || "$audit_fc" == "provider-overloaded" ]]; then
+      infra_reason="$audit_fc"
       break
     elif [[ "$audit_fc" == "timeout" ]]; then
       infra_reason="timeout"

@@ -731,6 +731,57 @@ test_autonomate_quota_wait_budget_sets_stop() {
   assert_not_contains "$out" "RECONCILE_WAS_CALLED" "budget-exhaustion path does not run reconcile"
 }
 
+# A 503/529 is the provider shedding load, not a usage limit. It gets the same
+# no-breaker sleep-through as quota -- that protection is why it was ever
+# bucketed as quota -- but an order of magnitude shorter, and out of quota's
+# wait budget. Before the split one 529 idled the whole graph for 30 minutes.
+test_autonomate_sleeps_through_overload_window_without_breaker() {
+  with_fixture
+  local evidence
+  evidence="$(make_structured_quota_evidence RUN-o claude 529)"
+  gluerun_planner_backoff_set provider-overloaded RUN-o D1.contract "$evidence" \
+    || fail "overload evidence did not arm a provider-overloaded backoff"
+  local window
+  window="$(python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" <<'PY'
+import json, sys
+from datetime import datetime
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+started = datetime.fromisoformat(d["startedAt"].replace("Z", "+00:00"))
+until = datetime.fromisoformat(d["until"].replace("Z", "+00:00"))
+print(int((until - started).total_seconds()))
+PY
+)"
+  assert_eq "$window" "180" "an overload window is the short backoff, not the 1800s quota window"
+  local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
+  write_reconcile_should_not_run_stub "$stub"
+  local out
+  out="$(GLUERUN_QUOTA_SLEEP_CAP=1 GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_contains "$out" "provider overload window open" "autonomate detects the open overload window"
+  assert_not_contains "$out" "quota window open" "an overload window is not reported as a quota window"
+  assert_eq "$(gluerun_breaker_count)" "0" "sleeping through an overload window does not trip the breaker"
+}
+
+# The overload wait budget is separate: exhausting it must not depend on, or
+# consume, the usage-limit budget.
+test_autonomate_overload_wait_budget_is_separate_from_quota() {
+  with_fixture
+  local evidence
+  evidence="$(make_structured_quota_evidence RUN-o claude 529)"
+  gluerun_planner_backoff_set provider-overloaded RUN-o D1.contract "$evidence"
+  local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
+  write_reconcile_should_not_run_stub "$stub"
+  local out
+  # A zero QUOTA budget must not stop an OVERLOAD wait.
+  out="$(GLUERUN_QUOTA_WAIT_BUDGET=0 GLUERUN_QUOTA_SLEEP_CAP=1 \
+    GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_not_contains "$out" "wait budget exhausted" "the quota budget does not govern an overload wait"
+  [[ ! -f "$GLUERUN_STOP_FILE" ]] || fail "an exhausted quota budget must not STOP an overload wait"
+  out="$(GLUERUN_OVERLOAD_WAIT_BUDGET=0 GLUERUN_RECONCILE_SCRIPT="$stub" \
+    "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_contains "$out" "provider overload wait budget exhausted" "the overload budget governs an overload wait"
+  [[ -f "$GLUERUN_STOP_FILE" ]] || fail "overload budget exhaustion should set the STOP sentinel"
+}
+
 # --- C2: limit/403 sleep-through at the breaker chokepoint -----------------------
 # A recent structured runner result carrying a provider limit is detected so the
 # breaker chokepoint can sleep through instead of tripping.
@@ -812,6 +863,34 @@ STUB
   [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "a limit window arms a quota backoff for the next iteration to sleep through"
   assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' "the armed backoff is a quota window"
   assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" 'runner-result.json' "the armed backoff carries result evidence"
+}
+
+# The chokepoint used to hardcode "quota" when re-arming from cycle evidence, so
+# an overload window bought a 30-minute backoff here even once the classifier
+# told the truth about it. The class must come from the evidence.
+test_autonomate_chokepoint_arms_the_class_the_evidence_names() {
+  with_fixture
+  make_structured_quota_evidence RUN-cycle claude 529 >/dev/null
+  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "dispatched_this_run=0"
+echo "failed_dispatches=1"
+echo "integrated_this_run=0"
+echo "failed_integrations=0"
+echo "planner_failures_this_run=0"
+echo "l1_import_rejections_this_run=0"
+STUB
+  chmod +x "$stub"
+  local out
+  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_contains "$out" "structured provider limit evidence" "an overload-induced cycle is recognized at the chokepoint"
+  assert_eq "$(gluerun_breaker_count)" "0" "an overload window leaves the breaker at zero"
+  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "the chokepoint arms a backoff from overload evidence"
+  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "provider-overloaded"' \
+    "overload evidence arms a provider-overloaded backoff, not quota"
+  assert_not_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' \
+    "the chokepoint no longer hardcodes quota"
 }
 
 # Import rejections alone are never limit-eligible: even with a genuine limit
@@ -1137,12 +1216,15 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_autonomate_nonquota_backoff_still_counts_unrelated_failure
 	test_autonomate_expired_quota_backoff_falls_through
 	test_autonomate_quota_wait_budget_sets_stop
+	test_autonomate_sleeps_through_overload_window_without_breaker
+	test_autonomate_overload_wait_budget_is_separate_from_quota
 	test_cycle_limit_window_detected_finds_marker
 	test_cycle_limit_window_ignores_model_authored_artifacts
 	test_cycle_limit_window_detected_finds_403_org_disabled
 	test_cycle_limit_window_detected_ignores_plain_failure
 	test_cycle_limit_window_detected_ignores_stale_marker
 	test_autonomate_limit_induced_failure_arms_backoff_not_breaker
+	test_autonomate_chokepoint_arms_the_class_the_evidence_names
 	test_autonomate_import_rejections_never_arm_backoff
 	test_autonomate_real_failure_still_trips_with_detection_active
 	test_fanout_invalid_staged_imports_nothing_for_that_node

@@ -2305,7 +2305,10 @@ if [[ "$frontier_mode" == "yes" ]]; then
   # hardcodes a promotable subset — unregistered nodes simply skip, so normal
   # build-loop nodes are untouched while registered nodes get a definite
   # promote-or-block decision instead of silent spinning.
-  frontier_json="$("$ENGINE_BIN/dag.sh" next-areas 2>/dev/null || true)"
+  # "no frontier gates to adjudicate" must not double as the report for a DAG
+  # that could not be read at all -- gluerun_dag_next_areas_json warns and emits
+  # dag.evaluation_failed, and this stays non-fatal so the cycle continues.
+  frontier_json="$(gluerun_dag_next_areas_json || true)"
   mapfile -t requested_nodes < <(python3 - "$frontier_json" <<'PY'
 import json
 import sys

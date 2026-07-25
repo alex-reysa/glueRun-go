@@ -1837,11 +1837,72 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 required_for=("schema-v2-runs",),
             )
 
+    def _dag_frontier_probe(self):
+        """Run `dag.sh next-areas` once; both DAG checks read the same result.
+
+        Returns ("absent", None) when there is no DAG to evaluate, else
+        ("ran", CompletedProcess).
+        """
+        cached = getattr(self, "_dag_probe_cache", None)
+        if cached is not None:
+            return cached
+        if not self.repo or not (self.repo / "docs/orchestration/dag.v0.json").is_file():
+            cached = ("absent", None)
+        else:
+            cached = ("ran", command(
+                [str(self.bash), str(self.engine / "engine/dag.sh"), "next-areas"],
+                cwd=self.repo,
+                env=self.runtime_env,
+                timeout=20,
+            ))
+        self._dag_probe_cache = cached
+        return cached
+
+    def dag_evaluation(self) -> None:
+        """An unevaluable DAG is indistinguishable from an idle one in the loop.
+
+        dag.sh emits a precise diagnostic and exits non-zero; every caller in the
+        loop discarded it and reported an empty frontier, so a single malformed
+        gate file presented as "no work to do". The loop now says so (see
+        gluerun_dag_next_areas_json), and doctor is where an operator goes to ask
+        why nothing is happening -- so it must answer that question directly.
+        """
+        state, result = self._dag_frontier_probe()
+        if state == "absent":
+            self.add(
+                "dag.evaluation",
+                "skip",
+                "no docs/orchestration/dag.v0.json to evaluate",
+            )
+            return
+        if result.returncode != 0:
+            lines = [
+                line for line in
+                ((result.stderr or "") + "\n" + (result.stdout or "")).splitlines()
+                if line.strip()
+            ]
+            detail = lines[-1].strip() if lines else (
+                f"dag.sh next-areas exited {result.returncode} without a diagnostic"
+            )
+            self.add(
+                "dag.evaluation",
+                "fail",
+                f"the DAG frontier cannot be evaluated: {detail}",
+                remediation=(
+                    "Run `gluerun next-areas` to see the full diagnostic and fix the "
+                    "offending node or gate file. Until then the loop reports an empty "
+                    "frontier, which looks identical to having no ready work."
+                ),
+                details={"exitCode": result.returncode, "diagnostic": lines[-8:]},
+            )
+            return
+        self.add("dag.evaluation", "pass", "the DAG frontier evaluates cleanly")
+
     def deployment_credentials(self) -> None:
         if not self.repo:
             return
-        dag = self.repo / "docs/orchestration/dag.v0.json"
-        if not dag.is_file():
+        state, result = self._dag_frontier_probe()
+        if state == "absent":
             self.add(
                 "deployment.credentials",
                 "skip",
@@ -1849,12 +1910,6 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 required_for=("deployment",),
             )
             return
-        result = command(
-            [str(self.bash), str(self.engine / "engine/dag.sh"), "next-areas"],
-            cwd=self.repo,
-            env=self.runtime_env,
-            timeout=20,
-        )
         if result.returncode != 0:
             self.add(
                 "deployment.credentials",
@@ -1975,6 +2030,7 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         self.readonly_guard_check()
         self.resource_check()
         self.governance_checks()
+        self.dag_evaluation()
         self.deployment_credentials()
         failed = sum(item["status"] == "fail" for item in self.checks)
         warned = sum(item["status"] == "warn" for item in self.checks)

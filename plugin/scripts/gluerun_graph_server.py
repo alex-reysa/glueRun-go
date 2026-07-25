@@ -3848,6 +3848,10 @@ SETTINGS_SPEC = [
          "wait after a planner error before re-planning"),
         ("GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS", "planner quota backoff", "1800", "duration", "s",
          "longer wait after a planner quota / rate-limit rejection"),
+        ("GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS", "planner overload backoff", "180", "duration", "s",
+         "short wait after a provider 503/529; transient capacity, not a usage limit"),
+        ("GLUERUN_OVERLOAD_WAIT_BUDGET", "overload wait budget", "3600", "duration", "s",
+         "total overload sleep-through before the loop writes STOP (separate from the quota budget)"),
     ]),
     ("Loop behavior", "list", [
         ("GLUERUN_AUTO_INTEGRATE", "auto-integrate", "1", "bool", "",

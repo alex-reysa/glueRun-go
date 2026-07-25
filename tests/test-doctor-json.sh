@@ -121,6 +121,7 @@ required = {
     "resources.adaptive-disk",
     "governance.unbound-waivers",
     "deployment.credentials",
+    "dag.evaluation",
     "model-cache.compatibility",
 }
 assert required <= set(by_id), sorted(required - set(by_id))

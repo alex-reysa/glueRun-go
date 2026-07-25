@@ -148,7 +148,8 @@ def command_create(args: argparse.Namespace) -> int:
         "unexpectedFailures": unexpected,
         "resolvedExpectedFailures": [],
         "rawExitCode": args.exit_code,
-        "logRef": str(log),
+        "logRef": getattr(args, "log_ref", None) or str(log),
+        "logPath": str(log),
         "logSha256": sha_bytes(raw),
         "logBytes": len(raw),
         "durationMs": max(0, args.duration_ms),
@@ -226,7 +227,14 @@ def load_verified_evidence(
     binding = report.get("evidenceBindingSha256")
     if binding != evidence_binding(report):
         return None, "gate report evidence binding mismatch"
-    log = pathlib.Path(str(report.get("logRef", "")))
+    # logPath (0.15.1) is the absolute filesystem location. logRef is a
+    # REPOSITORY-relative citation for dag.sh, and this resolver anchors a
+    # relative ref at the REPORT'S OWN DIRECTORY -- a third, incompatible base.
+    # Reading logRef here would look for
+    # .gluerun-state/runs/RUN-x/.gluerun-state/runs/RUN-x/gate-check.log,
+    # fail, and surface as an unreadable gate log -> audit-infra -> a parked
+    # task, for a gate that actually passed.
+    log = pathlib.Path(str(report.get("logPath") or report.get("logRef", "")))
     if not log.is_absolute():
         log = (report_path.parent / log).resolve()
     try:
@@ -322,6 +330,12 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--command", required=True)
     create.add_argument("--exit-code", required=True, type=int)
     create.add_argument("--log", required=True)
+    # The citation written into the report. `--log` stays the file that gets
+    # opened and hashed; without this split the report's logRef was
+    # .resolve()d — absolute AND symlink-dereferenced, both of which
+    # dag.sh's safe_repo_artifact refuses — so the fallback path would have
+    # reintroduced an unvalidatable ref on exactly the error path.
+    create.add_argument("--log-ref")
     create.add_argument("--duration-ms", type=int, default=0)
     create.add_argument(
         "--phase", choices=("worker", "audit-verification", "integration", "other"), default="other"

@@ -53,10 +53,18 @@ cat >"$run/gate-baseline.json" <<JSON
   "recordedAt": "2026-07-24T10:00:00Z"
 }
 JSON
+# --log-ref is the REPOSITORY-relative citation gate-check.sh emits (0.15.1);
+# --log-path is the absolute file. This reader resolves a relative logRef
+# against the RUN directory, so a repo-relative ref misses and the gate would
+# silently downgrade to "inconclusive" unless it reads logPath. Using the ref
+# form gate-check.sh really produces is what makes the assertion below a guard
+# rather than a coincidence -- an absolute --log-ref satisfies both readers and
+# proves nothing.
 python3 "$ROOT/engine/gate_report.py" \
   --task-id TASK-0001 --run-id RUN-evidence --head-sha "$head" \
   --command "run tests" --raw-exit-code 1 \
-  --log-ref "$run/gate-check.log" --log-path "$run/gate-check.log" \
+  --log-ref ".gluerun-state/runs/RUN-evidence/gate-check.log" \
+  --log-path "$run/gate-check.log" \
   --observation "$run/gate-observation.json" --baseline "$run/gate-baseline.json" \
   --integrity-status verified --phase worker --workspace-kind worker \
   --output "$run/gate-report.json" >/dev/null

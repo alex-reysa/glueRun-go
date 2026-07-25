@@ -79,6 +79,10 @@ def main() -> None:
     parser.add_argument("--log-path", required=True)
     parser.add_argument("--observation")
     parser.add_argument("--baseline")
+    # Same ref/path split as --log-ref/--log-path: --baseline is opened and
+    # hashed, --baseline-ref is the citation written into the report. Defaults to
+    # --baseline so existing callers are unchanged.
+    parser.add_argument("--baseline-ref")
     parser.add_argument("--require-observation", action="store_true")
     parser.add_argument(
         "--integrity-status",
@@ -214,6 +218,17 @@ def main() -> None:
         "resolvedExpectedFailures": resolved,
         "rawExitCode": args.raw_exit_code,
         "logRef": args.log_ref,
+        # logRef is a repository-relative CITATION: dag.sh anchors it at
+        # GLUERUN_ROOT and rejects absolute refs. logPath is the file this
+        # process actually opened and hashed, verbatim from --log-path.
+        #
+        # They are separate because the repo has THREE incompatible bases for a
+        # relative logRef -- GLUERUN_ROOT (dag.sh), the run directory
+        # (evidence-manifest.sh) and the report's own directory
+        # (gate-report.py). Readers that need to open the file follow logPath
+        # and are immune to which base a producer chose; only dag.sh reads
+        # logRef, and only it defines the repo-relative meaning.
+        "logPath": str(log_path),
         "logSha256": sha_file(log_path),
         "logBytes": log_path.stat().st_size,
         "durationMs": max(0, args.duration_ms),
@@ -249,7 +264,7 @@ def main() -> None:
         "recordedAt": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }
     if baseline_path:
-        record["baselineRef"] = str(baseline_path)
+        record["baselineRef"] = args.baseline_ref or str(baseline_path)
         record["baselineSha256"] = baseline_sha
     record["evidenceBindingSha256"] = evidence_binding(record)
     Path(args.output).write_text(

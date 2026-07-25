@@ -141,16 +141,29 @@ declare -A envelopes=(
   [cursor]='{"type":"result","is_error":true,"status":429,"code":"rate_limit_exceeded","result":"request rejected"}'
   [grok]='{"type":"error","error":{"http_status":429,"code":"rate_limit_exceeded","message":"request rejected"}}'
 )
+# 429 is a usage-limit window (quota); 503/529 is transient capacity
+# (provider-overloaded). They are separate classes with separate backoffs, and
+# neither may satisfy an evidence query for the other.
+declare -A envelope_class=(
+  [codex]=quota [claude]=provider-overloaded [gemini]=provider-overloaded
+  [opencode]=quota [cursor]=quota [grok]=quota
+)
 for provider in codex claude gemini opencode cursor grok; do
+  expected="${envelope_class[$provider]}"
+  other="quota"; [[ "$expected" == "quota" ]] && other="provider-overloaded"
   result="$(write_result "$provider" "${envelopes[$provider]}")"
-  evidence="$(gluerun_runner_quota_evidence_json "$result")" \
-    || fail "$provider structured terminal status was not accepted"
-  [[ "$(json_field "$result" failureClass)" == "quota" ]] \
-    || fail "$provider runner result not quota"
+  evidence="$(gluerun_runner_quota_evidence_json "$result" "$expected")" \
+    || fail "$provider structured terminal status was not accepted as $expected"
+  [[ "$(json_field "$result" failureClass)" == "$expected" ]] \
+    || fail "$provider runner result not $expected"
   [[ "$evidence" == *"\"provider\":\"$provider\""* ]] \
     || fail "$provider missing from evidence"
+  gluerun_runner_quota_evidence_json "$result" "$other" >/dev/null 2>&1 \
+    && fail "$provider $expected evidence cross-validated as $other"
+  gluerun_runner_quota_evidence_json "$result" any >/dev/null 2>&1 \
+    || fail "$provider $expected evidence rejected by the any-window query"
 done
-pass "cross-provider terminal envelopes normalize to bound quota evidence"
+pass "cross-provider terminal envelopes normalize to bound, class-separated evidence"
 
 # Raw provider evidence remains byte-for-byte available after each runner
 # removes its private temp files, and both raw references are hash-bound.
@@ -272,6 +285,61 @@ cycle="$(gluerun_cycle_limit_window_evidence_json)" \
   || fail "cycle did not find validated runner result"
 [[ "$cycle" == *"\"resultRef\""* ]] || fail "cycle evidence is not a runner result"
 pass "backoff and cycle detection consume structured evidence only"
+
+# An overload window is a different class with a different window length. The
+# whole point of the split: a 529 must not buy the 30-minute quota backoff, and
+# must not be arm-able as quota at all.
+rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
+overloaded="$(write_result claude \
+  '{"type":"result","subtype":"error","is_error":true,"api_error_status":529,"result":"provider unavailable"}')"
+if gluerun_planner_backoff_set quota RUN-overload planner "$overloaded" 2>/dev/null; then
+  fail "overload evidence armed a quota backoff"
+fi
+[[ ! -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "refused overload-as-quota still wrote a backoff"
+gluerun_planner_backoff_set provider-overloaded RUN-overload planner "$overloaded" \
+  || fail "overload evidence did not arm a provider-overloaded backoff"
+[[ "$(json_field "$GLUERUN_PLANNER_BACKOFF_FILE" failureClass)" == "provider-overloaded" ]] \
+  || fail "overload backoff recorded the wrong class"
+[[ "$(json_field "$GLUERUN_PLANNER_BACKOFF_FILE" httpStatus)" == "529" ]] \
+  || fail "overload backoff missing normalized status"
+backoff_window="$(python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" <<'PY'
+import json, sys
+from datetime import datetime
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+started = datetime.fromisoformat(d["startedAt"].replace("Z", "+00:00"))
+until = datetime.fromisoformat(d["until"].replace("Z", "+00:00"))
+print(int((until - started).total_seconds()))
+PY
+)"
+[[ "$backoff_window" == "180" ]] \
+  || fail "overload backoff window is ${backoff_window}s, expected the short 180s window"
+rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
+pass "provider overload arms its own short backoff and cannot arm quota"
+
+# failureClass is written by the host classifier; `kind` comes from the
+# separately hash-bound provider-error sidecar. A result that CLAIMS quota while
+# its bound envelope says overloaded is the cheap way to buy a 30-minute
+# sleep-through from a 529, so the two must be cross-checked rather than the
+# self-declared class trusted.
+forged="$tmp/forged-quota-runner-result.json"
+cp "$overloaded" "$forged"
+python3 - "$forged" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+assert data["failureClass"] == "provider-overloaded", data["failureClass"]
+data["failureClass"] = "quota"
+json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+PY
+gluerun_runner_quota_evidence_json "$forged" quota >/dev/null 2>&1 \
+  && fail "a result claiming quota over an overload envelope passed the quota query"
+gluerun_runner_quota_evidence_json "$forged" any >/dev/null 2>&1 \
+  && fail "class/kind disagreement passed the any-window query"
+if gluerun_planner_backoff_set quota RUN-forged planner "$forged" 2>/dev/null; then
+  fail "forged quota class armed the long quota backoff from a 529"
+fi
+[[ ! -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "forged evidence wrote a backoff"
+pass "declared failure class must agree with the bound provider-error kind"
 
 # Schema mirrors are byte-identical and the validator rejects a tampered result.
 cmp -s "$ENGINE_HOME/schemas/provider-error.v0.schema.json" \

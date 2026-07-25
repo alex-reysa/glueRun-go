@@ -35,7 +35,7 @@
     },
     "failureClass": {
       "type": "string",
-      "enum": ["none", "quota", "timeout", "provider-exit"]
+      "enum": ["none", "quota", "provider-overloaded", "timeout", "provider-exit"]
     },
     "providerErrorRef": { "type": ["string", "null"] },
     "outputRef": { "type": ["string", "null"] },

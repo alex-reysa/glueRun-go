@@ -1008,6 +1008,54 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             def wire(payload) -> str:  # exactly what send_json serializes
                 return json.dumps(payload, indent=2)
 
+            # 0.15.1 intentionally adds TWO settings knobs: the provider-overload
+            # backoff and its own wait budget. Splitting 503/529 out of the quota
+            # class is the point of the release — a transient capacity blip used
+            # to select the 1800s usage-limit window and, because that nap skips
+            # reconcile entirely, idled the whole graph for half an hour.
+            #
+            # Strip those rows from the CURRENT payload before comparing, and
+            # assert HEAD genuinely lacks them: the exemption then expires by
+            # itself the moment this ships, which is the failure mode the 0.14.0
+            # note above warns about (it asserted against itself and so never
+            # expired).
+            new_0_15_1 = {
+                "GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS",
+                "GLUERUN_OVERLOAD_WAIT_BUDGET",
+            }
+
+            def env_keys(payload) -> set:
+                found = set()
+                if isinstance(payload, dict):
+                    if isinstance(payload.get("envKey"), str):
+                        found.add(payload["envKey"])
+                    for value in payload.values():
+                        found |= env_keys(value)
+                elif isinstance(payload, list):
+                    for value in payload:
+                        found |= env_keys(value)
+                return found
+
+            def drop_new(payload):
+                if isinstance(payload, dict):
+                    return {k: drop_new(v) for k, v in payload.items()}
+                if isinstance(payload, list):
+                    return [drop_new(v) for v in payload
+                            if not (isinstance(v, dict) and v.get("envKey") in new_0_15_1)]
+                return payload
+
+            head_settings_keys = env_keys(head.collect_settings(repo))
+            self.assertFalse(
+                new_0_15_1 & head_settings_keys,
+                "the 0.15.1 settings exemption is spent: HEAD now carries "
+                f"{sorted(new_0_15_1 & head_settings_keys)}. Delete new_0_15_1 "
+                "and the drop_new() calls below.",
+            )
+            self.assertTrue(
+                new_0_15_1 <= env_keys(srv.collect_settings(repo)),
+                "the 0.15.1 overload knobs are missing from the current settings catalog",
+            )
+
             # 0.14.0 intentionally adds ONE settings knob:
             # 0.14.0 carried a narrow exemption here for the one settings row it
             # added (GLUERUN_SUPERVISOR_INTERVAL_MIN). That row is in HEAD now,
@@ -1023,9 +1071,9 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             # non-blocking background peek — see NativeFrontierTests /
             # ValidateDagNativeTests / SnapshotNoSubprocessTests below.
             # /api/overview (includes settings groups)
-            self.assertEqual(wire(srv.collect_overview(repo)),
+            self.assertEqual(wire(drop_new(srv.collect_overview(repo))),
                              wire(head.collect_overview(repo)))
-            self.assertEqual(wire(srv.collect_settings(repo)),
+            self.assertEqual(wire(drop_new(srv.collect_settings(repo))),
                              wire(head.collect_settings(repo)))
             # /api/events live overlay
             self.assertEqual(wire(srv.collect_events_overlay(repo, None, 120, None)),

@@ -120,13 +120,19 @@ PY
   fi
 fi
 
+# The REF is the citation dag.sh validates (repo-relative, or the strict path is
+# unreachable); the PATH is what gets opened and hashed and must stay absolute,
+# because gate-check.sh runs with $PWD set to a worktree while GLUERUN_ROOT and
+# GLUERUN_STATE_DIR still point at the main repo. Relativize against
+# GLUERUN_ROOT for the same reason — never against $PWD.
+log_ref="$(gluerun_repo_relative_ref "$log")"
 normalize_args=(
   --task-id "$task_id"
   --run-id "$run_id"
   --head-sha "$head_sha"
   --command "$command_text"
   --raw-exit-code "$exit_code"
-  --log-ref "$log"
+  --log-ref "$log_ref"
   --log-path "$log"
   --duration-ms "$((finished_ms - started_ms))"
   --phase "$phase"
@@ -162,7 +168,11 @@ done
 # baseline whose observation is missing, with a message naming the baseline —
 # strictly better than the generic one this flag would raise first.
 if [[ -n "${GLUERUN_GATE_BASELINE_FILE:-}" ]]; then
-  normalize_args+=(--baseline "$GLUERUN_GATE_BASELINE_FILE")
+  # baselineRef lands in the report and dag.sh validates it with the same
+  # regular_repo_file() call as logRef, so fixing logRef alone would just move
+  # the rejection one line down.
+  normalize_args+=(--baseline "$GLUERUN_GATE_BASELINE_FILE"
+                   --baseline-ref "$(gluerun_repo_relative_ref "$GLUERUN_GATE_BASELINE_FILE")")
 fi
 
 outcome=""
@@ -182,6 +192,7 @@ if [[ "$normalize_rc" -ne 0 || ! -f "$report" ]]; then
     --command "$command_text"
     --exit-code "$exit_code"
     --log "$log"
+    --log-ref "$log_ref"
     --duration-ms "$((finished_ms - started_ms))"
     --phase "$phase"
     --workspace-kind "$workspace_kind"

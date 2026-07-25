@@ -31,6 +31,11 @@ sleep_secs="${GLUERUN_SLEEP:-20}"
 quota_sleep_cap="${GLUERUN_QUOTA_SLEEP_CAP:-300}"       # max seconds per quota-window poll nap
 quota_wait_budget="${GLUERUN_QUOTA_WAIT_BUDGET:-10800}" # total quota-wait before escalating to STOP (3h)
 quota_waited_total=0
+# Provider overload gets its own budget. Sharing one would let a burst of 529s
+# spend the usage-limit budget and escalate to STOP for a reason that was never
+# a usage limit.
+overload_wait_budget="${GLUERUN_OVERLOAD_WAIT_BUDGET:-3600}"
+overload_waited_total=0
 once="no"
 detach="no"
 for arg in "$@"; do
@@ -202,15 +207,20 @@ while true; do
     break
   fi
 
-  # Quota usage-limit window: a planner backoff with failureClass=quota means the
-  # Claude/codex *session usage limit* is open. Refusing to plan is correct, but
-  # those refusals are NOT code failures and must not trip the circuit breaker;
-  # instead the loop sleeps through the window so it auto-recovers when the limit
-  # resets. ONLY the "quota" class is special-cased — every other failure class
-  # falls through to the normal cycle below and still counts toward the breaker.
-  # STOP is honored before and after the nap, and a total wait budget escalates an
-  # unbounded limit to STOP rather than idling forever. With no active quota
-  # backoff this block is a no-op and behavior is identical to before.
+  # Provider window: a planner backoff whose failureClass names one means the
+  # provider — not the code — is refusing. Two classes qualify:
+  #
+  #   quota                the session *usage limit* (or an entitlement denial)
+  #   provider-overloaded  a 503/529: the provider shedding load
+  #
+  # Refusing to plan is correct in both cases, but neither is a code failure and
+  # neither may trip the circuit breaker; the loop sleeps through the window so
+  # it auto-recovers. They differ only in how long: a usage limit is tens of
+  # minutes, an overload is seconds, and each carries its own wait budget.
+  # EVERY other failure class falls through to the normal cycle below and still
+  # counts toward the breaker. STOP is honored before and after the nap, and the
+  # wait budget escalates an unbounded window to STOP rather than idling forever.
+  # With no active backoff this block is a no-op.
   planner_backoff_at_cycle_start=0
   bo_json="$(gluerun_planner_backoff_active_json 2>/dev/null || true)"
   if [[ -n "$bo_json" ]]; then
@@ -230,28 +240,37 @@ except Exception:
 PY
 )
     [[ "$bo_remaining" =~ ^[0-9]+$ ]] || bo_remaining=0
-    if [[ "$bo_class" == "quota" && "$bo_remaining" -gt 0 ]]; then
-      if [[ "$quota_waited_total" -ge "$quota_wait_budget" ]]; then
-        echo "[autonomate] quota wait budget exhausted (${quota_waited_total}s >= ${quota_wait_budget}s); setting STOP"
+    if [[ ( "$bo_class" == "quota" || "$bo_class" == "provider-overloaded" ) && "$bo_remaining" -gt 0 ]]; then
+      if [[ "$bo_class" == "provider-overloaded" ]]; then
+        window_label="provider overload"; window_waited="$overload_waited_total"; window_budget="$overload_wait_budget"
+      else
+        window_label="quota"; window_waited="$quota_waited_total"; window_budget="$quota_wait_budget"
+      fi
+      if [[ "$window_waited" -ge "$window_budget" ]]; then
+        echo "[autonomate] $window_label wait budget exhausted (${window_waited}s >= ${window_budget}s); setting STOP"
         : >"$GLUERUN_STOP_FILE"
-        gluerun_write_status "$iteration" "stopped (quota wait budget ${quota_wait_budget}s exhausted)"
-        gluerun_append_event "autonomate.stopped" "stopped: quota wait budget exhausted" "{\"iteration\":$iteration,\"quotaWaitedTotal\":$quota_waited_total}"
+        gluerun_write_status "$iteration" "stopped ($window_label wait budget ${window_budget}s exhausted)"
+        gluerun_append_event "autonomate.stopped" "stopped: $window_label wait budget exhausted" "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"waitedTotal\":$window_waited}"
         break
       fi
       nap="$bo_remaining"; [[ "$nap" -gt "$quota_sleep_cap" ]] && nap="$quota_sleep_cap"
-      echo "[autonomate] planner quota window open (${bo_remaining}s left); sleeping up to ${nap}s WITHOUT breaker increment (waited ${quota_waited_total}s)"
-      gluerun_append_event "autonomate.quota_wait" "sleeping through planner quota window" "{\"iteration\":$iteration,\"remainingSec\":$bo_remaining,\"napSec\":$nap,\"quotaWaitedTotal\":$quota_waited_total}"
-      gluerun_write_status "$iteration" "sleeping through quota window (${bo_remaining}s left, waited ${quota_waited_total}s)"
-      [[ "$once" == "yes" ]] && { echo "[autonomate] --once: quota wait detected, single iteration done"; break; }
+      echo "[autonomate] planner $window_label window open (${bo_remaining}s left); sleeping up to ${nap}s WITHOUT breaker increment (waited ${window_waited}s)"
+      gluerun_append_event "autonomate.quota_wait" "sleeping through planner $window_label window" "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"remainingSec\":$bo_remaining,\"napSec\":$nap,\"waitedTotal\":$window_waited}"
+      gluerun_write_status "$iteration" "sleeping through $window_label window (${bo_remaining}s left, waited ${window_waited}s)"
+      [[ "$once" == "yes" ]] && { echo "[autonomate] --once: $window_label wait detected, single iteration done"; break; }
       # Interruptible (0.5.0): STOP mid-nap ends the loop within
       # GLUERUN_SLEEP_POLL_SEC; `gluerun wake` / clear-backoff end the nap
-      # early. Only actually-slept seconds count toward the quota budget.
+      # early. Only actually-slept seconds count toward the window's budget.
       nap_started=$SECONDS
       nap_rc=0
       gluerun_interruptible_sleep "$nap" 1 || nap_rc=$?
-      quota_waited_total=$((quota_waited_total + SECONDS - nap_started))
-      [[ "$nap_rc" -eq 2 ]] && { echo "[autonomate] STOP during quota wait; halting"; break; }
-      gluerun_stop_requested && { echo "[autonomate] STOP during quota wait; halting"; break; }
+      if [[ "$bo_class" == "provider-overloaded" ]]; then
+        overload_waited_total=$((overload_waited_total + SECONDS - nap_started))
+      else
+        quota_waited_total=$((quota_waited_total + SECONDS - nap_started))
+      fi
+      [[ "$nap_rc" -eq 2 ]] && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
+      gluerun_stop_requested && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
       iteration=$((iteration - 1))
       continue
     fi
@@ -324,12 +343,24 @@ PY
       limit_evidence="$(gluerun_cycle_limit_window_evidence_json 2>/dev/null || true)"
     fi
     ev_resultref=""
+    ev_class=""
     if [[ -n "$limit_evidence" ]]; then
-      ev_resultref="$(printf '%s' "$limit_evidence" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("resultRef",""))' 2>/dev/null || true)"
+      # The class must come from the evidence, not be assumed. This site used to
+      # hardcode "quota", so an overload window re-armed a 30-minute backoff here
+      # even once the classifier had told the truth about it.
+      # Class first: `read` folds every remaining field into the last variable,
+      # so a resultRef containing spaces survives intact.
+      read -r ev_class ev_resultref < <(printf '%s' "$limit_evidence" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+kinds = {"usage-limit": "quota", "entitlement": "quota", "overloaded": "provider-overloaded"}
+print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
+' 2>/dev/null || true)
     fi
-    if [[ -n "$ev_resultref" ]] && gluerun_planner_backoff_set quota "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_resultref"; then
-      echo "  [autonomate] no progress + structured provider limit evidence ($ev_resultref); armed quota backoff, NO breaker increment (breaker stays $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
-      gluerun_append_event "autonomate.limit_window_detected" "limit/403 window at breaker chokepoint; armed quota backoff instead of tripping" "{\"iteration\":$iteration,\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections,\"evidence\":$limit_evidence}"
+    if [[ -n "$ev_resultref" && -n "$ev_class" ]] \
+      && gluerun_planner_backoff_set "$ev_class" "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_resultref"; then
+      echo "  [autonomate] no progress + structured provider limit evidence ($ev_resultref); armed $ev_class backoff, NO breaker increment (breaker stays $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
+      gluerun_append_event "autonomate.limit_window_detected" "provider window at breaker chokepoint; armed $ev_class backoff instead of tripping" "{\"iteration\":$iteration,\"failureClass\":\"$ev_class\",\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections,\"evidence\":$limit_evidence}"
     else
       nb="$(gluerun_breaker_trip)"; echo "  [autonomate] no progress + failure; breaker -> $nb"
     fi

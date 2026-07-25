@@ -7,6 +7,100 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.15.1] — 2026-07-25 — What the engine already knew
+
+Three defects from the same 26-node localization program, all one shape: **the
+engine had the right information and threw it away.** It classified a 529 as
+transient and then treated it as a usage limit. It hashed a gate log correctly
+and cited it in a form its own validator must reject. It produced a precise DAG
+diagnostic and sent it to `/dev/null`.
+
+`schemaVersion` stays **v2**.
+
+### A transient 529 cost 30 idle minutes
+
+The provider-error classifier gets 503/529 right — `kind = "overloaded"`,
+`retryable = true` — and the next statement discarded it, bucketing `overloaded`
+with `usage-limit` and `entitlement` into one `quota` class. That selected
+`GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS` (1800), and because autonomate's quota
+nap `continue`s past `reconcile`, **a capacity blip that clears in seconds idled
+the entire graph for half an hour** — not just planning. At six concurrent
+agents it was the dominant failure mode.
+
+The obvious fix is wrong. Bucketing overload as quota was buying something real:
+those refusals do not increment the circuit breaker. Demote `overloaded` to
+`provider-exit` and five 529s in a row halt the loop — strictly worse.
+
+So there is now a third class, `provider-overloaded`: the same no-breaker
+sleep-through, an order of magnitude shorter
+(`GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS`, default 180), with its own
+`GLUERUN_OVERLOAD_WAIT_BUDGET` (3600) so a burst of 529s cannot spend the
+usage-limit allowance and stop the loop for a reason that was never a usage
+limit.
+
+Two things the class alone did not fix:
+
+- **The breaker chokepoint hardcoded `quota`** when re-arming from cycle
+  evidence, so an overload window bought the 30-minute backoff there even once
+  the classifier told the truth. It now reads the class from the evidence's
+  `kind`.
+- **`failureClass` and the provider-error `kind` were never cross-checked.**
+  `failureClass` is written by the host classifier; `kind` comes from the
+  separately hash-bound sidecar. A runner-result that merely *claimed* `quota`
+  over a 529 envelope was the cheap way to buy a 30-minute sleep-through. The
+  two must now agree — checked against the *declared* class, which also closes
+  the `any` query the cycle scanner uses.
+
+### `evidenceClass: deterministic-proof` was unreachable
+
+`gate-check.sh` built its refs from `GLUERUN_STATE_DIR`, which is absolute, and
+`gate_report.py` writes `--log-ref` verbatim. `dag.sh`'s `safe_repo_artifact`
+rejects an absolute ref **before** it checks anything else. So no gate report the
+engine produced could ever back a `deterministic-proof` gate-result — regardless
+of hashes, integrity or outcome. A consumer found this by writing a promoter,
+correctly refused to rewrite the engine's report to work around it ("that would
+mean editing evidence"), and fell back to a weaker class.
+
+The validator did not change — it is a trust boundary and must keep refusing
+absolute paths. Neither did `gate_report.py`, whose `--log-ref` / `--log-path`
+split was already the right seam. **One caller was wrong**, and it now
+relativizes against `GLUERUN_ROOT` (never `$PWD` — gate checks run inside a
+worktree), leaving the path absolute when the state dir genuinely lives outside
+the repo rather than fabricating a ref that resolves to nothing.
+
+That exposed the real hazard: **a relative `logRef` means three different things
+in this repo** — resolved against `GLUERUN_ROOT` by `dag.sh`, against the *run
+directory* by `evidence-manifest.sh`, and against the *report's own directory* by
+`gate-report.py`. Making the citation repo-relative silently broke the other two:
+gate checks downgraded to `inconclusive`, and the audit path reported an
+unreadable gate log, which becomes `audit-infra`, which the decider parks
+unconditionally — **a passing gate would have parked the task.** Reports now also
+carry `logPath`, the file that was actually opened and hashed, and every reader
+that needs to *open* the log follows it. Only `dag.sh` reads `logRef`, and only
+it defines the repo-relative meaning.
+
+The regression test drives `gate-check.sh` → `dag.sh` for real. Every prior
+strict test either hand-wrote its report with a repo-relative `logRef` or drove
+`promote-gate.sh`, which already passed a relative one — which is exactly how a
+total, structural failure stayed invisible.
+
+### A DAG validation error presented as "no work to do"
+
+`dag.sh` emits a precise diagnostic and exits 2. Five call sites piped it to
+`/dev/null` and reported an empty frontier, so one malformed gate file was
+indistinguishable from an idle graph — 34 minutes of a field run spent reading
+`frontier=0` while three nodes were ready.
+
+`gluerun_dag_next_areas_json` now captures stderr, warns, and emits
+`dag.evaluation_failed` (throttled per distinct diagnostic, so the per-cycle
+frontier read cannot flood the event log while a *changed* error still reports).
+It stays non-fatal: the loop keeps dispatching, integrating and reaping. It just
+may not do it silently. `gluerun health` prints `UNEVALUABLE` instead of a count,
+and a new `dag.evaluation` doctor check reports the diagnostic and what to do
+about it.
+
+---
+
 ## [0.15.0] — 2026-07-25 — The seams
 
 0.14.1 shipped clean by every internal measure. Then a real 26-node workload ran

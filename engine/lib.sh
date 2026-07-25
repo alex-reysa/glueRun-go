@@ -2364,9 +2364,22 @@ if exit_code in (124, 137):
     outcome, failure_class = "timed-out", "timeout"
 elif provider_error is not None:
     outcome = "provider-error"
-    failure_class = "quota" if provider_error["kind"] in {
-        "usage-limit", "overloaded", "entitlement"
-    } else "provider-exit"
+    # "quota" means a WINDOW the account has to wait out: a usage limit that
+    # resets, or an entitlement an operator has to change. "overloaded" is
+    # neither — a 503/529 is the provider shedding load and it typically clears
+    # in seconds. Collapsing the two made a capacity blip select the 30-minute
+    # quota backoff, and because autonomate's quota nap `continue`s past
+    # reconcile, one 529 idled the entire graph for half an hour.
+    #
+    # It still must not trip the circuit breaker (that is why it was bucketed
+    # as quota in the first place), so it gets its own class rather than being
+    # demoted to provider-exit: short backoff AND the no-breaker path.
+    if provider_error["kind"] in {"usage-limit", "entitlement"}:
+        failure_class = "quota"
+    elif provider_error["kind"] == "overloaded":
+        failure_class = "provider-overloaded"
+    else:
+        failure_class = "provider-exit"
 elif exit_code == 0:
     outcome, failure_class = "succeeded", "none"
 else:
@@ -2459,15 +2472,34 @@ PY
   fi
 }
 
-# Validate a runner-result and its provider-error binding. On quota evidence,
+# Validate a runner-result and its provider-error binding. On matching evidence,
 # print a compact normalized record; otherwise return nonzero. Validation is
 # deliberately independent of jsonschema availability so it is always active.
+#
+# $2 selects which provider window is being asked about:
+#   quota               usage-limit / entitlement — a window to wait out
+#   provider-overloaded 503/529 — transient capacity, clears in seconds
+#   any                 either (the cycle scanner, which needs the kind back to
+#                       decide which class to arm)
+# The class and the provider-error kind are cross-checked, so a 529 can never
+# satisfy a quota query and a 429 can never satisfy an overload query.
 gluerun_runner_quota_evidence_json() {
-  local result_file="$1"
+  local result_file="$1" expected_class="${2:-quota}"
   [[ -f "$result_file" ]] || return 1
-  python3 - "$result_file" <<'PY'
+  python3 - "$result_file" "$expected_class" <<'PY'
 import hashlib, json, os, re, sys
 result_path = os.path.abspath(sys.argv[1])
+expected_class = sys.argv[2]
+CLASS_KINDS = {
+    "quota": {"usage-limit", "entitlement"},
+    "provider-overloaded": {"overloaded"},
+}
+if expected_class == "any":
+    allowed_classes = set(CLASS_KINDS)
+elif expected_class in CLASS_KINDS:
+    allowed_classes = {expected_class}
+else:
+    sys.exit(1)
 try:
     result = json.load(open(result_path, encoding="utf-8"))
 except Exception:
@@ -2485,7 +2517,8 @@ if result.get("schema") != "gluerun.orchestration.runner-result.v0":
     sys.exit(1)
 if result.get("contractVersion") != 1 or result.get("provider") not in providers:
     sys.exit(1)
-if result.get("failureClass") != "quota" or result.get("outcome") != "provider-error":
+result_class = result.get("failureClass")
+if result_class not in allowed_classes or result.get("outcome") != "provider-error":
     sys.exit(1)
 if not isinstance(result.get("exitCode"), int) or isinstance(result.get("exitCode"), bool):
     sys.exit(1)
@@ -2566,6 +2599,13 @@ valid = (
 )
 if not valid:
     sys.exit(1)
+# failureClass is written by the host classifier; `kind` comes from the
+# separately hash-bound provider-error sidecar. They must agree, or a result
+# that merely CLAIMS quota over a 529 envelope buys the 30-minute backoff.
+# Checking against the declared class (not the queried one) also closes the
+# "any" query, which the cycle scanner and gluerun_limit_marker_scan use.
+if kind not in CLASS_KINDS.get(result_class, set()):
+    sys.exit(1)
 digest = error.get("rawEventSha256")
 if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
     sys.exit(1)
@@ -2610,10 +2650,12 @@ except Exception:
 if data.get("schema") != "gluerun.orchestration.runner-result.v0":
     sys.exit(1)
 value = data.get("failureClass")
-if value not in {"none", "quota", "timeout", "provider-exit"}:
+if value not in {"none", "quota", "provider-overloaded", "timeout", "provider-exit"}:
     sys.exit(1)
-if value == "quota":
-    sys.exit(1)  # quota requires the bound provider-error validation path
+if value in {"quota", "provider-overloaded"}:
+    # Both provider-window classes require the bound provider-error validation
+    # path; a self-declared class in the result file is not evidence.
+    sys.exit(1)
 print(value)
 PY
 }
@@ -2621,8 +2663,13 @@ PY
 gluerun_planner_failure_class() {
   local log_file="$1" exit_code="${2:-0}" output_file="${3:-}" result_file="${4:-}"
   local structured=""
-  if [[ -n "$result_file" ]] && gluerun_runner_quota_evidence_json "$result_file" >/dev/null 2>&1; then
+  if [[ -n "$result_file" ]] && gluerun_runner_quota_evidence_json "$result_file" quota >/dev/null 2>&1; then
     echo "quota"
+    return 0
+  fi
+  if [[ -n "$result_file" ]] \
+    && gluerun_runner_quota_evidence_json "$result_file" provider-overloaded >/dev/null 2>&1; then
+    echo "provider-overloaded"
     return 0
   fi
   if [[ -n "$result_file" ]]; then
@@ -2669,12 +2716,12 @@ PY
 gluerun_planner_backoff_set() {
   local failure_class="$1" run_id="${2:-}" node="${3:-}" evidence_ref="${4:-}"
   local quota_evidence=""
-  # A path is not evidence. Quota backoff requires a schema-valid runner result
-  # bound to a normalized provider terminal envelope. Legacy/custom runner logs
-  # intentionally fail this gate and remain ordinary failures.
-  if [[ "$failure_class" == "quota" ]]; then
+  # A path is not evidence. Both provider-window classes require a schema-valid
+  # runner result bound to a normalized provider terminal envelope. Legacy/custom
+  # runner logs intentionally fail this gate and remain ordinary failures.
+  if [[ "$failure_class" == "quota" || "$failure_class" == "provider-overloaded" ]]; then
     if [[ -n "$evidence_ref" ]]; then
-      quota_evidence="$(gluerun_runner_quota_evidence_json "$evidence_ref" 2>/dev/null || true)"
+      quota_evidence="$(gluerun_runner_quota_evidence_json "$evidence_ref" "$failure_class" 2>/dev/null || true)"
     fi
     if [[ -z "$quota_evidence" ]]; then
       local rejected_json
@@ -2688,15 +2735,20 @@ print(json.dumps({
 PY
 )"
       gluerun_append_event "backoff.rejected_invalid_evidence" \
-        "quota backoff refused: structured provider evidence missing or invalid" \
+        "$failure_class backoff refused: structured provider evidence missing or invalid" \
         "$rejected_json" 2>/dev/null || true
-      echo "quota backoff refused: structured provider evidence missing or invalid (runId=$run_id node=$node)" >&2
+      echo "$failure_class backoff refused: structured provider evidence missing or invalid (runId=$run_id node=$node)" >&2
       return 1
     fi
   fi
   local seconds
+  # A usage limit is a window measured in tens of minutes; provider overload
+  # clears in seconds. Same no-breaker treatment, an order of magnitude apart in
+  # how long the loop stands down.
   if [[ "$failure_class" == "quota" ]]; then
     seconds="${GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS:-1800}"
+  elif [[ "$failure_class" == "provider-overloaded" ]]; then
+    seconds="${GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS:-180}"
   else
     seconds="${GLUERUN_PLANNER_BACKOFF_SECONDS:-900}"
   fi
@@ -2755,7 +2807,9 @@ gluerun_planner_backoff_clear() {
 # runner-result/provider-error validation; arbitrary text files never match.
 gluerun_limit_marker_scan() {
   local file="$1"
-  gluerun_runner_quota_evidence_json "$file"
+  # "any": before overload was split out of quota this matched all three kinds,
+  # and extensions asking "is there a provider limit window here" still want that.
+  gluerun_runner_quota_evidence_json "$file" any
 }
 
 # Detect a usage-limit/overload/entitlement window from this cycle's durable,
@@ -2813,7 +2867,7 @@ PY
   local file hit
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
-    if hit="$(gluerun_runner_quota_evidence_json "$file" 2>/dev/null)"; then
+    if hit="$(gluerun_runner_quota_evidence_json "$file" any 2>/dev/null)"; then
       printf '%s\n' "$hit"
       return 0
     fi
@@ -4004,6 +4058,8 @@ GLUERUN_MIN_DISK_GB
 GLUERUN_L1_STALE_MINUTES
 GLUERUN_PLANNER_BACKOFF_SECONDS
 GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS
+GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS
+GLUERUN_OVERLOAD_WAIT_BUDGET
 GLUERUN_AUTO_INTEGRATE
 GLUERUN_PUSH
 GLUERUN_GENERATE
@@ -4024,7 +4080,11 @@ gluerun_supervisor_digest() {
   local status health frontier gates events cfgenv whitelist
   status="$(cat "$GLUERUN_STATUS_FILE" 2>/dev/null || true)"; [[ -n "$status" ]] || status="(no STATUS.md written yet)"
   health="$("$(gluerun_bash_bin)" "$GLUERUN_ENGINE_DIR/ops.sh" health --json 2>/dev/null || true)"; [[ -n "$health" ]] || health="{}"
-  frontier="$("$(gluerun_bash_bin)" "$GLUERUN_ENGINE_DIR/dag.sh" next-areas 2>/dev/null || true)"; [[ -n "$frontier" ]] || frontier="{}"
+  # An unevaluable DAG must not reach the supervisor as an empty frontier: the
+  # model would reason about a graph with no ready work when the real answer is
+  # "the graph could not be read".
+  frontier="$(gluerun_dag_next_areas_json || true)"
+  [[ -n "$frontier" ]] || frontier='{"frontierUnavailable":true}'
   gates="$("$(gluerun_bash_bin)" "$GLUERUN_ENGINE_DIR/ops.sh" gates --json 2>/dev/null || true)"; [[ -n "$gates" ]] || gates="{}"
   events="$(tail -n 30 "$GLUERUN_EVENTS_FILE" 2>/dev/null | python3 -c '
 import json, sys
@@ -4339,13 +4399,83 @@ gluerun_l1_reclaim_stale() {
 # (a) already have an active L1 lease, (b) belong to an area that already has an
 # active L1 lease (the V1 primary guard), or (c) overlap an active lease's
 # allowedWriteScopes. Emits selected node ids in DAG order, one per line.
+# Evaluate the DAG frontier, and SAY SO when it cannot be evaluated.
+#
+# dag.sh produces a precise diagnostic on stderr and exits 2 — "gate-result.v1
+# for loc-00-contract evidence[0] ref must be a safe repository-relative path:
+# /private/tmp/…" — and every caller sent it to /dev/null and reported an empty
+# frontier. An invalid DAG was therefore indistinguishable from "no ready work",
+# which cost a field operator 34 minutes staring at frontier=0 while three nodes
+# were ready and one malformed gate file was the whole problem.
+#
+# Non-fatal by design: the loop must keep dispatching, integrating and reaping
+# other work. It just may not do it silently. Prints the frontier JSON on
+# success; on failure prints nothing, warns, emits dag.evaluation_failed, and
+# returns non-zero so the caller can distinguish the two.
+gluerun_dag_next_areas_json() {
+  local err_file out rc=0
+  err_file="$(mktemp)"
+  # GLUERUN_LIB_DIR, never GLUERUN_ENGINE_DIR: the latter is an overridable knob
+  # (tests shim it to a directory of selected ctx-*.sh symlinks) and resolving an
+  # engine executable through it breaks under that shim.
+  out="$("$GLUERUN_LIB_DIR/dag.sh" next-areas 2>"$err_file")" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    rm -f "$err_file"
+    printf '%s' "$out"
+    return 0
+  fi
+  local err
+  err="$(cat "$err_file" 2>/dev/null || true)"
+  rm -f "$err_file"
+  [[ -n "$err" ]] || err="dag.sh next-areas exited $rc without a diagnostic"
+  echo "dag: frontier evaluation failed: $err" >&2
+  gluerun_dag_evaluation_failed_event "$err" "$rc"
+  return "$rc"
+}
+
+# One event per distinct diagnostic. The frontier is evaluated every cycle, so an
+# unthrottled event would bury events.ndjson under thousands of copies of the
+# same line; keying the marker on the message means a CHANGED error still
+# reports. Mirrors gluerun_capability_optional_warn_once's O_EXCL marker.
+gluerun_dag_evaluation_failed_event() {
+  local err="$1" exit_code="${2:-2}"
+  local warning_dir="$GLUERUN_STATE_DIR/warnings/dag"
+  local key marker
+  key="$(gluerun_sha256_text "$err")"
+  marker="$warning_dir/$key.warned"
+  mkdir -p "$warning_dir" 2>/dev/null || return 0
+  python3 - "$marker" <<'PY' 2>/dev/null || return 0
+import os
+import sys
+
+try:
+    os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+except FileExistsError:
+    raise SystemExit(1)
+PY
+  local payload
+  payload="$(python3 - "$err" "$exit_code" <<'PY'
+import json
+import sys
+
+print(json.dumps({"stderr": sys.argv[1], "exitCode": int(sys.argv[2])},
+                 separators=(",", ":")))
+PY
+)"
+  gluerun_append_event "dag.evaluation_failed" \
+    "dag frontier could not be evaluated; an empty frontier here is not 'no work'" \
+    "$payload" 2>/dev/null || true
+}
+
 gluerun_select_l1_frontier() {
   local limit="${1:-1}"
   [[ "$limit" =~ ^[0-9]+$ ]] || limit=1
   [[ "$limit" -gt 0 ]] || return 0
 
   local frontier_json
-  frontier_json="$("$(dirname "${BASH_SOURCE[0]}")/dag.sh" next-areas 2>/dev/null)" || return 0
+  # A failure here still yields no nodes -- the loop must not stop -- but it is
+  # now reported rather than presented as "no eligible frontier nodes".
+  frontier_json="$(gluerun_dag_next_areas_json)" || return 0
 
   # Pre-resolve each candidate area's configured write scopes through the
   # config-driven map (gluerun_l1_area_write_scopes), so the overlap guard below
@@ -5031,6 +5161,49 @@ for key in ("failureSignals", "infrastructureSignals"):
 PY
     fi
   } | shasum -a 256 | awk '{print $1}'
+}
+
+# Express an artifact path as a repository-relative *reference*.
+#
+# dag.sh's safe_repo_artifact rejects an absolute ref before it checks anything
+# else, so a gate report citing an absolute logRef could never back a
+# deterministic-proof gate-result: the engine could not satisfy its own strict
+# validator. The conversion belongs at the caller, not in the validator (which
+# is a trust boundary and must keep refusing absolute paths) and not in
+# gate_report.py (whose --log-ref / --log-path split is already the right seam:
+# the ref is the citation, the path is what gets opened and hashed).
+#
+# Anchors on the RESOLVED root, matching safe_repo_artifact's
+# `Path(repo_root).resolve()`. Resolving both sides also means an artifact
+# reached through a symlinked parent is cited by its real location, which is
+# what safe_repo_artifact's no-symlink-traversal rule wants.
+#
+# Prints the repo-relative form when the path lies inside the repo, and the
+# input unchanged otherwise: GLUERUN_STATE_DIR may legitimately live outside the
+# repo, and there the strict path is simply unsatisfiable — a configuration
+# fact, not something to paper over with a fabricated ref.
+gluerun_repo_relative_ref() {
+  local path="$1" root="${2:-$GLUERUN_ROOT}"
+  python3 - "$path" "$root" <<'PY'
+import os
+import sys
+
+path, root = sys.argv[1], sys.argv[2]
+if not path or not os.path.isabs(path):
+    print(path)
+    raise SystemExit(0)
+try:
+    real_root = os.path.realpath(root)
+    real_path = os.path.realpath(path)
+except OSError:
+    print(path)
+    raise SystemExit(0)
+rel = os.path.relpath(real_path, real_root)
+if os.path.isabs(rel) or rel == os.pardir or rel.startswith(os.pardir + os.sep):
+    print(path)
+else:
+    print(rel)
+PY
 }
 
 gluerun_tracked_source_snapshot() {

@@ -56,6 +56,7 @@
     },
     "rawExitCode": { "type": "integer" },
     "logRef": { "type": "string", "minLength": 1 },
+    "logPath": { "type": "string", "minLength": 1 },
     "logSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "logBytes": { "type": "integer", "minimum": 0 },
     "durationMs": { "type": "integer", "minimum": 0 },

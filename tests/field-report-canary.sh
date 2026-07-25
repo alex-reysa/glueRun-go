@@ -64,4 +64,19 @@ run_case "8-acknowledged-inherited" "test-gate-report.sh"
 run_case "9-adaptive-disk-concurrency" "test-resource-bootstrap.sh"
 run_case "10-human-artifact-invalidation" "test-human-gate.sh"
 
-echo "FIELD-REPORT CANARY PASS: captured events/artifacts + equivalent 26-node run + 10 regression scenarios"
+# The 0.15.1 findings, from the 26-node localization program run on 2026-07-25.
+# Each is a case of the engine holding the right information and discarding it.
+#
+# 11: a 503/529 was classified `overloaded` and then bucketed as `quota`, so a
+#     capacity blip selected the 1800s usage-limit window -- and because that nap
+#     `continue`s past reconcile, it idled the whole graph for half an hour.
+# 12: gate-check.sh cited an absolute logRef, which dag.sh's safe_repo_artifact
+#     rejects before any other check, so no report the engine produced could ever
+#     back a deterministic-proof gate-result.
+# 13: dag.sh's precise diagnostic went to /dev/null at every call site, so an
+#     invalid DAG was indistinguishable from having no ready work.
+run_case "11-provider-overload-class" "test-provider-failure-contract.sh"
+run_case "12-strict-gate-evidence-path" "test-gate-strict-evidence-path.sh"
+run_case "13-dag-evaluation-diagnostics" "test-dag-evaluation-diagnostics.sh"
+
+echo "FIELD-REPORT CANARY PASS: captured events/artifacts + equivalent 26-node run + 13 regression scenarios"

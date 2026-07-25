@@ -40,8 +40,12 @@ one-off overrides. Operator secrets/overrides go in
 | `GLUERUN_L1_STALE_MINUTES` | `60` | L1 planning-lease age before `recover` reclaims it (`GLUERUN_RECOVER_L1=1`). |
 | `GLUERUN_STALE_HARD_MINUTES` | `240` | Tree-liveness conservatism cap: past this lease age a dispatch is reaped regardless of surviving processes. |
 | `GLUERUN_QUOTA_SLEEP_CAP` / `GLUERUN_QUOTA_WAIT_BUDGET` | `300` / `10800` | Per-nap cap and total budget for quota-window sleeps (budget exhaustion writes STOP). |
+| `GLUERUN_PLANNER_BACKOFF_SECONDS` | `900` | Wait after an ordinary planner error before re-planning. |
+| `GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS` | `1800` | Wait after a usage-limit (429) or entitlement (403) rejection — a window the account has to sit out. |
+| `GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS` | `180` | Wait after a provider 503/529 (0.15.1). Overload is transient capacity, not a usage limit; before it had its own class a single 529 bought the 1800s quota window and, because the nap skips reconcile, idled the whole graph for half an hour. |
+| `GLUERUN_OVERLOAD_WAIT_BUDGET` | `3600` | Total overload sleep-through before STOP. Separate from the quota budget so a burst of 529s cannot spend the usage-limit allowance. |
 | `GLUERUN_LIMIT_SLEEPTHROUGH` | `1` | Sleep through provider limit windows instead of tripping the breaker — 0.5.0 requires structured evidence (a runner-log marker with a logRef); repo prose can no longer arm a false backoff. |
-| planner backoff accounting | — | A valid backoff defers only planning for non-quota classes and is neutral to the no-progress breaker; unrelated failures still count. Quota retains full sleep-through. |
+| planner backoff accounting | — | A valid backoff defers only planning for classes outside the two provider-window classes, and is neutral to the no-progress breaker; unrelated failures still count. `quota` and `provider-overloaded` retain full sleep-through, differing only in window length and budget. |
 | `GLUERUN_AUTO_PROMOTE_GATES` | `1` | Promote gates at integrate time + on empty-queue cycles (0.4.0 default was 0). |
 | `GLUERUN_PROMOTE_TOLERATE_TERMINAL` | `1` | Superseded/blocked predecessors with an integrated successor count as satisfied for promotion. |
 | `GLUERUN_SUPPRESS_UNPROMOTED_REPLAN` | `1` | Never re-plan a node whose tasks are complete but whose gate is unpublished (a published failed gate keeps the node plannable). |
