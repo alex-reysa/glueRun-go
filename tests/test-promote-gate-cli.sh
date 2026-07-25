@@ -32,7 +32,7 @@ chmod +x "$root/promoters/env-promoter.sh"
 
 cat >"$root/gluerun.config.json" <<EOF
 {
-  "schemaVersion": "v1",
+  "schemaVersion": "v2",
   "targetBranch": "target",
   "gateCommand": "true",
   "promoter": "$root/promoters/config-promoter.sh"

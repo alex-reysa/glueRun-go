@@ -21,6 +21,10 @@ set -euo pipefail
 #   ops.sh report
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "ops.sh requires bash >= 4" >&2; exit 1
 fi
@@ -248,7 +252,7 @@ for node_id, kind in nodes:
     try:
         g = json.load(open(path))
         status = str(g.get("status", "?"))
-        if status == "passed":
+        if status in ("passed", "passed-with-acknowledged-baseline"):
             passed += 1
         rows.append({"node": node_id, "kind": kind, "status": status,
                      "authoritative": g.get("authoritative", ""),
@@ -297,17 +301,52 @@ except Exception:
   auto_pid="$(cat "$GLUERUN_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
   auto_alive="false"
   [[ -n "$auto_pid" ]] && kill -0 "$auto_pid" 2>/dev/null && auto_alive="true"
-  local disk_free wt_count console_url
+  local disk_free wt_count console_url lifecycle_json resource_json health_details_json
   disk_free="$(gluerun_free_disk_gb 2>/dev/null || echo null)"
   wt_count="$(find "$GLUERUN_WORKTREES_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | grep -c . || true)"
   console_url="$(head -1 "$GLUERUN_STATE_DIR/console.url" 2>/dev/null || true)"
+  lifecycle_json="$(python3 - "$GLUERUN_RUNS_DIR" <<'PY'
+import collections
+import json
+import pathlib
+import sys
+
+runs = pathlib.Path(sys.argv[1])
+records = []
+if runs.is_dir():
+    for path in runs.glob("*/run-status.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("schema") != "gluerun.orchestration.run-status.v0":
+            continue
+        records.append(data)
+records.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
+active = [item for item in records if item.get("state") in ("active", "waiting")]
+counts = collections.Counter(str(item.get("phase") or "unknown") for item in active)
+print(json.dumps({
+    "active": active[:50],
+    "activeCount": len(active),
+    "phaseCounts": dict(sorted(counts.items())),
+    "implementersActive": counts.get("implementing", 0),
+}, separators=(",", ":")))
+PY
+)"
+  resource_json="$("$SCRIPT_DIR/resource-plan.sh" --json 2>/dev/null || echo null)"
+  health_details_json="$(python3 "$SCRIPT_DIR/health_details.py" \
+    --repo "$GLUERUN_ROOT" \
+    --dag "${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}" \
+    --events "$GLUERUN_EVENTS_FILE" 2>/dev/null \
+    || echo '{"diagnostics":{"total":0,"groups":0,"counts":{},"items":[]},"humanGates":{"total":0,"approved":0,"blocking":0,"states":{},"blockedNodes":[],"items":[],"errors":["health detail collection failed"]}}')"
   local head_sha
   head_sha="$(git -C "$GLUERUN_ROOT" rev-parse --short HEAD 2>/dev/null || echo null)"
 
   python3 - "$gates_json" "$frontier_json" "$ready_count" "$active_count" "$l1_active" "$l1_stale" \
     "$backoff_json" "$breaker_n" "${GLUERUN_MAX_CONSEC_FAILS:-5}" "$stop_present" "$lock_present" \
     "$auto_pid" "$auto_alive" "$disk_free" "${GLUERUN_MIN_DISK_GB:-2}" "$wt_count" "$console_url" \
-    "${GLUERUN_TARGET_BRANCH:-}" "$head_sha" "$json" <<'PY'
+    "${GLUERUN_TARGET_BRANCH:-}" "$head_sha" "$lifecycle_json" "$resource_json" \
+    "$health_details_json" "$json" <<'PY'
 import hashlib
 import json
 import sys
@@ -315,7 +354,7 @@ from datetime import datetime, timezone
 
 (gates_raw, frontier, ready, active, l1a, l1s, backoff_raw, breaker, breaker_max,
  stop, lock, auto_pid, auto_alive, disk, min_disk, wt, console_url,
- target, head, as_json) = sys.argv[1:21]
+ target, head, lifecycle_raw, resource_raw, health_details_raw, as_json) = sys.argv[1:24]
 
 
 def num(x):
@@ -330,6 +369,24 @@ try:
     backoff = json.loads(backoff_raw) if backoff_raw != "null" else None
 except Exception:
     backoff = None
+try:
+    lifecycle = json.loads(lifecycle_raw)
+except Exception:
+    lifecycle = {"active": [], "activeCount": 0, "phaseCounts": {}, "implementersActive": 0}
+try:
+    resources = json.loads(resource_raw) if resource_raw != "null" else None
+except Exception:
+    resources = None
+try:
+    health_details = json.loads(health_details_raw)
+except Exception:
+    health_details = {
+        "diagnostics": {"total": 0, "groups": 0, "counts": {}, "items": []},
+        "humanGates": {
+            "total": 0, "approved": 0, "blocking": 0, "states": {},
+            "blockedNodes": [], "items": [], "errors": ["health detail JSON invalid"],
+        },
+    }
 
 attention = []
 if stop == "true":
@@ -344,13 +401,20 @@ if num(disk) is not None and num(min_disk) is not None and num(disk) < num(min_d
     attention.append(f"disk below floor ({disk}GiB < {min_disk}GiB)")
 if auto_alive != "true":
     attention.append("autonomate not running")
+if resources and resources.get("effectiveSlots") == 0:
+    attention.append("adaptive scheduler has zero affordable worktree slots")
 
 doc = {
     "ok": not attention,
     "gates": gates,
     "frontier": {"ready": num(frontier)},
     "tasks": {"ready": num(ready)},
-    "leases": {"l2Active": num(active), "l1Active": num(l1a), "l1Stale": num(l1s)},
+    "leases": {"l2Active": num(active), "l1Active": num(l1a), "l1Stale": num(l1s),
+               "implementersActive": lifecycle.get("implementersActive", 0)},
+    "lifecycle": lifecycle,
+    "resources": resources,
+    "diagnostics": health_details.get("diagnostics", {}),
+    "humanGates": health_details.get("humanGates", {}),
     "backoff": backoff,
     "breaker": {"consecFails": num(breaker), "threshold": num(breaker_max),
                 "open": bool(num(breaker) and num(breaker) >= num(breaker_max))},
@@ -366,8 +430,14 @@ doc = {
 }
 # Digest over everything except generatedAt: the skill heartbeat compares
 # ONLY this field to decide whether anything changed.
+digest_doc = json.loads(json.dumps(doc))
+# Exact free bytes fluctuate because unrelated processes write caches between
+# polls. Capacity transitions matter; byte-level noise does not.
+if isinstance(digest_doc.get("resources"), dict):
+    digest_doc["resources"].pop("freeBytes", None)
+    digest_doc["resources"].pop("affordableSlots", None)
 doc["digest"] = hashlib.sha256(
-    json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
+    json.dumps(digest_doc, sort_keys=True, separators=(",", ":")).encode()
 ).hexdigest()[:16]
 doc["generatedAt"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -385,6 +455,16 @@ else:
     print(f"stop:       {doc['stop']}   lock: {doc['lock']}")
     print(f"autonomate: pid={doc['autonomate']['pid']} alive={doc['autonomate']['alive']}")
     print(f"disk:       {doc['diskFreeGb']}GiB free; worktrees: {doc['worktrees']}")
+    if doc["resources"]:
+        print(f"capacity:   {doc['resources']['effectiveSlots']}/{doc['resources']['configuredSlots']} slots ({doc['resources']['reason']})")
+    if doc["lifecycle"]["phaseCounts"]:
+        print(f"phases:     {doc['lifecycle']['phaseCounts']}")
+    diagnostics = doc["diagnostics"]
+    if diagnostics.get("total"):
+        print(f"diagnostics:{diagnostics.get('counts', {})}")
+    human = doc["humanGates"]
+    if human.get("total"):
+        print(f"human gates:{human.get('approved')}/{human.get('total')} approved; {human.get('blocking')} blocking")
     if doc["consoleUrl"]:
         print(f"console:    {doc['consoleUrl']}")
     for a in doc["attention"]:
@@ -395,11 +475,36 @@ PY
 
 # --- gc --------------------------------------------------------------------------
 ops_gc() {
-  local dry="no"
-  [[ "${1:-}" == "--dry-run" ]] && dry="yes"
-  local run_id
-  run_id="$(gluerun_run_id)"
-  if [[ "$dry" == "no" ]]; then
+  local dry="no" inherited_run_id=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry="yes"; shift ;;
+      --from-reconcile)
+        [[ -n "${2:-}" ]] || { echo "usage: gluerun gc [--dry-run] [--from-reconcile RUN_ID]" >&2; return 2; }
+        inherited_run_id="$2"
+        shift 2
+        ;;
+      *) echo "usage: gluerun gc [--dry-run] [--from-reconcile RUN_ID]" >&2; return 2 ;;
+    esac
+  done
+  [[ -z "$inherited_run_id" || "$dry" == "no" ]] || {
+    echo "gc: --from-reconcile cannot be combined with --dry-run" >&2
+    return 2
+  }
+
+  local run_id lock_run_id lock_pid
+  run_id="${inherited_run_id:-$(gluerun_run_id)}"
+  if [[ -n "$inherited_run_id" ]]; then
+    # Reconcile already owns the sole origin lock. Reuse it only for its direct
+    # child and exact run id; this avoids weakening the ordinary gc lock rule.
+    lock_run_id="$(gluerun_json_field "$GLUERUN_LOCK_FILE" runId 2>/dev/null || true)"
+    lock_pid="$(gluerun_json_field "$GLUERUN_LOCK_FILE" pid 2>/dev/null || true)"
+    if [[ "$lock_run_id" != "$inherited_run_id" || "$lock_pid" != "$PPID" ]] \
+      || ! gluerun_pid_alive "$lock_pid"; then
+      echo "gc: reconcile lock ownership did not verify" >&2
+      return 2
+    fi
+  elif [[ "$dry" == "no" ]]; then
     gluerun_acquire_lock "$run_id" || { echo "gc: origin lock busy" >&2; return 2; }
     # shellcheck disable=SC2064
     trap "gluerun_release_lock '$run_id' 2>/dev/null || true" EXIT
@@ -678,7 +783,8 @@ import json, os, sys
 (dag_file, gates_dir, tasks_dir, events_file, plan_id, name, archived_at,
  engine_version, schema_version, branch, head_sha, force) = sys.argv[1:13]
 
-# gates: passed among dag nodes (status=="passed"); total = node count.
+# gates: successful among dag nodes (plain pass or acknowledged baseline);
+# total = node count.
 nodes = []
 try:
     dag = json.load(open(dag_file))
@@ -688,7 +794,9 @@ except Exception:
 passed = 0
 for nid in nodes:
     try:
-        if json.load(open(os.path.join(gates_dir, f"{nid}.gate-result.json"))).get("status") == "passed":
+        if json.load(open(os.path.join(gates_dir, f"{nid}.gate-result.json"))).get("status") in (
+            "passed", "passed-with-acknowledged-baseline"
+        ):
             passed += 1
     except Exception:
         pass
@@ -933,12 +1041,12 @@ os.replace(tmp, path)
 PY
   echo "runId=$run_id"
   if [[ "$want_wait" == "yes" ]]; then
-    bash "$SCRIPT_DIR/ask.sh" --run-id "$run_id"
+    "$(gluerun_bash_bin)" "$SCRIPT_DIR/ask.sh" --run-id "$run_id"
     # A timeout / no-answer ends with no answer.md; that is a normal terminal
     # outcome (state is in ask.json), so never fail the verb on its absence.
     if [[ -f "$run_dir/answer.md" ]]; then echo "---"; cat "$run_dir/answer.md"; fi
   else
-    ( bash "$SCRIPT_DIR/ask.sh" --run-id "$run_id" >>"$run_dir/ask-spawn.log" 2>&1 & ) || true
+    ( "$(gluerun_bash_bin)" "$SCRIPT_DIR/ask.sh" --run-id "$run_id" >>"$run_dir/ask-spawn.log" 2>&1 & ) || true
     echo "dispatched (poll the console, or re-run with --wait)"
   fi
 }
@@ -947,7 +1055,7 @@ PY
 # updated in place only if the model returns a schema-valid report.
 ops_report() {
   echo "requesting supervisor briefing (readonly, one-shot)..." >&2
-  bash "$SCRIPT_DIR/supervise.sh" --once
+  "$(gluerun_bash_bin)" "$SCRIPT_DIR/supervise.sh" --once
 }
 
 case "$verb" in

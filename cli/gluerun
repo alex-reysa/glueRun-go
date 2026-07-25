@@ -7,6 +7,23 @@
 # bumping the pinned version (`gluerun update`).
 set -euo pipefail
 
+# GLUERUN_BASH_BIN is intentionally bootstrap-only: it must be available before
+# repo configuration is loaded. Re-exec exactly once so every CLI command and
+# engine entrypoint starts under the requested interpreter without changing
+# PATH (and therefore without changing provider resolution).
+if [[ -n "${GLUERUN_BASH_BIN:-}" && "${GLUERUN_BASH_BOOTSTRAPPED:-0}" != "1" ]]; then
+  if [[ "$GLUERUN_BASH_BIN" != /* || ! -x "$GLUERUN_BASH_BIN" ]]; then
+    echo "gluerun: GLUERUN_BASH_BIN must be an absolute executable path: $GLUERUN_BASH_BIN" >&2
+    exit 2
+  fi
+  export GLUERUN_BASH_BOOTSTRAPPED=1
+  exec "$GLUERUN_BASH_BIN" "$0" "$@"
+fi
+if [[ -n "${GLUERUN_BASH_BIN:-}" && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  echo "gluerun: GLUERUN_BASH_BIN must provide bash >= 4: $GLUERUN_BASH_BIN" >&2
+  exit 2
+fi
+
 GLUERUN_CLI_VERSION="0.1.0"
 
 die() { echo "gluerun: $*" >&2; exit 1; }
@@ -107,9 +124,9 @@ require_repo() {
 # Exec an engine script with GLUERUN_ROOT bound to the current repo.
 run_engine() {
   local script="$1"; shift
-  local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
+  local home root bash_bin="${GLUERUN_BASH_BIN:-bash}"; home="$(resolve_engine_home)"; root="$(require_repo)"
   [[ -f "$home/engine/$script" ]] || die "engine $home has no engine/$script"
-  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" exec bash "$home/engine/$script" "$@"
+  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" exec "$bash_bin" "$home/engine/$script" "$@"
 }
 
 cmd_version() {
@@ -123,6 +140,44 @@ cmd_version() {
   fi
   local root; root="$(repo_root)"
   [[ -n "$root" ]] && echo "repo        $root"
+}
+
+doctor_probe_command() {
+  # Run a no-inference provider probe with a hard wall-clock bound. A separate
+  # process group lets timeout cleanup kill wrapper + packaged native child.
+  python3 - "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+argv = sys.argv[2:]
+try:
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+except OSError as exc:
+    print(str(exc))
+    raise SystemExit(127)
+try:
+    out, err = proc.communicate(timeout=timeout)
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    proc.communicate()
+    print(f"probe timed out after {timeout}s")
+    raise SystemExit(124)
+text = (out or "") + (err or "")
+sys.stdout.write(text[:4096])
+raise SystemExit(proc.returncode)
+PY
 }
 
 cmd_doctor() {
@@ -173,9 +228,8 @@ cmd_doctor() {
       printf "  warn  .gluerun-version (%s) and gluerun.config.json engineVersion (%s) disagree; .gluerun-version wins\n" "$pinfile" "$cfgpin"
     fi
   else printf "  warn  not in a git repo\n"; fi
-  # runner provider CLIs (best-effort, warn-only) + one-line auth hint per provider.
-  # Auth hints use ONLY cheap file/env inference (0.9.0 provider registry) — NO CLI
-  # auth subprocess probes, so doctor stays fast. Presence never fails the check.
+  # Runner provider inventory is informational. The selected standard Codex
+  # runner receives strict executable + auth probes below.
   provider_auth_hint() { # <id> -> "auth: <one line>" via pure FS/env inference
     case "$1" in
       claude)
@@ -212,11 +266,70 @@ except Exception: print(0)' "$ocf" 2>/dev/null || echo 0)"
   for _prov in "claude:claude" "codex:codex" "gemini:gemini" "opencode:opencode" "cursor:cursor-agent" "grok:grok"; do
     _id="${_prov%%:*}"; _bin="${_prov##*:}"
     if command -v "$_bin" >/dev/null 2>&1; then
-      printf "  ok    %s CLI (%s) on PATH — %s\n" "$_id" "$_bin" "$(provider_auth_hint "$_id")"
+      if [[ "$_id" == "codex" ]]; then
+        printf "  info  %s CLI candidate (%s) on PATH — selected runtime is checked below\n" "$_id" "$_bin"
+      else
+        printf "  info  %s CLI candidate (%s) on PATH — %s\n" "$_id" "$_bin" "$(provider_auth_hint "$_id")"
+      fi
     else
       printf "  warn  %s CLI (%s) not on PATH\n" "$_id" "$_bin"
     fi
   done
+
+  # Resolve the configured runner and Codex executable through engine/lib.sh,
+  # exactly as the runtime does. When the standard Codex runner is selected,
+  # both probes are required and make no inference/API request.
+  if [[ -n "$home" && -n "$root" ]]; then
+    local bash_bin="${GLUERUN_BASH_BIN:-bash}" runtime_info="" runtime_rc=0
+    runtime_info="$(
+      GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" "$bash_bin" -c '
+        source "$1/engine/lib.sh"
+        runner="${GLUERUN_RUNNER:-$GLUERUN_ENGINE_DIR/codex-run.sh}"
+        printf "runner=%s\n" "$runner"
+        if [[ "$(basename "$runner")" == "codex-run.sh" ]]; then
+          codex_bin="$(gluerun_resolve_codex_bin)" || exit $?
+          printf "codex=%s\n" "$codex_bin"
+        fi
+      ' _ "$home" 2>&1
+    )" || runtime_rc=$?
+    local selected_runner=""
+    selected_runner="$(printf '%s\n' "$runtime_info" | sed -n 's/^runner=//p' | tail -1)"
+    if [[ "$runtime_rc" -ne 0 || -z "$selected_runner" ]]; then
+      printf "  FAIL  selected runner resolution failed: %s\n" "$(printf '%s' "$runtime_info" | tail -1)"
+      ok=1
+    else
+      printf "  ok    selected runner: %s\n" "$selected_runner"
+      if [[ "$(basename "$selected_runner")" == "codex-run.sh" ]]; then
+        local selected_codex=""
+        selected_codex="$(printf '%s\n' "$runtime_info" | sed -n 's/^codex=//p' | tail -1)"
+        if [[ -z "$selected_codex" ]]; then
+          printf "  FAIL  selected Codex executable could not be resolved: %s\n" "$(printf '%s' "$runtime_info" | tail -1)"
+          ok=1
+        else
+          printf "  ok    selected Codex executable: %s\n" "$selected_codex"
+          local probe_out="" probe_rc=0 version_line=""
+          probe_out="$(doctor_probe_command 10 "$selected_codex" --version 2>&1)" || probe_rc=$?
+          if [[ "$probe_rc" -eq 0 ]]; then
+            version_line="$(printf '%s\n' "$probe_out" | head -1)"
+            printf "  ok    selected Codex spawn: %s\n" "${version_line:-version probe passed}"
+            probe_out=""; probe_rc=0
+            probe_out="$(doctor_probe_command 10 "$selected_codex" login status 2>&1)" || probe_rc=$?
+            if [[ "$probe_rc" -eq 0 ]]; then
+              printf "  ok    selected Codex authentication\n"
+            else
+              printf "  FAIL  selected Codex authentication probe failed (exit %s): %s\n" \
+                "$probe_rc" "$(printf '%s' "$probe_out" | head -1)"
+              ok=1
+            fi
+          else
+            printf "  FAIL  selected Codex spawn probe failed (exit %s): %s\n" \
+              "$probe_rc" "$(printf '%s' "$probe_out" | head -1)"
+            ok=1
+          fi
+        fi
+      fi
+    fi
+  fi
 
   # --- 0.5.0 preflights (each bit the field run) -------------------------------
   # Model id prefix sanity (invalid `gpt-5.6` failed only at planner runtime as
@@ -371,6 +484,21 @@ except OSError:
   return "$ok"
 }
 
+cmd_doctor_v1() {
+  local home root bash_path
+  home="$(resolve_engine_home)"
+  root="$(repo_root)"
+  bash_path="${BASH:-${GLUERUN_BASH_BIN:-bash}}"
+  [[ -f "$home/engine/doctor.py" ]] \
+    || die "engine $home has no structured doctor helper (engine/doctor.py)"
+  exec python3 "$home/engine/doctor.py" \
+    --engine-home "$home" \
+    --repo-root "$root" \
+    --bash "$bash_path" \
+    --bash-version "$BASH_VERSION" \
+    "$@"
+}
+
 cmd_init() {
   local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
   echo "gluerun init -> $root"
@@ -400,7 +528,7 @@ cmd_init() {
 EOF
     echo "  new   docs/orchestration/dag.v0.json (1 starter node — define your graph)"
   fi
-  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" bash "$home/engine/scaffold.sh"
+  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" "${GLUERUN_BASH_BIN:-bash}" "$home/engine/scaffold.sh"
   echo "  ok    docs/orchestration scaffold + schema mirrors"
   # version pin
   if [[ ! -f "$root/.gluerun-version" ]]; then
@@ -454,7 +582,7 @@ cmd_migrate() {
       || die "no migration found for $rsv -> $esv (looked for $home/migrations/$rsv-to-*.sh); see CHANGELOG.md"
     next="$(basename "$script" .sh)"; next="${next#*-to-}"
     echo "  run   $(basename "$script") ($rsv -> $next)"
-    bash "$script" "$root" || die "migration $(basename "$script") failed (repo left at schema $rsv)"
+    "${GLUERUN_BASH_BIN:-bash}" "$script" "$root" || die "migration $(basename "$script") failed (repo left at schema $rsv)"
     set_repo_schema_version "$root" "$next" || die "migration ran but schemaVersion could not be updated in gluerun.config.json"
     rsv="$next"
     steps=$((steps + 1))
@@ -708,8 +836,9 @@ Run anywhere (operate on the current repo):
   status                                              orchestration status
   recover [--scan|--prune]                            stale leases / orphans
   validate-dag | next-area | next-areas | area-gate NODE
-  promote-gate NODE [--operator --evidence REF]       gate promotion (project promoter;
-                                                      --operator for evaluation nodes)
+  promote-gate NODE [legacy: --operator --evidence REF]
+                                                      gate promotion (schema v2 evaluation
+                                                      nodes use hash-bound human gates)
   metrics [--json] [--runs-dir DIR] [--events-file FILE]   read-only ctx metrics
   console [--ensure|--status|--stop]                  visualization console (idempotent start,
                                                       URL persists at .gluerun-state/console.url)
@@ -717,6 +846,7 @@ Run anywhere (operate on the current repo):
 Operate / recover:
   health [--json]      compact loop-health digest (gates, leases, backoff, breaker, digest hash)
   gates [--json]       per-node gate table from gate-result files
+  human-gate request|approve|status                    hash-bound human approval records
   supersede TASK-XXXX [--by TASK-YYYY] [--force]      atomically supersede a task (all four surfaces)
   clear-backoff        remove the planner backoff (with event)
   breaker [show|reset] circuit-breaker state
@@ -735,7 +865,7 @@ Setup / lifecycle:
                                                       and reset the live tree to a starter DAG
   plan list [--json]   list archived plan threads (id, name, date, gates, tasks)
   init                 scaffold gluerun.config.json + docs/orchestration in this repo
-  doctor               check deps, engine resolution, repo config
+  doctor [--json] [--repair-model-cache]               structured operator preflight
   update [VERSION]     pin this repo to an engine version (.gluerun-version)
   migrate              bring this repo's schemaVersion up to the engine's
   version              print CLI + resolved engine version
@@ -771,6 +901,7 @@ main() {
     next-areas)    run_engine dag.sh next-areas "$@" ;;
     area-gate)     run_engine dag.sh area-gate "$@" ;;
     promote-gate)  run_engine promote-gate.sh "$@" ;;   # sources lib.sh -> honors config "promoter"
+    human-gate)    run_engine human-gate.sh "$@" ;;
     supersede)     run_engine ops.sh supersede "$@" ;;
     clear-backoff) run_engine ops.sh clear-backoff "$@" ;;
     breaker)       run_engine ops.sh breaker "$@" ;;
@@ -790,7 +921,7 @@ main() {
     experiment-report) [[ "${GLUERUN_CTX_EXPERIMENT:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_experiment_report "$@" ;;
     console)       cmd_console "$@" ;;
     init)          cmd_init "$@" ;;
-    doctor)        cmd_doctor "$@" ;;
+    doctor)        cmd_doctor_v1 "$@" ;;
     update)        cmd_update "$@" ;;
     migrate)       cmd_migrate "$@" ;;
     version|--version|-v) cmd_version ;;

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -179,7 +180,9 @@ class ParseLogLinesTests(unittest.TestCase):
 
     def test_plain_line_without_iso_prefix(self) -> None:
         recs = srv.parse_log_lines(["last_message=/path/to/file"])
-        self.assertEqual(recs[0], {"kind": "log", "text": "last_message=/path/to/file"})
+        self.assertEqual(recs[0]["kind"], "log")
+        self.assertEqual(recs[0]["text"], "last_message=/path/to/file")
+        self.assertEqual(recs[0]["diagnostic"]["category"], "info")
 
     def test_codex_loader_noise_dropped_in_parsed_kept_in_raw(self) -> None:
         noise = "2026-06-04T14:25:53Z  WARN codex_core_skills::loader: ignoring interface.icon_small: x"
@@ -488,6 +491,16 @@ class SynthesizeGateBlockingTests(unittest.TestCase):
         out = srv.synthesize_gate_blocking({"status": "passed"}, set())
         self.assertEqual(out["reason"], "")
 
+    def test_acknowledged_baseline_is_successful(self) -> None:
+        status = "passed-with-acknowledged-baseline"
+        out = srv.synthesize_gate_blocking(
+            {"status": status, "upstreamGates": ["D0.contract"]},
+            set(),
+            {"D0.contract": status},
+        )
+        self.assertEqual(out["reason"], "")
+        self.assertEqual(out["upstreamBlockers"], [])
+
     def test_blocked_lists_missing_and_upstream(self) -> None:
         gate = {"status": "blocked", "rationale": "closeout incomplete",
                 "upstreamGates": ["D0.contract"],
@@ -573,7 +586,11 @@ class PlanOverviewTests(unittest.TestCase):
             {"id": "D1.service", "stage": "D1", "area": "artifact", "layer": "service"},
             {"id": "S0.base", "stage": "S0", "area": "storage", "layer": "base"},
         ]})
-        gates = {"D0.contract": "passed", "D1.contract": "passed", "S0.base": "passed"}
+        gates = {
+            "D0.contract": "passed-with-acknowledged-baseline",
+            "D1.contract": "passed",
+            "S0.base": "passed",
+        }
         progress, stages, frontier = srv.compute_plan_progress(registry, gates)
         self.assertEqual(progress, {"passedNodes": 3, "totalNodes": 4, "pct": 75})
         d1 = [s for s in stages if s["stage"] == "D1"][0]
@@ -1086,7 +1103,7 @@ class NativeFrontierTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
             self._write_dag(repo, [self._node("D0.a", []), self._node("D1.b", ["D0.a"])])
-            self._gate(repo, "D0.a", "passed")
+            self._gate(repo, "D0.a", "passed-with-acknowledged-baseline")
             self._gate(repo, "D1.b", "passed")
             out = srv.compute_frontier_native(repo)
             self.assertEqual(out, {"frontier": [], "allComplete": True})
@@ -1180,6 +1197,18 @@ class SnapshotNoSubprocessTests(unittest.TestCase):
                 "schema": "gluerun.orchestration.dag.v0",
                 "nodes": [{"id": "D0.a", "stage": "D0", "area": "core", "layer": "contract",
                            "kind": "build", "dependsOn": [], "requiredCompletion": "done"}]}))
+            run_dir = repo / ".gluerun-state/runs/RUN-resource"
+            run_dir.mkdir(parents=True)
+            (run_dir / "resource-plan.json").write_text(json.dumps({
+                "schema": "gluerun.orchestration.resource-plan.v0",
+                "configuredSlots": 7,
+                "effectiveSlots": 1,
+                "freeBytes": 1,
+                "reserveBytes": 0,
+                "estimatedWorktreeBytes": 1024,
+                "affordableSlots": 1,
+                "reason": "disk-limited-concurrency",
+            }))
             calls: list[list[str]] = []
             real_run = subprocess.run
 
@@ -1198,6 +1227,10 @@ class SnapshotNoSubprocessTests(unittest.TestCase):
             self.assertTrue(snap["orchestration"]["validateDag"].get("native"))
             self.assertEqual(snap["orchestration"]["gates"],
                              {"passed": 0, "total": 1, "byNode": {"D0.a": "absent"}})
+            self.assertEqual(snap["resources"]["configuredSlots"], 7)
+            self.assertEqual(snap["resources"]["reserveBytes"], 0)
+            self.assertEqual(snap["resources"]["estimatedWorktreeBytes"], 1024)
+            self.assertEqual(snap["resources"]["source"], "latest-reconcile")
             self.assertEqual(
                 [f["node"] for f in snap["orchestration"]["nextAreas"]["frontier"]], ["D0.a"])
             self.assertEqual(snap["orchestration"]["nextArea"]["node"], "D0.a")
@@ -3365,6 +3398,209 @@ class SnapshotLoopLivenessTests(unittest.TestCase):
             out = srv._snapshot_loop_liveness(repo)
             self.assertEqual(out["pid"], os.getpid())
             self.assertTrue(out["alive"])
+
+
+class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
+    def test_run_status_overrides_worker_file_inference(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            run = repo / ".gluerun-state" / "runs" / "RUN-auditing"
+            run.mkdir(parents=True)
+            (run / "worker-codex.log").write_text("{}\n")
+            (run / "gate-check.json").write_text('{"exitCode":0}\n')
+            (run / "auditor-codex.log").write_text("{}\n")
+            (run / "run-status.json").write_text(json.dumps({
+                "schema": "gluerun.orchestration.run-status.v0",
+                "runId": "RUN-auditing",
+                "taskId": "TASK-0001",
+                "phase": "auditing",
+                "state": "active",
+                "process": {
+                    "type": "auditor",
+                    "pid": 4321,
+                    "startedAt": "2026-07-24T10:00:00Z",
+                },
+                "phaseStartedAt": "2026-07-24T10:01:00Z",
+                "lastProgressAt": "2026-07-24T10:02:00Z",
+                "currentActivity": "rerunning Vitest",
+                "safeCancel": True,
+                "nextAction": "record verdict",
+                "updatedAt": "2026-07-24T10:02:00Z",
+            }))
+            rows = srv.discover_sessions(repo)
+            row = next(item for item in rows if item["id"] == "RUN-auditing")
+            self.assertEqual(row["kind"], "audit")
+            self.assertEqual(row["phase"], "auditing")
+            self.assertEqual(row["role"], "auditor")
+            self.assertEqual(row["pid"], 4321)
+            self.assertEqual(row["implementerState"], "completed")
+            self.assertEqual(row["currentActivity"], "rerunning Vitest")
+
+    def test_optional_warning_is_deduplicated_and_raw_is_unchanged(self) -> None:
+        lines = [
+            "2026-07-24T10:00:00Z WARN model cache unknown field supports_reasoning_summaries",
+            "2026-07-24T10:00:01Z WARN model cache unknown field supports_reasoning_summaries",
+        ]
+        parsed = srv.parse_log_lines(lines)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["count"], 2)
+        self.assertEqual(
+            parsed[0]["diagnostic"]["category"],
+            "optional-dependency-warning",
+        )
+        raw = srv.parse_log_lines(lines, raw=True)
+        self.assertEqual([item["text"] for item in raw], lines)
+
+    def test_structured_categories(self) -> None:
+        provider = srv.classify_codex_record({
+            "schema": "gluerun.orchestration.provider-error.v0",
+            "provider": "codex",
+            "kind": "usage-limit",
+            "eventType": "turn.failed",
+            "retryable": True,
+            "excerpt": "usage limit",
+            "recordedAt": "2026-07-24T10:00:00Z",
+        })
+        self.assertEqual(provider["diagnostic"]["category"], "provider-failure")
+        baseline = srv.classify_codex_record({
+            "schema": "gluerun.orchestration.gate-report.v0",
+            "outcome": "passed-with-acknowledged-baseline",
+        })
+        self.assertEqual(
+            baseline["diagnostic"]["category"],
+            "acknowledged-baseline",
+        )
+        product = srv.classify_codex_record({
+            "schema": "gluerun.orchestration.gate-report.v0",
+            "outcome": "failed-product",
+        })
+        self.assertEqual(product["diagnostic"]["category"], "product-failure")
+        infrastructure = srv.classify_codex_record({
+            "schema": "gluerun.orchestration.gate-report.v0",
+            "outcome": "inconclusive-infrastructure",
+        })
+        self.assertEqual(
+            infrastructure["diagnostic"]["category"],
+            "infrastructure-inconclusive",
+        )
+        orchestration = srv.classify_codex_record({
+            "type": "l1.audit_invalid",
+            "message": "invalid audit verdict",
+        })
+        self.assertEqual(
+            orchestration["diagnostic"]["category"],
+            "orchestration-failure",
+        )
+        informational = srv.classify_codex_record({
+            "type": "l1.audit_completed",
+            "message": "audit completed",
+        })
+        self.assertEqual(informational["diagnostic"]["category"], "info")
+        optional = srv.parse_log_lines(
+            ["WARN optional MCP server failed to start"]
+        )[0]
+        self.assertEqual(
+            optional["diagnostic"]["category"],
+            "optional-dependency-warning",
+        )
+
+    def test_human_gate_api_exposes_owner_staleness_and_descendants(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            orch = repo / "docs" / "orchestration"
+            gates = orch / "human-gates"
+            gates.mkdir(parents=True)
+            artifact = repo / "release.txt"
+            artifact.write_text("approved bytes\n")
+            evidence_path = repo / "review.txt"
+            evidence_path.write_text("review evidence\n")
+            request_ref = "docs/orchestration/human-gates/release.human-gate.json"
+            approval_ref = "docs/orchestration/human-gates/release.human-approval.json"
+            request = {
+                "schema": "gluerun.orchestration.human-gate.v0",
+                "gateId": "release",
+                "node": "release",
+                "approvalType": "exact-artifact",
+                "requiredOwner": "owner@example.com",
+                "questions": [{"id": "risk", "prompt": "Accept?", "required": True}],
+                "artifacts": [{
+                    "ref": "release.txt",
+                    "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                }],
+                "blockedNodes": ["deploy"],
+                "createdAt": "2026-07-24T10:00:00Z",
+                "expiresAt": "2099-07-25T10:00:00Z",
+            }
+            request_path = repo / request_ref
+            request_path.write_text(json.dumps(request))
+            approval = {
+                "schema": "gluerun.orchestration.human-approval.v0",
+                "gateId": "release",
+                "node": "release",
+                "requestRef": request_ref,
+                "requestSha256": hashlib.sha256(request_path.read_bytes()).hexdigest(),
+                "approver": "owner@example.com",
+                "decision": "approved",
+                "answers": {"risk": "yes"},
+                "artifacts": request["artifacts"],
+                "evidence": [{
+                    "ref": "review.txt",
+                    "sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
+                }],
+                "rationale": "approved",
+                "approvedAt": "2026-07-24T11:00:00Z",
+                "expiresAt": "2099-07-25T10:00:00Z",
+            }
+            (repo / approval_ref).write_text(json.dumps(approval))
+            (orch / "dag.v0.json").write_text(json.dumps({
+                "schema": "gluerun.orchestration.dag.v0",
+                "nodes": [
+                    {
+                        "id": "release", "dependsOn": [],
+                        "humanGate": {
+                            "requestRef": request_ref,
+                            "approvalRef": approval_ref,
+                        },
+                    },
+                    {"id": "deploy", "dependsOn": ["release"]},
+                ],
+            }))
+            self.assertEqual(srv.collect_human_gates(repo)[0]["state"], "approved")
+            session_payload = srv.collect_sessions(repo)
+            self.assertEqual(session_payload["humanGates"][0]["state"], "approved")
+            self.assertIn("effectiveSlots", session_payload["resources"])
+
+            approval_path = repo / approval_ref
+            malformed_approval = dict(approval)
+            malformed_approval.pop("requestRef")
+            approval_path.write_text(json.dumps(malformed_approval))
+            row = srv.collect_human_gates(repo)[0]
+            self.assertEqual(row["state"], "invalid")
+            self.assertIn("requestRef", row["reason"])
+
+            malformed_approval = dict(approval)
+            malformed_approval["evidence"] = []
+            approval_path.write_text(json.dumps(malformed_approval))
+            row = srv.collect_human_gates(repo)[0]
+            self.assertEqual(row["state"], "invalid")
+            self.assertIn("non-empty", row["reason"])
+
+            approval_path.write_text(json.dumps(approval))
+            malformed_request = dict(request)
+            malformed_request["createdAt"] = malformed_request["expiresAt"]
+            request_path.write_text(json.dumps(malformed_request))
+            row = srv.collect_human_gates(repo)[0]
+            self.assertEqual(row["state"], "invalid")
+            self.assertIn("after creation", row["reason"])
+
+            request_path.write_text(json.dumps(request))
+            approval["requestSha256"] = hashlib.sha256(request_path.read_bytes()).hexdigest()
+            approval_path.write_text(json.dumps(approval))
+            artifact.write_text("changed\n")
+            row = srv.collect_human_gates(repo)[0]
+            self.assertEqual(row["state"], "stale")
+            self.assertEqual(row["owner"], "owner@example.com")
+            self.assertEqual(row["blockedNodes"], ["deploy"])
 
 
 if __name__ == "__main__":

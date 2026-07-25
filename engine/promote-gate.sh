@@ -35,4 +35,4 @@ EOF
   exit 2
 fi
 
-exec bash "$promoter" "$@"
+exec "${GLUERUN_BASH_BIN:-bash}" "$promoter" "$@"

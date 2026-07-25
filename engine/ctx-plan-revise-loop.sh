@@ -49,8 +49,9 @@
 #       approve                 -> terminate `import` (staged set left intact for L0)
 #       revise (budget left)    -> assemble prompt; decide+record resume|fresh;
 #                                  re-invoke the injectable planner runner with the
-#                                  SAME revision prompt to re-stage candidates
-#                                  (resume rc-86 -> fresh fallback, recorded);
+#                                  SAME revision prompt (resume rc-86 -> fresh
+#                                  fallback, recorded); host-validate and
+#                                  transactionally re-stage the returned batch;
 #                                  record per-finding dispositions; re-critique
 #       revise (budget spent)   -> terminate `park revise-budget-exhausted` (recorded)
 #       park (explicit/unknown) -> terminate `park <reason>` (recorded)
@@ -76,6 +77,43 @@ try:
 except Exception:
     pass
 PY
+}
+
+# Record one stable, fail-closed terminal for every revision execution or staging
+# failure. The detail remains structured for operators, while callers can route
+# on the stable `park revision-staging-failed` outcome.
+gluerun_plan_revise_loop_park_failure() {
+  local node="${1:-}" run_id="${2:-}" revisions_done="${3:-0}"
+  local failure_class="${4:-unknown}" exit_code="${5:-0}" evidence_ref="${6:-}"
+  local event_json
+  event_json="$(python3 - "$node" "$run_id" "$revisions_done" "$failure_class" \
+    "$exit_code" "$evidence_ref" <<'PY'
+import json
+import sys
+node, run_id, revisions, failure_class, exit_code, evidence_ref = sys.argv[1:7]
+try:
+    revisions_value = int(revisions)
+except Exception:
+    revisions_value = 0
+try:
+    exit_value = int(exit_code)
+except Exception:
+    exit_value = 0
+data = {
+    "node": node,
+    "runId": run_id,
+    "reason": "revision-staging-failed",
+    "failureClass": failure_class,
+    "exitCode": exit_value,
+    "revisionsDone": revisions_value,
+}
+if evidence_ref:
+    data["evidenceRef"] = evidence_ref
+print(json.dumps(data, separators=(",", ":")))
+PY
+)"
+  gluerun_append_event "plan.revise_parked" "plan revision staging failed" "$event_json" || true
+  echo "park revision-staging-failed"
 }
 
 # The composed bounded revision loop. Composes ONLY integrated functions; prints
@@ -145,10 +183,35 @@ gluerun_plan_revise_loop() {
     local next_round="${decision##* }"
     local revises_run_id="${run_id}-revise-${next_round}"
 
+    # Freeze the prior candidate set's exact identity contract before invoking a
+    # provider. A revision may change task content and dependencies, but not its
+    # allocated ids, count, or area.
+    local prior_contract="$stage_dir/revision-contract-${next_round}.json"
+    if ! gluerun_task_batch_stage_contract "$stage_dir" "$prior_contract"; then
+      gluerun_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
+        candidate-contract-invalid 0 "$prior_contract"
+      return 0
+    fi
+    local expected_ids_json expected_area
+    expected_ids_json="$(python3 - "$prior_contract" <<'PY'
+import json, sys
+print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["taskIds"]))
+PY
+)"
+    expected_area="$(python3 - "$prior_contract" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["area"])
+PY
+)"
+
     # (a) Assemble the revision prompt: base planner template + structured per-id
     #     findings + the prior candidate set.
     local prompt_file="$stage_dir/revision-prompt-${next_round}.md"
-    "${_rev_pfx}prompt" "$node" "$record" "$stage_dir" "$prompt_file" || true
+    if ! "${_rev_pfx}prompt" "$node" "$record" "$stage_dir" "$prompt_file"; then
+      gluerun_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
+        prompt-assembly-failed 0 "$prompt_file"
+      return 0
+    fi
 
     # (b) Decide resume-vs-fresh via the integrated fail-closed decider and record
     #     the chosen strategy. A `fresh <reason>` is trusted verbatim; the loop
@@ -168,19 +231,34 @@ gluerun_plan_revise_loop() {
         fresh "$strat_rest" || true
     fi
 
-    # (c) Re-invoke the planner through the injectable runner with the SAME
-    #     revision prompt to re-stage candidates: resuming the persisted node
-    #     session on `resume`, else fresh. --stage-dir tells the planner where to
-    #     re-stage; --output-last-message captures the revised batch for (e).
+    # (c) Re-invoke the planner through the provider-only runner contract with
+    #     the SAME revision prompt, resuming the persisted node session on
+    #     `resume`, else fresh. The runner returns a final message only; host-side
+    #     code below validates and stages it.
     local out="$stage_dir/revised-batch-${next_round}.md"
+    local normalized="$stage_dir/revised-batch-${next_round}.json"
+    local validation_log="$stage_dir/revised-batch-${next_round}.validation.log"
+    local candidate_dir="$stage_dir/.revision-candidates-${next_round}-$$"
+    rm -f "$out" "$normalized" "$validation_log"
+    rm -rf -- "$candidate_dir"
     local base_args=(--level readonly -C "$worktree" --run-id "$revises_run_id" \
-      --prompt-file "$prompt_file" --output-last-message "$out" --stage-dir "$stage_dir")
+      --prompt-file "$prompt_file" --output-last-message "$out")
     [[ -n "$session_meta" ]] && base_args+=(--session-meta "$session_meta")
     local run_args=("${base_args[@]}")
     [[ "$strategy" == "resume" ]] && run_args+=(--resume-session "$resume_sid")
 
+    local planner_result="$stage_dir/revised-planner-${next_round}-${strategy}-runner-result.json"
+    rm -f "$planner_result"
     local prc=0
-    "$planner_runner" "${run_args[@]}" >"$stage_dir/revised-planner-${next_round}.log" 2>&1 || prc=$?
+    local planner_capability_profile="${GLUERUN_PLANNER_CAPABILITY_PROFILE:-planner-core}"
+    gluerun_runner_contract_prepare \
+      "$planner_runner" planner "$planner_capability_profile" "$planner_result"
+    GLUERUN_RUNNER_ROLE=planner \
+    GLUERUN_RUNNER_CAPABILITY_PROFILE="$planner_capability_profile" \
+    GLUERUN_RUNNER_RESULT_FILE="$planner_result" \
+    GLUERUN_RUNNER_RUN_ID="$revises_run_id" \
+    "$planner_runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+      "${run_args[@]}" >"$stage_dir/revised-planner-${next_round}.log" 2>&1 || prc=$?
 
     # (d) rc-86 resume-refused: the runner declined the resume. Record the
     #     fresh fallback and re-run FRESH (drop --resume-session) with the SAME
@@ -188,14 +266,71 @@ gluerun_plan_revise_loop() {
     if [[ "$prc" -eq 86 && "$strategy" == "resume" ]]; then
       "${_rec_pfx}resume_failed" "$node" "$run_id" "$revises_run_id" "$resume_sid" || true
       prc=0
-      "$planner_runner" "${base_args[@]}" >"$stage_dir/revised-planner-${next_round}.log" 2>&1 || prc=$?
+      planner_result="$stage_dir/revised-planner-${next_round}-fresh-runner-result.json"
+      rm -f "$planner_result"
+      gluerun_runner_contract_prepare \
+        "$planner_runner" planner "$planner_capability_profile" "$planner_result"
+      GLUERUN_RUNNER_ROLE=planner \
+      GLUERUN_RUNNER_CAPABILITY_PROFILE="$planner_capability_profile" \
+      GLUERUN_RUNNER_RESULT_FILE="$planner_result" \
+      GLUERUN_RUNNER_RUN_ID="$revises_run_id" \
+      "$planner_runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+        "${base_args[@]}" >"$stage_dir/revised-planner-${next_round}.log" 2>&1 || prc=$?
     fi
 
-    # (e) Record the revised batch's per-finding dispositions (plan.revised +
-    #     accepted-observation / rejected-observation / accepted-but-unaddressed)
-    #     against the PRE-revision critique record — before the loop re-critiques
-    #     and overwrites it.
-    "${_rec_pfx}dispositions" "$node" "$revises_run_id" "$record" "$out" || true
+    if [[ "$prc" -ne 0 ]]; then
+      gluerun_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
+        runner-failed "$prc" "$stage_dir/revised-planner-${next_round}.log"
+      return 0
+    fi
+    if [[ ! -s "$out" ]]; then
+      gluerun_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
+        output-missing 0 "$out"
+      return 0
+    fi
+
+    # (e) Materialize the complete revision privately. Exact id-set validation,
+    #     markdown validation, and dependency checks all finish before the old
+    #     candidate set is touched.
+    local batch_rc=0
+    gluerun_task_batch_materialize "$out" "$normalized" "$candidate_dir" \
+      "$expected_area" "$expected_ids_json" exact "$GLUERUN_TASKBATCH_SCHEMA" \
+      2>"$validation_log" || batch_rc=$?
+    if [[ "$batch_rc" -ne 0 ]]; then
+      local batch_failure="batch-invalid"
+      [[ "$batch_rc" -eq 4 ]] && batch_failure="batch-empty"
+      [[ "$batch_rc" -eq 3 ]] && batch_failure="batch-malformed"
+      gluerun_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
+        "$batch_failure" "$batch_rc" "$validation_log"
+      return 0
+    fi
+
+    # (f) Transactionally replace the candidate set. Promotion failure rolls the
+    #     old files back; no disposition is recorded for an unstaged revision.
+    if ! gluerun_task_batch_replace_stage "$candidate_dir" "$stage_dir"; then
+      gluerun_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
+        stage-replace-failed 0 "$validation_log"
+      return 0
+    fi
+    gluerun_append_event "plan.revision_staged" "revised task batch staged" \
+      "$(python3 - "$node" "$revises_run_id" "$prior_contract" "$normalized" <<'PY'
+import json, sys
+node, run_id, contract_path, batch_path = sys.argv[1:5]
+contract = json.load(open(contract_path, encoding="utf-8"))
+print(json.dumps({
+    "node": node,
+    "runId": run_id,
+    "taskIds": contract["taskIds"],
+    "count": contract["count"],
+    "batchRef": batch_path,
+}, separators=(",", ":")))
+PY
+)" || true
+
+    # (g) Only now record the revised batch's per-finding dispositions against
+    #     the pre-revision critique record, before the loop re-critiques and
+    #     overwrites it.
+    "${_rec_pfx}dispositions" "$node" "$revises_run_id" "$record" "$normalized" || true
 
     revisions_done="$next_round"
     # Loop: re-critique the revised candidate set.

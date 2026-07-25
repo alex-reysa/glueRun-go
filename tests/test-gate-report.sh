@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+command="npm test"
+command_sha="$(printf '%s' "$command" | shasum -a 256 | awk '{print $1}')"
+printf 'known failure\n' >"$tmp/gate.log"
+cat >"$tmp/observation.json" <<'JSON'
+{
+  "schema": "gluerun.orchestration.gate-observation.v0",
+  "failures": [{"signature": "known-1", "title": "known failure"}]
+}
+JSON
+cat >"$tmp/baseline.json" <<JSON
+{
+  "schema": "gluerun.orchestration.gate-baseline.v0",
+  "commandSha256": "$command_sha",
+  "failures": [
+    {"signature": "known-1", "title": "known failure"},
+    {"signature": "resolved-1", "title": "already fixed"}
+  ],
+  "acknowledgedBy": "owner",
+  "recordedAt": "2026-07-24T10:00:00Z"
+}
+JSON
+
+python3 "$ROOT/engine/gate_report.py" \
+  --task-id TASK-0001 --run-id RUN-1 \
+  --head-sha 0123456789012345678901234567890123456789 \
+  --command "$command" --raw-exit-code 1 \
+  --log-ref gate.log --log-path "$tmp/gate.log" \
+  --observation "$tmp/observation.json" --baseline "$tmp/baseline.json" \
+  --output "$tmp/report.json" >/dev/null
+
+python3 - "$tmp/report.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["outcome"] == "passed-with-acknowledged-baseline"
+assert [f["signature"] for f in data["expectedFailures"]] == ["known-1"]
+assert data["unexpectedFailures"] == []
+assert [f["signature"] for f in data["resolvedExpectedFailures"]] == ["resolved-1"]
+PY
+
+python3 - "$tmp/observation.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["failures"].append({"signature": "new-1"})
+json.dump(data, open(path, "w"))
+PY
+python3 "$ROOT/engine/gate_report.py" \
+  --task-id TASK-0001 --run-id RUN-2 \
+  --head-sha 0123456789012345678901234567890123456789 \
+  --command "$command" --raw-exit-code 1 \
+  --log-ref gate.log --log-path "$tmp/gate.log" \
+  --observation "$tmp/observation.json" --baseline "$tmp/baseline.json" \
+  --output "$tmp/report-new.json" >/dev/null
+[[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["outcome"])' "$tmp/report-new.json")" == "failed-product" ]]
+
+# A genuine unexpected failure wins over an unrelated infrastructure signal.
+python3 - "$tmp/observation.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["infrastructureFailure"] = True
+data["infrastructureReason"] = "cache permission warning"
+json.dump(data, open(path, "w"))
+PY
+python3 "$ROOT/engine/gate_report.py" \
+  --task-id TASK-0001 --run-id RUN-mixed \
+  --head-sha 0123456789012345678901234567890123456789 \
+  --command "$command" --raw-exit-code 1 \
+  --log-ref gate.log --log-path "$tmp/gate.log" \
+  --observation "$tmp/observation.json" --baseline "$tmp/baseline.json" \
+  --output "$tmp/report-mixed.json" >/dev/null
+[[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["outcome"])' "$tmp/report-mixed.json")" == "failed-product" ]]
+
+if python3 "$ROOT/engine/gate_report.py" \
+  --task-id TASK-0001 --run-id RUN-3 \
+  --head-sha 0123456789012345678901234567890123456789 \
+  --command "changed command" --raw-exit-code 1 \
+  --log-ref gate.log --log-path "$tmp/gate.log" \
+  --observation "$tmp/observation.json" --baseline "$tmp/baseline.json" \
+  --output "$tmp/report-stale.json" >/dev/null 2>&1; then
+  echo "stale baseline command hash must fail closed" >&2
+  exit 1
+fi
+
+# An acknowledged baseline cannot infer "resolved" from a missing strict
+# observation, even when the raw command happens to exit zero.
+if python3 "$ROOT/engine/gate_report.py" \
+  --task-id TASK-0001 --run-id RUN-missing \
+  --head-sha 0123456789012345678901234567890123456789 \
+  --command "$command" --raw-exit-code 0 \
+  --log-ref gate.log --log-path "$tmp/gate.log" \
+  --baseline "$tmp/baseline.json" \
+  --output "$tmp/report-missing.json" >/dev/null 2>&1; then
+  echo "missing strict observation with a baseline must fail closed" >&2
+  exit 1
+fi
+
+# A v2 gate wrapper cannot promote a bare zero exit when its adapter omitted the
+# required observation sidecar.
+strict_missing_rc=0
+GLUERUN_ROOT="$ROOT" \
+GLUERUN_STATE_DIR="$tmp/state" \
+GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
+  "$ROOT/engine/gate-check.sh" RUN-strict-missing \
+    --task-id TASK-0001 -- true >"$tmp/strict-missing.out" 2>&1 \
+  || strict_missing_rc=$?
+[[ "$strict_missing_rc" -eq 20 ]] || {
+  echo "v2 missing strict observation should exit 20, got $strict_missing_rc" >&2
+  cat "$tmp/strict-missing.out" >&2
+  exit 1
+}
+python3 - "$tmp/state/runs/RUN-strict-missing/gate-report.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["outcome"] == "inconclusive-infrastructure"
+assert "gate-report-normalization-failed" in data["infrastructureSignals"]
+PY
+
+# Explicit legacy schema mode retains the v0 exit-code-only adapter while old
+# consumers migrate; strict observation enforcement is a v2 write policy.
+mkdir -p "$tmp/legacy"
+cat >"$tmp/legacy/gluerun.config.json" <<'JSON'
+{
+  "schemaVersion": "v1",
+  "targetBranch": "main",
+  "gateCommand": "true"
+}
+JSON
+legacy_rc=0
+GLUERUN_ROOT="$tmp/legacy" \
+GLUERUN_ENGINE_HOME="$ROOT" \
+GLUERUN_STATE_DIR="$tmp/legacy-state" \
+GLUERUN_EVENTS_FILE="$tmp/legacy-state/events.ndjson" \
+  "$ROOT/engine/gate-check.sh" RUN-legacy \
+    --task-id TASK-0001 -- true >"$tmp/legacy.out" 2>&1 \
+  || legacy_rc=$?
+[[ "$legacy_rc" -eq 0 ]] || {
+  echo "explicit v1 gate compatibility should accept a clean zero exit" >&2
+  cat "$tmp/legacy.out" >&2
+  exit 1
+}
+[[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["outcome"])' \
+  "$tmp/legacy-state/runs/RUN-legacy/gate-report.json")" == "passed" ]]
+
+# The gate wrapper emits a durable stale-baseline warning when every expected
+# failure has disappeared from a valid strict observation.
+cat >"$tmp/resolved-gate.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schema":"gluerun.orchestration.gate-observation.v0","failures":[]}' \
+  >"$GLUERUN_GATE_REPORT_FILE"
+SH
+chmod +x "$tmp/resolved-gate.sh"
+resolved_command="$tmp/resolved-gate.sh"
+resolved_command_sha="$(printf '%s' "$resolved_command" | shasum -a 256 | awk '{print $1}')"
+cat >"$tmp/resolved-baseline.json" <<JSON
+{
+  "schema": "gluerun.orchestration.gate-baseline.v0",
+  "commandSha256": "$resolved_command_sha",
+  "failures": [{"signature": "known-1"}],
+  "acknowledgedBy": "owner",
+  "recordedAt": "2026-07-24T10:00:00Z"
+}
+JSON
+wrapper_output="$(
+  GLUERUN_ROOT="$ROOT" \
+  GLUERUN_STATE_DIR="$tmp/state" \
+  GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
+  GLUERUN_GATE_BASELINE_FILE="$tmp/resolved-baseline.json" \
+    "$ROOT/engine/gate-check.sh" RUN-resolved \
+      --task-id TASK-0001 -- "$resolved_command" 2>&1
+)"
+[[ "$wrapper_output" == *"acknowledged gate baseline failure(s) are now resolved"* ]]
+grep -q '"type":"gate.baseline_stale"' "$tmp/state/events.ndjson"
+
+# Evidence-only verification requires the report's composite binding; a report
+# with individually plausible fields but no binding must fail closed.
+printf 'verified log\n' >"$tmp/verified.log"
+python3 "$ROOT/engine/gate-report.py" create \
+  --output "$tmp/verified-report.json" \
+  --task-id TASK-0001 --run-id RUN-verified \
+  --head-sha 0123456789012345678901234567890123456789 \
+  --command "npm test" --exit-code 0 --log "$tmp/verified.log" \
+  --integrity-status verified >/dev/null
+python3 "$ROOT/engine/gate-report.py" verify-evidence \
+  --report "$tmp/verified-report.json" \
+  --expected-head 0123456789012345678901234567890123456789 \
+  --expected-command "npm test"
+python3 - "$tmp/verified-report.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+report = json.load(open(path, encoding="utf-8"))
+report.pop("evidenceBindingSha256")
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump(report, stream)
+PY
+if python3 "$ROOT/engine/gate-report.py" verify-evidence \
+  --report "$tmp/verified-report.json" \
+  --expected-head 0123456789012345678901234567890123456789 \
+  --expected-command "npm test" >/dev/null 2>&1
+then
+  echo "missing gate report evidence binding must fail verification" >&2
+  exit 1
+fi
+
+echo "gate report tests passed"

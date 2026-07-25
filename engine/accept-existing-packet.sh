@@ -2,6 +2,10 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "accept-existing-packet.sh requires bash >= 4 (mapfile); install via 'brew install bash'" >&2
   exit 1
@@ -19,11 +23,60 @@ usage() {
 packet="$1"
 [[ -f "$packet" ]] || { echo "packet not found: $packet" >&2; exit 2; }
 
-scope_worktree=""
+verification_sandbox=""
+verification_worktree=""
+verification_worktree_added="no"
+original_workspace_fingerprint=""
+check_original_workspace_on_exit="no"
+
+workspace_fingerprint() {
+  python3 - "$1" <<'PY'
+import hashlib
+import subprocess
+import sys
+
+root = sys.argv[1]
+head = subprocess.run(
+    ["git", "-C", root, "rev-parse", "HEAD"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    check=False,
+).stdout
+status = subprocess.run(
+    ["git", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    check=False,
+).stdout
+print(hashlib.sha256(head + b"\0" + status).hexdigest())
+PY
+}
+
 cleanup() {
-  if [[ -n "$scope_worktree" ]]; then
-    git -C "$GLUERUN_ROOT" worktree remove --force "$scope_worktree" >/dev/null 2>&1 || rm -rf "$scope_worktree"
+  local rc=$?
+  trap - EXIT
+  if [[ "$check_original_workspace_on_exit" == "yes" \
+    && -n "$original_workspace_fingerprint" && -d "${workspace:-}" ]]; then
+    local current_workspace_fingerprint=""
+    current_workspace_fingerprint="$(workspace_fingerprint "$workspace" 2>/dev/null || true)"
+    if [[ -z "$current_workspace_fingerprint" \
+      || "$current_workspace_fingerprint" != "$original_workspace_fingerprint" ]]; then
+      echo "original packet workspace changed during deterministic acceptance; refusing" >&2
+      rc=2
+    fi
   fi
+  if [[ "$verification_worktree_added" == "yes" ]]; then
+    if gluerun_git_lock_acquire 2>/dev/null; then
+      git -C "$GLUERUN_ROOT" worktree remove --force "$verification_worktree" >/dev/null 2>&1 || true
+      git -C "$GLUERUN_ROOT" worktree prune >/dev/null 2>&1 || true
+      gluerun_git_lock_release
+    fi
+  fi
+  if [[ -n "$verification_sandbox" \
+    && "$(basename "$verification_sandbox")" == gluerun-accept-* ]]; then
+    rm -rf -- "$verification_sandbox"
+  fi
+  exit "$rc"
 }
 trap cleanup EXIT
 
@@ -40,6 +93,21 @@ workspace="$(gluerun_json_field "$packet" workspace)"
 run_dir="$GLUERUN_RUNS_DIR/$run_id"
 audit_record="$(gluerun_audit_record_path "$run_id")"
 task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+repo_schema_version="$(python3 - "$GLUERUN_ROOT/gluerun.config.json" <<'PY' 2>/dev/null || true
+import json
+import sys
+try:
+    print(json.load(open(sys.argv[1], encoding="utf-8")).get("schemaVersion", "") or "")
+except Exception:
+    pass
+PY
+)"
+audit_contract="v0"
+audit_schema_path="$GLUERUN_SCHEMA_DIR/audit-verdict.v0.schema.json"
+if [[ "$repo_schema_version" == "v2" ]]; then
+  audit_contract="v1"
+  audit_schema_path="$GLUERUN_SCHEMA_DIR/audit-verdict.v1.schema.json"
+fi
 
 [[ -f "$task_file" ]] || { echo "task file not found: $task_file" >&2; exit 2; }
 [[ -d "$workspace" ]] || { echo "packet workspace not found: $workspace" >&2; exit 2; }
@@ -95,6 +163,8 @@ if [[ -n "$non_generated_dirty" ]]; then
   printf '  %s\n' $non_generated_dirty >&2
   exit 2
 fi
+original_workspace_fingerprint="$(workspace_fingerprint "$workspace")"
+check_original_workspace_on_exit="yes"
 
 mapfile -t owned_files < <(python3 - "$packet" <<'PY'
 import json
@@ -115,11 +185,85 @@ for path in data.get("forbiddenFiles", []):
         print(path)
 ')
 
+safe_run_id="${run_id//[^A-Za-z0-9_.-]/_}"
+verification_sandbox="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-accept-${safe_run_id}.XXXXXX")"
+verification_worktree="$verification_sandbox/worktree"
+verification_cache="$verification_sandbox/cache"
+verification_setup_log="$run_dir/accept-existing-packet-setup.log"
+if ! gluerun_git_lock_acquire; then
+  echo "could not acquire git lock for deterministic acceptance worktree" >&2
+  exit 2
+fi
+worktree_add_rc=0
+git -C "$GLUERUN_ROOT" worktree add --detach -q "$verification_worktree" "$actual_head" \
+  >"$verification_setup_log" 2>&1 || worktree_add_rc=$?
+if [[ "$worktree_add_rc" -eq 0 ]]; then
+  verification_worktree_added="yes"
+fi
+gluerun_git_lock_release
+if [[ "$worktree_add_rc" -ne 0 ]]; then
+  cat "$verification_setup_log" >&2
+  echo "could not create disposable deterministic acceptance worktree" >&2
+  exit 2
+fi
+verification_head="$(git -C "$verification_worktree" rev-parse HEAD 2>/dev/null || true)"
+if [[ "$verification_head" != "$actual_head" ]]; then
+  echo "disposable verification worktree head mismatch: expected $actual_head, got $verification_head" >&2
+  exit 2
+fi
+
+mkdir -p "$verification_cache/tmp" "$verification_cache/xdg" \
+  "$verification_cache/turbo" "$verification_cache/vite" \
+  "$verification_cache/bun" "$verification_cache/npm" \
+  "$verification_cache/yarn" "$verification_cache/corepack" \
+  "$verification_cache/node" "$verification_cache/cargo" \
+  "$verification_cache/go" "$verification_cache/home" \
+  "$verification_cache/bun-install" "$verification_sandbox/state"
+bootstrap_log="$run_dir/accept-existing-packet-bootstrap.log"
+if ! gluerun_worktree_provision "$verification_worktree" "" >"$bootstrap_log" 2>&1; then
+  cat "$bootstrap_log" >&2
+  echo "disposable deterministic acceptance worktree provisioning failed" >&2
+  exit 2
+fi
+if ! env \
+  GLUERUN_ROOT="$verification_worktree" \
+  GLUERUN_STATE_DIR="$verification_sandbox/state" \
+  TMPDIR="$verification_cache/tmp/" \
+  TMP="$verification_cache/tmp" \
+  TEMP="$verification_cache/tmp" \
+  XDG_CACHE_HOME="$verification_cache/xdg" \
+  TURBO_CACHE_DIR="$verification_cache/turbo" \
+  VITE_CACHE_DIR="$verification_cache/vite" \
+  BUN_INSTALL="$verification_cache/bun-install" \
+  BUN_INSTALL_CACHE_DIR="$verification_cache/bun" \
+  BUN_TMPDIR="$verification_cache/tmp" \
+  npm_config_cache="$verification_cache/npm" \
+  YARN_CACHE_FOLDER="$verification_cache/yarn" \
+  COREPACK_HOME="$verification_cache/corepack" \
+  NODE_COMPILE_CACHE="$verification_cache/node" \
+  CARGO_TARGET_DIR="$verification_cache/cargo" \
+  GOCACHE="$verification_cache/go" \
+  "$SCRIPT_DIR/bootstrap-worktree.sh" --worktree "$verification_worktree" \
+  >>"$bootstrap_log" 2>&1; then
+  cat "$bootstrap_log" >&2
+  echo "required deterministic acceptance bootstrap failed" >&2
+  exit 2
+fi
+bootstrap_head="$(git -C "$verification_worktree" rev-parse HEAD 2>/dev/null || true)"
+mapfile -t bootstrap_changed_paths < <(
+  git -C "$verification_worktree" status --porcelain=v1 --untracked-files=all 2>/dev/null \
+    | sed -E 's/^.. //' | sed '/^[[:space:]]*$/d'
+)
+if [[ "$bootstrap_head" != "$actual_head" || "${#bootstrap_changed_paths[@]}" -ne 0 ]]; then
+  echo "deterministic acceptance bootstrap attempted source mutation; refusing" >&2
+  if [[ "${#bootstrap_changed_paths[@]}" -gt 0 ]]; then
+    printf '  %s\n' "${bootstrap_changed_paths[@]}" >&2
+  fi
+  exit 2
+fi
+
 scope_log="$run_dir/accept-existing-packet-scope.log"
-scope_worktree="$(mktemp -d "$run_dir/accept-existing-packet-scope.XXXXXX")"
-rmdir "$scope_worktree"
-git -C "$GLUERUN_ROOT" worktree add --detach -q "$scope_worktree" "$actual_head"
-scope_args=(--worktree "$scope_worktree" --base "$base_ref")
+scope_args=(--worktree "$verification_worktree" --base "$base_ref")
 for f in "${owned_files[@]}"; do scope_args+=(--allow-prefix "$f"); done
 for f in "${forbidden_files[@]}"; do scope_args+=(--forbid-prefix "$f"); done
 if ! "$SCRIPT_DIR/scope-check.sh" "${scope_args[@]}" >"$scope_log" 2>&1; then
@@ -128,20 +272,27 @@ if ! "$SCRIPT_DIR/scope-check.sh" "${scope_args[@]}" >"$scope_log" 2>&1; then
 fi
 
 secret_log="$run_dir/accept-existing-packet-secret-scan.log"
-if ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$workspace" --range "$base_ref..HEAD" >"$secret_log" 2>&1; then
+if ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$verification_worktree" \
+  --range "$base_ref..HEAD" >"$secret_log" 2>&1; then
   cat "$secret_log" >&2
   exit 2
 fi
 
 cmd_list="$run_dir/accept-existing-packet-commands.jsonl"
 python3 - "$packet" "$workspace" "$run_dir" "$cmd_list" <<'PY'
+import hashlib
 import json
 import os
+import pathlib
+import shutil
 import sys
+import tempfile
 
 packet_path, workspace, run_dir, cmd_list = sys.argv[1:5]
 with open(packet_path, encoding="utf-8") as f:
     packet = json.load(f)
+workspace = os.path.realpath(workspace)
+run_dir = os.path.realpath(run_dir)
 
 def candidates(ref):
     if not ref:
@@ -163,9 +314,12 @@ def exists(ref):
 
 phases = {"red": False, "green": False, "regression": False}
 missing = []
+log_refs = []
 for test in packet.get("tests", []):
     phase = str(test.get("phase", "")).lower()
     ref = test.get("logRef", "")
+    if ref:
+        log_refs.append(ref)
     for key in list(phases):
         if key in phase:
             phases[key] = True
@@ -179,6 +333,8 @@ for key, seen in phases.items():
 rerun = []
 for idx, command in enumerate(packet.get("commands", [])):
     ref = command.get("logRef", "")
+    if ref:
+        log_refs.append(ref)
     if ref and not exists(ref):
         missing.append(f"command evidence missing: {ref}")
     if int(command.get("exitCode", 999)) == 0:
@@ -189,6 +345,64 @@ if not rerun:
 if missing:
     print("\n".join(missing), file=sys.stderr)
     sys.exit(2)
+
+def contained(root, path):
+    try:
+        return os.path.commonpath([root, os.path.realpath(path)]) == root
+    except (OSError, ValueError):
+        return False
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+# Preserve the exact packet evidence bytes in the durable run directory before
+# the acceptance verdict is written. The evidence manifest can then bind the
+# re-check to immutable raw artifacts rather than mutable ignored worker files.
+for ref in dict.fromkeys(log_refs):
+    pure = pathlib.PurePosixPath(ref)
+    if pure.is_absolute() or any(part in ("", ".", "..") for part in pure.parts):
+        print(f"unsafe packet evidence ref: {ref}", file=sys.stderr)
+        sys.exit(2)
+    source = next((path for path in candidates(ref) if os.path.isfile(path)), None)
+    if not source:
+        continue
+    source = os.path.realpath(source)
+    if not (contained(workspace, source) or contained(run_dir, source)):
+        print(f"packet evidence escapes allowed roots: {ref}", file=sys.stderr)
+        sys.exit(2)
+    destination = os.path.join(run_dir, *pure.parts)
+    destination_parent = os.path.dirname(destination)
+    os.makedirs(destination_parent, exist_ok=True)
+    if not contained(run_dir, destination_parent):
+        print(f"packet evidence destination escapes run directory: {ref}", file=sys.stderr)
+        sys.exit(2)
+    if os.path.islink(destination):
+        print(f"packet evidence destination must not be a symlink: {ref}", file=sys.stderr)
+        sys.exit(2)
+    if os.path.realpath(destination) == source:
+        continue
+    if os.path.exists(destination):
+        if not os.path.isfile(destination) or sha256(destination) != sha256(source):
+            print(f"packet evidence conflicts with durable artifact: {ref}", file=sys.stderr)
+            sys.exit(2)
+        continue
+    fd, temporary = tempfile.mkstemp(
+        prefix=os.path.basename(destination) + ".",
+        dir=destination_parent,
+    )
+    os.close(fd)
+    try:
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 with open(cmd_list, "w", encoding="utf-8") as f:
     for command in rerun:
@@ -202,26 +416,292 @@ if ! gluerun_packet_module_guard "$packet" "$task_file" "$workspace" "$run_dir" 
 fi
 
 rerun_logs="$run_dir/accept-existing-packet-rerun-logs.txt"
+rerun_results="$run_dir/accept-existing-packet-command-results.jsonl"
 : >"$rerun_logs"
+: >"$rerun_results"
+failed_command=""
+failed_command_log=""
+failed_command_exit=0
 while IFS= read -r line; do
   [[ -n "$line" ]] || continue
   idx="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["idx"])' "$line")"
   cmd="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["cmd"])' "$line")"
   log="$run_dir/accept-existing-packet-command-$idx.log"
-  if ! (cd "$workspace" && bash -lc "$cmd") >"$log" 2>&1; then
-    echo "packet command failed during deterministic acceptance: $cmd (log: $log)" >&2
-    cat "$log" >&2
-    exit 2
-  fi
+  started_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
+  command_exit=0
+  (
+    gluerun_run_in_worktree_env "$verification_worktree" env \
+      GLUERUN_ROOT="$verification_worktree" \
+      GLUERUN_STATE_DIR="$verification_sandbox/state" \
+      HOME="$verification_cache/home" \
+      TMPDIR="$verification_cache/tmp/" \
+      TMP="$verification_cache/tmp" \
+      TEMP="$verification_cache/tmp" \
+      XDG_CACHE_HOME="$verification_cache/xdg" \
+      TURBO_CACHE_DIR="$verification_cache/turbo" \
+      VITE_CACHE_DIR="$verification_cache/vite" \
+      BUN_INSTALL="$verification_cache/bun-install" \
+      BUN_INSTALL_CACHE_DIR="$verification_cache/bun" \
+      BUN_TMPDIR="$verification_cache/tmp" \
+      npm_config_cache="$verification_cache/npm" \
+      YARN_CACHE_FOLDER="$verification_cache/yarn" \
+      COREPACK_HOME="$verification_cache/corepack" \
+      NODE_COMPILE_CACHE="$verification_cache/node" \
+      CARGO_TARGET_DIR="$verification_cache/cargo" \
+      GOCACHE="$verification_cache/go" \
+      "$(gluerun_bash_bin)" -c "$cmd"
+  ) >"$log" 2>&1 || command_exit=$?
+  finished_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
+  duration_ms="$((finished_ms - started_ms))"
+  python3 - "$rerun_results" "$idx" "$cmd" "$command_exit" "$duration_ms" "$log" <<'PY'
+import json
+import sys
+
+path, index, command, exit_code, duration_ms, log = sys.argv[1:7]
+with open(path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps({
+        "index": int(index),
+        "command": command,
+        "exitCode": int(exit_code),
+        "durationMs": max(0, int(duration_ms)),
+        "log": log,
+    }, separators=(",", ":")) + "\n")
+PY
   printf '%s\n' "$log" >>"$rerun_logs"
+  if [[ "$command_exit" -ne 0 ]]; then
+    failed_command="$cmd"
+    failed_command_log="$log"
+    failed_command_exit="$command_exit"
+    break
+  fi
 done <"$cmd_list"
 
-python3 - "$packet" "$audit_record" "$scope_log" "$secret_log" "$cmd_list" "$rerun_logs" "$GLUERUN_AUDIT_SCHEMA" <<'PY'
+verification_head_after="$(git -C "$verification_worktree" rev-parse HEAD 2>/dev/null || true)"
+mapfile -t verification_changed_paths < <(
+  git -C "$verification_worktree" status --porcelain=v1 --untracked-files=all 2>/dev/null \
+    | sed -E 's/^.. //' | sed '/^[[:space:]]*$/d'
+)
+if [[ "$verification_head_after" != "$actual_head" \
+  || "${#verification_changed_paths[@]}" -ne 0 ]]; then
+  echo "packet command attempted source mutation in disposable verification worktree; refusing" >&2
+  if [[ "$verification_head_after" != "$actual_head" ]]; then
+    echo "  HEAD changed: $actual_head -> $verification_head_after" >&2
+  fi
+  if [[ "${#verification_changed_paths[@]}" -gt 0 ]]; then
+    printf '  %s\n' "${verification_changed_paths[@]}" >&2
+  fi
+  exit 2
+fi
+
+current_workspace_fingerprint="$(workspace_fingerprint "$workspace" 2>/dev/null || true)"
+if [[ -z "$current_workspace_fingerprint" \
+  || "$current_workspace_fingerprint" != "$original_workspace_fingerprint" ]]; then
+  echo "original packet workspace changed during deterministic acceptance; refusing" >&2
+  exit 2
+fi
+check_original_workspace_on_exit="no"
+
+if [[ -n "$failed_command" ]]; then
+  echo "packet command failed during deterministic acceptance with exit $failed_command_exit: $failed_command (log: $failed_command_log)" >&2
+  cat "$failed_command_log" >&2
+  exit 2
+fi
+
+packet_input="$run_dir/accept-existing-packet-input.json"
+python3 - "$packet" "$packet_input" <<'PY'
+import os
+import pathlib
+import sys
+import tempfile
+
+source, destination = map(pathlib.Path, sys.argv[1:3])
+payload = source.read_bytes()
+if destination.exists():
+    if destination.read_bytes() != payload:
+        raise SystemExit("existing deterministic acceptance packet snapshot has different bytes")
+    raise SystemExit(0)
+destination.parent.mkdir(parents=True, exist_ok=True)
+fd, raw = tempfile.mkstemp(prefix=destination.name + ".", dir=str(destination.parent))
+try:
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(payload)
+    os.replace(raw, destination)
+finally:
+    try:
+        os.unlink(raw)
+    except FileNotFoundError:
+        pass
+PY
+
+manifest_log="$run_dir/accept-existing-packet-evidence-manifest.log"
+if ! "$SCRIPT_DIR/evidence-manifest.sh" \
+  --run-dir "$run_dir" --task-id "$task_id" \
+  --worktree "$verification_worktree" --base-ref "$base_ref" --head-sha "$actual_head" \
+  >"$manifest_log" 2>&1; then
+  cat "$manifest_log" >&2
+  echo "could not generate deterministic acceptance evidence manifest" >&2
+  exit 2
+fi
+evidence_manifest="$run_dir/evidence-manifest.json"
+python3 - "$evidence_manifest" "$run_dir" "$rerun_results" \
+  "$scope_log" "$secret_log" "$bootstrap_log" "$storage_guard_log" "$packet_input" \
+  "$verification_setup_log" "$cmd_list" "$rerun_logs" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import sys
+import tempfile
+
+(
+    manifest_path_raw,
+    run_dir_raw,
+    rerun_results_raw,
+    scope_log_raw,
+    secret_log_raw,
+    bootstrap_log_raw,
+    module_guard_log_raw,
+    packet_input_raw,
+    setup_log_raw,
+    command_list_raw,
+    rerun_logs_raw,
+) = sys.argv[1:12]
+manifest_path = pathlib.Path(manifest_path_raw)
+run_dir = pathlib.Path(run_dir_raw).resolve()
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+excerpt_limit = int(manifest["budget"]["excerptLimitBytes"])
+limit_bytes = int(manifest["budget"]["limitBytes"])
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+def artifact_ref(path):
+    return path.resolve().relative_to(run_dir).as_posix()
+
+def excerpt(path):
+    raw = path.read_bytes()[:excerpt_limit]
+    text = raw.decode("utf-8", errors="replace")
+    if path.stat().st_size > excerpt_limit:
+        suffix = "\n[truncated at capture]"
+        text = (text[:max(0, excerpt_limit - len(suffix))] + suffix)
+    return text[:excerpt_limit]
+
+reruns = []
+with open(rerun_results_raw, encoding="utf-8") as handle:
+    for line in handle:
+        if line.strip():
+            reruns.append(json.loads(line))
+for result in reruns:
+    log = pathlib.Path(result["log"]).resolve()
+    if log.parent != run_dir or not log.is_file():
+        raise SystemExit(f"acceptance rerun log escapes run directory: {log}")
+    manifest["commands"].append({
+        "name": f"acceptance-rerun-{result['index'] + 1}",
+        "command": result["command"],
+        "exitCode": result["exitCode"],
+        "status": "passed" if result["exitCode"] == 0 else "failed-product",
+        "durationMs": result["durationMs"],
+        "logRef": artifact_ref(log),
+        "logSha256": sha256(log),
+        "excerpt": excerpt(log),
+    })
+
+artifact_paths = [
+    pathlib.Path(scope_log_raw),
+    pathlib.Path(secret_log_raw),
+    pathlib.Path(bootstrap_log_raw),
+    pathlib.Path(module_guard_log_raw),
+    pathlib.Path(packet_input_raw),
+    pathlib.Path(setup_log_raw),
+    pathlib.Path(command_list_raw),
+    pathlib.Path(rerun_logs_raw),
+    pathlib.Path(rerun_results_raw),
+    *[pathlib.Path(item["log"]) for item in reruns],
+]
+artifacts = {
+    item.get("ref"): item
+    for item in manifest.get("artifacts", [])
+    if item.get("ref") not in {"packet.json", "audit.json"}
+}
+for path in artifact_paths:
+    path = path.resolve()
+    if path.parent != run_dir or not path.is_file():
+        raise SystemExit(f"acceptance artifact escapes run directory: {path}")
+    ref = artifact_ref(path)
+    artifacts[ref] = {
+        "ref": ref,
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+manifest["artifacts"] = sorted(artifacts.values(), key=lambda item: item["ref"])
+
+scope = pathlib.Path(scope_log_raw).resolve()
+secret = pathlib.Path(secret_log_raw).resolve()
+results = pathlib.Path(rerun_results_raw).resolve()
+manifest["checks"]["scope"] = {
+    "status": "passed",
+    "ref": artifact_ref(scope),
+    "sha256": sha256(scope),
+}
+manifest["checks"]["secret"] = {
+    "status": "passed",
+    "ref": artifact_ref(secret),
+    "sha256": sha256(secret),
+}
+manifest["checks"]["gate"] = {
+    "status": "passed",
+    "ref": artifact_ref(results),
+    "sha256": sha256(results),
+}
+
+for _ in range(3):
+    encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    manifest["budget"]["composedBytes"] = len(encoded)
+encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+if len(encoded) > limit_bytes:
+    raise SystemExit(
+        f"deterministic acceptance evidence exceeds {limit_bytes} bytes ({len(encoded)})"
+    )
+fd, temporary = tempfile.mkstemp(
+    prefix=manifest_path.name + ".",
+    dir=str(manifest_path.parent),
+)
+try:
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(encoded)
+    os.replace(temporary, manifest_path)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+
+manifest_schema="$GLUERUN_SCHEMA_DIR/evidence-manifest.v0.schema.json"
+manifest_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])),separators=(",",":")))' "$evidence_manifest")"
+gluerun_json_schema_check "$manifest_json" "$manifest_schema" "evidence manifest" \
+  || { echo "evidence manifest schema validation failed for $evidence_manifest" >&2; exit 2; }
+
+python3 - "$packet" "$audit_record" "$scope_log" "$secret_log" "$cmd_list" \
+  "$rerun_logs" "$audit_contract" "$evidence_manifest" <<'PY'
 import json
 import os
 import sys
 
-packet_path, audit_path, scope_log, secret_log, cmd_list, rerun_logs, schema_path = sys.argv[1:8]
+(
+    packet_path,
+    audit_path,
+    scope_log,
+    secret_log,
+    cmd_list,
+    rerun_logs,
+    contract,
+    evidence_manifest,
+) = sys.argv[1:9]
 with open(packet_path, encoding="utf-8") as f:
     packet = json.load(f)
 with open(cmd_list, encoding="utf-8") as f:
@@ -230,6 +710,7 @@ with open(rerun_logs, encoding="utf-8") as f:
     logs = [line.strip() for line in f if line.strip()]
 
 evidence = [
+    evidence_manifest,
     packet_path,
     scope_log,
     secret_log,
@@ -241,7 +722,7 @@ for item in packet.get("evidence", []):
         evidence.append(ref)
 
 audit = {
-    "schema": "gluerun.orchestration.audit-verdict.v0",
+    "schema": f"gluerun.orchestration.audit-verdict.{contract}",
     "taskId": packet["taskId"],
     "runId": packet["runId"],
     "branch": packet["branch"],
@@ -255,11 +736,20 @@ audit = {
     "findings": [
         "deterministic acceptance for an existing stranded packet",
         "packet branch head matched packet headSha",
-        "scope check, secret scan, and current successful packet commands passed",
+        "scope check, secret scan, and current successful packet commands passed in a disposable exact-head worktree",
+        "the original packet workspace remained immutable and disposable source integrity was verified",
     ],
     "requiredFixes": [],
     "rationale": "Existing worker output was accepted deterministically because the packet is valid, branch head matches, scope is clean, evidence is present, and successful packet commands pass when rerun.",
 }
+if contract == "v1":
+    audit["verificationResults"] = [{
+        "status": "passed",
+        "command": "deterministic existing-packet scope, secret, and command verification",
+        "exitCode": 0,
+        "evidenceRefs": [evidence_manifest, scope_log, secret_log, *logs],
+        "rationale": "All deterministic existing-packet checks passed in a disposable worktree at the exact packet head without source mutation.",
+    }]
 
 os.makedirs(os.path.dirname(audit_path), exist_ok=True)
 with open(audit_path, "w", encoding="utf-8") as f:
@@ -269,7 +759,8 @@ PY
 
 # Central validator (0.5.0): the same schema check every auditor verdict gets,
 # replacing this script's hand-rolled required/extra/const/enum python.
-gluerun_validate_audit_verdict "$audit_record" "$task_id" "$run_id" \
+GLUERUN_AUDIT_SCHEMA="$audit_schema_path" \
+  gluerun_validate_audit_verdict "$audit_record" "$task_id" "$run_id" \
   || { echo "audit schema validation failed for $audit_record" >&2; exit 2; }
 
 python3 - "$packet" "$run_id" <<'PY'

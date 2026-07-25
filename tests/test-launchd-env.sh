@@ -57,7 +57,24 @@ EOF
   assert_contains "$out" "GLUERUN_MAX_CONCURRENT=5" "worker concurrency cap defaults to 5"
   assert_contains "$out" "GLUERUN_MAX_DISPATCH=5" "dispatch cap defaults to 5"
   assert_contains "$out" "GLUERUN_MAX_HOURS=12" "watchdog time box defaults to 12 hours"
+  assert_contains "$out" "GLUERUN_CODEX_BIN=$fake_codex" "legacy CODEX_BIN maps to canonical Codex pin"
   assert_not_contains "$out" "gluerun-secret.example" "database URL is not printed"
+
+  local preferred_codex="$tmp/preferred codex"
+  cp "$fake_codex" "$preferred_codex"
+  chmod +x "$preferred_codex"
+  out="$(
+    HOME="$tmp/home" \
+    CODEX_HOME="$codex_home" \
+    CODEX_BIN="$fake_codex" \
+    GLUERUN_CODEX_BIN="$preferred_codex" \
+    GLUERUN_BASH_BIN="$BASH" \
+    GLUERUN_ENV_FILE="$env_file" \
+    GLUERUN_LAUNCHD_MODE=--print-env \
+    bash "$ENGINE_HOME/templates/launchd/run-orchestrator.sh"
+  )"
+  assert_contains "$out" "GLUERUN_CODEX_BIN=$preferred_codex" "canonical Codex pin wins alias"
+  assert_contains "$out" "GLUERUN_BASH_BIN=$BASH" "bootstrap Bash pin is preserved"
 }
 
 test_launchd_wrapper_sources_env_and_defaults_autonomy_flags

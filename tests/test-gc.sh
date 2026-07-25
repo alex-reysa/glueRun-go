@@ -31,7 +31,7 @@ ops() {
     GLUERUN_DISPATCH_DIR="$root/.gluerun-state/dispatch" GLUERUN_RUNS_DIR="$root/.gluerun-state/runs" \
     GLUERUN_WORKTREES_DIR="$root/.worktrees" \
     GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" GLUERUN_TARGET_BRANCH=target "$@" \
-    bash "$SCRIPT_DIR/ops.sh" gc "${GC_ARGS[@]:-}"
+    bash "$SCRIPT_DIR/ops.sh" gc "${GC_ARGS[@]}"
 }
 
 # 12 old RUN- dirs + 3 old ORIGIN- dirs; RUN-keeper referenced by a live lease.

@@ -103,6 +103,30 @@ with_fixture() {
 	  unset GLUERUN_TEST_FAIL_NODE GLUERUN_TEST_BADAREA_NODE GLUERUN_L1_PLAN_NODE GLUERUN_CODEX_RUNNER GLUERUN_L1_PLANNER GLUERUN_ENABLE_L1_PARALLEL GLUERUN_AUTO_INTEGRATE GLUERUN_PUSH GLUERUN_AUTO_PROMOTE_GATES GLUERUN_MAX_CONSEC_FAILS 2>/dev/null || true
 	}
 
+make_structured_quota_evidence() {
+  local run_id="${1:-RUN-quota}" provider="${2:-codex}" status="${3:-429}"
+  local dir="$GLUERUN_RUNS_DIR/$run_id"
+  mkdir -p "$dir"
+  case "$provider:$status" in
+    claude:403)
+      printf '%s\n' \
+        '{"type":"result","subtype":"error","is_error":true,"api_error_status":403,"result":"Organization has disabled subscription access for Claude Code."}' \
+        >"$dir/provider-envelope.json"
+      ;;
+    claude:*)
+      printf '{"type":"result","subtype":"error","is_error":true,"api_error_status":%s,"result":"provider unavailable"}\n' \
+        "$status" >"$dir/provider-envelope.json"
+      ;;
+    *)
+      printf '{"type":"turn.failed","error":{"status":%s,"code":"rate_limit_exceeded","message":"request rejected"}}\n' \
+        "$status" >"$dir/provider-envelope.json"
+      ;;
+  esac
+  gluerun_runner_result_write "$provider" "$run_id" planner planner-core \
+    "$dir/runner-result.json" 1 "$dir/provider-envelope.json" "" ""
+  printf '%s\n' "$dir/runner-result.json"
+}
+
 # A drop-in l1-plan-node stub: creates the node's active lease (real area) and
 # stages one candidate. Honors GLUERUN_TEST_FAIL_NODE (exit 1, lease failed) and
 # GLUERUN_TEST_BADAREA_NODE (stage a candidate with the wrong area).
@@ -246,6 +270,12 @@ make_codex_quota_stub() {
 #!/usr/bin/env bash
 set -euo pipefail
 echo "You've hit your usage limit. Try again at 11:21 AM." >&2
+source "$GLUERUN_REAL_SCRIPT_DIR/lib.sh"
+envelope="$(dirname "$GLUERUN_RUNNER_RESULT_FILE")/planner-provider-envelope.json"
+printf '%s\n' '{"type":"turn.failed","error":{"status":429,"code":"rate_limit_exceeded","message":"request rejected"}}' >"$envelope"
+gluerun_runner_result_write codex "${GLUERUN_RUNNER_RUN_ID:-RUN-stub}" \
+  "${GLUERUN_RUNNER_ROLE:-planner}" "${GLUERUN_RUNNER_CAPABILITY_PROFILE:-planner-core}" \
+  "$GLUERUN_RUNNER_RESULT_FILE" 1 "$envelope" "" ""
 exit 1
 STUB
 	  chmod +x "$1"
@@ -410,6 +440,49 @@ PY
 	  assert_eq "$(task_count)" "0" "backoff must not create tasks"
 	}
 
+test_reconcile_defers_serial_planning_during_active_backoff() {
+  with_fixture
+  GLUERUN_PLANNER_BACKOFF_SECONDS=120 gluerun_planner_backoff_set codex-exit RUN-b D1.contract /dev/null
+  local marker="$GLUERUN_STATE_DIR/serial-planner-called" stub="$GLUERUN_ROOT/serial-planner.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+touch "$GLUERUN_STATE_DIR/serial-planner-called"
+exit 99
+STUB
+  chmod +x "$stub"
+  local out
+  out="$(GLUERUN_ENABLE_L1_PARALLEL=0 GLUERUN_CODEX_RUNNER="$stub" \
+    GLUERUN_AUTO_PROMOTE_GATES=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_PUSH=0 \
+    "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
+  assert_contains "$out" "planner_backoff_active_this_run=1" "serial reconcile reports deferred backoff"
+  assert_contains "$out" "planner_failures_this_run=0" "serial backoff deferral is neutral"
+  [[ ! -f "$marker" ]] || fail "serial planner ran during active backoff"
+  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" "origin.planner_deferred_backoff" \
+    "serial backoff deferral emits telemetry"
+}
+
+test_reconcile_defers_parallel_planning_before_leases() {
+  with_fixture
+  GLUERUN_PLANNER_BACKOFF_SECONDS=120 gluerun_planner_backoff_set timeout RUN-b D1.contract /dev/null
+  local marker="$GLUERUN_STATE_DIR/parallel-planner-called" stub="$GLUERUN_ROOT/parallel-planner.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+touch "$GLUERUN_STATE_DIR/parallel-planner-called"
+exit 99
+STUB
+  chmod +x "$stub"
+  local out
+  out="$(GLUERUN_ENABLE_L1_PARALLEL=1 GLUERUN_L1_PLAN_NODE="$stub" \
+    GLUERUN_AUTO_PROMOTE_GATES=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_PUSH=0 \
+    "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
+  assert_contains "$out" "planner_backoff_active_this_run=1" "parallel reconcile reports deferred backoff"
+  assert_contains "$out" "planner_failures_this_run=0" "parallel backoff deferral is neutral"
+  [[ ! -f "$marker" ]] || fail "parallel planner ran during active backoff"
+  if [[ -d "$GLUERUN_L1_LEASES_DIR" ]] && find "$GLUERUN_L1_LEASES_DIR" -type f | grep -q .; then
+    fail "parallel backoff deferral created an L1 lease"
+  fi
+}
+
 test_generate_tasks_honors_blocked_gate_without_calling_codex() {
   with_fixture
   write_blocked_gate D1.contract internal/artifact TASK-0099
@@ -430,11 +503,22 @@ test_generate_tasks_honors_blocked_gate_without_calling_codex() {
 test_fanout_full_chain_two_nodes_unique_ids() {
   with_fixture
   local stub="$GLUERUN_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
-  local out
+  local out plan_root artifact_prompt storage_prompt
   out="$(GLUERUN_CODEX_RUNNER="$stub" gluerun_l1_fanout RUN-chain "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "2" "fanout imports both planned nodes"
   [[ -f "$GLUERUN_TASKS_DIR/TASK-0001.md" && -f "$GLUERUN_TASKS_DIR/TASK-0002.md" ]] \
     || fail "two staged batches must import as distinct sequential real ids"
+  plan_root="$GLUERUN_RUNS_DIR/RUN-chain/l1-staging"
+  artifact_prompt="$plan_root/D1.contract/planner-prompt.md"
+  storage_prompt="$plan_root/S0.storage_substrate_base/planner-prompt.md"
+  [[ -f "$artifact_prompt" && -f "$storage_prompt" ]] \
+    || fail "concurrent planners must persist prompts in their node-private staging directories"
+  assert_contains "$(cat "$artifact_prompt")" '- area: `artifact`' "artifact node keeps its own planner prompt"
+  assert_contains "$(cat "$storage_prompt")" '- area: `storage`' "storage node keeps its own planner prompt"
+  [[ -f "$plan_root/D1.contract/planner-out.md" && -f "$plan_root/S0.storage_substrate_base/planner-out.md" ]] \
+    || fail "concurrent planners must persist provider output in their node-private staging directories"
+  [[ ! -e "$GLUERUN_RUNS_DIR/RUN-chain/planner-prompt.md" && ! -e "$GLUERUN_RUNS_DIR/RUN-chain/planner-out.md" ]] \
+    || fail "parallel planners must not fall back to shared parent-run artifacts"
   assert_eq "$(gluerun_l1_lease_status D1.contract)" "released" "planned node lease is released after import"
   assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "released" "planned node lease is released after import"
 }
@@ -546,7 +630,10 @@ STUB
 # and NOT invoke reconcile (which would burn quota).
 test_autonomate_sleeps_through_quota_window_without_breaker() {
   with_fixture
-  GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS=120 gluerun_planner_backoff_set quota RUN-q D1.contract /dev/null
+  local evidence
+  evidence="$(make_structured_quota_evidence RUN-q)"
+  GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS=120 \
+    gluerun_planner_backoff_set quota RUN-q D1.contract "$evidence"
   local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
   write_reconcile_should_not_run_stub "$stub"
   local out
@@ -556,9 +643,9 @@ test_autonomate_sleeps_through_quota_window_without_breaker() {
   assert_eq "$(gluerun_breaker_count)" "0" "sleeping through a quota window does not trip the breaker"
 }
 
-# Only the quota class is diverted: a non-quota backoff (e.g. timeout) falls
-# through to the normal cycle and still counts toward the breaker.
-test_autonomate_nonquota_backoff_still_trips_breaker() {
+# Non-quota backoffs still permit reconcile, but a repeated planner refusal is
+# neutral while the backoff remains valid.
+test_autonomate_nonquota_backoff_neutralizes_repeated_planner_failure() {
   with_fixture
   GLUERUN_PLANNER_BACKOFF_SECONDS=120 gluerun_planner_backoff_set timeout RUN-t D1.contract /dev/null
   local stub="$GLUERUN_ROOT/reconcile-planner-fail.sh"
@@ -575,7 +662,30 @@ STUB
   local out
   out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_not_contains "$out" "quota window open" "non-quota backoff is not treated as a quota window"
-  assert_eq "$(gluerun_breaker_count)" "1" "non-quota backoff still counts toward the breaker"
+  assert_contains "$out" "planner refusal neutral" "active non-quota backoff is explicitly neutral"
+  assert_eq "$(gluerun_breaker_count)" "0" "repeated planner refusal under active backoff does not count"
+}
+
+test_autonomate_nonquota_backoff_still_counts_unrelated_failure() {
+  with_fixture
+  GLUERUN_PLANNER_BACKOFF_SECONDS=120 gluerun_planner_backoff_set codex-exit RUN-t D1.contract /dev/null
+  local stub="$GLUERUN_ROOT/reconcile-dispatch-fail.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "dispatched_this_run=0"
+echo "failed_dispatches=1"
+echo "integrated_this_run=0"
+echo "failed_integrations=0"
+echo "planner_failures_this_run=1"
+echo "planner_backoff_active_this_run=1"
+echo "l1_import_rejections_this_run=0"
+STUB
+  chmod +x "$stub"
+  local out
+  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_contains "$out" "planner refusal neutral" "planner component is neutralized"
+  assert_contains "$out" "breaker -> 1" "unrelated dispatch failure still trips breaker"
+  assert_eq "$(gluerun_breaker_count)" "1" "unrelated failure counts during planner backoff"
 }
 
 # An EXPIRED quota backoff must fail open: the predicate ignores it, so the loop
@@ -608,7 +718,10 @@ STUB
 # wait reaches the budget the loop escalates to STOP rather than sleeping on.
 test_autonomate_quota_wait_budget_sets_stop() {
   with_fixture
-  GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS=120 gluerun_planner_backoff_set quota RUN-q D1.contract /dev/null
+  local evidence
+  evidence="$(make_structured_quota_evidence RUN-q)"
+  GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS=120 \
+    gluerun_planner_backoff_set quota RUN-q D1.contract "$evidence"
   local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
   write_reconcile_should_not_run_stub "$stub"
   local out
@@ -619,18 +732,13 @@ test_autonomate_quota_wait_budget_sets_stop() {
 }
 
 # --- C2: limit/403 sleep-through at the breaker chokepoint -----------------------
-# A recent run log carrying a usage-limit / overload marker is detected so the
+# A recent structured runner result carrying a provider limit is detected so the
 # breaker chokepoint can sleep through instead of tripping.
 test_cycle_limit_window_detected_finds_marker() {
   with_fixture
-  # 0.5.0: only engine-written RUNNER logs are evidence (claude-envelope.json,
-  # *-codex.log, ...). Model-authored artifacts (audit.json verdicts, prompts)
-  # can echo repo text and are excluded by construction.
-  mkdir -p "$GLUERUN_RUNS_DIR/RUN-limit/sub"
-  cat >"$GLUERUN_RUNS_DIR/RUN-limit/sub/claude-envelope.json" <<'EOF'
-{"error":"api_error_status":429,"message":"Overloaded"}
-EOF
-  gluerun_cycle_limit_window_detected || fail "a recent run log with a usage-limit/overload marker must be detected"
+  make_structured_quota_evidence RUN-limit claude 529 >/dev/null
+  gluerun_cycle_limit_window_detected \
+    || fail "a recent structured usage-limit/overload result must be detected"
 }
 
 # Model-authored artifacts must NOT be evidence even when they carry markers --
@@ -653,11 +761,9 @@ EOF
 # entitlement block, not quota, but is equally un-healable by spinning -> detect.
 test_cycle_limit_window_detected_finds_403_org_disabled() {
   with_fixture
-  mkdir -p "$GLUERUN_RUNS_DIR/RUN-403"
-  cat >"$GLUERUN_RUNS_DIR/RUN-403/planner-codex.log" <<'EOF'
-api_error: Your organization has disabled Claude subscription access for Claude Code. Use an Anthropic API key instead.
-EOF
-  gluerun_cycle_limit_window_detected || fail "a 403 org-disabled-subscription marker must be detected"
+  make_structured_quota_evidence RUN-403 claude 403 >/dev/null
+  gluerun_cycle_limit_window_detected \
+    || fail "a structured 403 org-disabled-subscription result must be detected"
 }
 
 # A plain code failure with no limit markers must NOT look like a limit window
@@ -676,25 +782,17 @@ EOF
 # fresh real failure forever.
 test_cycle_limit_window_detected_ignores_stale_marker() {
   with_fixture
-  mkdir -p "$GLUERUN_RUNS_DIR/RUN-old"
-  cat >"$GLUERUN_RUNS_DIR/RUN-old/planner-codex.log" <<'EOF'
-you've hit your session limit
-EOF
-  touch -t 200001010000 "$GLUERUN_RUNS_DIR/RUN-old/planner-codex.log" "$GLUERUN_RUNS_DIR/RUN-old"
+  local result
+  result="$(make_structured_quota_evidence RUN-old)"
+  touch -t 200001010000 "$result" "$GLUERUN_RUNS_DIR/RUN-old"
   if GLUERUN_LIMIT_SCAN_WINDOW_SEC=900 gluerun_cycle_limit_window_detected; then fail "a stale out-of-window limit marker must NOT be detected"; fi
 }
 
-# Chokepoint behavior: a no-progress cycle whose role logs carry a limit marker
+# Chokepoint behavior: a no-progress cycle with structured provider evidence
 # arms a quota backoff (for C1 to sleep through) and does NOT trip the breaker.
 test_autonomate_limit_induced_failure_arms_backoff_not_breaker() {
   with_fixture
-  # 0.5.0: evidence must live in a RUNNER log and the failing counter must be
-  # limit-ELIGIBLE (dispatch/integration/planner failures). Import rejections
-  # are deterministic validation outcomes and are excluded (see below).
-  mkdir -p "$GLUERUN_RUNS_DIR/RUN-cycle"
-  cat >"$GLUERUN_RUNS_DIR/RUN-cycle/planner-codex.log" <<'EOF'
-you've hit your session limit; resets 10:40pm
-EOF
+  make_structured_quota_evidence RUN-cycle >/dev/null
   local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
@@ -708,12 +806,12 @@ STUB
   chmod +x "$stub"
   local out
   out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
-  assert_contains "$out" "limit/403 evidence" "a limit-induced cycle is recognized at the chokepoint"
+  assert_contains "$out" "structured provider limit evidence" "a limit-induced cycle is recognized at the chokepoint"
   assert_not_contains "$out" "breaker -> 1" "a limit window does NOT trip the breaker"
   assert_eq "$(gluerun_breaker_count)" "0" "a limit window leaves the breaker at zero"
   [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "a limit window arms a quota backoff for the next iteration to sleep through"
   assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' "the armed backoff is a quota window"
-  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" 'planner-codex.log' "the armed backoff carries the evidence logRef"
+  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" 'runner-result.json' "the armed backoff carries result evidence"
 }
 
 # Import rejections alone are never limit-eligible: even with a genuine limit
@@ -721,10 +819,7 @@ STUB
 # (0.4.0 armed a false 30-minute backoff here -- the field audit's top defect).
 test_autonomate_import_rejections_never_arm_backoff() {
   with_fixture
-  mkdir -p "$GLUERUN_RUNS_DIR/RUN-rej"
-  cat >"$GLUERUN_RUNS_DIR/RUN-rej/planner-codex.log" <<'EOF'
-you've hit your session limit; resets 10:40pm
-EOF
+  make_structured_quota_evidence RUN-rej >/dev/null
   local stub="$GLUERUN_ROOT/reconcile-reject-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
@@ -914,6 +1009,37 @@ test_import_fails_closed_on_missing_lease() {
 	  assert_contains "$out" "generated:" "successor of a blocked task must import"
 	}
 
+test_import_reads_atomic_candidate_generation() {
+  with_fixture
+  gluerun_l1_lease_write S0.storage_substrate_base storage S0 \
+    storage_substrate_base active RUN-pointer abc1234 target
+  local sdir="$GLUERUN_RUNS_DIR/RUN-pointer/l1-staging/S0.storage_substrate_base"
+  local replacement="$sdir/.replacement"
+  mkdir -p "$sdir" "$replacement"
+  write_signature_task TASK-0001 ready storage \
+    "Atomic staged fixture S0.storage_substrate_base" \
+    "Import the atomically selected candidate generation." \
+    "internal/storage/atomic_staged.go"
+  mv "$GLUERUN_TASKS_DIR/TASK-0001.md" "$sdir/TASK-0001.candidate.md"
+  cp "$sdir/TASK-0001.candidate.md" "$replacement/"
+  printf '\nGeneration publication marker.\n' \
+    >>"$replacement/TASK-0001.candidate.md"
+  gluerun_task_batch_replace_stage "$replacement" "$sdir" \
+    || fail "candidate generation publication failed"
+  [[ -f "$sdir/.candidate-current.json" ]] \
+    || fail "candidate generation pointer was not published"
+
+  # The legacy file is deliberately invalid after publication. Import must pin
+  # and consume the immutable generation selected by the pointer.
+  printf 'invalid legacy candidate\n' >"$sdir/TASK-0001.candidate.md"
+  local out
+  out="$(gluerun_l1_import_staged RUN-pointer S0.storage_substrate_base 2>&1 || true)"
+  assert_contains "$out" "generated:" \
+    "L0 import must consume the authoritative candidate generation"
+  assert_eq "$(task_count)" "1" \
+    "atomic generation import must promote exactly one task"
+}
+
 	test_generate_tasks_direct_rejects_duplicate_candidate_matching_open_task_signature() {
 	  with_fixture
 	  # v2 (0.5.0): creation-time rejection applies to OPEN twins. Integrated
@@ -984,6 +1110,7 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_import_rejects_candidate_without_taskid
 	test_import_rejects_duplicate_candidate_matching_open_task_signature
 	test_import_allows_successor_of_blocked_task
+	test_import_reads_atomic_candidate_generation
 	test_generate_tasks_direct_rejects_duplicate_candidate_matching_open_task_signature
 	test_ready_listing_skips_duplicate_ready_task_by_owned_files
 	test_active_lease_count_uses_single_json_pass
@@ -994,6 +1121,8 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_generate_tasks_backcompat_unchanged
 	test_generate_tasks_logs_quota_failure_and_sets_backoff
 	test_generate_tasks_honors_active_planner_backoff_without_calling_codex
+	test_reconcile_defers_serial_planning_during_active_backoff
+	test_reconcile_defers_parallel_planning_before_leases
 	test_generate_tasks_honors_blocked_gate_without_calling_codex
 	test_fanout_full_chain_two_nodes_unique_ids
 	test_fanout_default_cap_two
@@ -1004,7 +1133,8 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_fanout_reports_planner_failures_for_breaker_accounting
 	test_autonomate_counts_planner_failures_against_breaker
 	test_autonomate_sleeps_through_quota_window_without_breaker
-	test_autonomate_nonquota_backoff_still_trips_breaker
+	test_autonomate_nonquota_backoff_neutralizes_repeated_planner_failure
+	test_autonomate_nonquota_backoff_still_counts_unrelated_failure
 	test_autonomate_expired_quota_backoff_falls_through
 	test_autonomate_quota_wait_budget_sets_stop
 	test_cycle_limit_window_detected_finds_marker

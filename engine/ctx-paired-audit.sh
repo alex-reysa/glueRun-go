@@ -94,8 +94,18 @@ gluerun_ctx_paired_audit_record() {
   # no --resume-session / session reuse; read-only = --level readonly. The base
   # auditor prompt is used unchanged. Runner failure is non-fatal (record still
   # captures what happened) and never feeds back into any outcome.
+  local result_file="$run_dir/paired-audit-runner-result.json"
+  rm -f "$result_file" 2>/dev/null || true
   local rc=0
-  "$runner" --level readonly -C "$worktree" --run-id "$run_id" \
+  local audit_capability_profile="${GLUERUN_AUDITOR_CAPABILITY_PROFILE:-audit-core}"
+  gluerun_runner_contract_prepare \
+    "$runner" auditor "$audit_capability_profile" "$result_file"
+  GLUERUN_RUNNER_ROLE=auditor \
+  GLUERUN_RUNNER_CAPABILITY_PROFILE="$audit_capability_profile" \
+  GLUERUN_RUNNER_RESULT_FILE="$result_file" \
+  GLUERUN_RUNNER_RUN_ID="$run_id" \
+  "$runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    --level readonly -C "$worktree" --run-id "$run_id" \
     --prompt-file "$prompt" --output-last-message "$raw" >/dev/null 2>&1 || rc=$?
 
   # Parse verdict + findings and write the record; emit the event data on stdout.

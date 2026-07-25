@@ -67,7 +67,7 @@ test_init_scaffolds_fresh_repo_and_reconcile_apply_is_noop_safe() {
   assert_contains "$(cat "$repo/docs/orchestration/project-state.md")" "Latest Reconcile Snapshot" "fresh reconcile writes project snapshot"
 }
 
-test_v0_to_v1_migration_backfills_scaffold_and_rebrands_pmgo_namespace() {
+test_v0_to_v2_migration_backfills_scaffold_rebrands_and_syncs_contracts() {
   local tmp repo out
   tmp="$(mktemp -d)"
   repo="$tmp/repo"
@@ -91,14 +91,17 @@ JSON
 
   out="$(cd "$repo" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate 2>&1)"
   assert_contains "$out" "run   v0-to-v1.sh (v0 -> v1)" "migration announces v1 step"
-  assert_eq "$(json_file_field "$repo/gluerun.config.json" schemaVersion)" "v1" "migration advances schemaVersion"
+  assert_contains "$out" "run   v1-to-v2.sh (v1 -> v2)" "migration announces v2 step"
+  assert_eq "$(json_file_field "$repo/gluerun.config.json" schemaVersion)" "v2" "migration advances schemaVersion"
   grep -q 'gluerun.orchestration.decider-verdict.v0' "$repo/gluerun.config.json" || fail "migration did not rebrand config namespace"
   grep -q 'gluerun.orchestration.state-packet.v0' "$repo/docs/orchestration/prompts/legacy.md" || fail "migration did not rebrand orchestration namespace"
   assert_file "$repo/docs/orchestration/project-state.md" "migration project-state scaffold"
   assert_dir "$repo/docs/orchestration/packets/imported" "migration packet import scaffold"
+  assert_file "$repo/schemas/orchestration/audit-verdict.v1.schema.json" "migration v1 audit contract"
+  assert_file "$repo/schemas/orchestration/gate-result.v1.schema.json" "migration v1 gate contract"
 
   out="$(cd "$repo" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate 2>&1)"
-  assert_contains "$out" "up to date, nothing to do" "migration is idempotent after v1"
+  assert_contains "$out" "up to date, nothing to do" "migration is idempotent after v2"
 }
 
 write_missing_branch_fixture() {
@@ -235,6 +238,18 @@ test_l1_drive_provisions_gitignored_files_and_allowlisted_env() {
   cat >"$repo/.env.local" <<'EOF'
 LOCAL_ONLY=present
 EOF
+  cat >"$repo/strict-gate.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+test -f .env.local
+test -f "$GLUERUN_WORKTREE_ENV_FILE"
+. "$GLUERUN_WORKTREE_ENV_FILE"
+test "${PUBLIC_ALLOWED:-}" = ok
+test -z "${SECRET_DENIED:-}"
+printf '%s\n' '{"schema":"gluerun.orchestration.gate-observation.v0","failures":[]}' \
+  >"$GLUERUN_GATE_REPORT_FILE"
+SH
+  chmod +x "$repo/strict-gate.sh"
   cat >"$repo/docs/orchestration/tasks/TASK-0001.md" <<'EOF'
 # TASK-0001: Provisioning fixture
 
@@ -243,7 +258,7 @@ Area: core
 Target branch: `target`
 Worker branch: `agent/core/TASK-0001-provisioning`
 Test policy: `strict_test_first`
-Gate command: `test -f .env.local && test -f "$GLUERUN_WORKTREE_ENV_FILE" && . "$GLUERUN_WORKTREE_ENV_FILE" && test "${PUBLIC_ALLOWED:-}" = ok && test -z "${SECRET_DENIED:-}"`
+Gate command: `bash strict-gate.sh`
 Dispatch mode: canonical
 Depends on: []
 
@@ -265,11 +280,11 @@ Forbidden files:
 
 - Gate can read provisioned file and allowlisted env.
 EOF
-  git -C "$repo" add .gitignore docs/orchestration src
+  git -C "$repo" add .gitignore docs/orchestration src strict-gate.sh
   git -C "$repo" -c user.name=test -c user.email=test@example.local commit -q -m target-setup
   cat >"$repo/gluerun.config.json" <<JSON
 {
-  "schemaVersion": "v1",
+  "schemaVersion": "v2",
   "targetBranch": "target",
   "gateCommand": "true",
   "provisionFiles": [
@@ -361,7 +376,7 @@ SH
 }
 
 test_init_scaffolds_fresh_repo_and_reconcile_apply_is_noop_safe
-test_v0_to_v1_migration_backfills_scaffold_and_rebrands_pmgo_namespace
+test_v0_to_v2_migration_backfills_scaffold_rebrands_and_syncs_contracts
 test_integrate_parks_missing_branch_once_then_skips_blocked_history
 test_l1_drive_provisions_gitignored_files_and_allowlisted_env
 

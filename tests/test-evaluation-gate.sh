@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# P4 (0.5.0): evaluation-gate governance — `kind: evaluation` nodes promote
-# via operator authority (--operator --evidence) always, and via a valid
-# passing gate-review.v0 file ONLY when the node opts in with
-# `authority: agent-review-allowed`. All review defects fail closed.
+# P4 (0.5.0): evaluation-gate governance — pre-v2 nodes may promote via
+# operator authority (--operator --evidence), and via a valid passing
+# gate-review.v0 file ONLY when the node opts in with
+# `authority: agent-review-allowed`. Schema v2 disables the unbound operator
+# route by default and hash-binds every promoted evaluation artifact.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
@@ -107,5 +108,93 @@ write_review review-opted-in pass "$head" "2020-01-01T00:00:00Z"
 rc=0; out="$(promote review-opted-in)" || rc=$?
 [[ "$rc" -eq 2 ]] || fail "stale review must refuse"
 assert_contains "$out" "older than" "staleness named"
+
+# 6. Schema v2 rejects the unbound operator bypass by default.
+cat >"$root/gluerun.config.json" <<'EOF'
+{
+  "schemaVersion": "v2",
+  "targetBranch": "target",
+  "legacyCompatibility": {"unboundWaivers": false}
+}
+EOF
+rm -f "$root/docs/orchestration/gates/review-operator-only.gate-result.json"
+rc=0
+out="$(promote review-operator-only --operator --evidence docs/readiness/evidence.md)" || rc=$?
+[[ "$rc" -eq 2 ]] || fail "schema-v2 unbound operator promotion must refuse (rc=$rc: $out)"
+assert_contains "$out" "unbound --operator --evidence promotion is disabled under schema v2" \
+  "v2 refusal names the disabled bypass"
+[[ ! -f "$root/docs/orchestration/gates/review-operator-only.gate-result.json" ]] \
+  || fail "v2 refusal must not write a gate"
+
+# 7. The agent-review path remains available in v2 and writes hash-bound v1.
+rm -f "$root/docs/orchestration/gates/review-opted-in.gate-result.json"
+write_review review-opted-in pass "$head"
+out="$(promote review-opted-in)" || fail "v2 agent-review promotion failed: $out"
+python3 - "$root/docs/orchestration/gates/review-opted-in.gate-result.json" "$root" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+gate_path, root_raw = sys.argv[1:3]
+root = pathlib.Path(root_raw)
+gate = json.load(open(gate_path, encoding="utf-8"))
+assert gate["schema"] == "gluerun.orchestration.gate-result.v1", gate
+assert gate["evidenceClass"] == "agent-review"
+assert gate["verificationClassification"] == "not-rerun-evidence-verified"
+assert all(len(item["sha256"]) == 64 for item in gate["evidence"])
+by_ref = {item["ref"]: item for item in gate["evidence"]}
+evidence_ref = "docs/readiness/evidence.md"
+expected = hashlib.sha256((root / evidence_ref).read_bytes()).hexdigest()
+assert by_ref[evidence_ref]["sha256"] == expected
+PY
+
+# A governance classification does not waive exact artifact binding: frontier
+# evaluation re-hashes every cited source before trusting the passing record.
+printf '%s\n' "mutated after review" >"$root/docs/readiness/evidence.md"
+rc=0
+out="$(
+  cd "$root"
+  env \
+    GLUERUN_ROOT="$root" \
+    GLUERUN_STATE_DIR="$root/.gluerun-state" \
+    GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+    bash "$ENGINE_HOME/engine/dag.sh" area-gate review-opted-in 2>&1
+)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "mutated agent-review evidence must invalidate the v1 gate"
+printf '%s\n' "evidence body" >"$root/docs/readiness/evidence.md"
+
+# 8. An explicit legacy-compatibility selection restores the operator route,
+# but schema-v2 output is still gate-result.v1 with exact evidence hashes.
+python3 - "$root/gluerun.config.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+data["legacyCompatibility"]["unboundWaivers"] = True
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump(data, stream, indent=2)
+    stream.write("\n")
+PY
+out="$(promote review-operator-only --operator --evidence docs/readiness/evidence.md)" \
+  || fail "v2 legacy-compatible operator promotion failed: $out"
+python3 - "$root/docs/orchestration/gates/review-operator-only.gate-result.json" "$root" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+gate_path, root_raw = sys.argv[1:3]
+root = pathlib.Path(root_raw)
+gate = json.load(open(gate_path, encoding="utf-8"))
+assert gate["schema"] == "gluerun.orchestration.gate-result.v1", gate
+assert gate["evidenceClass"] == "operator-review"
+assert gate["verificationClassification"] == "not-rerun-evidence-verified"
+assert len(gate["evidence"]) == 1
+item = gate["evidence"][0]
+expected = hashlib.sha256((root / item["ref"]).read_bytes()).hexdigest()
+assert item["sha256"] == expected
+PY
 
 echo "PASS: test-evaluation-gate"

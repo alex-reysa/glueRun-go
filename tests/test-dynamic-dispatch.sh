@@ -429,6 +429,46 @@ test_codex_run_l2_rejects_invalid_sandbox_override() {
   assert_contains "$out" "invalid GLUERUN_L2_SANDBOX" "invalid l2 sandbox override is rejected"
 }
 
+test_codex_run_explicit_bin_wins_without_path_reordering() {
+  with_fixture
+  local broken_dir="$GLUERUN_ROOT/broken-bin"
+  local working_dir="$GLUERUN_ROOT/working codex"
+  local working_codex="$working_dir/codex"
+  mkdir -p "$broken_dir" "$working_dir"
+  cat >"$broken_dir/codex" <<'EOF'
+#!/usr/bin/env bash
+touch "$GLUERUN_STATE_DIR/broken-codex-called"
+exit 91
+EOF
+  cat >"$working_codex" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$GLUERUN_STATE_DIR/pinned-codex-args.log"
+exit 0
+EOF
+  chmod +x "$broken_dir/codex" "$working_codex"
+
+  PATH="$broken_dir:$PATH" GLUERUN_CODEX_BIN="$working_codex" \
+    "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$GLUERUN_ROOT" \
+    >/dev/null 2>&1
+
+  [[ -f "$GLUERUN_STATE_DIR/pinned-codex-args.log" ]] || fail "explicit Codex path was not invoked"
+  [[ ! -f "$GLUERUN_STATE_DIR/broken-codex-called" ]] || fail "runner fell back to broken PATH Codex"
+  assert_contains "$(cat "$GLUERUN_STATE_DIR/pinned-codex-args.log")" "--sandbox workspace-write" \
+    "pinned Codex receives normal runner arguments"
+}
+
+test_codex_run_rejects_nonabsolute_explicit_bin() {
+  with_fixture
+  make_codex_arg_stub
+  local out rc=0
+  out="$(GLUERUN_CODEX_BIN=codex "$SCRIPT_DIR/codex-run.sh" \
+    --level l2 --no-output-capture -C "$GLUERUN_ROOT" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "relative GLUERUN_CODEX_BIN must be rejected"
+  assert_contains "$out" "GLUERUN_CODEX_BIN must be an absolute path" \
+    "relative explicit Codex path has a clear error"
+  [[ ! -f "$GLUERUN_STATE_DIR/codex-args.log" ]] || fail "invalid explicit Codex must not fall back to PATH"
+}
+
 test_gate_red_external_proof_env_blocker_detected() {
   with_fixture
   local log="$GLUERUN_STATE_DIR/gate-red.log"
@@ -896,6 +936,8 @@ test_codex_run_readonly_auditor_uses_high_reasoning
 test_codex_run_readonly_aux_roles_use_high_reasoning
 test_codex_run_l2_allows_explicit_sandbox_override
 test_codex_run_l2_rejects_invalid_sandbox_override
+test_codex_run_explicit_bin_wins_without_path_reordering
+test_codex_run_rejects_nonabsolute_explicit_bin
 test_gate_red_external_proof_env_blocker_detected
 test_gate_red_external_proof_env_blocker_ignored_when_env_present
 test_strict_proof_skip_detected

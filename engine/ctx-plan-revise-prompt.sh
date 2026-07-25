@@ -53,6 +53,8 @@ gluerun_plan_revise_prompt() {
   local node="$1" critique_record="${2:-}" stage_dir="${3:-}" out_file="${4:-}"
   local template_file="${5:-}"
   [[ -n "$out_file" ]] || return 2
+  local candidate_batch_dir
+  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
 
   # Resolve the base planner TEMPLATE path. An explicit arg wins; otherwise fall
   # back to the integrated canonical resolver (GLUERUN_PLANNER_TEMPLATE or the
@@ -139,7 +141,7 @@ PY
 
     printf '## Prior Candidate Set\n\n'
     local had_candidate=0 c
-    for c in "$stage_dir"/*.candidate.md; do
+    for c in "$candidate_batch_dir"/*.candidate.md; do
       [[ -e "$c" ]] || continue
       had_candidate=1
       printf '### %s\n\n' "$(basename "$c")"

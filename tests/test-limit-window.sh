@@ -2,20 +2,13 @@
 set -euo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-fail() {
-  echo "FAIL: $*" >&2
-  exit 1
-}
-
-assert_contains() {
-  local haystack="$1" needle="$2" msg="$3"
-  [[ "$haystack" == *"$needle"* ]] || fail "$msg (missing: $needle)"
-}
-
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/state/runs/RUN-1"
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+assert_contains() {
+  [[ "$1" == *"$2"* ]] || fail "$3 (missing: $2)"
+}
 
 run_lib() {
   GLUERUN_ROOT="$tmp" \
@@ -24,55 +17,72 @@ run_lib() {
   bash -c "source '$ENGINE_HOME/engine/lib.sh'; $1"
 }
 
-# 1. Provider marker in a RUNNER log -> structured evidence with that logRef.
-printf 'stream...\nerror: rate limited, try again at 10pm\n' >"$tmp/state/runs/RUN-1/worker-codex.log"
-ev="$(run_lib gluerun_cycle_limit_window_evidence_json)" || fail "runner-log marker should be detected"
-assert_contains "$ev" '"logRef":"'"$tmp"'/state/runs/RUN-1/worker-codex.log"' "evidence carries logRef"
-assert_contains "$ev" '"marker"' "evidence carries marker"
-rm -f "$tmp/state/runs/RUN-1/worker-codex.log"
+make_evidence() {
+  local root="$1" state="$2" run="$3" status="${4:-429}"
+  local dir="$state/runs/$run"
+  mkdir -p "$dir"
+  printf '{"type":"turn.failed","error":{"status":%s,"code":"rate_limit_exceeded","message":"request rejected"}}\n' \
+    "$status" >"$dir/codex-envelope.json"
+  GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$state" GLUERUN_RUNS_DIR="$state/runs" \
+    bash -c 'source "$1"; gluerun_runner_result_write codex "$2" planner planner-core "$3" 1 "$4" "" ""' \
+      bash "$ENGINE_HOME/engine/lib.sh" "$run" "$dir/runner-result.json" "$dir/codex-envelope.json"
+  printf '%s\n' "$dir/runner-result.json"
+}
 
-# 2. Same content in a prompt .md is NEVER evidence (prompts embed repo prose —
-#    the 0.4.0 false-positive vector).
-printf 'the quota banner shows: rate limit exceeded\n' >"$tmp/state/runs/RUN-1/l2-prompt.md"
+mkdir -p "$tmp/state/runs/RUN-noise"
+
+# Raw logs/prompts are never evidence, regardless of how provider-like or
+# legally realistic the embedded prose appears.
+printf 'api_error_status":429 rate limit exceeded quota overloaded\n' \
+  >"$tmp/state/runs/RUN-noise/worker-codex.log"
+printf 'Policy: if a customer is rate limited, retain quota evidence.\n' \
+  >"$tmp/state/runs/RUN-noise/l2-prompt.md"
 run_lib gluerun_cycle_limit_window_evidence_json >/dev/null 2>&1 \
-  && fail ".md files must not be scanned"
+  && fail "raw logs/prompts must never be scanned"
 
-# 3. Bare repo word "quota" in a runner log is not a marker; a provider
-#    phrasing is.
-printf 'building the quota management module\n' >"$tmp/state/runs/RUN-1/worker-codex.log"
-run_lib gluerun_cycle_limit_window_evidence_json >/dev/null 2>&1 \
-  && fail "bare 'quota' prose must not match"
-printf 'api says: quota exceeded for this billing period\n' >"$tmp/state/runs/RUN-1/worker-codex.log"
-run_lib gluerun_cycle_limit_window_evidence_json >/dev/null \
-  || fail "'quota exceeded' must match"
-rm -f "$tmp/state/runs/RUN-1/worker-codex.log"
+# A schema-valid runner result bound to a provider terminal envelope is evidence.
+evidence="$(make_evidence "$tmp" "$tmp/state" RUN-1)"
+ev="$(run_lib gluerun_cycle_limit_window_evidence_json)" \
+  || fail "structured runner result should be detected"
+assert_contains "$ev" '"resultRef":"'"$evidence"'"' "evidence carries resultRef"
+assert_contains "$ev" '"providerErrorRef"' "evidence carries providerErrorRef"
 
-# 4. Arming a quota backoff without logRef evidence is refused.
+# Quota backoff refuses absent, raw-log, and tampered evidence.
 if run_lib "gluerun_planner_backoff_set quota RUN-X node-x ''" 2>/dev/null; then
-  fail "quota backoff with empty logRef must be refused"
+  fail "quota backoff without structured evidence must be refused"
 fi
-[[ -f "$tmp/state/planner-backoff.json" ]] && fail "refused backoff must not write the file"
-assert_contains "$(cat "$tmp/state/events.ndjson")" '"type":"backoff.rejected_no_evidence"' "refusal event"
+if run_lib "gluerun_planner_backoff_set quota RUN-X node-x '$tmp/state/runs/RUN-noise/worker-codex.log'" 2>/dev/null; then
+  fail "quota backoff with a raw log must be refused"
+fi
+[[ -f "$tmp/state/planner-backoff.json" ]] \
+  && fail "refused evidence must not write the backoff file"
+assert_contains "$(cat "$tmp/state/events.ndjson")" \
+  '"type":"backoff.rejected_invalid_evidence"' "refusal event"
 
-# 5. With a logRef it arms; clear removes it with an event.
-run_lib "gluerun_planner_backoff_set quota RUN-X node-x '$tmp/state/runs/RUN-1/some.log'" \
-  || fail "quota backoff with logRef should arm"
-[[ -f "$tmp/state/planner-backoff.json" ]] || fail "backoff file missing after arm"
+# Valid evidence arms; the v0 compatibility logRef points to the normalized
+# provider-error sidecar, never to the raw transcript.
+run_lib "gluerun_planner_backoff_set quota RUN-X node-x '$evidence'" \
+  || fail "validated result should arm quota backoff"
+[[ -f "$tmp/state/planner-backoff.json" ]] || fail "backoff file missing"
+backoff="$(cat "$tmp/state/planner-backoff.json")"
+assert_contains "$backoff" '"evidenceRef": "'"$evidence"'"' "backoff binds runner result"
+assert_contains "$backoff" '.provider-error.json' "compat logRef is normalized evidence"
 out="$(run_lib gluerun_planner_backoff_clear)"
 assert_contains "$out" "backoff cleared" "clear output"
-[[ -f "$tmp/state/planner-backoff.json" ]] && fail "backoff file should be gone"
+[[ ! -f "$tmp/state/planner-backoff.json" ]] || fail "clear did not remove backoff"
 assert_contains "$(cat "$tmp/state/events.ndjson")" '"type":"backoff.cleared"' "clear event"
 out="$(run_lib gluerun_planner_backoff_clear)"
-assert_contains "$out" "no active backoff" "idempotent clear"
+assert_contains "$out" "no active backoff" "clear is idempotent"
 
-# 6. Chokepoint integration: import rejections alone are never limit-eligible
-#    (breaker trips even with a planted marker); dispatch failures with runner
-#    evidence arm the backoff with the logRef.
+# Chokepoint integration: import rejections alone remain ineligible; a dispatch
+# failure plus structured evidence arms sleep-through without tripping breaker.
 repo="$tmp/repo"
 mkdir -p "$repo"
 git -C "$repo" init -q
 git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 git -C "$repo" branch agent/integration
+mkdir -p "$repo/docs/orchestration/tasks"
+make_evidence "$repo" "$repo/.gluerun-state" RUN-cycle >/dev/null
 
 auto_env() {
   GLUERUN_ROOT="$repo" \
@@ -87,7 +97,6 @@ auto_env() {
 }
 
 write_stub() {
-  # args: failed_dispatches l1_import_rejections
   cat >"$repo/stub-reconcile.sh" <<SH
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -103,30 +112,26 @@ SH
   chmod +x "$repo/stub-reconcile.sh"
 }
 
-mkdir -p "$repo/.gluerun-state/runs/RUN-2" "$repo/docs/orchestration/tasks"
-printf 'error: usage limit reached, try again at 9pm\n' >"$repo/.gluerun-state/runs/RUN-2/planner-codex.log"
-
-# 6a. Rejections only: no limit eligibility -> breaker trips, no backoff.
 write_stub 0 1
 out="$(auto_env bash "$ENGINE_HOME/engine/autonomate.sh" --once 2>&1)" || true
-assert_contains "$out" "breaker -> 1" "import rejections alone must trip the breaker"
-[[ -f "$repo/.gluerun-state/planner-backoff.json" ]] \
-  && fail "import rejections must never arm a quota backoff"
+assert_contains "$out" "breaker -> 1" "import rejections must trip breaker"
+[[ ! -f "$repo/.gluerun-state/planner-backoff.json" ]] \
+  || fail "import rejections armed quota backoff"
 
-# 6b. Dispatch failure + runner evidence: backoff armed with logRef, breaker untouched.
-touch "$repo/.gluerun-state/runs/RUN-2/planner-codex.log"
+rm -f "$repo/.gluerun-state/circuit.json"
+touch "$repo/.gluerun-state/runs/RUN-cycle/runner-result.json"
 write_stub 1 0
 out="$(auto_env bash "$ENGINE_HOME/engine/autonomate.sh" --once 2>&1)" || true
 assert_contains "$out" "armed quota backoff" "dispatch failure + evidence should arm"
-[[ -f "$repo/.gluerun-state/planner-backoff.json" ]] || fail "backoff file expected"
-logref="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["logRef"])' "$repo/.gluerun-state/planner-backoff.json")"
-assert_contains "$logref" "planner-codex.log" "backoff logRef points at the evidence"
+[[ -f "$repo/.gluerun-state/planner-backoff.json" ]] || fail "backoff expected"
+assert_contains "$(cat "$repo/.gluerun-state/planner-backoff.json")" \
+  'runner-result.json' "backoff carries result evidence"
 
-# 6c. Sleepthrough disabled (legacy knob): breaker trips despite evidence.
 rm -f "$repo/.gluerun-state/planner-backoff.json" "$repo/.gluerun-state/circuit.json"
-touch "$repo/.gluerun-state/runs/RUN-2/planner-codex.log"
+touch "$repo/.gluerun-state/runs/RUN-cycle/runner-result.json"
 out="$(GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH=1 auto_env bash "$ENGINE_HOME/engine/autonomate.sh" --once 2>&1)" || true
 assert_contains "$out" "breaker -> 1" "disabled sleepthrough must trip"
-[[ -f "$repo/.gluerun-state/planner-backoff.json" ]] && fail "disabled sleepthrough must not arm"
+[[ ! -f "$repo/.gluerun-state/planner-backoff.json" ]] \
+  || fail "disabled sleepthrough armed backoff"
 
 echo "PASS: test-limit-window"

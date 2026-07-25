@@ -36,13 +36,14 @@ while [[ $# -gt 0 ]]; do
       # auto-promotion (0.5.0).
       if_ready_mode="yes"; shift ;;
     --operator)
-      # Operator authority for kind=evaluation nodes: promote on the
-      # operator's say-so with --evidence refs (no review file needed).
+      # Legacy operator authority for kind=evaluation nodes. Schema v2 rejects
+      # this artifact-unbound route unless legacyCompatibility.unboundWaivers
+      # is explicitly selected; first-class human gates are the default.
       operator_mode="yes"; shift ;;
     --evidence)
       operator_evidence+=("$2"); shift 2 ;;
     --help|-h)
-      echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier" >&2
+      echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier [legacy: --operator --evidence REF]" >&2
       exit 0 ;;
     -*)
       echo "unknown option: $1" >&2; exit 2 ;;
@@ -52,7 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$frontier_mode" != "yes" && "${#requested_nodes[@]}" -eq 0 ]]; then
-  echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier" >&2
+  echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier [legacy: --operator --evidence REF]" >&2
   exit 2
 fi
 
@@ -74,6 +75,207 @@ gates_dir="${GLUERUN_GATES_DIR:-$GLUERUN_ORCH_DIR/gates}"
 evidence_dir="$gates_dir/evidence"
 mkdir -p "$gates_dir" "$evidence_dir"
 dag_file="${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}"
+
+# Schema-v2 consumers write only the hash-bound gate-result.v1 contract.
+# Pre-v2 consumers continue to write v0 so existing projects remain compatible.
+gate_result_schema_id() {
+  if [[ "${GLUERUN_CONFIG_SCHEMA_VERSION:-}" == "v2" ]]; then
+    printf '%s\n' "gluerun.orchestration.gate-result.v1"
+  else
+    printf '%s\n' "gluerun.orchestration.gate-result.v0"
+  fi
+}
+
+# Hash a repo-relative source artifact without following symlinks or allowing
+# traversal outside the consumer repository. Files use their byte SHA-256.
+# Directories use a stable framed manifest of every directory, regular file,
+# and symlink (the link text itself, never its target).
+gate_source_sha256() {
+  local ref="$1"
+  python3 - "$GLUERUN_ROOT" "$ref" <<'PY'
+import hashlib
+import os
+import pathlib
+import stat
+import sys
+
+root_raw, ref = sys.argv[1:3]
+root = pathlib.Path(root_raw).resolve()
+rel = pathlib.PurePath(ref)
+if (
+    not ref
+    or not rel.parts
+    or rel.is_absolute()
+    or any(part in ("", "..") for part in rel.parts)
+):
+    raise SystemExit(f"unsafe gate evidence ref: {ref!r}")
+
+target = root.joinpath(*rel.parts)
+cursor = root
+for part in rel.parts[:-1]:
+    cursor = cursor / part
+    try:
+        mode = cursor.lstat().st_mode
+    except OSError as exc:
+        raise SystemExit(f"gate evidence ref does not exist: {ref}: {exc}")
+    if stat.S_ISLNK(mode):
+        raise SystemExit(f"unsafe gate evidence ref traverses a symlink: {ref}")
+
+try:
+    mode = target.lstat().st_mode
+except OSError as exc:
+    raise SystemExit(f"gate evidence ref does not exist: {ref}: {exc}")
+
+def file_digest(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+if stat.S_ISREG(mode):
+    print(file_digest(target).hex())
+    raise SystemExit(0)
+if stat.S_ISLNK(mode):
+    digest = hashlib.sha256()
+    digest.update(b"gluerun-symlink.v0\0")
+    digest.update(os.fsencode(os.readlink(target)))
+    print(digest.hexdigest())
+    raise SystemExit(0)
+if not stat.S_ISDIR(mode):
+    raise SystemExit(f"unsupported gate evidence artifact type: {ref}")
+
+digest = hashlib.sha256()
+digest.update(b"gluerun-tree.v0\0")
+
+def frame(kind, relative, payload=b""):
+    body = kind + b"\0" + os.fsencode(relative) + b"\0" + payload
+    digest.update(len(body).to_bytes(8, "big"))
+    digest.update(body)
+
+def visit(directory, prefix):
+    with os.scandir(directory) as entries:
+        ordered = sorted(entries, key=lambda item: os.fsencode(item.name))
+    for entry in ordered:
+        relative = entry.name if not prefix else f"{prefix}/{entry.name}"
+        entry_mode = entry.stat(follow_symlinks=False).st_mode
+        if stat.S_ISLNK(entry_mode):
+            frame(b"L", relative, os.fsencode(os.readlink(entry.path)))
+        elif stat.S_ISREG(entry_mode):
+            frame(b"F", relative, file_digest(pathlib.Path(entry.path)))
+        elif stat.S_ISDIR(entry_mode):
+            frame(b"D", relative)
+            visit(entry.path, relative)
+        else:
+            raise SystemExit(f"unsupported gate evidence artifact type: {ref}/{relative}")
+
+visit(target, "")
+print(digest.hexdigest())
+PY
+}
+
+# A task-set ref is logical evidence rather than a filesystem path. Bind it to
+# the exact ordered task ID array with canonical JSON.
+gate_task_set_sha256() {
+  local ref="$1" tasks_json="$2"
+  python3 - "$ref" "$tasks_json" <<'PY'
+import hashlib
+import json
+import sys
+
+ref, tasks_raw = sys.argv[1:3]
+payload = {
+    "ref": ref,
+    "taskIds": json.loads(tasks_raw),
+}
+encoded = json.dumps(
+    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+).encode("utf-8")
+print(hashlib.sha256(encoded).hexdigest())
+PY
+}
+
+strict_gate_report_outcome=""
+strict_gate_report_sha=""
+
+# Normalize a schema-v2 promotion command into a strict, hash-bound report.
+# The command itself is responsible for writing gate-observation.v0 to the
+# supplied observation ref. A missing/malformed observation or stale baseline
+# is infrastructure-inconclusive and can never create a passing gate.
+write_strict_gate_report() {
+  # node command exit_code log_ref head_sha observation_ref report_ref
+  local node="$1" command="$2" exit_code="$3" log_ref="$4" head_sha="$5"
+  local observation_ref="$6" report_ref="$7"
+  local task_id="${gate_evidence_tasks[0]:-}"
+  if [[ ! "$task_id" =~ ^TASK-[0-9]{4,}$ ]]; then
+    echo "gate promotion node=$node has no task ID suitable for strict report binding" >&2
+    return 2
+  fi
+
+  local baseline_ref="" baseline_raw="${GLUERUN_GATE_BASELINE_FILE:-}"
+  if [[ -z "$baseline_raw" ]]; then
+    local default_baseline="docs/orchestration/gate-baselines/$node.gate-baseline.json"
+    [[ -f "$GLUERUN_ROOT/$default_baseline" ]] && baseline_raw="$default_baseline"
+  fi
+  if [[ -n "$baseline_raw" ]]; then
+    if ! baseline_ref="$(python3 - "$GLUERUN_ROOT" "$baseline_raw" <<'PY'
+from pathlib import Path, PurePath
+import sys
+
+root = Path(sys.argv[1]).resolve()
+raw = sys.argv[2]
+candidate = Path(raw)
+if candidate.is_absolute():
+    target = candidate.resolve()
+else:
+    rel = PurePath(raw)
+    if not rel.parts or any(part in ("", "..") for part in rel.parts):
+        raise SystemExit(f"unsafe gate baseline ref: {raw!r}")
+    target = root.joinpath(*rel.parts).resolve()
+try:
+    relative = target.relative_to(root)
+except ValueError:
+    raise SystemExit(f"gate baseline must be inside the consumer repository: {raw}")
+if not target.is_file():
+    raise SystemExit(f"gate baseline does not exist: {raw}")
+print(relative.as_posix())
+PY
+)"; then
+      return 2
+    fi
+  fi
+
+  local -a normalize_args=(
+    --task-id "$task_id"
+    --run-id "$run_id"
+    --head-sha "$head_sha"
+    --command "$command"
+    --raw-exit-code "$exit_code"
+    --log-ref "$log_ref"
+    --log-path "$log_ref"
+    --observation "$observation_ref"
+    --require-observation
+    --phase integration
+    --workspace-kind integration
+    --output "$report_ref"
+  )
+  [[ -n "$baseline_ref" ]] && normalize_args+=(--baseline "$baseline_ref")
+
+  rm -f "$GLUERUN_ROOT/$report_ref"
+  if ! (cd "$GLUERUN_ROOT" && python3 "$ENGINE_BIN/gate_report.py" "${normalize_args[@]}") \
+    >/dev/null; then
+    return 2
+  fi
+  local report_path="$GLUERUN_ROOT/$report_ref" report_json
+  [[ -f "$report_path" ]] || return 2
+  report_json="$(<"$report_path")"
+  gluerun_json_schema_check \
+    "$report_json" \
+    "$GLUERUN_ENGINE_HOME/schemas/gate-report.v0.schema.json" \
+    "strict gate report" >/dev/null || return 2
+  strict_gate_report_outcome="$(gluerun_json_field "$report_path" outcome)"
+  strict_gate_report_sha="$(gate_source_sha256 "$report_ref")" || return 2
+}
 
 declare gate_node gate_source_path gate_task_ref gate_command_ref gate_upstream gate_rationale gate_completion_ref gate_requirement_mode gate_storage_proof_red_command
 declare -a gate_evidence_tasks gate_required_tasks gate_missing_tasks
@@ -1028,13 +1230,20 @@ node_already_blocked() {
 
 write_gate_json() {
   local node="$1" command="$2" log_ref="$3" sha="$4" head_sha="$5" recorded_at="$6" out_path="$7"
-  local red_command="${8:-}" red_log_ref="${9:-}" red_sha="${10:-}" red_exit="${11:-}"
-  local tasks_json
+  local green_exit="${8:-0}" red_command="${9:-}" red_log_ref="${10:-}" red_sha="${11:-}" red_exit="${12:-}"
+  local report_ref="${13:-}" report_sha="${14:-}" report_outcome="${15:-}"
+  local tasks_json schema_id source_sha="" task_set_sha=""
   tasks_json="$(printf '%s\n' "${gate_evidence_tasks[@]}" | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')"
+  schema_id="$(gate_result_schema_id)"
+  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+    source_sha="$(gate_source_sha256 "$gate_source_path")" || return 1
+    task_set_sha="$(gate_task_set_sha256 "$gate_task_ref" "$tasks_json")" || return 1
+  fi
   python3 - "$node" "$gate_source_path" "$gate_task_ref" "$gate_command_ref" \
     "$gate_upstream" "$gate_rationale" "$command" "$log_ref" "$sha" \
     "$head_sha" "$recorded_at" "$tasks_json" "$out_path" \
-    "$red_command" "$red_log_ref" "$red_sha" "$red_exit" <<'PY'
+    "$green_exit" "$red_command" "$red_log_ref" "$red_sha" "$red_exit" "$schema_id" \
+    "$source_sha" "$task_set_sha" "$report_ref" "$report_sha" "$report_outcome" <<'PY'
 import json
 import sys
 
@@ -1052,11 +1261,18 @@ import sys
     recorded_at,
     tasks_raw,
     out_path,
+    green_exit,
     red_command,
     red_log_ref,
     red_sha,
     red_exit,
-) = sys.argv[1:18]
+    schema_id,
+    source_sha,
+    task_set_sha,
+    report_ref,
+    report_sha,
+    report_outcome,
+) = sys.argv[1:25]
 task_ids = json.loads(tasks_raw)
 upstream_gates = [item for item in upstream.split() if item]
 evidence = [
@@ -1076,12 +1292,27 @@ evidence = [
         "ref": command_ref,
         "description": "Fresh full regression command captured during L0 gate promotion.",
         "command": command,
-        "exitCode": 0,
+        "exitCode": int(green_exit),
         "logRef": log_ref,
         "sha256": sha,
         "headSha": head_sha,
     },
 ]
+if schema_id == "gluerun.orchestration.gate-result.v1":
+    if report_outcome not in ("passed", "passed-with-acknowledged-baseline"):
+        raise SystemExit("gate-result.v1 requires a passing strict gate-report outcome")
+    if not report_ref or len(report_sha) != 64:
+        raise SystemExit("gate-result.v1 requires a hash-bound strict gate report")
+    evidence[0]["sha256"] = source_sha
+    evidence[1]["sha256"] = task_set_sha
+    evidence.append(
+        {
+            "kind": "gate-report",
+            "ref": report_ref,
+            "sha256": report_sha,
+            "description": "Strict gate-report.v0 bound to the promoted command, log, and worker head.",
+        }
+    )
 if red_command:
     # The skip-guard: an expected-FAIL run of the durable proof with the storage
     # DSN stripped. Re-hashed like every log; its non-zero exit is what proves
@@ -1099,9 +1330,13 @@ if red_command:
         }
     )
 gate = {
-    "schema": "gluerun.orchestration.gate-result.v0",
+    "schema": schema_id,
     "node": node,
-    "status": "passed",
+    "status": (
+        "passed-with-acknowledged-baseline"
+        if report_outcome == "passed-with-acknowledged-baseline"
+        else "passed"
+    ),
     "authoritative": True,
     "evidenceClass": "deterministic-proof",
     "evidence": evidence,
@@ -1110,6 +1345,9 @@ gate = {
     "rationale": rationale,
     "recordedAt": recorded_at,
 }
+if schema_id.endswith(".v1"):
+    gate["verificationClassification"] = "passed"
+    gate["gateReportRef"] = report_ref
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(gate, f, indent=2)
     f.write("\n")
@@ -1130,12 +1368,33 @@ validate_gate_candidate_file() {
 write_blocked_gate_json() {
   # node source_path source_desc rationale upstream missing_tasks_json out_path
   local node="$1" source_path="$2" source_desc="$3" rationale="$4" upstream="$5" missing_json="$6" out_path="$7" recorded_at
+  local schema_id source_sha="" task_set_sha=""
   recorded_at="$(gluerun_timestamp)"
-  python3 - "$node" "$source_path" "$source_desc" "$rationale" "$upstream" "$missing_json" "$recorded_at" "$out_path" <<'PY'
+  schema_id="$(gate_result_schema_id)"
+  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+    source_sha="$(gate_source_sha256 "$source_path")" || return 1
+    if [[ -n "$missing_json" && "$missing_json" != "[]" ]]; then
+      task_set_sha="$(gate_task_set_sha256 "${node}-unmet-readiness-tasks" "$missing_json")" || return 1
+    fi
+  fi
+  python3 - "$node" "$source_path" "$source_desc" "$rationale" "$upstream" "$missing_json" "$recorded_at" "$out_path" \
+    "$schema_id" "$source_sha" "$task_set_sha" <<'PY'
 import json
 import sys
 
-node, source_path, source_desc, rationale, upstream, missing_json, recorded_at, out_path = sys.argv[1:9]
+(
+    node,
+    source_path,
+    source_desc,
+    rationale,
+    upstream,
+    missing_json,
+    recorded_at,
+    out_path,
+    schema_id,
+    source_sha,
+    task_set_sha,
+) = sys.argv[1:12]
 missing = json.loads(missing_json) if missing_json else []
 evidence = [
     {
@@ -1153,8 +1412,12 @@ if missing:
             "taskIds": missing,
         }
     )
+if schema_id == "gluerun.orchestration.gate-result.v1":
+    evidence[0]["sha256"] = source_sha
+    if missing:
+        evidence[1]["sha256"] = task_set_sha
 gate = {
-    "schema": "gluerun.orchestration.gate-result.v0",
+    "schema": schema_id,
     "node": node,
     "status": "blocked",
     "authoritative": True,
@@ -1221,7 +1484,11 @@ block_with() {
   local gate_path="$gates_dir/$node.gate-result.json"
   local tmp_gate
   tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
-  write_blocked_gate_json "$node" "$source_path" "$source_desc" "$rationale" "$upstream" "$missing_json" "$tmp_gate"
+  if ! write_blocked_gate_json "$node" "$source_path" "$source_desc" "$rationale" "$upstream" "$missing_json" "$tmp_gate"; then
+    rm -f "$tmp_gate"
+    echo "refusing to write unhashable blocked gate evidence node=$node" >&2
+    return 2
+  fi
   if ! validate_blocked_gate_candidate_file "$node" "$tmp_gate"; then
     rm -f "$tmp_gate"
     echo "refusing to write malformed blocked gate node=$node" >&2
@@ -1389,6 +1656,11 @@ promote_storage_proof_node() {
   fi
   green_log_ref="docs/orchestration/gates/evidence/$node.regression.txt"
   green_log_path="$GLUERUN_ROOT/$green_log_ref"
+  local observation_ref="docs/orchestration/gates/evidence/$node.gate-observation.json"
+  local observation_path="$GLUERUN_ROOT/$observation_ref"
+  local report_ref="docs/orchestration/gates/evidence/$node.gate-report.json"
+  local schema_id
+  schema_id="$(gate_result_schema_id)"
 
   local red_command red_log_ref red_log_path
   if [[ "$fixture_overrides" == "yes" && -n "${GLUERUN_PROOF_RED_COMMAND:-}" ]]; then
@@ -1403,18 +1675,49 @@ promote_storage_proof_node() {
 
   local tmp_gate
   tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
+  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+    rm -f "$observation_path" "$GLUERUN_ROOT/$report_ref"
+  fi
 
   gluerun_append_event "gate_promotion.started" "gate promotion started" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\",\"layer\":\"storage_proof\"}"
 
   # 1) GREEN: full regression with real storage present must pass.
   local green_exit=0
-  if ( cd "$GLUERUN_ROOT" && bash -c "$green_command" ) >"$green_log_path" 2>&1; then
+  local -a green_env=()
+  [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]] \
+    && green_env=(env "GLUERUN_GATE_REPORT_FILE=$observation_path")
+  if ( cd "$GLUERUN_ROOT" && "${green_env[@]}" bash -c "$green_command" ) >"$green_log_path" 2>&1; then
     green_exit=0
   else
     green_exit=$?
   fi
-  if [[ "$green_exit" -ne 0 ]]; then
+
+  local green_sha head_sha report_sha="" report_outcome=""
+  green_sha="$(shasum -a 256 "$green_log_path" | awk '{print $1}')"
+  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
+  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+    if ! write_strict_gate_report \
+      "$node" "$green_command" "$green_exit" "$green_log_ref" "$head_sha" \
+      "$observation_ref" "$report_ref"; then
+      rm -f "$tmp_gate"
+      gluerun_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
+        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"inconclusive-infrastructure\",\"logRef\":\"$green_log_ref\"}"
+      echo "refusing to promote node=$node: strict gate report is missing or invalid" >&2
+      return 2
+    fi
+    report_sha="$strict_gate_report_sha"
+    report_outcome="$strict_gate_report_outcome"
+    if [[ "$report_outcome" != "passed" \
+      && "$report_outcome" != "passed-with-acknowledged-baseline" ]]; then
+      rm -f "$tmp_gate"
+      gluerun_append_event "gate_promotion.failed" "strict gate report did not pass" \
+        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"$report_outcome\",\"exitCode\":$green_exit,\"logRef\":\"$green_log_ref\",\"gateReportRef\":\"$report_ref\"}"
+      echo "gate promotion did not pass node=$node classification=$report_outcome log=$green_log_ref report=$report_ref" >&2
+      [[ "$green_exit" -ne 0 ]] && return "$green_exit"
+      return 2
+    fi
+  elif [[ "$green_exit" -ne 0 ]]; then
     rm -f "$tmp_gate"
     gluerun_append_event "gate_promotion.failed" "gate promotion command failed" \
       "{\"runId\":\"$run_id\",\"node\":\"$node\",\"exitCode\":$green_exit,\"logRef\":\"$green_log_ref\"}"
@@ -1438,13 +1741,16 @@ promote_storage_proof_node() {
     return 2
   fi
 
-  local green_sha red_sha head_sha recorded_at
-  green_sha="$(shasum -a 256 "$green_log_path" | awk '{print $1}')"
+  local red_sha recorded_at
   red_sha="$(shasum -a 256 "$red_log_path" | awk '{print $1}')"
-  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
   recorded_at="$(gluerun_timestamp)"
-  write_gate_json "$node" "$green_command" "$green_log_ref" "$green_sha" "$head_sha" "$recorded_at" "$tmp_gate" \
-    "$red_command" "$red_log_ref" "$red_sha" "$red_exit"
+  if ! write_gate_json "$node" "$green_command" "$green_log_ref" "$green_sha" "$head_sha" "$recorded_at" "$tmp_gate" \
+    "$green_exit" "$red_command" "$red_log_ref" "$red_sha" "$red_exit" \
+    "$report_ref" "$report_sha" "$report_outcome"; then
+    rm -f "$tmp_gate"
+    echo "refusing to write unhashable gate evidence node=$node" >&2
+    return 2
+  fi
   validate_gate_candidate_file "$node" "$tmp_gate"
   mv "$tmp_gate" "$gates_dir/$node.gate-result.json"
   "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
@@ -1472,16 +1778,19 @@ EOF
 # repeatedly mistook a healthy promotion for a hang. stdout stays byte-
 # identical (parsed by reconcile); the heartbeat goes to stderr only.
 run_gate_command_with_progress() {
-  # args: command log_path  -- returns the command's exit code
-  local command="$1" log_path="$2"
+  # args: command log_path [observation_path] -- returns the command's exit code
+  local command="$1" log_path="$2" observation_path="${3:-}"
+  local -a command_env=()
+  [[ -n "$observation_path" ]] \
+    && command_env=(env "GLUERUN_GATE_REPORT_FILE=$observation_path")
   local interval="${GLUERUN_PROMOTE_PROGRESS_SECS:-15}"
   [[ "$interval" =~ ^[0-9]+$ ]] || interval=15
   local ec=0
   if (( interval == 0 )); then
-    (cd "$GLUERUN_ROOT" && bash -c "$command") >"$log_path" 2>&1 || ec=$?
+    (cd "$GLUERUN_ROOT" && "${command_env[@]}" bash -c "$command") >"$log_path" 2>&1 || ec=$?
     return "$ec"
   fi
-  (cd "$GLUERUN_ROOT" && bash -c "$command") >"$log_path" 2>&1 &
+  (cd "$GLUERUN_ROOT" && "${command_env[@]}" bash -c "$command") >"$log_path" 2>&1 &
   local child=$! started=$SECONDS
   while kill -0 "$child" 2>/dev/null; do
     sleep 1
@@ -1570,16 +1879,53 @@ promote_node() {
   local command="${GLUERUN_PROMOTE_GATE_COMMAND:-$GLUERUN_DEFAULT_GATE_CMD}"
   local log_ref="docs/orchestration/gates/evidence/$node.regression.txt"
   local log_path="$GLUERUN_ROOT/$log_ref"
+  local observation_ref="docs/orchestration/gates/evidence/$node.gate-observation.json"
+  local observation_path="$GLUERUN_ROOT/$observation_ref"
+  local report_ref="docs/orchestration/gates/evidence/$node.gate-report.json"
   local gate_path="$gates_dir/$node.gate-result.json"
-  local tmp_gate
+  local tmp_gate schema_id
+  schema_id="$(gate_result_schema_id)"
   tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
+  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+    rm -f "$observation_path" "$GLUERUN_ROOT/$report_ref"
+  fi
 
   gluerun_append_event "gate_promotion.started" "gate promotion started" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
   local exit_code=0
   echo "promote-gate: node=$node running regression (log: $log_ref)" >&2
-  run_gate_command_with_progress "$command" "$log_path" || exit_code=$?
-  if [[ "$exit_code" -ne 0 ]]; then
+  run_gate_command_with_progress \
+    "$command" \
+    "$log_path" \
+    "$([[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]] && printf '%s' "$observation_path")" \
+    || exit_code=$?
+
+  local sha head_sha recorded_at report_sha="" report_outcome=""
+  sha="$(shasum -a 256 "$log_path" | awk '{print $1}')"
+  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
+  recorded_at="$(gluerun_timestamp)"
+  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+    if ! write_strict_gate_report \
+      "$node" "$command" "$exit_code" "$log_ref" "$head_sha" \
+      "$observation_ref" "$report_ref"; then
+      rm -f "$tmp_gate"
+      gluerun_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
+        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"inconclusive-infrastructure\",\"logRef\":\"$log_ref\"}"
+      echo "refusing to promote node=$node: strict gate report is missing or invalid" >&2
+      return 2
+    fi
+    report_sha="$strict_gate_report_sha"
+    report_outcome="$strict_gate_report_outcome"
+    if [[ "$report_outcome" != "passed" \
+      && "$report_outcome" != "passed-with-acknowledged-baseline" ]]; then
+      rm -f "$tmp_gate"
+      gluerun_append_event "gate_promotion.failed" "strict gate report did not pass" \
+        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"$report_outcome\",\"exitCode\":$exit_code,\"logRef\":\"$log_ref\",\"gateReportRef\":\"$report_ref\"}"
+      echo "gate promotion did not pass node=$node classification=$report_outcome log=$log_ref report=$report_ref" >&2
+      [[ "$exit_code" -ne 0 ]] && return "$exit_code"
+      return 2
+    fi
+  elif [[ "$exit_code" -ne 0 ]]; then
     rm -f "$tmp_gate"
     gluerun_append_event "gate_promotion.failed" "gate promotion command failed" \
       "{\"runId\":\"$run_id\",\"node\":\"$node\",\"exitCode\":$exit_code,\"logRef\":\"$log_ref\"}"
@@ -1587,11 +1933,13 @@ promote_node() {
     return "$exit_code"
   fi
 
-  local sha head_sha recorded_at
-  sha="$(shasum -a 256 "$log_path" | awk '{print $1}')"
-  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  recorded_at="$(gluerun_timestamp)"
-  write_gate_json "$node" "$command" "$log_ref" "$sha" "$head_sha" "$recorded_at" "$tmp_gate"
+  if ! write_gate_json \
+    "$node" "$command" "$log_ref" "$sha" "$head_sha" "$recorded_at" "$tmp_gate" \
+    "$exit_code" "" "" "" "" "$report_ref" "$report_sha" "$report_outcome"; then
+    rm -f "$tmp_gate"
+    echo "refusing to write unhashable gate evidence node=$node" >&2
+    return 2
+  fi
   validate_gate_candidate_file "$node" "$tmp_gate"
   mv "$tmp_gate" "$gate_path"
   "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
@@ -1605,8 +1953,8 @@ promote_node() {
 # for promotable nodes, block for block-registry nodes, refuse/skip otherwise.
 # --- Evaluation gates (0.5.0 governance) -------------------------------------
 # kind=evaluation nodes are judgment calls, not regression runs. Authority:
-#   - `--operator` always promotes (evidenceClass operator-review; requires
-#     >=1 --evidence ref naming the reviewed artifact(s)).
+#   - pre-v2, or schema v2 with explicit legacy unbound-waiver compatibility,
+#     `--operator` promotes with >=1 hashable --evidence ref.
 #   - nodes declaring `authority: agent-review-allowed` in the DAG promote on
 #     a VALID passing review file at
 #     docs/orchestration/gates/evidence/<node>.review.json (gate-review.v0:
@@ -1632,27 +1980,63 @@ promote_evaluation_node() {
       echo "promote-gate --operator requires at least one --evidence REF for $node" >&2
       return 2
     fi
+    local schema_id
+    schema_id="$(gate_result_schema_id)"
+    if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]] \
+      && ! gluerun_unbound_waivers_enabled; then
+      cat >&2 <<EOF
+evaluation node $node: unbound --operator --evidence promotion is disabled under schema v2.
+  Record a first-class human-gate request and exact-artifact human approval instead.
+  Legacy compatibility requires an explicit "legacyCompatibility": {"unboundWaivers": true} selection.
+EOF
+      return 2
+    fi
+    local -a operator_hashes=()
+    local evidence_ref evidence_sha
+    if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+      for evidence_ref in "${operator_evidence[@]}"; do
+        if ! evidence_sha="$(gate_source_sha256 "$evidence_ref")"; then
+          echo "evaluation node $node: operator evidence cannot be safely hash-bound: $evidence_ref" >&2
+          return 2
+        fi
+        operator_hashes+=("$evidence_sha")
+      done
+    fi
     tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
-    python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "${operator_evidence[@]}" <<'PY'
+    python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "$schema_id" \
+      "${#operator_evidence[@]}" "${operator_evidence[@]}" "${operator_hashes[@]}" <<'PY'
 import json
 import sys
 
-node, head_sha, recorded_at, out_path = sys.argv[1:5]
-refs = sys.argv[5:]
+node, head_sha, recorded_at, out_path, schema_id, count_raw = sys.argv[1:7]
+count = int(count_raw)
+refs = sys.argv[7:7 + count]
+hashes = sys.argv[7 + count:]
+if schema_id.endswith(".v1") and len(hashes) != len(refs):
+    raise SystemExit("operator evidence hash count mismatch")
+evidence = []
+for index, ref in enumerate(refs):
+    item = {
+        "kind": "source-path",
+        "ref": ref,
+        "description": f"operator-reviewed evidence for {node}",
+    }
+    if schema_id.endswith(".v1"):
+        item["sha256"] = hashes[index]
+    evidence.append(item)
 gate = {
-    "schema": "gluerun.orchestration.gate-result.v0",
+    "schema": schema_id,
     "node": node,
     "status": "passed",
     "authoritative": True,
     "evidenceClass": "operator-review",
-    "evidence": [
-        {"kind": "source-path", "ref": ref, "description": f"operator-reviewed evidence for {node}"}
-        for ref in refs
-    ],
+    "evidence": evidence,
     "decidedBy": "operator:" + (__import__("os").environ.get("USER") or "cli"),
     "rationale": f"Evaluation gate {node} promoted on operator authority (promote-gate --operator).",
     "recordedAt": recorded_at,
 }
+if schema_id.endswith(".v1"):
+    gate["verificationClassification"] = "not-rerun-evidence-verified"
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(gate, f, indent=2)
     f.write("\n")
@@ -1673,13 +2057,22 @@ PY
   local review_file="$gates_dir/evidence/$node.review.json"
   if [[ "$authority" != "agent-review-allowed" ]]; then
     if [[ "$strict" == "yes" ]]; then
-      cat >&2 <<EOF
+      if [[ "$(gate_result_schema_id)" == "gluerun.orchestration.gate-result.v1" ]] \
+        && ! gluerun_unbound_waivers_enabled; then
+        cat >&2 <<EOF
+evaluation node $node requires exact-artifact human approval under schema v2.
+  Record a first-class human-gate request and approval for this node.
+  The unbound --operator --evidence route is available only through explicit legacy compatibility.
+EOF
+      else
+        cat >&2 <<EOF
 evaluation node $node requires operator authority.
   Options:
     - rerun with: gluerun promote-gate $node --operator --evidence <path>...
     - or set "authority": "agent-review-allowed" on the node in dag.v0.json
       and record review evidence at $review_file (gate-review.v0)
 EOF
+      fi
       return 2
     fi
     return 0
@@ -1755,23 +2148,107 @@ PY
     return 2
   fi
 
+  local review_schema_id review_file_ref review_file_sha="" review_refs_json="[]" review_ref_count=0
+  local -a review_ref_hashes=()
+  review_schema_id="$(gate_result_schema_id)"
+  review_file_ref="$(python3 - "$review_file" "$GLUERUN_ROOT" <<'PY'
+import os
+import sys
+print(os.path.relpath(sys.argv[1], sys.argv[2]))
+PY
+)"
+  if [[ "$review_schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+    if ! review_file_sha="$(gate_source_sha256 "$review_file_ref")"; then
+      echo "evaluation node $node: review file cannot be safely hash-bound: $review_file_ref" >&2
+      return 2
+    fi
+    if ! review_refs_json="$(python3 - "$review_file" <<'PY'
+import json
+import sys
+
+refs = json.load(open(sys.argv[1], encoding="utf-8")).get("evidenceRefs", [])
+for ref in refs:
+    if any(char in ref for char in ("\n", "\r", "\0")):
+        raise SystemExit(f"unsafe control character in gate review evidenceRef: {ref!r}")
+print(json.dumps(refs, ensure_ascii=False, separators=(",", ":")))
+PY
+)"; then
+      echo "evaluation node $node: review evidence refs cannot be safely hash-bound" >&2
+      return 2
+    fi
+    if ! review_ref_count="$(python3 - "$review_refs_json" <<'PY'
+import json
+import sys
+print(len(json.loads(sys.argv[1])))
+PY
+)"; then
+      echo "evaluation node $node: review evidence refs are malformed" >&2
+      return 2
+    fi
+    local review_ref review_index evidence_sha
+    for ((review_index = 0; review_index < review_ref_count; review_index++)); do
+      if ! review_ref="$(python3 - "$review_refs_json" "$review_index" <<'PY'
+import json
+import sys
+print(json.loads(sys.argv[1])[int(sys.argv[2])], end="")
+PY
+)"; then
+        echo "evaluation node $node: review evidence ref index is malformed" >&2
+        return 2
+      fi
+      if ! evidence_sha="$(gate_source_sha256 "$review_ref")"; then
+        echo "evaluation node $node: review evidence cannot be safely hash-bound: $review_ref" >&2
+        return 2
+      fi
+      review_ref_hashes+=("$evidence_sha")
+    done
+  fi
+
   tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
-  python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "$review_file" "$r_reviewer_kind" "$r_reviewer_id" "$GLUERUN_ROOT" <<'PY'
+  python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "$review_file" "$r_reviewer_kind" "$r_reviewer_id" "$GLUERUN_ROOT" \
+    "$review_schema_id" "$review_file_sha" "$review_ref_count" "${review_ref_hashes[@]}" <<'PY'
 import json
 import os
 import sys
 
-node, head_sha, recorded_at, out_path, review_file, r_kind, r_id, root = sys.argv[1:9]
+(
+    node,
+    head_sha,
+    recorded_at,
+    out_path,
+    review_file,
+    r_kind,
+    r_id,
+    root,
+    schema_id,
+    review_file_sha,
+    ref_count_raw,
+) = sys.argv[1:12]
+ref_hashes = sys.argv[12:]
+ref_count = int(ref_count_raw)
 review = json.load(open(review_file))
 evidence = [
     {"kind": "source-path", "ref": os.path.relpath(review_file, root),
      "description": f"gate-review.v0 evidence for {node} (reviewer {r_kind}/{r_id})"}
 ]
-for ref in review.get("evidenceRefs", []):
-    evidence.append({"kind": "source-path", "ref": ref,
-                     "description": f"review-cited evidence for {node}"})
+refs = review.get("evidenceRefs", [])
+if len(refs) != ref_count:
+    raise SystemExit("gate review evidence count changed during promotion")
+if schema_id.endswith(".v1") and len(ref_hashes) != len(refs):
+    raise SystemExit("gate review evidence hash count mismatch")
+if schema_id.endswith(".v1"):
+    evidence[0]["sha256"] = review_file_sha
+for index, ref in enumerate(refs):
+    item = {
+        "kind": "source-path",
+        "ref": ref,
+        "description": f"review-cited evidence for {node}",
+    }
+    if schema_id.endswith(".v1"):
+        item["sha256"] = ref_hashes[index]
+    evidence.append(item)
 gate = {
-    "schema": "gluerun.orchestration.gate-result.v0",
+    "schema": schema_id,
     "node": node,
     "status": "passed",
     "authoritative": True,
@@ -1781,6 +2258,8 @@ gate = {
     "rationale": review.get("rationale", f"Evaluation gate {node} promoted on independent review evidence."),
     "recordedAt": recorded_at,
 }
+if schema_id.endswith(".v1"):
+    gate["verificationClassification"] = "not-rerun-evidence-verified"
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(gate, f, indent=2)
     f.write("\n")

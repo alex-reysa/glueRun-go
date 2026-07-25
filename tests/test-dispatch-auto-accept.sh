@@ -28,8 +28,12 @@ git -C "$root" init -q
 git -C "$root" checkout -q -b target
 cp "$ENGINE_HOME/schemas/state-packet.v0.schema.json" "$root/schemas/orchestration/"
 cp "$ENGINE_HOME/schemas/audit-verdict.v0.schema.json" "$root/schemas/orchestration/"
+cp "$ENGINE_HOME/schemas/audit-verdict.v1.schema.json" "$root/schemas/orchestration/"
 cp "$ENGINE_HOME/templates/prompts/l2-test-first-developer.md" "$root/docs/orchestration/prompts/"
 cp "$ENGINE_HOME/templates/prompts/auditor.md" "$root/docs/orchestration/prompts/"
+cat >"$root/gluerun.config.json" <<'JSON'
+{"schemaVersion":"v2","targetBranch":"target","gateCommand":"true"}
+JSON
 mkdir -p "$root/internal/artifact"
 echo "package artifact" >"$root/internal/artifact/doc.go"
 git -C "$root" add . && git -C "$root" -c user.name=t -c user.email=t@t commit -q -m init
@@ -161,6 +165,9 @@ assert_contains "$out" "auto-accepted stranded packet" "heal reported"
 [[ -f "$GLUERUN_INBOX_DIR/$run_id.json" ]] || fail "packet must be enqueued to inbox"
 assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" '"type":"l1.auto_accepted_existing"' "heal event"
 assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" '"type":"packet.accepted_existing"' "deterministic acceptance ran"
+assert_eq "gluerun.orchestration.audit-verdict.v1" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "$run_dir/audit.json")" \
+  "v2 deterministic acceptance writes audit-verdict.v1"
 
 # 2. Re-dispatch while queued: no-op exit 0 (work is in flight, no refusal churn).
 rc=0

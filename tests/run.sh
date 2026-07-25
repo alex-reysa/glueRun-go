@@ -6,6 +6,7 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pass=0
 fail=0
 failed=""
+gate_report_file="${GLUERUN_GATE_REPORT_FILE:-}"
 
 # Hermetic guard: scrub inherited GLUERUN_* env. When this suite runs as the
 # regression gate under l1-drive, the drive has already exported the consumer
@@ -41,4 +42,29 @@ done
 echo ""
 echo "SUMMARY: $pass passed, $fail failed"
 [[ -n "$failed" ]] && echo "FAILED:$failed"
+if [[ -n "$gate_report_file" ]]; then
+  python3 - "$gate_report_file" "$failed" <<'PY'
+import json
+import os
+import sys
+
+path, failed = sys.argv[1:3]
+failures = [
+    {"signature": f"engine-regression:{name}", "title": name}
+    for name in failed.split()
+]
+record = {
+    "schema": "gluerun.orchestration.gate-observation.v0",
+    "failures": failures,
+}
+temporary = path + ".tmp"
+parent = os.path.dirname(path)
+if parent:
+    os.makedirs(parent, exist_ok=True)
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(record, handle, separators=(",", ":"))
+    handle.write("\n")
+os.replace(temporary, path)
+PY
+fi
 [[ "$fail" -eq 0 ]]

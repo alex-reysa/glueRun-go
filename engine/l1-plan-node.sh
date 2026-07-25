@@ -3,6 +3,10 @@ set -euo pipefail
 
 # Require bash >= 4 (mapfile/compgen); macOS /bin/bash is 3.2.
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "l1-plan-node.sh requires bash >= 4" >&2; exit 1
 fi
@@ -37,6 +41,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$node" && -n "$stage_dir" ]] || { echo "l1-plan-node: --node and --stage-dir are required" >&2; exit 2; }
+[[ -n "$run_id" ]] || run_id="$(gluerun_worker_run_id)"
 
 mkdir -p "$stage_dir"
 # Concurrent planners must not write the global event log; route all events
@@ -63,6 +68,35 @@ layer="$(printf '%s\n' "$fields" | sed -n 's/^layer=//p' | tail -1)"
 
 [[ -n "$base_sha" ]] || base_sha="$(git -C "$GLUERUN_ROOT" rev-parse "$GLUERUN_TARGET_BRANCH")"
 
+planner_node_status_activity="Planning failed for $node"
+planner_node_status_next_action="Inspect the node planner evidence"
+planner_node_status_outcome="planning-failed"
+
+gluerun_planner_node_status_write() {
+  local activity="$1" next_action="$2"
+  "$SCRIPT_DIR/run-status.sh" write \
+    --run-id "$run_id" --node "$node" --phase planning --state active \
+    --activity "$activity" --safe-cancel true --next-action "$next_action" \
+    --process-type planner --pid "$$" >/dev/null 2>&1 || true
+}
+
+gluerun_planner_node_status_on_exit() {
+  local rc=$?
+  local state="failed"
+  trap - EXIT
+  [[ "$rc" -eq 0 ]] && state="completed"
+  "$SCRIPT_DIR/run-status.sh" write \
+    --run-id "$run_id" --node "$node" --phase terminal --state "$state" \
+    --activity "$planner_node_status_activity" --safe-cancel false \
+    --next-action "$planner_node_status_next_action" --process-type planner --pid "$$" \
+    --outcome "$planner_node_status_outcome" >/dev/null 2>&1 || true
+  exit "$rc"
+}
+
+gluerun_planner_node_status_write \
+  "Planning node $node" "Validate its staged task candidates"
+trap gluerun_planner_node_status_on_exit EXIT
+
 # Lease the node: planning -> active.
 gluerun_l1_lease_write "$node" "$area" "$stage" "$layer" planning "$run_id" "$base_sha" "$GLUERUN_TARGET_BRANCH" || {
   echo "plan-failed:$node (lease write failed)"
@@ -71,11 +105,18 @@ gluerun_l1_lease_write "$node" "$area" "$stage" "$layer" planning "$run_id" "$ba
 gluerun_l1_lease_set_status "$node" active || true
 
 planner="${GLUERUN_L1_PLANNER:-$SCRIPT_DIR/generate-tasks.sh}"
-if "$planner" --node "$node" --stage-dir "$stage_dir" --count "$count" >>"$stage_dir/planner.out" 2>&1 \
-   && { compgen -G "$stage_dir/"'*.candidate.md' >/dev/null || [[ -f "$stage_dir/NO-TASKS" ]]; }; then
+if GLUERUN_PLANNING_RUN_ID="$run_id" \
+   GLUERUN_PLANNING_ARTIFACT_DIR="$stage_dir" \
+   "$planner" --node "$node" --stage-dir "$stage_dir" --count "$count" >>"$stage_dir/planner.out" 2>&1 \
+   && { gluerun_task_batch_has_candidates "$stage_dir" || [[ -f "$stage_dir/NO-TASKS" ]]; }; then
+  gluerun_planner_node_status_write \
+    "Validating staged candidates for $node" "Critique or import the validated candidates"
   # A valid empty batch (NO-TASKS marker, 0.5.0): nothing to critique or
   # import; leave the lease for L0's importer to release.
-  if [[ -f "$stage_dir/NO-TASKS" ]] && ! compgen -G "$stage_dir/"'*.candidate.md' >/dev/null; then
+  if [[ -f "$stage_dir/NO-TASKS" ]] && ! gluerun_task_batch_has_candidates "$stage_dir"; then
+    planner_node_status_activity="Planning completed with no tasks for $node"
+    planner_node_status_next_action="Release the node lease"
+    planner_node_status_outcome="planned-empty"
     echo "planned-empty:$node"
     exit 0
   fi
@@ -107,6 +148,9 @@ if "$planner" --node "$node" --stage-dir "$stage_dir" --count "$count" >>"$stage
       exit 1
     fi
   fi
+  planner_node_status_activity="Planning staged candidates for $node"
+  planner_node_status_next_action="Import the staged candidates"
+  planner_node_status_outcome="planned"
   echo "planned:$node"
   exit 0
 fi

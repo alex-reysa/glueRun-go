@@ -49,9 +49,9 @@ make_repo "$tmp/repo-a" v9
 out="$(cd "$tmp/repo-a" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" doctor 2>&1)"
 rc=$?
 [[ "$rc" -ne 0 ]] || fail "doctor should exit nonzero on schemaVersion mismatch"
-assert_contains "$out" "FAIL  schemaVersion mismatch: repo v9 vs engine v1" "doctor mismatch FAIL line"
-assert_contains "$out" "engine schema: v1" "doctor reports engine SCHEMA_VERSION"
-assert_contains "$out" "versions: cli " "doctor reports cli/engine versions"
+assert_contains "$out" "FAIL  schemaVersion mismatch: repo v9 vs engine v2" "doctor mismatch FAIL line"
+assert_contains "$out" "[schema.version]" "doctor identifies the schema-version check"
+assert_contains "$out" "engine resolved ($ENGINE_HOME, v0.13.0)" "doctor reports resolved engine version"
 
 # --- (b) pin disagreement: WARN, .gluerun-version stays authoritative ------------
 fake_home="$tmp/home"
@@ -59,18 +59,15 @@ make_engine "$fake_home/.gluerun/versions/9.9.9" "9.9.9" "v0"
 make_repo "$tmp/repo-b" v0 "1.2.3"
 echo "9.9.9" > "$tmp/repo-b/.gluerun-version"
 
-out="$(cd "$tmp/repo-b" && HOME="$fake_home" bash "$CLI" doctor 2>&1)"
-assert_contains "$out" "warn  .gluerun-version (9.9.9) and gluerun.config.json engineVersion (1.2.3) disagree" "doctor pin-disagreement warn"
-assert_contains "$out" "engine resolved ($fake_home/.gluerun/versions/9.9.9" "resolution unchanged: .gluerun-version wins over engineVersion"
-
-# same condition as a one-line stderr warning on a normal command
-err="$(cd "$tmp/repo-b" && HOME="$fake_home" bash "$CLI" migrate 2>&1 >/dev/null)"
+# A normal command warns, then succeeds against the engine selected by the pin.
+out="$(cd "$tmp/repo-b" && HOME="$fake_home" bash "$CLI" migrate 2>&1)"
 rc=$?
-[[ "$rc" -eq 0 ]] || fail "migrate should still succeed under pin disagreement (rc=$rc, err=$err)"
-assert_contains "$err" "gluerun: warning: .gluerun-version (9.9.9) and gluerun.config.json engineVersion (1.2.3) disagree; using .gluerun-version" "repo_pin stderr warning"
+[[ "$rc" -eq 0 ]] || fail "migrate should still succeed under pin disagreement (rc=$rc, out=$out)"
+assert_contains "$out" "gluerun: warning: .gluerun-version (9.9.9) and gluerun.config.json engineVersion (1.2.3) disagree; using .gluerun-version" "repo_pin stderr warning"
+assert_contains "$out" "repo schema v0 matches engine schema" "resolution unchanged: .gluerun-version wins over engineVersion"
 
 # --- (c) migrate no-ops cleanly when schema versions match --------------------
-make_repo "$tmp/repo-c" v1
+make_repo "$tmp/repo-c" v2
 out="$(cd "$tmp/repo-c" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate 2>&1)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "migrate should exit 0 when up to date (rc=$rc, out=$out)"

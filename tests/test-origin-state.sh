@@ -29,7 +29,7 @@ cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 }
 EOF
 cat >"$root/docs/orchestration/gates/a.gate-result.json" <<'EOF'
-{"schema":"gluerun.orchestration.gate-result.v0","node":"a","status":"passed","authoritative":true,"evidenceClass":"grandfathered","evidence":[{"kind":"source-path","ref":"x"}],"decidedBy":"t","recordedAt":"2026-06-01T00:00:00Z"}
+{"schema":"gluerun.orchestration.gate-result.v1","node":"a","status":"passed-with-acknowledged-baseline","authoritative":true,"evidenceClass":"grandfathered","evidence":[{"kind":"source-path","ref":"x","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}],"decidedBy":"t","recordedAt":"2026-06-01T00:00:00Z"}
 EOF
 for spec in "TASK-0001:ready" "TASK-0002:integrated" "TASK-0003:blocked"; do
   id="${spec%%:*}"; st="${spec##*:}"

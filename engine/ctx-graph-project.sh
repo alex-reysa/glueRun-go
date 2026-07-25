@@ -128,7 +128,9 @@ print(base64.b64encode(content.encode()).decode())
 
   gluerun_graph_emit_node gate-result "$gate_ident" "$record_path" "$content"
   case "$gate_status" in
-    passed) gluerun_graph_emit_edge verifies    "$gate_node" "$target_node" "$record_path" "$content" ;;
+    passed|passed-with-acknowledged-baseline)
+      gluerun_graph_emit_edge verifies "$gate_node" "$target_node" "$record_path" "$content"
+      ;;
     failed) gluerun_graph_emit_edge invalidates "$gate_node" "$target_node" "$record_path" "$content" ;;
   esac
 }

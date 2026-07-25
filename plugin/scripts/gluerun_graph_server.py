@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -33,6 +34,38 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 DEFAULT_REPO = os.environ.get("GLUERUN_REPO", ".")
 TARGET_BRANCH = "agent/integration"
+
+
+def _load_human_gate_validator():
+    """Load the engine-owned contract validator so console state cannot drift.
+
+    The console and engine ship together.  GLUERUN_ENGINE_HOME supports installed
+    layouts; the source-tree location keeps development and packaged tests simple.
+    Missing validator code fails closed in ``collect_human_gates``.
+    """
+    candidates = []
+    configured = os.environ.get("GLUERUN_ENGINE_HOME")
+    if configured:
+        candidates.append(Path(configured) / "engine" / "human_gate.py")
+    candidates.append(Path(__file__).resolve().parents[2] / "engine" / "human_gate.py")
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "_gluerun_human_gate_contract", path
+            )
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.validate_gate
+        except Exception:
+            continue
+    return None
+
+
+VALIDATE_HUMAN_GATE = _load_human_gate_validator()
 
 
 def load_repo_target_branch(repo) -> str:
@@ -1146,7 +1179,8 @@ def probe_command_overridden(name: str) -> bool:
 # ---- Native (no-subprocess) built-in probes ---------------------------------- #
 
 def _gate_passed_data(gate: Any) -> bool:
-    return bool(isinstance(gate, dict) and gate.get("status") == "passed"
+    return bool(isinstance(gate, dict)
+                and gate.get("status") in {"passed", "passed-with-acknowledged-baseline"}
                 and gate.get("authoritative") is True)
 
 
@@ -1281,10 +1315,119 @@ def collect_gates_summary(repo: Path) -> dict[str, Any]:
     registry_ids = list(load_dag_registry(repo).get("by_id") or {})
     statuses = _all_gate_statuses(repo)
     by_node = {node_id: statuses.get(node_id, "absent") for node_id in registry_ids}
+    successful = {"passed", "passed-with-acknowledged-baseline"}
     return {
-        "passed": sum(1 for s in by_node.values() if s == "passed"),
+        "passed": sum(1 for s in by_node.values() if s in successful),
         "total": len(registry_ids),
         "byNode": by_node,
+    }
+
+
+def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
+    """Read-only adaptive worktree-capacity calculation for console APIs.
+
+    Reuse the most recent reconcile estimate when present, but always combine
+    it with current free space so the operator sees today's schedulable slots.
+    """
+    defaults = {
+        "configuredSlots": 3,
+        "reserveBytes": 2147483648,
+        "estimatedWorktreeBytes": 268435456,
+    }
+    config = read_json(repo / "gluerun.config.json", {}) or {}
+    resources = config.get("resources") if isinstance(config, dict) else {}
+    resources = resources if isinstance(resources, dict) else {}
+    config_env = config.get("env") if isinstance(config, dict) else {}
+    config_env = config_env if isinstance(config_env, dict) else {}
+
+    def integer(value: Any, fallback: int, *, positive: bool = False) -> int:
+        if isinstance(value, bool):
+            return fallback
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return fallback
+        if parsed < (1 if positive else 0):
+            return fallback
+        return parsed
+
+    configured = integer(
+        os.environ.get(
+            "GLUERUN_MAX_CONCURRENT",
+            config_env.get(
+                "GLUERUN_MAX_CONCURRENT",
+                resources.get("maxConcurrent", defaults["configuredSlots"]),
+            ),
+        ),
+        defaults["configuredSlots"],
+    )
+    reserve = integer(
+        os.environ.get(
+            "GLUERUN_DISK_RESERVE_BYTES",
+            config_env.get(
+                "GLUERUN_DISK_RESERVE_BYTES",
+                resources.get("diskReserveBytes", defaults["reserveBytes"]),
+            ),
+        ),
+        defaults["reserveBytes"],
+    )
+    estimate = integer(
+        os.environ.get(
+            "GLUERUN_ESTIMATED_WORKTREE_BYTES",
+            config_env.get(
+                "GLUERUN_ESTIMATED_WORKTREE_BYTES",
+                resources.get(
+                    "estimatedWorktreeBytes", defaults["estimatedWorktreeBytes"]
+                ),
+            ),
+        ),
+        defaults["estimatedWorktreeBytes"],
+        positive=True,
+    )
+    source = "live-config"
+
+    runs_dir = state_path(repo, "runs")
+    latest: Path | None = None
+    try:
+        latest = max(
+            runs_dir.glob("*/resource-plan.json"),
+            key=lambda path: path.stat().st_mtime_ns,
+            default=None,
+        )
+    except OSError:
+        latest = None
+    prior = read_json(latest, None) if latest else None
+    if isinstance(prior, dict) and prior.get("schema") == "gluerun.orchestration.resource-plan.v0":
+        configured = integer(prior.get("configuredSlots"), configured)
+        reserve = integer(prior.get("reserveBytes"), reserve)
+        estimate = integer(
+            prior.get("estimatedWorktreeBytes"), estimate, positive=True
+        )
+        source = "latest-reconcile"
+
+    try:
+        free = shutil.disk_usage(repo).free
+    except OSError:
+        free = 0
+    affordable = max(0, free - reserve) // estimate
+    effective = min(configured, affordable)
+    if effective == configured:
+        reason = "configured-capacity-available"
+    elif effective == 0:
+        reason = "insufficient-disk-after-reserve"
+    else:
+        reason = "disk-limited-concurrency"
+    return {
+        "schema": "gluerun.orchestration.resource-plan.v0",
+        "configuredSlots": configured,
+        "effectiveSlots": effective,
+        "freeBytes": free,
+        "reserveBytes": reserve,
+        "estimatedWorktreeBytes": estimate,
+        "affordableSlots": affordable,
+        "reason": reason,
+        "source": source,
+        **({"recordRef": str(latest)} if latest else {}),
     }
 
 
@@ -1387,6 +1530,7 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
         "events": parse_events(state_path(repo, EVENTS_LOG_REL), 40),
         "autonomateTail": tail_lines(state_path(repo, resolve_autonomate_log(repo)), 80),
         "disk": collect_disk(repo),
+        "resources": collect_resource_plan_native(repo),
         "l1Areas": l1_areas,
         "l1Leases": l1_leases,
         "l2Tasks": l2_tasks,
@@ -1472,6 +1616,18 @@ ISO_LEVEL_LINE_RE = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+([A-Z]+)\s+(.*)$"
 # Codex plugin/skill loader chatter — hundreds of identical WARN lines per run that
 # carry no orchestration signal. Dropped from parsed view; raw view keeps everything.
 LOG_NOISE_RE = re.compile(r"codex_core_(plugins::manifest|skills::loader)")
+MODEL_CACHE_WARNING_RE = re.compile(
+    r"(supports_reasoning_summaries|model[-_ ]cache.*(?:schema|incompat|unknown field))",
+    re.IGNORECASE,
+)
+OPTIONAL_MCP_WARNING_RE = re.compile(
+    r"(mcp|plugin|connector).*(invalid_grant|unavailable|failed to (?:start|load|initialize))",
+    re.IGNORECASE,
+)
+INFRA_WARNING_RE = re.compile(
+    r"(inconclusive-infrastructure|read-only file system|cache.*permission denied)",
+    re.IGNORECASE,
+)
 # planner-prompt.md header fields we surface as session identity.
 _PLANNER_AREA_RE = re.compile(r"Area Planner for area `([^`]+)`")
 _PLANNER_NODE_RE = re.compile(r"Executable DAG node:\s*`([^`]+)`")
@@ -1500,10 +1656,76 @@ def _read_head(path: Path, max_bytes: int = 4096) -> str:
         return ""
 
 
+def _diagnostic(category: str, severity: str, *, expected: bool = False,
+                impact: str = "none", source: str = "console",
+                dedupe_key: str | None = None) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "category": category,
+        "severity": severity,
+        "expected": expected,
+        "impact": impact,
+        "source": source,
+    }
+    if dedupe_key:
+        data["dedupeKey"] = dedupe_key
+    return data
+
+
+def _event_diagnostic(event_type: str) -> dict[str, Any]:
+    event = event_type.lower()
+    if "baseline" in event:
+        return _diagnostic("acknowledged-baseline", "warning", expected=True,
+                           impact="non-blocking", source="orchestrator")
+    if ".infra" in event or "infrastructure" in event:
+        return _diagnostic("infrastructure-inconclusive", "warning",
+                           impact="retryable", source="orchestrator")
+    if "provider" in event and ("error" in event or "failed" in event):
+        return _diagnostic("provider-failure", "error", impact="blocking",
+                           source="provider")
+    if re.search(r"(?:^|[._])(?:failed|invalid|rejected)(?:[._]|$)", event):
+        return _diagnostic("orchestration-failure", "error", impact="blocking",
+                           source="orchestrator")
+    return _diagnostic("info", "info", source="orchestrator")
+
+
 def classify_codex_record(obj: dict[str, Any]) -> dict[str, Any] | None:
     """Map one Codex thread JSON record (or an orchestration event line) to a
     compact terminal line. Pure — no I/O, no time. Returns None to drop a record
     (e.g. an item.started agent_message which has no text yet)."""
+    schema = obj.get("schema")
+    if schema == "gluerun.orchestration.provider-error.v0":
+        retryable = bool(obj.get("retryable"))
+        return {
+            "kind": "diagnostic",
+            "text": str(obj.get("excerpt") or obj.get("kind") or "provider error"),
+            "providerError": obj,
+            "diagnostic": _diagnostic(
+                "provider-failure", "warning" if retryable else "error",
+                impact="retryable" if retryable else "blocking",
+                source=str(obj.get("provider") or "provider"),
+                dedupe_key=f"provider:{obj.get('provider')}:{obj.get('kind')}:{obj.get('providerCode')}",
+            ),
+        }
+    if schema == "gluerun.orchestration.gate-report.v0":
+        outcome = str(obj.get("outcome") or "")
+        acknowledged = outcome == "passed-with-acknowledged-baseline"
+        return {
+            "kind": "diagnostic",
+            "text": outcome or "gate report",
+            "gateReport": obj,
+            "diagnostic": _diagnostic(
+                "acknowledged-baseline" if acknowledged else
+                "infrastructure-inconclusive" if outcome == "inconclusive-infrastructure" else
+                "product-failure" if outcome == "failed-product" else "info",
+                "warning" if acknowledged or outcome == "inconclusive-infrastructure" else
+                "error" if outcome == "failed-product" else "info",
+                expected=acknowledged,
+                impact="non-blocking" if acknowledged else
+                "retryable" if outcome == "inconclusive-infrastructure" else
+                "blocking" if outcome == "failed-product" else "none",
+                source="gate",
+            ),
+        }
     rtype = obj.get("type")
     if rtype in ("item.started", "item.completed"):
         item = obj.get("item") if isinstance(obj.get("item"), dict) else {}
@@ -1517,11 +1739,18 @@ def classify_codex_record(obj: dict[str, Any]) -> dict[str, Any] | None:
                     "text": text[:AGENT_MSG_CAP], "truncated": len(text) > AGENT_MSG_CAP}
         if itype == "command_execution":
             out = str(item.get("aggregated_output") or "")
+            exit_code = item.get("exit_code")
+            failed = isinstance(exit_code, int) and exit_code != 0
             return {"kind": "command", "id": item.get("id"),
                     "command": str(item.get("command") or ""),
                     "status": item.get("status") or ("completed" if done else "in_progress"),
-                    "exitCode": item.get("exit_code"),
-                    "output": out[-CMD_OUTPUT_CAP:], "outputTruncated": len(out) > CMD_OUTPUT_CAP}
+                    "exitCode": exit_code,
+                    "output": out[-CMD_OUTPUT_CAP:], "outputTruncated": len(out) > CMD_OUTPUT_CAP,
+                    "diagnostic": _diagnostic(
+                        "product-failure" if failed else "info",
+                        "error" if failed else "info",
+                        impact="blocking" if failed else "none",
+                        source="command")}
         if itype == "file_change":
             changes = [{"path": c.get("path"), "kind": c.get("kind")}
                        for c in (item.get("changes") or []) if isinstance(c, dict)]
@@ -1536,8 +1765,20 @@ def classify_codex_record(obj: dict[str, Any]) -> dict[str, Any] | None:
         return {"kind": "meta", "text": str(itype or "item")} if done else None
     if rtype == "turn.completed":
         usage = obj.get("usage") if isinstance(obj.get("usage"), dict) else {}
+        inp = usage.get("input_tokens")
         tok = usage.get("output_tokens")
-        return {"kind": "meta", "text": "turn complete" + (f" · {tok} out tok" if tok is not None else "")}
+        return {
+            "kind": "meta",
+            "text": "turn complete"
+                    + (f" · {inp} in tok" if inp is not None else "")
+                    + (f" · {tok} out tok" if tok is not None else ""),
+            "usage": {
+                "inputTokens": inp,
+                "cachedInputTokens": usage.get("cached_input_tokens"),
+                "outputTokens": tok,
+            },
+            "diagnostic": _diagnostic("info", "info", source="provider"),
+        }
     if rtype == "turn.started":
         return {"kind": "meta", "text": "turn started"}
     if rtype == "thread.started":
@@ -1545,10 +1786,55 @@ def classify_codex_record(obj: dict[str, Any]) -> dict[str, Any] | None:
     # An orchestration event line (events.ndjson): {ts,type,message,data}.
     msg = obj.get("message")
     if rtype and msg is not None:
-        return {"kind": "event", "ts": obj.get("ts"), "eventType": str(rtype), "text": str(msg)}
+        data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+        diag = data.get("diagnostic") if isinstance(data.get("diagnostic"), dict) else None
+        return {"kind": "event", "ts": obj.get("ts"), "eventType": str(rtype),
+                "text": str(msg), "diagnostic": diag or _event_diagnostic(str(rtype))}
     if rtype:
         return {"kind": "meta", "text": str(rtype)}
     return None
+
+
+def _plain_log_diagnostic(line: str, level: str | None = None) -> dict[str, Any]:
+    if MODEL_CACHE_WARNING_RE.search(line):
+        return _diagnostic(
+            "optional-dependency-warning", "warning", impact="non-blocking",
+            source="model-cache", dedupe_key="optional:model-cache-schema",
+        )
+    if OPTIONAL_MCP_WARNING_RE.search(line):
+        return _diagnostic(
+            "optional-dependency-warning", "warning", impact="non-blocking",
+            source="capability", dedupe_key="optional:mcp-startup",
+        )
+    if INFRA_WARNING_RE.search(line):
+        return _diagnostic(
+            "infrastructure-inconclusive", "warning", impact="retryable",
+            source="runtime",
+        )
+    if level in {"ERROR", "FATAL"}:
+        return _diagnostic("orchestration-failure", "error", impact="blocking",
+                           source="runtime")
+    return _diagnostic("info", "warning" if level == "WARN" else "info",
+                       source="runtime")
+
+
+def _dedupe_diagnostics(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    indexes: dict[str, int] = {}
+    for record in records:
+        diagnostic = record.get("diagnostic")
+        key = diagnostic.get("dedupeKey") if isinstance(diagnostic, dict) else None
+        if not key:
+            output.append(record)
+            continue
+        if key in indexes:
+            current = output[indexes[key]]
+            current["count"] = int(current.get("count") or 1) + 1
+            continue
+        record["count"] = 1
+        indexes[key] = len(output)
+        output.append(record)
+    return output
 
 
 def parse_log_lines(raw_lines: list[str], raw: bool = False) -> list[dict[str, Any]]:
@@ -1574,10 +1860,13 @@ def parse_log_lines(raw_lines: list[str], raw: bool = False) -> list[dict[str, A
             continue  # codex plugin/skill loader chatter — no signal in parsed view
         m = ISO_LEVEL_LINE_RE.match(line)
         if m and not raw:
-            out.append({"kind": "log", "ts": m.group(1), "level": m.group(2), "text": m.group(3)})
+            out.append({"kind": "log", "ts": m.group(1), "level": m.group(2),
+                        "text": m.group(3),
+                        "diagnostic": _plain_log_diagnostic(m.group(3), m.group(2))})
         else:
-            out.append({"kind": "log", "text": line})
-    return out
+            out.append({"kind": "log", "text": line,
+                        "diagnostic": _plain_log_diagnostic(line)})
+    return out if raw else _dedupe_diagnostics(out)
 
 
 def read_log_window(path: Path, cursor: int | None, max_bytes: int = SESSION_LOG_MAX_BYTES) -> dict[str, Any]:
@@ -1710,22 +1999,91 @@ def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float) -> dict[s
     fresh = (now - mtime) < SESSION_LIVE_WINDOW
     integ = INTEGRATE_RE.search(name)
     if integ:
-        return _integration_session(path, name, mtime, fresh, integ.group(1))
+        session = _integration_session(path, name, mtime, fresh, integ.group(1))
+        lifecycle = read_json(path / "run-status.json", None)
+        if (
+            isinstance(lifecycle, dict)
+            and lifecycle.get("schema") == "gluerun.orchestration.run-status.v0"
+            and lifecycle.get("runId") == name
+        ):
+            _apply_run_status(session, lifecycle)
+        return session
     try:
         names = set(os.listdir(path))
     except OSError:
         return None
+    lifecycle = read_json(path / "run-status.json", None)
+    lifecycle = lifecycle if (
+        isinstance(lifecycle, dict)
+        and lifecycle.get("schema") == "gluerun.orchestration.run-status.v0"
+        and lifecycle.get("runId") == name
+    ) else None
+    session = None
     if "worker-codex.log" in names:
-        return _worker_session(repo, path, name, mtime, fresh, names)
-    if "planner-codex.log" in names:
-        return _planner_session(repo, path, name, mtime, fresh, names)
-    if "gate-check.log" in names or "audit.json" in names or "auditor-codex.log" in names:
-        return _gate_session(path, name, mtime, fresh, names)
+        session = _worker_session(repo, path, name, mtime, fresh, names)
+    elif "planner-codex.log" in names:
+        session = _planner_session(repo, path, name, mtime, fresh, names)
+    elif "gate-check.log" in names or "audit.json" in names or "auditor-codex.log" in names:
+        session = _gate_session(path, name, mtime, fresh, names)
     # 0.10.0 supervisor/ask run dirs (ASK-* / SUP-*): operator-initiated readonly
     # sessions, listed as kind "assistant". recommend_auto never auto-picks them.
     if "assistant-codex.log" in names or "supervisor-codex.log" in names or "ask.json" in names:
-        return _assistant_session(path, name, mtime, fresh, names)
-    return None
+        session = _assistant_session(path, name, mtime, fresh, names)
+    if lifecycle and session is None:
+        session = {
+            "id": name, "runId": name, "kind": "worker", "layer": "L2",
+            "role": "orchestrator", "taskId": lifecycle.get("taskId"),
+            "node": lifecycle.get("node"), "area": None,
+            "startedAt": None, "updatedAt": lifecycle.get("updatedAt"),
+            "logFiles": _session_log_files(path),
+            "_mtime": mtime, "_dir": str(path),
+        }
+    if lifecycle and session is not None:
+        _apply_run_status(session, lifecycle)
+    return session
+
+
+def _apply_run_status(session: dict[str, Any], status: dict[str, Any]) -> None:
+    phase = str(status.get("phase") or "")
+    ui_state = {
+        "active": "active",
+        "waiting": "awaiting",
+        "completed": "integrated",
+        "failed": "failed",
+        "stale": "stale",
+        "cancelled": "stopped",
+    }.get(str(status.get("state") or ""), "stale")
+    kind_role_layer = {
+        "planning": ("planner", "planner", "L1"),
+        "implementing": ("worker", "implementer", "L2"),
+        "gating": ("audit", "gate", "L1"),
+        "auditing": ("audit", "auditor", "L1"),
+        "deciding": ("audit", "decider", "L1"),
+        "integrating": ("integration", "integration-worker", "L1"),
+        "awaiting-human": ("human-gate", "operator", "L0"),
+    }
+    if phase in kind_role_layer:
+        session["kind"], session["role"], session["layer"] = kind_role_layer[phase]
+    session.update({
+        "phase": phase,
+        "state": ui_state,
+        "live": ui_state == "active",
+        "lifecycle": status,
+        "phaseStartedAt": status.get("phaseStartedAt"),
+        "lastProgressAt": status.get("lastProgressAt"),
+        "currentActivity": status.get("currentActivity"),
+        "safeCancel": status.get("safeCancel"),
+        "nextAction": status.get("nextAction"),
+        "outcome": status.get("outcome"),
+        "updatedAt": status.get("updatedAt") or session.get("updatedAt"),
+        "implementerState": "active" if phase == "implementing" else "completed",
+    })
+    process = status.get("process") if isinstance(status.get("process"), dict) else {}
+    if process:
+        session["processType"] = process.get("type")
+        session["pid"] = process.get("pid")
+        session["pgid"] = process.get("pgid")
+        session["startedAt"] = process.get("startedAt") or session.get("startedAt")
 
 
 def _session_meta_compact(meta: dict[str, Any]) -> dict[str, Any]:
@@ -2003,6 +2361,105 @@ def recommend_auto(sessions: list[dict[str, Any]]) -> dict[str, Any]:
     return {"mode": "origin", "sessionIds": ["origin"]}
 
 
+def _human_gate_repo_file(repo: Path, ref: Any) -> Path | None:
+    if not isinstance(ref, str) or not ref:
+        return None
+    rel = Path(ref)
+    if rel.is_absolute() or ".." in rel.parts:
+        return None
+    path = (repo / rel).resolve()
+    try:
+        path.relative_to(repo.resolve())
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+def _human_gate_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return ""
+    return digest.hexdigest()
+
+
+def collect_human_gates(repo: Path) -> list[dict[str, Any]]:
+    dag = read_json(repo / "docs" / "orchestration" / "dag.v0.json", None)
+    nodes = dag.get("nodes", []) if isinstance(dag, dict) else []
+    by_id = {
+        str(node.get("id")): node
+        for node in nodes
+        if isinstance(node, dict) and node.get("id")
+    }
+    reverse: dict[str, set[str]] = {}
+    for node_id, node in by_id.items():
+        for dependency in node.get("dependsOn", []):
+            reverse.setdefault(str(dependency), set()).add(node_id)
+
+    def descendants(node_id: str) -> list[str]:
+        found: set[str] = set()
+        queue = list(reverse.get(node_id, set()))
+        while queue:
+            current = queue.pop()
+            if current in found:
+                continue
+            found.add(current)
+            queue.extend(reverse.get(current, set()))
+        return sorted(found)
+
+    output = []
+    for node_id, node in by_id.items():
+        config = node.get("humanGate")
+        if not isinstance(config, dict):
+            continue
+        request_ref = config.get("requestRef")
+        approval_ref = config.get("approvalRef")
+        request_path = _human_gate_repo_file(repo, request_ref)
+        request = read_json(request_path, None) if request_path else None
+        request = request if isinstance(request, dict) else {}
+        if not isinstance(request_ref, str) or not isinstance(approval_ref, str):
+            result = {
+                "state": "invalid",
+                "reason": "human-gate references must be non-empty strings",
+            }
+        elif VALIDATE_HUMAN_GATE is None:
+            result = {
+                "state": "invalid",
+                "reason": "human-gate contract validator unavailable",
+            }
+        else:
+            try:
+                result = VALIDATE_HUMAN_GATE(
+                    repo.resolve(),
+                    request_ref,
+                    approval_ref,
+                    node_id,
+                )
+            except Exception as exc:  # fail closed; the console is an observer
+                result = {
+                    "state": "invalid",
+                    "reason": f"human-gate validation failed: {exc}",
+                }
+        state = str(result.get("state") or "invalid")
+        reason = str(result.get("reason") or "human-gate validation failed")
+        output.append({
+            "node": node_id,
+            "state": state,
+            "reason": reason,
+            "gateId": result.get("gateId", request.get("gateId")),
+            "owner": result.get("owner", request.get("requiredOwner")),
+            "approvalType": request.get("approvalType"),
+            "expiresAt": result.get("expiresAt", request.get("expiresAt")),
+            "requestRef": request_ref,
+            "approvalRef": approval_ref,
+            "blockedNodes": descendants(node_id) if state != "approved" else [],
+        })
+    return output
+
+
 def collect_sessions(repo: Path) -> dict[str, Any]:
     sessions = discover_sessions(repo)
     return {
@@ -2011,6 +2468,8 @@ def collect_sessions(repo: Path) -> dict[str, Any]:
         "repo": str(repo.resolve()),
         "sessions": sessions,
         "auto": recommend_auto(sessions),
+        "resources": collect_resource_plan_native(repo),
+        "humanGates": collect_human_gates(repo),
     }
 
 
@@ -2476,9 +2935,12 @@ def synthesize_gate_blocking(gate: dict[str, Any] | None, integrated_ids: set[st
     accepted = [t for t in task_ids if t in integrated_ids]
     missing = [t for t in task_ids if t not in integrated_ids]
     upstream = gate.get("upstreamGates") or []
-    upstream_blockers = [u for u in upstream if upstream_status.get(u, "passed") != "passed"]
+    successful = {"passed", "passed-with-acknowledged-baseline"}
+    upstream_blockers = [
+        u for u in upstream if upstream_status.get(u, "passed") not in successful
+    ]
     rationale = str(gate.get("rationale") or "").strip()
-    if status == "passed":
+    if status in successful:
         reason = ""
     elif status == "blocked":
         bits = ["Gate is blocked."]
@@ -3154,6 +3616,7 @@ def _stage_sort_key(stage: str) -> tuple[int, int]:
 def compute_plan_progress(registry: dict[str, Any], gate_status: dict[str, str]) -> tuple:
     """Per-stage + overall plan completion from the DAG + gate statuses. Pure."""
     by_stage = registry.get("by_stage") or {}
+    successful = {"passed", "passed-with-acknowledged-baseline"}
     stages = []
     total = passed = 0
     for s in sorted(by_stage, key=_stage_sort_key):
@@ -3161,7 +3624,7 @@ def compute_plan_progress(registry: dict[str, Any], gate_status: dict[str, str])
         p = 0
         for n in sorted(by_stage[s], key=lambda x: str(x.get("id"))):
             st = gate_status.get(str(n.get("id")), "absent")
-            if st == "passed":
+            if st in successful:
                 p += 1
             nodes.append({"id": n.get("id"), "status": st, "layer": n.get("layer")})
         t = len(by_stage[s])
@@ -3275,7 +3738,9 @@ def compute_loop_pulse(index: dict[str, Any], registry: dict[str, Any],
     # Not-yet-passed nodes grouped by the area whose tasks feed them.
     frontier_by_area: dict[str, list[dict[str, Any]]] = {}
     for nid, node in (registry.get("by_id") or {}).items():
-        if gate_status.get(nid, "absent") != "passed":
+        if gate_status.get(nid, "absent") not in {
+            "passed", "passed-with-acknowledged-baseline"
+        }:
             frontier_by_area.setdefault(str(node.get("area") or "—"), []).append(
                 {"id": nid, "status": gate_status.get(nid, "absent"), "stage": node.get("stage")})
     activity = []
@@ -3510,7 +3975,11 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
     stages = []
     for sid in sorted(stage_nodes, key=_stage_sort_key):
         ids = sorted(stage_nodes[sid])
-        passed = sum(1 for i in ids if node_out_by_id[i]["gate"]["status"] == "passed")
+        passed = sum(
+            1 for i in ids
+            if node_out_by_id[i]["gate"]["status"]
+            in {"passed", "passed-with-acknowledged-baseline"}
+        )
         has_active = any(node_out_by_id[i]["tasks"]["counts"]["active"] for i in ids)
         status = ("complete" if passed == len(ids)
                   else "in-progress" if (passed or has_active) else "pending")

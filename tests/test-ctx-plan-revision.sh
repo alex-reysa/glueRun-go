@@ -6,7 +6,8 @@
 # gluerun_plan_revise_loop <node> <run_id> <stage_dir> [worktree] composes ONLY
 # the already-integrated engine helpers into the bounded in-lineage
 #   critique -> decide(revise|import|park) -> [assemble prompt -> resume|fresh ->
-#   re-stage via injectable planner runner (rc-86 -> fresh fallback) ->
+#   provider final message -> host-side transactional re-stage
+#   (rc-86 -> fresh fallback) ->
 #   record dispositions] -> re-critique
 # loop, printing EXACTLY one terminal outcome line (`import` or `park <reason>`)
 # and driving no state beyond the stage dir + the pinned event log.
@@ -53,6 +54,7 @@ export GLUERUN_ROOT="$REPO"
 export GLUERUN_STATE_DIR="$REPO/.gluerun-state"
 export GLUERUN_ORCH_DIR="$REPO/docs/orchestration"
 export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
+export GLUERUN_TARGET_BRANCH=target
 export GLUERUN_PLAN_CRITIQUE=1
 export GLUERUN_PLAN_REVISE_MAX=1
 : > "$GLUERUN_EVENTS_FILE"
@@ -115,21 +117,21 @@ chmod +x "$CRITIC"
 export GLUERUN_RUNNER="$CRITIC"
 
 # --- STUB planner runner (GLUERUN_PLAN_REVISE_PLANNER) ------------------------
-# Re-stages a candidate into --stage-dir, reads the finding ids from the revision
-# --prompt-file, and writes a task-batch.v0 to --output-last-message that ADDRESSES
-# the first id, REJECTS the second, and leaves the third unaddressed (so all three
-# dispositions appear). When PLANNER_FAIL_ON_RESUME=1 and --resume-session is
-# present, exits 86 (resume-refused) to drive the fresh-fallback path.
+# Returns a complete task-batch.v0 through --output-last-message. It deliberately
+# knows nothing about the orchestration staging directory: the host materializes
+# and transactionally swaps the candidate set after validation. The batch
+# ADDRESSES the first finding id, REJECTS the second, and leaves the third
+# unaddressed. PLANNER_MODE selects malformed/empty/id-drift/runner-failure
+# regressions; PLANNER_FAIL_ON_RESUME drives the rc-86 fresh-fallback path.
 PLANNER="$tmp/stub-planner.sh"
 cat > "$PLANNER" <<'PEOF'
 #!/usr/bin/env bash
 set -uo pipefail
-out=""; prompt=""; stage=""; has_resume=0; args=("$@"); i=0
+out=""; prompt=""; has_resume=0; args=("$@"); i=0
 while [[ $i -lt ${#args[@]} ]]; do
   case "${args[$i]}" in
     --output-last-message) out="${args[$((i + 1))]}" ;;
     --prompt-file) prompt="${args[$((i + 1))]}" ;;
-    --stage-dir) stage="${args[$((i + 1))]}" ;;
     --resume-session) has_resume=1 ;;
   esac
   i=$((i + 1))
@@ -138,11 +140,15 @@ if [[ "${PLANNER_FAIL_ON_RESUME:-0}" == "1" && "$has_resume" == "1" ]]; then
   exit 86
 fi
 touch "${PLANNER_INVOKED_FILE:-/dev/null}"
-[[ -n "$stage" ]] && printf '# revised candidate\n' > "$stage/TASK-0100.candidate.md"
+[[ "${PLANNER_MODE:-valid}" != "runner-fail" ]] || exit 7
 [[ -n "$out" ]] || exit 0
-python3 - "$out" "$prompt" <<'PY'
+if [[ "${PLANNER_MODE:-valid}" == "malformed" ]]; then
+  printf 'not a task batch\n' >"$out"
+  exit 0
+fi
+python3 - "$out" "$prompt" "${PLANNER_MODE:-valid}" <<'PY'
 import re, json, sys
-out, prompt = sys.argv[1], sys.argv[2]
+out, prompt, mode = sys.argv[1:4]
 ids = []
 try:
     with open(prompt, "r", encoding="utf-8") as f:
@@ -150,12 +156,50 @@ try:
     ids = sorted(set(re.findall(r"f-[0-9a-f]{12}", text)))
 except Exception:
     ids = []
-tasks = []
-if len(ids) >= 1:
-    tasks.append({"taskId": "TASK-0100", "markdown": "addresses %s per critique" % ids[0]})
-if len(ids) >= 2:
-    tasks.append({"taskId": "TASK-0101", "markdown": "reject %s: out of scope" % ids[1]})
-# ids[2:] deliberately unaddressed (accepted-but-unaddressed)
+if mode == "empty":
+    tasks = []
+else:
+    task_ids = ["TASK-0100", "TASK-0101", "TASK-0102"]
+    if mode == "id-drift":
+        task_ids[-1] = "TASK-9999"
+    notes = [
+        "addresses %s per critique" % ids[0] if len(ids) >= 1 else "addresses critique",
+        "reject %s: out of scope" % ids[1] if len(ids) >= 2 else "reject critique",
+        "retains the third slice without mentioning its finding",
+    ]
+    tasks = []
+    for index, task_id in enumerate(task_ids):
+        markdown = """# {task_id}: revised candidate {index}
+
+Status: ready
+Area: plancritic
+DAG node: plan-revision-loop
+Target branch: `target`
+Worker branch: `agent/plancritic/{task_id}-revised`
+Test policy: `strict_test_first`
+Gate command: `true`
+Dispatch mode: canonical
+Depends on: []
+
+## Objective
+
+{note}
+
+## Scope
+
+Owned files:
+
+- `engine/revised-{index}.sh`
+
+Forbidden files:
+
+- Any file outside the owned scope.
+
+## Acceptance Criteria
+
+- The revised slice passes.
+""".format(task_id=task_id, index=index, note=notes[index])
+        tasks.append({"taskId": task_id, "markdown": markdown})
 doc = {"schema": "gluerun.orchestration.task-batch.v0", "tasks": tasks}
 with open(out, "w", encoding="utf-8") as f:
     json.dump(doc, f)
@@ -211,7 +255,60 @@ PY
 }
 
 new_stage() { # <label> -> prints a fresh stage dir
-  local d="$tmp/stage/$1"; mkdir -p "$d"; printf '%s' "$d"
+  local d="$tmp/stage/$1" tid index
+  mkdir -p "$d"
+  for index in 0 1 2; do
+    tid="$(printf 'TASK-%04d' "$((100 + index))")"
+    cat >"$d/$tid.candidate.md" <<MD
+# $tid: prior candidate $index
+
+Status: ready
+Area: plancritic
+DAG node: plan-revision-loop
+Target branch: \`target\`
+Worker branch: \`agent/plancritic/$tid-prior\`
+Test policy: \`strict_test_first\`
+Gate command: \`true\`
+Dispatch mode: canonical
+Depends on: []
+
+## Objective
+
+Prior candidate $index.
+
+## Scope
+
+Owned files:
+
+- \`engine/prior-$index.sh\`
+
+Forbidden files:
+
+- Any file outside the owned scope.
+
+## Acceptance Criteria
+
+- The prior slice passes.
+MD
+  done
+  printf '%s' "$d"
+}
+
+candidate_digest() { # <stage-dir>
+  local candidate_batch_dir
+  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$1")" \
+    || fail "cannot resolve authoritative candidate batch for $1"
+  python3 - "$candidate_batch_dir" <<'PY'
+import glob, hashlib, os, sys
+root = sys.argv[1]
+h = hashlib.sha256()
+for path in sorted(glob.glob(os.path.join(root, "TASK-*.candidate.md"))):
+    h.update(os.path.basename(path).encode())
+    h.update(b"\0")
+    h.update(open(path, "rb").read())
+    h.update(b"\0")
+print(h.hexdigest())
+PY
 }
 
 # =============================================================================
@@ -292,7 +389,242 @@ outD="$(gluerun_plan_revise_loop "$NODE" "RUN-D" "$sdD" "$REPO")" \
 [[ ! -e "$PLANNER_INVOKED_FILE" ]] || fail "D: planner runner must NOT run on an immediate approve"
 
 # =============================================================================
-# (E) present-but-uncalled: no existing engine path invokes the new function.
+# (E-H) runner/malformed/empty/id-drift failures preserve the prior candidate
+# set, park on one stable reason, and never record dispositions.
+# =============================================================================
+assert_revision_failure() { # <label> <planner-mode> <failure-class>
+  local label="$1" mode="$2" failure_class="$3" stage before after result
+  : >"$GLUERUN_EVENTS_FILE"
+  export CRITIC_SEQ_FILE="$tmp/seq-$label"
+  printf 'revise\n' >"$CRITIC_SEQ_FILE"
+  export PLANNER_MODE="$mode"
+  export PLANNER_FAIL_ON_RESUME=0
+  export PLANNER_INVOKED_FILE="$tmp/planner-$label"
+  stage="$(new_stage "$label")"
+  before="$(candidate_digest "$stage")"
+  result="$(gluerun_plan_revise_loop "$NODE" "RUN-$label" "$stage" "$REPO")" \
+    || fail "$label: failure path must return a terminal park outcome"
+  after="$(candidate_digest "$stage")"
+  [[ "$result" == "park revision-staging-failed" ]] \
+    || fail "$label: expected stable revision-staging-failed park, got '$result'"
+  [[ "$before" == "$after" ]] \
+    || fail "$label: invalid revision changed the prior candidate set"
+  [[ "$(ev_count plan.revised)" -eq 0 ]] \
+    || fail "$label: disposition recorded before a successful stage replacement"
+  grep -q "\"failureClass\":\"$failure_class\"" "$GLUERUN_EVENTS_FILE" \
+    || fail "$label: missing failureClass=$failure_class"
+}
+
+assert_revision_failure E runner-fail runner-failed
+assert_revision_failure F malformed batch-malformed
+assert_revision_failure G empty batch-empty
+assert_revision_failure H id-drift batch-invalid
+unset PLANNER_MODE
+
+# =============================================================================
+# (I) Real codex-run.sh argument parser + fake Codex executable. The fake rejects
+# any leaked --stage-dir. A full revise -> approve walk proves the real runner
+# contract accepts the host-owned staging design.
+# =============================================================================
+FAKE_CODEX="$tmp/fake-codex.sh"
+FAKE_CODEX_ARGS="$tmp/fake-codex.args"
+cat >"$FAKE_CODEX" <<'CEO'
+#!/usr/bin/env bash
+set -uo pipefail
+out=""
+args=("$@")
+printf '%s\n' "${args[@]}" >"${FAKE_CODEX_ARGS:?}"
+for ((i=0; i<${#args[@]}; i++)); do
+  [[ "${args[$i]}" != "--stage-dir" ]] || exit 97
+  [[ "${args[$i]}" != "-o" ]] || out="${args[$((i + 1))]}"
+done
+[[ -n "$out" ]] || exit 2
+python3 - "$out" <<'PY'
+import json, sys
+tasks = []
+for index, task_id in enumerate(("TASK-0100", "TASK-0101", "TASK-0102")):
+    markdown = """# {task_id}: parser-backed revision {index}
+
+Status: ready
+Area: plancritic
+DAG node: plan-revision-loop
+Target branch: `target`
+Worker branch: `agent/plancritic/{task_id}-parser`
+Test policy: `strict_test_first`
+Gate command: `true`
+Dispatch mode: canonical
+Depends on: []
+
+## Objective
+
+Revision returned through the real codex-run parser.
+
+## Scope
+
+Owned files:
+
+- `engine/parser-{index}.sh`
+
+Forbidden files:
+
+- Any file outside the owned scope.
+
+## Acceptance Criteria
+
+- The parser-backed revision passes.
+""".format(task_id=task_id, index=index)
+    tasks.append({"taskId": task_id, "markdown": markdown})
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump({"schema": "gluerun.orchestration.task-batch.v0", "tasks": tasks}, f)
+PY
+printf '%s\n' '{"type":"thread.started","thread_id":"fake-revision-thread"}'
+exit 0
+CEO
+chmod +x "$FAKE_CODEX"
+
+: >"$GLUERUN_EVENTS_FILE"
+export CRITIC_SEQ_FILE="$tmp/seqI"; printf 'revise\napprove\n' >"$CRITIC_SEQ_FILE"
+export GLUERUN_PLAN_REVISE_PLANNER="$ENGINE_HOME/engine/codex-run.sh"
+export GLUERUN_CODEX_BIN="$FAKE_CODEX"
+export GLUERUN_CODEX_TIMEOUT_SEC=0
+export GLUERUN_CODEX_IDLE_SEC=0
+export FAKE_CODEX_ARGS
+sdI="$(new_stage I)"
+beforeI="$(candidate_digest "$sdI")"
+outI="$(gluerun_plan_revise_loop "$NODE" "RUN-I" "$sdI" "$REPO")" \
+  || fail "I: real codex-run parser walk must exit 0"
+afterI="$(candidate_digest "$sdI")"
+[[ "$outI" == "import" ]] || fail "I: real parser walk must import (got '$outI')"
+[[ -s "$FAKE_CODEX_ARGS" ]] || fail "I: fake Codex executable was not invoked"
+! grep -qx -- '--stage-dir' "$FAKE_CODEX_ARGS" \
+  || fail "I: orchestration-only --stage-dir leaked through the real runner contract"
+[[ "$beforeI" != "$afterI" ]] || fail "I: valid parser-backed revision did not replace candidates"
+[[ "$(ev_count plan.revised)" -eq 1 ]] \
+  || fail "I: parser-backed revision must record dispositions after staging"
+export GLUERUN_PLAN_REVISE_PLANNER="$PLANNER"
+unset GLUERUN_CODEX_BIN GLUERUN_CODEX_TIMEOUT_SEC GLUERUN_CODEX_IDLE_SEC FAKE_CODEX_ARGS
+
+# =============================================================================
+# (J) A hard interruption after generation construction but before the pointer
+# swap leaves the complete prior candidate batch authoritative. Retrying the
+# same publication recovers by reusing the immutable orphan generation.
+# =============================================================================
+sdJ="$(new_stage J)"
+replacementJ="$sdJ/.replacement"
+mkdir -p "$replacementJ"
+for candidateJ in "$sdJ"/TASK-*.candidate.md; do
+  cp "$candidateJ" "$replacementJ/"
+  printf '\nRevision replacement bytes.\n' >>"$replacementJ/$(basename "$candidateJ")"
+done
+beforeJ="$(candidate_digest "$sdJ")"
+readyJ="$tmp/publish-J.ready"
+releaseJ="$tmp/publish-J.release"
+GLUERUN_TEST_BATCH_PUBLISH_READY="$readyJ" \
+GLUERUN_TEST_BATCH_PUBLISH_RELEASE="$releaseJ" \
+  python3 "$ENGINE_HOME/engine/task_batch_publish.py" publish \
+    --stage-dir "$sdJ" --candidate-dir "$replacementJ" >/dev/null 2>&1 &
+publish_pidJ=$!
+for _ in $(seq 1 500); do
+  [[ -f "$readyJ" ]] && break
+  sleep 0.01
+done
+[[ -f "$readyJ" ]] || {
+  kill "$publish_pidJ" 2>/dev/null || true
+  fail "J: publisher did not reach the pre-swap interruption barrier"
+}
+kill -9 "$publish_pidJ" 2>/dev/null || true
+wait "$publish_pidJ" 2>/dev/null || true
+afterJ="$(candidate_digest "$sdJ")"
+[[ "$beforeJ" == "$afterJ" ]] \
+  || fail "J: interrupted publication exposed replacement candidate bytes"
+[[ ! -e "$sdJ/.candidate-current.json" ]] \
+  || fail "J: interrupted pre-swap publication wrote the authoritative pointer"
+gluerun_task_batch_replace_stage "$replacementJ" "$sdJ" \
+  || fail "J: retry after interruption did not recover"
+after_retryJ="$(candidate_digest "$sdJ")"
+[[ "$after_retryJ" != "$beforeJ" ]] \
+  || fail "J: recovered publication did not select the replacement generation"
+
+# =============================================================================
+# (K) A concurrent reader pins one immutable generation per read while the
+# current pointer changes. It may observe old or new, but never a mixed digest.
+# =============================================================================
+sdK="$(new_stage K)"
+replacementK1="$sdK/.replacement-1"
+replacementK2="$sdK/.replacement-2"
+mkdir -p "$replacementK1" "$replacementK2"
+for candidateK in "$sdK"/TASK-*.candidate.md; do
+  cp "$candidateK" "$replacementK1/"
+  printf '\nFirst generation bytes.\n' >>"$replacementK1/$(basename "$candidateK")"
+done
+gluerun_task_batch_replace_stage "$replacementK1" "$sdK" \
+  || fail "K: could not seed the first immutable generation"
+oldK="$(candidate_digest "$sdK")"
+resolvedK="$(gluerun_task_batch_candidate_dir "$sdK")"
+for candidateK in "$resolvedK"/TASK-*.candidate.md; do
+  cp "$candidateK" "$replacementK2/"
+  chmod u+w "$replacementK2/$(basename "$candidateK")"
+  printf '\nSecond generation bytes.\n' >>"$replacementK2/$(basename "$candidateK")"
+done
+newK="$(python3 - "$replacementK2" <<'PY'
+import glob, hashlib, os, sys
+root = sys.argv[1]
+h = hashlib.sha256()
+for path in sorted(glob.glob(os.path.join(root, "TASK-*.candidate.md"))):
+    h.update(os.path.basename(path).encode())
+    h.update(b"\0")
+    h.update(open(path, "rb").read())
+    h.update(b"\0")
+print(h.hexdigest())
+PY
+)"
+readyK="$tmp/publish-K.ready"
+releaseK="$tmp/publish-K.release"
+seen_oldK="$tmp/reader-K.old"
+seen_newK="$tmp/reader-K.new"
+reader_errorK="$tmp/reader-K.error"
+GLUERUN_TEST_BATCH_PUBLISH_READY="$readyK" \
+GLUERUN_TEST_BATCH_PUBLISH_RELEASE="$releaseK" \
+  python3 "$ENGINE_HOME/engine/task_batch_publish.py" publish \
+    --stage-dir "$sdK" --candidate-dir "$replacementK2" >/dev/null 2>&1 &
+publish_pidK=$!
+for _ in $(seq 1 500); do
+  [[ -f "$readyK" ]] && break
+  sleep 0.01
+done
+[[ -f "$readyK" ]] || fail "K: publisher did not reach the pointer-swap barrier"
+(
+  for _ in $(seq 1 500); do
+    observed="$(candidate_digest "$sdK")" || exit 1
+    if [[ "$observed" == "$oldK" ]]; then
+      : >"$seen_oldK"
+    elif [[ "$observed" == "$newK" ]]; then
+      : >"$seen_newK"
+    else
+      printf '%s\n' "$observed" >"$reader_errorK"
+      exit 1
+    fi
+    [[ -f "$seen_oldK" && -f "$seen_newK" ]] && exit 0
+  done
+  exit 1
+) &
+reader_pidK=$!
+for _ in $(seq 1 500); do
+  [[ -f "$seen_oldK" ]] && break
+  sleep 0.01
+done
+[[ -f "$seen_oldK" ]] || fail "K: reader did not observe the complete old generation"
+: >"$releaseK"
+wait "$publish_pidK" || fail "K: atomic pointer publication failed"
+wait "$reader_pidK" || fail "K: concurrent reader did not observe only complete generations"
+[[ ! -s "$reader_errorK" ]] \
+  || fail "K: concurrent reader observed mixed digest $(cat "$reader_errorK")"
+[[ -f "$seen_newK" ]] || fail "K: reader did not observe the complete new generation"
+[[ "$(candidate_digest "$sdK")" == "$newK" ]] \
+  || fail "K: current pointer does not select the complete new generation"
+
+# =============================================================================
+# (L) present-but-uncalled: no existing engine path invokes the new function.
 # =============================================================================
 callers="$(grep -rl "gluerun_plan_revise_loop" "$ENGINE_HOME/engine" 2>/dev/null \
   | grep -v '/ctx-plan-revise-loop.sh$' || true)"

@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+"""Create and verify hash-bound Gluerun gate reports."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import pathlib
+import re
+import sys
+from typing import Any
+
+
+PRODUCT_PATTERNS = (
+    ("assertion", re.compile(r"\b(assertionerror|assertion failed|expected .+ (?:to|but)|received:)\b", re.I)),
+    (
+        "test-failure",
+        re.compile(
+            r"(?:^|\n)\s*(?:not ok\b|FAIL(?:\s+\S|:))|\btests?\s+failed\b|\btest suite failed\b",
+            re.I,
+        ),
+    ),
+    ("compile-error", re.compile(r"\b(?:syntaxerror|typeerror:|compilation failed|build failed)\b", re.I)),
+)
+
+INFRA_PATTERNS = (
+    ("read-only-filesystem", re.compile(r"\bread-only file system\b|\berofs\b", re.I)),
+    ("permission-denied", re.compile(r"\bpermission denied\b|\beacces\b|\beperm\b", re.I)),
+    ("disk-full", re.compile(r"\bno space left on device\b|\benospc\b", re.I)),
+    ("resource-exhausted", re.compile(r"\btoo many open files\b|\bemfile\b|\benfile\b", re.I)),
+    ("missing-executable", re.compile(r"\bcommand not found\b|\bno such file or directory\b", re.I)),
+    ("missing-dependency", re.compile(r"\bmodule not found\b|\bcannot find module\b|\bmissing dependency\b", re.I)),
+    (
+        "network",
+        re.compile(
+            r"\b(?:enotfound|econnreset|econnrefused|etimedout|temporary failure in name resolution|network is unreachable)\b",
+            re.I,
+        ),
+    ),
+)
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+HEX_RE = re.compile(r"\b[0-9a-f]{8,}\b", re.I)
+NUMBER_RE = re.compile(r"\b\d+\b")
+
+
+def sha_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def evidence_binding(report: dict[str, Any]) -> str:
+    bound = {
+        "headSha": report.get("headSha"),
+        "commandSha256": report.get("commandSha256"),
+        "rawExitCode": report.get("rawExitCode"),
+        "logSha256": report.get("logSha256"),
+        "outcome": report.get("outcome"),
+        "baselineSha256": report.get("baselineSha256", ""),
+    }
+    return sha_bytes(
+        json.dumps(bound, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def normalized_signature(text: str) -> tuple[str, str]:
+    for raw in text.splitlines():
+        line = ANSI_RE.sub("", raw).strip()
+        if not line:
+            continue
+        if any(pattern.search(line) for _, pattern in PRODUCT_PATTERNS):
+            normalized = " ".join(line.lower().split())
+            normalized = HEX_RE.sub("<hex>", normalized)
+            normalized = NUMBER_RE.sub("<n>", normalized)
+            return sha_bytes(normalized.encode("utf-8")), line[:240]
+    normalized = "gate command exited nonzero"
+    return sha_bytes(normalized.encode("utf-8")), normalized
+
+
+def classify(
+    exit_code: int,
+    text: str,
+    integrity_status: str,
+    setup_errors: list[str],
+) -> tuple[str, list[str], list[str]]:
+    product = [name for name, pattern in PRODUCT_PATTERNS if pattern.search(text)]
+    infrastructure = [name for name, pattern in INFRA_PATTERNS if pattern.search(text)]
+    infrastructure.extend(error for error in setup_errors if error)
+    if integrity_status == "violation":
+        infrastructure.append("source-integrity-violation")
+        return "inconclusive-infrastructure", product, sorted(set(infrastructure))
+    if setup_errors:
+        return "inconclusive-infrastructure", product, sorted(set(infrastructure))
+    if exit_code == 0:
+        return "passed", product, sorted(set(infrastructure))
+    # A genuine assertion/build failure remains a product failure even if the
+    # same log also contains an unrelated infrastructure warning.
+    if product:
+        return "failed-product", sorted(set(product)), sorted(set(infrastructure))
+    if infrastructure:
+        return "inconclusive-infrastructure", [], sorted(set(infrastructure))
+    # A bare terminal status is not product evidence. Timeouts, signals, missing
+    # executables, and other host-side termination paths can all produce a
+    # non-zero code without an assertion. Only a recognizable product signal
+    # above may turn raw output into failed-product.
+    if exit_code in {124, 137, 143}:
+        return "inconclusive-infrastructure", [], ["gate-command-timeout"]
+    return (
+        "inconclusive-infrastructure",
+        [],
+        [f"unknown-terminal-exit:{exit_code}"],
+    )
+
+
+def valid_head(value: str) -> str:
+    value = value.strip().lower()
+    return value if re.fullmatch(r"[0-9a-f]{40,64}", value) else "0" * 40
+
+
+def atomic_json(path: pathlib.Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def command_create(args: argparse.Namespace) -> int:
+    log = pathlib.Path(args.log).resolve()
+    try:
+        raw = log.read_bytes()
+    except OSError:
+        raw = b""
+        args.setup_error.append("gate-log-missing")
+    text = raw.decode("utf-8", errors="replace")
+    outcome, product, infrastructure = classify(
+        args.exit_code, text, args.integrity_status, args.setup_error
+    )
+    unexpected: list[dict[str, str]] = []
+    if outcome == "failed-product":
+        signature, title = normalized_signature(text)
+        unexpected.append({"signature": signature, "title": title})
+    report: dict[str, Any] = {
+        "schema": "gluerun.orchestration.gate-report.v0",
+        "taskId": args.task_id,
+        "runId": args.run_id,
+        "headSha": valid_head(args.head_sha),
+        "command": args.command,
+        "commandSha256": sha_bytes(args.command.encode("utf-8")),
+        "outcome": outcome,
+        "expectedFailures": [],
+        "unexpectedFailures": unexpected,
+        "resolvedExpectedFailures": [],
+        "rawExitCode": args.exit_code,
+        "logRef": str(log),
+        "logSha256": sha_bytes(raw),
+        "logBytes": len(raw),
+        "durationMs": max(0, args.duration_ms),
+        "phase": args.phase,
+        "workspaceKind": args.workspace_kind,
+        "evidenceOnly": False,
+        "sourceIntegrity": {
+            "status": args.integrity_status,
+            "changedPaths": sorted(set(args.changed_path)),
+        },
+        "failureSignals": product,
+        "infrastructureSignals": infrastructure,
+        "recordedAt": utc_now(),
+    }
+    report["evidenceBindingSha256"] = evidence_binding(report)
+    atomic_json(pathlib.Path(args.output), report)
+    return {"passed": 0, "failed-product": 10, "inconclusive-infrastructure": 20}[outcome]
+
+
+def load_verified_evidence(
+    report_path: pathlib.Path, expected_head: str, expected_command: str
+) -> tuple[dict[str, Any] | None, str]:
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"gate report unreadable: {exc}"
+    required = {
+        "schema",
+        "taskId",
+        "runId",
+        "headSha",
+        "command",
+        "commandSha256",
+        "evidenceBindingSha256",
+        "outcome",
+        "rawExitCode",
+        "logRef",
+        "logSha256",
+    }
+    missing = sorted(required - set(report))
+    if missing:
+        return None, "gate report missing: " + ", ".join(missing)
+    if report.get("schema") != "gluerun.orchestration.gate-report.v0":
+        return None, "unsupported gate report schema"
+    if report.get("headSha") != valid_head(expected_head):
+        return None, "gate report head mismatch"
+    if report.get("command") != expected_command:
+        return None, "gate report command mismatch"
+    if report.get("commandSha256") != sha_bytes(expected_command.encode("utf-8")):
+        return None, "gate report command hash mismatch"
+    if report.get("outcome") not in {"passed", "passed-with-acknowledged-baseline"}:
+        return None, "gate report is not successful evidence"
+    raw_exit_code = report.get("rawExitCode")
+    if not isinstance(raw_exit_code, int) or isinstance(raw_exit_code, bool):
+        return None, "gate report exit code is invalid"
+    unexpected = report.get("unexpectedFailures", [])
+    expected = report.get("expectedFailures", [])
+    if not isinstance(unexpected, list) or not isinstance(expected, list):
+        return None, "gate report failure lists are invalid"
+    if unexpected:
+        return None, "successful gate report contains unexpected failures"
+    if report.get("outcome") == "passed" and raw_exit_code != 0:
+        return None, "passed gate report has a nonzero exit code"
+    if (
+        report.get("outcome") == "passed-with-acknowledged-baseline"
+        and not expected
+    ):
+        return None, "acknowledged gate report contains no expected failures"
+    source_integrity = report.get("sourceIntegrity")
+    if (
+        not isinstance(source_integrity, dict)
+        or source_integrity.get("status") != "verified"
+    ):
+        return None, "successful gate report lacks verified source integrity"
+    binding = report.get("evidenceBindingSha256")
+    if binding != evidence_binding(report):
+        return None, "gate report evidence binding mismatch"
+    log = pathlib.Path(str(report.get("logRef", "")))
+    if not log.is_absolute():
+        log = (report_path.parent / log).resolve()
+    try:
+        raw = log.read_bytes()
+    except OSError as exc:
+        return None, f"gate log unreadable: {exc}"
+    if sha_bytes(raw) != report.get("logSha256"):
+        return None, "gate log hash mismatch"
+    baseline_ref = report.get("baselineRef")
+    baseline_sha = report.get("baselineSha256")
+    if bool(baseline_ref) != bool(baseline_sha):
+        return None, "gate report baseline binding is incomplete"
+    if report.get("outcome") == "passed-with-acknowledged-baseline" and not baseline_ref:
+        return None, "acknowledged gate report is missing its baseline binding"
+    if baseline_ref:
+        baseline_path = pathlib.Path(str(baseline_ref))
+        if not baseline_path.is_absolute():
+            baseline_path = (report_path.parent / baseline_path).resolve()
+        try:
+            baseline_raw = baseline_path.read_bytes()
+            baseline = json.loads(baseline_raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            return None, f"gate baseline unreadable: {exc}"
+        if sha_bytes(baseline_raw) != baseline_sha:
+            return None, "gate baseline hash mismatch"
+        if (
+            not isinstance(baseline, dict)
+            or baseline.get("schema") != "gluerun.orchestration.gate-baseline.v0"
+        ):
+            return None, "gate baseline schema mismatch"
+        if baseline.get("commandSha256") != report.get("commandSha256"):
+            return None, "gate baseline command hash mismatch"
+    return report, ""
+
+
+def command_bind(args: argparse.Namespace) -> int:
+    path = pathlib.Path(args.report)
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"gate-report: cannot bind invalid report: {exc}", file=sys.stderr)
+        return 2
+    report["headSha"] = valid_head(args.head_sha)
+    if args.task_id:
+        report["taskId"] = args.task_id
+    report["evidenceBindingSha256"] = evidence_binding(report)
+    atomic_json(path, report)
+    return 0
+
+
+def command_verify(args: argparse.Namespace) -> int:
+    _, reason = load_verified_evidence(
+        pathlib.Path(args.report), args.expected_head, args.expected_command
+    )
+    if reason:
+        print(reason, file=sys.stderr)
+        return 4
+    return 0
+
+
+def command_copy_evidence(args: argparse.Namespace) -> int:
+    source_path = pathlib.Path(args.report)
+    report, reason = load_verified_evidence(
+        source_path, args.expected_head, args.expected_command
+    )
+    if report is None:
+        print(reason, file=sys.stderr)
+        return 4
+    report = dict(report)
+    report["outcome"] = "not-rerun-evidence-verified"
+    report["phase"] = "audit-verification"
+    report["workspaceKind"] = "evidence-only"
+    report["evidenceOnly"] = True
+    report["durationMs"] = 0
+    report["sourceIntegrity"] = {"status": "verified", "changedPaths": []}
+    report["infrastructureSignals"] = []
+    report["failureSignals"] = []
+    report["recordedAt"] = utc_now()
+    report["evidenceBindingSha256"] = evidence_binding(report)
+    atomic_json(pathlib.Path(args.output), report)
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    commands = parser.add_subparsers(dest="subcommand", required=True)
+
+    create = commands.add_parser("create")
+    create.add_argument("--output", required=True)
+    create.add_argument("--task-id", required=True)
+    create.add_argument("--run-id", required=True)
+    create.add_argument("--head-sha", required=True)
+    create.add_argument("--command", required=True)
+    create.add_argument("--exit-code", required=True, type=int)
+    create.add_argument("--log", required=True)
+    create.add_argument("--duration-ms", type=int, default=0)
+    create.add_argument(
+        "--phase", choices=("worker", "audit-verification", "integration", "other"), default="other"
+    )
+    create.add_argument(
+        "--workspace-kind",
+        choices=("worker", "disposable", "evidence-only", "integration"),
+        default="worker",
+    )
+    create.add_argument(
+        "--integrity-status",
+        choices=("verified", "violation", "not-checked"),
+        default="not-checked",
+    )
+    create.add_argument("--changed-path", action="append", default=[])
+    create.add_argument("--setup-error", action="append", default=[])
+    create.set_defaults(handler=command_create)
+
+    bind = commands.add_parser("bind-head")
+    bind.add_argument("--report", required=True)
+    bind.add_argument("--head-sha", required=True)
+    bind.add_argument("--task-id")
+    bind.set_defaults(handler=command_bind)
+
+    verify = commands.add_parser("verify-evidence")
+    verify.add_argument("--report", required=True)
+    verify.add_argument("--expected-head", required=True)
+    verify.add_argument("--expected-command", required=True)
+    verify.set_defaults(handler=command_verify)
+
+    copy_evidence = commands.add_parser("copy-evidence")
+    copy_evidence.add_argument("--report", required=True)
+    copy_evidence.add_argument("--output", required=True)
+    copy_evidence.add_argument("--expected-head", required=True)
+    copy_evidence.add_argument("--expected-command", required=True)
+    copy_evidence.set_defaults(handler=command_copy_evidence)
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    return int(args.handler(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -301,13 +301,15 @@ Promotion discipline (these have each caused real incidents):
 - Never run `promote-gate` concurrently with a live reconcile cycle: the
   cycle's git operations clobber uncommitted gate files. Promote in a
   wait/drain window (`gluerun stop --wait` … `gluerun resume`).
-- Evaluation nodes (`kind: evaluation`) are authority decisions, enforced by
-  the engine since 0.5.0: `gluerun promote-gate <node> --operator
-  --evidence <ref>` promotes on operator say-so; a node declaring
-  `authority: agent-review-allowed` in the DAG also promotes on a valid
-  PASSING review file at `gates/evidence/<node>.review.json`
-  (gate-review.v0: independent reviewer identity, evidence refs, headSha
-  ancestor check). A failed review never writes a failed gate.
+- Evaluation nodes (`kind: evaluation`) are authority decisions. Under schema
+  v2, record a first-class `human-gate` request and exact-artifact approval.
+  The older `gluerun promote-gate <node> --operator --evidence <ref>` route is
+  rejected unless `legacyCompatibility.unboundWaivers` is explicitly enabled.
+  A node declaring `authority: agent-review-allowed` in the DAG may also
+  promote on a valid PASSING review file at
+  `gates/evidence/<node>.review.json` (gate-review.v0: independent reviewer
+  identity, evidence refs, and headSha ancestor check). A failed review never
+  writes a failed gate.
 - A planner's "this node is already complete" refusal may be premature;
   re-read the claim after the last integration before promoting on it.
 

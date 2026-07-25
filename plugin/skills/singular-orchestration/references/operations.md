@@ -24,6 +24,8 @@ one-off overrides. Operator secrets/overrides go in
 | `GLUERUN_MAX_RETRIES` | `3` | Per-task worker retries before the decider escalates. |
 | `GLUERUN_STALE_MINUTES` | `60` | Lease age before a task without a live dispatch pid is reclaimed. |
 | `GLUERUN_TARGET_BRANCH` | (config) | Integration target branch. |
+| `GLUERUN_BASH_BIN` | `bash` / current fallback | Absolute Bash ≥4 path set in the shell/service environment before launch. Bootstrap-only; committed repo config is ignored. |
+| `GLUERUN_CODEX_BIN` | first `codex` on `PATH` | Absolute Codex executable used identically by doctor and `codex-run.sh`; an explicit broken path never falls back. |
 | `GLUERUN_SESSION_AFFINITY` | `1` | Reuse a role's prior runtime session when staleness gates pass. |
 | `GLUERUN_FIX_PROMPT_STRUCTURED` | `1` | Structured fix prompt (authoritative open findings) on retries. |
 | `GLUERUN_DECIDER_FAST` | `1` | Clear-cut failure classes resolved by host policy table without a model round-trip. |
@@ -39,6 +41,7 @@ one-off overrides. Operator secrets/overrides go in
 | `GLUERUN_STALE_HARD_MINUTES` | `240` | Tree-liveness conservatism cap: past this lease age a dispatch is reaped regardless of surviving processes. |
 | `GLUERUN_QUOTA_SLEEP_CAP` / `GLUERUN_QUOTA_WAIT_BUDGET` | `300` / `10800` | Per-nap cap and total budget for quota-window sleeps (budget exhaustion writes STOP). |
 | `GLUERUN_LIMIT_SLEEPTHROUGH` | `1` | Sleep through provider limit windows instead of tripping the breaker — 0.5.0 requires structured evidence (a runner-log marker with a logRef); repo prose can no longer arm a false backoff. |
+| planner backoff accounting | — | A valid backoff defers only planning for non-quota classes and is neutral to the no-progress breaker; unrelated failures still count. Quota retains full sleep-through. |
 | `GLUERUN_AUTO_PROMOTE_GATES` | `1` | Promote gates at integrate time + on empty-queue cycles (0.4.0 default was 0). |
 | `GLUERUN_PROMOTE_TOLERATE_TERMINAL` | `1` | Superseded/blocked predecessors with an integrated successor count as satisfied for promotion. |
 | `GLUERUN_SUPPRESS_UNPROMOTED_REPLAN` | `1` | Never re-plan a node whose tasks are complete but whose gate is unpublished (a published failed gate keeps the node plannable). |
@@ -60,6 +63,48 @@ Model/effort selection per role: `GLUERUN_CLAUDE_MODEL`,
 `GLUERUN_CLAUDE_{L1,L2,PLANNER,AUDITOR,DECIDER}_MODEL`;
 `GLUERUN_CODEX_MODEL`,
 `GLUERUN_CODEX_{L1,L2,PLANNER,AUDITOR,CRITIC,DECIDER,READONLY}_REASONING_EFFORT`.
+
+## Doctor, capability profiles, and operator gates
+
+Run `gluerun doctor` before an unattended cycle and use
+`gluerun doctor --json` in automation. The JSON report is
+`gluerun.doctor-report.v1`; every check includes stable `id`, `status`,
+`severity`, `requiredFor`, `remediation`, and `dedupeKey` fields. A non-zero
+exit means at least one required preflight failed. Warnings cover optional
+dependencies and do not block a run.
+
+Doctor verifies the exact selected Bash, runner, and provider executable; the
+runner contract; provider authentication and model inventory where available;
+schema fixtures and mirrors; disposable worktree support; lazy role capability
+profiles; bootstrap/lockfiles; adaptive disk capacity; and Codex cache
+compatibility. Deployment credentials are deliberately skipped until a
+deployment-capable node enters the ready DAG frontier.
+
+Declare profiles with top-level `capabilityProfiles{}` and map roles with
+`roleProfiles{}`. Profiles accept `required[]`, `optional[]`, and
+`"startup": "lazy"`. Built-ins are `filesystem`, `git`, `schemas`, `skills`,
+`runner-contract`, and `provider-executable`; external IDs use `mcp:NAME`,
+`plugin:NAME`, `executable:NAME`, or `file:PATH`. A missing shared optional
+capability is reported once with all affected roles in `requiredFor`.
+Strict external activation must be declared under
+`capabilityArgs.<exact-capability>` with provider-specific literal argv.
+Profile-wide `providerArgs` cannot satisfy a named capability, and legacy
+free-form provider extra-argument environment variables are disabled in
+strict profiles.
+
+`gluerun doctor` never mutates the Codex model cache. If compatibility is
+warned, either update the selected CLI or explicitly run
+`gluerun doctor --repair-model-cache`; repair atomically renames the original
+to a timestamped, SHA-tagged backup and lets Codex regenerate it on its next
+run.
+
+Human approvals use `gluerun human-gate request|approve|status`. Requests bind
+an owner, expiry, required questions, blocked nodes, and exact artifact hashes.
+Approvals must link the exact request path and hash, answer exactly its
+mandatory question set, and bind at least one evidence file. Approval is
+invalid as soon as the request, an artifact, or evidence bytes change. Schema
+v2 rejects the old unbound `promote-gate --operator --evidence` route unless
+`legacyCompatibility.unboundWaivers` is explicitly enabled for migration.
 
 ## Context knobs (0.4.x)
 

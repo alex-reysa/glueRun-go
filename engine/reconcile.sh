@@ -4,6 +4,10 @@ set -euo pipefail
 # Require bash >= 4 (mapfile). macOS /bin/bash is 3.2; re-exec under Homebrew bash
 # if launched with an old interpreter (e.g. via the launchd /bin/bash wrapper).
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "reconcile.sh requires bash >= 4 (mapfile); install via 'brew install bash'" >&2
   exit 1
@@ -133,10 +137,16 @@ refused_dispatches=0
 integrations_this_run=0
 integration_failures=0
 planner_failures_this_run=0
+planner_backoff_active_this_run=0
 l1_import_rejections_this_run=0
 reaped_ok=0
 reaped_failures=0
 workers_running=0
+resource_configured_slots=0
+resource_effective_slots=0
+resource_available_slots=0
+resource_reason="not-actuating"
+resource_gc_attempted=0
 
 mapfile -t inbox_packets < <(find "$GLUERUN_STATE_DIR/inbox" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
 
@@ -235,13 +245,75 @@ if [[ "$mode" == "actuate" ]]; then
     [[ "$integration_failures" =~ ^[0-9]+$ ]] || integration_failures=0
   fi
 
-  max_concurrent="${GLUERUN_MAX_CONCURRENT:-1}"
+  resource_configured_slots="${GLUERUN_MAX_CONCURRENT:-1}"
+  [[ "$resource_configured_slots" =~ ^[0-9]+$ ]] || resource_configured_slots=1
+  resource_plan_file="$run_dir/resource-plan.json"
+  resource_plan_tmp="$resource_plan_file.tmp.$$"
+  resource_plan_rc=0
+  "$SCRIPT_DIR/resource-plan.sh" --configured-slots "$resource_configured_slots" --json \
+    >"$resource_plan_tmp" 2>"$run_dir/resource-plan.log" || resource_plan_rc=$?
+  if [[ "$resource_plan_rc" -eq 0 ]]; then
+    mv "$resource_plan_tmp" "$resource_plan_file"
+  else
+    rm -f "$resource_plan_tmp"
+    python3 - "$resource_plan_file" "$resource_configured_slots" <<'PY'
+import json
+import pathlib
+import sys
+
+path, configured = sys.argv[1], int(sys.argv[2])
+pathlib.Path(path).write_text(json.dumps({
+    "schema": "gluerun.orchestration.resource-plan.v0",
+    "configuredSlots": configured,
+    "effectiveSlots": 0,
+    "freeBytes": 0,
+    "reserveBytes": 0,
+    "estimatedWorktreeBytes": 0,
+    "affordableSlots": 0,
+    "reason": "resource-plan-failed",
+}, separators=(",", ":")) + "\n", encoding="utf-8")
+PY
+  fi
+  resource_effective_slots="$(gluerun_json_field "$resource_plan_file" effectiveSlots 2>/dev/null || true)"
+  resource_reason="$(gluerun_json_field "$resource_plan_file" reason 2>/dev/null || true)"
+  [[ "$resource_effective_slots" =~ ^[0-9]+$ ]] || resource_effective_slots=0
+  [[ -n "$resource_reason" ]] || resource_reason="resource-plan-invalid"
+
+  # When disk reserve initially leaves no dispatch slot, perform the existing
+  # conservative GC sweep while reusing this reconcile's exact origin lock,
+  # then measure again before accepting zero capacity.
+  if [[ "$resource_configured_slots" -gt 0 && "$resource_effective_slots" -eq 0 ]]; then
+    resource_gc_attempted=1
+    "$SCRIPT_DIR/ops.sh" gc --from-reconcile "$run_id" \
+      >"$run_dir/resource-gc.log" 2>&1 || true
+    resource_plan_rc=0
+    "$SCRIPT_DIR/resource-plan.sh" --configured-slots "$resource_configured_slots" --json \
+      >"$resource_plan_tmp" 2>>"$run_dir/resource-plan.log" || resource_plan_rc=$?
+    if [[ "$resource_plan_rc" -eq 0 ]]; then
+      mv "$resource_plan_tmp" "$resource_plan_file"
+      resource_effective_slots="$(gluerun_json_field "$resource_plan_file" effectiveSlots 2>/dev/null || true)"
+      resource_reason="$(gluerun_json_field "$resource_plan_file" reason 2>/dev/null || true)"
+      [[ "$resource_effective_slots" =~ ^[0-9]+$ ]] || resource_effective_slots=0
+      [[ -n "$resource_reason" ]] || resource_reason="resource-plan-invalid"
+    else
+      rm -f "$resource_plan_tmp"
+      resource_effective_slots=0
+      resource_reason="resource-plan-failed-after-gc"
+    fi
+  fi
+
+  max_concurrent="$resource_effective_slots"
   max_dispatch="${GLUERUN_MAX_DISPATCH:-$max_concurrent}"
+  [[ "$max_dispatch" =~ ^[0-9]+$ ]] || max_dispatch="$max_concurrent"
   active_leases="$(gluerun_active_lease_count)"
   available_slots=$((max_concurrent - active_leases))
   [[ "$available_slots" -lt 0 ]] && available_slots=0
+  resource_available_slots="$available_slots"
   dispatch_budget="$max_dispatch"
   [[ "$dispatch_budget" -gt "$available_slots" ]] && dispatch_budget="$available_slots"
+  gluerun_append_event "origin.resource_plan" "adaptive dispatch capacity calculated" \
+    "{\"runId\":\"$run_id\",\"configuredSlots\":$resource_configured_slots,\"effectiveSlots\":$resource_effective_slots,\"availableSlots\":$resource_available_slots,\"activeLeases\":$active_leases,\"gcAttempted\":$resource_gc_attempted,\"reason\":\"$resource_reason\"}"
+  echo "actuation: capacity $resource_available_slots available / $resource_effective_slots effective / $resource_configured_slots configured ($resource_reason)"
   # This list is used only for queue-size/empty checks. Duplicate suppression is
   # authoritative in gluerun_select_dispatch_frontier below, whose single-pass
   # parser also enforces dependencies, leases, and scope conflicts. Re-running
@@ -269,7 +341,15 @@ if [[ "$mode" == "actuate" ]]; then
   # and import their staged proposals serially (L0 stays the only importer);
   # otherwise fall back to the single-node generator (unchanged).
   if [[ ${#ready_tasks[@]} -eq 0 && "$dispatch_budget" -gt 0 && "${GLUERUN_GENERATE:-1}" == "1" ]]; then
-    if [[ "${GLUERUN_ENABLE_L1_PARALLEL:-0}" == "1" ]]; then
+    planner_backoff_json="$(gluerun_planner_backoff_active_json 2>/dev/null || true)"
+    if [[ -n "$planner_backoff_json" ]]; then
+      planner_backoff_active_this_run=1
+      planner_failures_this_run=0
+      echo "actuation: planner backoff active; deferring planning while non-planner work continues"
+      gluerun_append_event "origin.planner_deferred_backoff" \
+        "planner backoff active; planning deferred without failure" \
+        "{\"runId\":\"$run_id\",\"backoff\":$planner_backoff_json}"
+    elif [[ "${GLUERUN_ENABLE_L1_PARALLEL:-0}" == "1" ]]; then
       echo "actuation: ready queue empty; L1 parallel fanout (cap ${GLUERUN_MAX_L1_CONCURRENT:-3})..."
       # Plan-critique knob (default-OFF): when ON, route the L1 import fanout
       # through the integrated critique-aware orchestrator so L0 import honors the
@@ -288,7 +368,10 @@ if [[ "$mode" == "actuate" ]]; then
       echo "actuation: ready queue empty; invoking task generator for up to $dispatch_budget task(s)..."
       gen_out="$("$SCRIPT_DIR/generate-tasks.sh" --count "$dispatch_budget" 2>&1)" || true
       printf '%s\n' "$gen_out" | sed 's/^/  gen: /'
-      if printf '%s\n' "$gen_out" | grep -q 'planner-failed\|planner-backoff\|planner-blocked'; then
+      if printf '%s\n' "$gen_out" | grep -q 'planner-backoff'; then
+        planner_backoff_active_this_run=1
+        planner_failures_this_run=0
+      elif printf '%s\n' "$gen_out" | grep -q 'planner-failed\|planner-blocked'; then
         planner_failures_this_run=1
       fi
     fi
@@ -414,7 +497,13 @@ Failed dispatches: $failed_dispatches
 Integrated this run: $integrations_this_run
 Failed integrations: $integration_failures
 Planner failures this run: $planner_failures_this_run
+Planner backoff active this run: $planner_backoff_active_this_run
 L1 import rejections this run: $l1_import_rejections_this_run
+Configured dispatch slots: $resource_configured_slots
+Disk-adjusted dispatch slots: $resource_effective_slots
+Available dispatch slots: $resource_available_slots
+Capacity reason: $resource_reason
+Capacity GC attempted: $resource_gc_attempted
 
 Actions:
 
@@ -424,25 +513,151 @@ Actions:
 - Continue toward one manual artifact-area proof loop after scaffolding is accepted.
 SNAPSHOT
 )"
+
+# The tracked project snapshot contains durable semantic state only. Per-cycle
+# timestamps, run ids, process activity, and transient counters stay in the
+# run-local snapshot/origin-state under .gluerun-state.
+project_snapshot="$(python3 - "$GLUERUN_TASKS_DIR" "$GLUERUN_ORCH_DIR/gates" \
+  "$GLUERUN_ORCH_DIR/packets/imported" "$GLUERUN_TARGET_BRANCH" <<'PY'
+import collections
+import json
+import pathlib
+import re
+import sys
+
+tasks_dir = pathlib.Path(sys.argv[1])
+gates_dir = pathlib.Path(sys.argv[2])
+packets_dir = pathlib.Path(sys.argv[3])
+target = sys.argv[4]
+
+counts = collections.Counter()
+for path in sorted(tasks_dir.rglob("TASK-*.md")) if tasks_dir.is_dir() else []:
+    if not re.fullmatch(r"TASK-\d{4,}\.md", path.name):
+        continue
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        continue
+    match = re.search(r"^Status:\s*`?([^`\n]+)`?\s*$", text, re.MULTILINE | re.IGNORECASE)
+    counts[(match.group(1).strip().lower() if match else "unknown")] += 1
+
+gate_total = gate_passed = 0
+if gates_dir.is_dir():
+    for path in sorted(gates_dir.glob("*.gate-result.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        gate_total += 1
+        if data.get("status") in ("passed", "passed-with-acknowledged-baseline"):
+            gate_passed += 1
+
+imported = 0
+if packets_dir.is_dir():
+    imported = sum(
+        1
+        for path in packets_dir.rglob("*.json")
+        if not path.name.endswith(".audit.json")
+    )
+
+lines = [
+    "Durable semantic state (cycle heartbeat and process telemetry live under `.gluerun-state`).",
+    "",
+    f"Target branch: `{target}`",
+    f"Imported packets: {imported}",
+    f"Tasks: {sum(counts.values())}",
+    f"Gates passed: {gate_passed}/{gate_total}",
+    "",
+    "Task statuses:",
+]
+if counts:
+    lines.extend(f"- {status}: {counts[status]}" for status in sorted(counts))
+else:
+    lines.append("- (none)")
+print("\n".join(lines))
+PY
+)"
+
 gluerun_write_run_snapshot "$run_id" "$snapshot"
+
+_ctl_min="${GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC:-300}"
+[[ "$_ctl_min" =~ ^[0-9]+$ ]] || _ctl_min=300
+_ctl_now="${GLUERUN_CONTROL_COMMIT_NOW_EPOCH:-$(date +%s)}"
+[[ "$_ctl_now" =~ ^[0-9]+$ ]] || _ctl_now="$(date +%s)"
+_ctl_last="$(git -C "$GLUERUN_ROOT" log -1 --format=%ct -- \
+  docs/orchestration/project-state.md 2>/dev/null || true)"
+[[ "$_ctl_last" =~ ^[0-9]+$ ]] || _ctl_last=0
+_ctl_snapshot_due="no"
+if [[ "$_ctl_min" -eq 0 || "$_ctl_last" -eq 0 ]]; then
+  _ctl_snapshot_due="yes"
+elif ! grep -q '<!-- gluerun:reconcile-snapshot:start -->' \
+    "$GLUERUN_ORCH_DIR/project-state.md" 2>/dev/null; then
+  _ctl_snapshot_due="yes"
+elif [[ "$_ctl_now" -ge "$_ctl_last" && $((_ctl_now - _ctl_last)) -ge "$_ctl_min" ]]; then
+  _ctl_snapshot_due="yes"
+fi
+
+_ctl_material_pending="$(git -C "$GLUERUN_ROOT" status --porcelain -- \
+  docs/orchestration ':(exclude)docs/orchestration/project-state.md' 2>/dev/null || true)"
+_ctl_snapshot_written="no"
 if [[ "$mode" == "apply" || "$mode" == "actuate" ]]; then
-  gluerun_update_project_snapshot "$snapshot"
+  if [[ "$_ctl_snapshot_due" == "yes" ]]; then
+    gluerun_update_project_snapshot "$project_snapshot"
+    _ctl_snapshot_written="yes"
+  else
+    gluerun_append_event "origin.control_state_deferred" \
+      "semantic snapshot refresh deferred by path-specific commit interval" \
+      "{\"runId\":\"$run_id\",\"minimumIntervalSec\":$_ctl_min,\"lastSnapshotEpoch\":$_ctl_last,\"nowEpoch\":$_ctl_now}"
+  fi
 fi
 gluerun_write_origin_state "$run_id"
 
 # Commit (and optionally push) the cycle's control-state output so the tree stays
 # clean for the next integrate and progress is durable. Only on the target branch.
 if [[ "$do_import" == "yes" && "$(gluerun_current_branch)" == "$GLUERUN_TARGET_BRANCH" ]]; then
-  if [[ -n "$(git -C "$GLUERUN_ROOT" status --porcelain -- docs/orchestration)" ]]; then
+  if [[ -n "$(git -C "$GLUERUN_ROOT" status --porcelain -- docs/orchestration)" ]] \
+    && [[ -n "$_ctl_material_pending" || "$_ctl_snapshot_written" == "yes" ]]; then
     # add -> scan -> commit/reset mutates the main worktree index, so it runs
     # under the repo-wide git lock shared with worker git ops; detached workers
     # may be running concurrently with this block.
     if gluerun_git_lock_acquire; then
       git -C "$GLUERUN_ROOT" add -- docs/orchestration
-      if "$SCRIPT_DIR/secret-scan.sh" --worktree "$GLUERUN_ROOT" --staged >"$GLUERUN_STATE_DIR/runs/$run_id/secret-scan-ctl.log" 2>&1; then
-        git -C "$GLUERUN_ROOT" -c user.name="$GLUERUN_GIT_L0_NAME" -c user.email="$GLUERUN_GIT_L0_EMAIL" \
-          commit -q -m "chore(orchestration): control-state update (run $run_id)" || true
+      _ctl_staged="$(git -C "$GLUERUN_ROOT" diff --cached --name-only -- docs/orchestration)"
+      # Snapshot-only writes reach this point only when the path-specific
+      # 300-second interval is due. Any other durable orchestration path is a
+      # material transition and commits immediately.
+      if [[ -n "$_ctl_staged" ]] \
+        && "$SCRIPT_DIR/secret-scan.sh" --worktree "$GLUERUN_ROOT" --staged \
+          >"$GLUERUN_STATE_DIR/runs/$run_id/secret-scan-ctl.log" 2>&1; then
+        _ctl_commit_rc=0
+        if [[ -n "${GLUERUN_CONTROL_COMMIT_NOW_EPOCH:-}" ]]; then
+          env GIT_AUTHOR_DATE="@${_ctl_now} +0000" GIT_COMMITTER_DATE="@${_ctl_now} +0000" \
+            git -C "$GLUERUN_ROOT" -c user.name="$GLUERUN_GIT_L0_NAME" -c user.email="$GLUERUN_GIT_L0_EMAIL" \
+            commit -q -m "chore(orchestration): control-state update (run $run_id)" \
+            || _ctl_commit_rc=$?
+        else
+          git -C "$GLUERUN_ROOT" -c user.name="$GLUERUN_GIT_L0_NAME" -c user.email="$GLUERUN_GIT_L0_EMAIL" \
+            commit -q -m "chore(orchestration): control-state update (run $run_id)" \
+            || _ctl_commit_rc=$?
+        fi
+        if [[ "$_ctl_commit_rc" -ne 0 ]]; then
+          git -C "$GLUERUN_ROOT" reset -q -- docs/orchestration || true
+        fi
         gluerun_git_lock_release
+        if [[ "$_ctl_commit_rc" -ne 0 ]]; then
+          gluerun_append_event "origin.control_state_blocked" \
+            "control-state commit failed" "{\"runId\":\"$run_id\",\"exitCode\":$_ctl_commit_rc}"
+          continue_push="no"
+        else
+          continue_push="yes"
+        fi
+      else
+        git -C "$GLUERUN_ROOT" reset -q -- docs/orchestration || true
+        gluerun_git_lock_release
+        gluerun_append_event "origin.control_state_blocked" "secret-scan blocked control-state commit" "{\"runId\":\"$run_id\"}"
+        continue_push="no"
+      fi
+      if [[ "$continue_push" == "yes" ]]; then
         gluerun_append_event "origin.control_state_committed" "control state committed" "{\"runId\":\"$run_id\"}"
         if [[ "${GLUERUN_PUSH:-0}" == "1" ]] && git -C "$GLUERUN_ROOT" remote get-url origin >/dev/null 2>&1; then
           git -C "$GLUERUN_ROOT" push origin "$GLUERUN_TARGET_BRANCH" >/dev/null 2>&1 \
@@ -451,10 +666,6 @@ if [[ "$do_import" == "yes" && "$(gluerun_current_branch)" == "$GLUERUN_TARGET_B
                  && gluerun_append_event "push.ok" "pushed control state (after fetch)" "{\"runId\":\"$run_id\"}" \
                  || gluerun_append_event "push.failed" "control-state push failed" "{\"runId\":\"$run_id\"}"; }
         fi
-      else
-        git -C "$GLUERUN_ROOT" reset -q -- docs/orchestration || true
-        gluerun_git_lock_release
-        gluerun_append_event "origin.control_state_blocked" "secret-scan blocked control-state commit" "{\"runId\":\"$run_id\"}"
       fi
     else
       gluerun_append_event "origin.control_state_blocked" "git lock unavailable for control-state commit" "{\"runId\":\"$run_id\"}"
@@ -491,9 +702,16 @@ if [[ "$mode" == "actuate" ]]; then
   echo "integrated_this_run=$integrations_this_run"
   echo "failed_integrations=$integration_failures"
   echo "planner_failures_this_run=$planner_failures_this_run"
+  echo "planner_backoff_active_this_run=$planner_backoff_active_this_run"
   echo "l1_import_rejections_this_run=$l1_import_rejections_this_run"
+  echo "configured_slots=$resource_configured_slots"
+  echo "effective_slots=$resource_effective_slots"
+  echo "available_slots=$resource_available_slots"
+  echo "resource_reason=$resource_reason"
+  echo "resource_gc_attempted=$resource_gc_attempted"
+  echo "resource_plan=.gluerun-state/runs/$run_id/resource-plan.json"
 else
   echo "worker_launch=disabled"
 fi
 
-gluerun_append_event "origin.reconcile_completed" "origin reconcile completed" "{\"runId\":\"$run_id\",\"mode\":\"$mode\",\"inboxPackets\":$inbox_count,\"validInboxPackets\":$valid_inbox_count,\"invalidInboxPackets\":$invalid_inbox_count,\"importedThisRun\":$imported_this_run,\"failedImports\":$failed_imports,\"dispatchedThisRun\":$dispatched_this_run,\"failedDispatches\":$failed_dispatches,\"reapedOk\":$reaped_ok,\"reapedFailures\":$reaped_failures,\"workersRunning\":$workers_running,\"integratedThisRun\":$integrations_this_run,\"failedIntegrations\":$integration_failures,\"plannerFailuresThisRun\":$planner_failures_this_run,\"l1ImportRejectionsThisRun\":$l1_import_rejections_this_run,\"importedPackets\":$imported_count}"
+gluerun_append_event "origin.reconcile_completed" "origin reconcile completed" "{\"runId\":\"$run_id\",\"mode\":\"$mode\",\"inboxPackets\":$inbox_count,\"validInboxPackets\":$valid_inbox_count,\"invalidInboxPackets\":$invalid_inbox_count,\"importedThisRun\":$imported_this_run,\"failedImports\":$failed_imports,\"dispatchedThisRun\":$dispatched_this_run,\"failedDispatches\":$failed_dispatches,\"reapedOk\":$reaped_ok,\"reapedFailures\":$reaped_failures,\"workersRunning\":$workers_running,\"integratedThisRun\":$integrations_this_run,\"failedIntegrations\":$integration_failures,\"plannerFailuresThisRun\":$planner_failures_this_run,\"plannerBackoffActiveThisRun\":$planner_backoff_active_this_run,\"l1ImportRejectionsThisRun\":$l1_import_rejections_this_run,\"importedPackets\":$imported_count,\"configuredSlots\":$resource_configured_slots,\"effectiveSlots\":$resource_effective_slots,\"availableSlots\":$resource_available_slots,\"resourceGcAttempted\":$resource_gc_attempted,\"resourceReason\":\"$resource_reason\"}"

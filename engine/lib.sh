@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Bash selection is a bootstrap concern: capture it before loading repo config
+# and restore it afterwards so a committed config cannot change the interpreter
+# used to run the engine. Operators may set it in the process/service
+# environment (including launchd's local env file).
+_gluerun_bootstrap_bash_bin="${GLUERUN_BASH_BIN:-}"
+
 gluerun_repo_root() {
   git rev-parse --show-toplevel
 }
@@ -41,6 +47,7 @@ def setv(var, val):
         return
     out.append("export %s=%s" % (var, shlex.quote(str(val))))
 setv("GLUERUN_TARGET_BRANCH", cfg.get("targetBranch"))
+setv("GLUERUN_CONFIG_SCHEMA_VERSION", cfg.get("schemaVersion"))
 setv("GLUERUN_DEFAULT_GATE_CMD", cfg.get("gateCommand"))
 setv("GLUERUN_RUNNER", cfg.get("runner"))
 setv("GLUERUN_AREA_PREFIX", cfg.get("areaPrefix"))
@@ -64,12 +71,46 @@ pf = cfg.get("provisionFiles")
 if isinstance(pf, list): setv("GLUERUN_PROVISION_FILES_JSON", json.dumps(pf, separators=(",", ":")))
 ea = cfg.get("envAllowlist")
 if isinstance(ea, list): setv("GLUERUN_ENV_ALLOWLIST_JSON", json.dumps(ea, separators=(",", ":")))
+capability_profiles = cfg.get("capabilityProfiles")
+if isinstance(capability_profiles, dict):
+    setv("GLUERUN_CAPABILITY_PROFILES_JSON", json.dumps(capability_profiles, separators=(",", ":")))
+role_profiles = cfg.get("roleProfiles")
+if isinstance(role_profiles, dict):
+    setv("GLUERUN_ROLE_PROFILES_JSON", json.dumps(role_profiles, separators=(",", ":")))
+capabilities = cfg.get("capabilities")
+if isinstance(capabilities, dict):
+    setv("GLUERUN_CAPABILITIES_JSON", json.dumps(capabilities, separators=(",", ":")))
+evidence = cfg.get("evidence")
+if isinstance(evidence, dict):
+    setv("GLUERUN_EVIDENCE_CONFIG_JSON", json.dumps(evidence, separators=(",", ":")))
+bootstrap = cfg.get("bootstrap")
+if isinstance(bootstrap, dict):
+    setv("GLUERUN_BOOTSTRAP_JSON", json.dumps(bootstrap, separators=(",", ":")))
+resources = cfg.get("resources")
+if isinstance(resources, dict):
+    setv("GLUERUN_DISK_RESERVE_BYTES", resources.get("diskReserveBytes"))
+    setv("GLUERUN_ESTIMATED_WORKTREE_BYTES", resources.get("estimatedWorktreeBytes"))
+    setv("GLUERUN_MAX_CONCURRENT", resources.get("maxConcurrent"))
+control_state = cfg.get("controlState")
+if isinstance(control_state, dict):
+    setv("GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC", control_state.get("commitIntervalSeconds"))
+legacy_compatibility = cfg.get("legacyCompatibility")
+if isinstance(legacy_compatibility, dict) and isinstance(
+    legacy_compatibility.get("unboundWaivers"), bool
+):
+    setv(
+        "GLUERUN_LEGACY_UNBOUND_WAIVERS",
+        "1" if legacy_compatibility["unboundWaivers"] else "0",
+    )
 setv("GLUERUN_PROMOTER", cfg.get("promoter"))
 ident = cfg.get("identity") or {}
 l0 = ident.get("l0") or {}; l1 = ident.get("l1") or {}
 setv("GLUERUN_GIT_L0_NAME", l0.get("name")); setv("GLUERUN_GIT_L0_EMAIL", l0.get("email"))
 setv("GLUERUN_GIT_L1_NAME", l1.get("name")); setv("GLUERUN_GIT_L1_EMAIL", l1.get("email"))
 for k, v in (cfg.get("env") or {}).items():
+    if k == "GLUERUN_BASH_BIN":
+        sys.stderr.write("gluerun: ignoring bootstrap-only config env key: GLUERUN_BASH_BIN\n")
+        continue
     setv(k, v)
 print("\n".join(out))
 PY
@@ -92,7 +133,55 @@ if [[ -f "$GLUERUN_LOCAL_CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$GLUERUN_LOCAL_CONFIG_FILE"
 fi
+if [[ -n "$_gluerun_bootstrap_bash_bin" ]]; then
+  GLUERUN_BASH_BIN="$_gluerun_bootstrap_bash_bin"
+  export GLUERUN_BASH_BIN
+else
+  unset GLUERUN_BASH_BIN 2>/dev/null || true
+fi
+unset _gluerun_bootstrap_bash_bin
 # ------------------------------------------------------------------------------
+
+gluerun_bash_bin() {
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    printf '%s\n' "$GLUERUN_BASH_BIN"
+  else
+    command -v bash 2>/dev/null || printf '%s\n' /bin/bash
+  fi
+}
+
+# Resolve the exact Codex executable used by the runner and doctor. An explicit
+# value is intentionally strict: it must be an absolute executable path and is
+# never replaced by another PATH candidate when broken.
+gluerun_resolve_codex_bin() {
+  local configured="${GLUERUN_CODEX_BIN:-}" resolved=""
+  if [[ -n "$configured" ]]; then
+    if [[ "$configured" != /* ]]; then
+      echo "GLUERUN_CODEX_BIN must be an absolute path: $configured" >&2
+      return 2
+    fi
+    if [[ ! -x "$configured" ]]; then
+      echo "GLUERUN_CODEX_BIN is not executable: $configured" >&2
+      return 127
+    fi
+    printf '%s\n' "$configured"
+    return 0
+  fi
+  resolved="$(command -v codex 2>/dev/null || true)"
+  if [[ -z "$resolved" ]]; then
+    echo "codex CLI not found on PATH (set GLUERUN_CODEX_BIN)" >&2
+    return 127
+  fi
+  case "$resolved" in
+    /*) ;;
+    *) resolved="$(cd "$(dirname "$resolved")" 2>/dev/null && pwd -P)/$(basename "$resolved")" ;;
+  esac
+  [[ -x "$resolved" ]] || {
+    echo "resolved codex CLI is not executable: $resolved" >&2
+    return 127
+  }
+  printf '%s\n' "$resolved"
+}
 
 GLUERUN_LOCK_FILE="$GLUERUN_STATE_DIR/locks/origin.lock.json"
 GLUERUN_EVENTS_FILE="$GLUERUN_STATE_DIR/events.ndjson"
@@ -314,12 +403,31 @@ Status: starter
 EOF
   fi
   if [[ -d "$GLUERUN_SCHEMA_DIR" ]]; then
-    local schema base
-    while IFS= read -r schema; do
-      [[ -n "$schema" ]] || continue
-      base="$(basename "$schema")"
-      [[ -f "$GLUERUN_ROOT/schemas/orchestration/$base" ]] || cp "$schema" "$GLUERUN_ROOT/schemas/orchestration/$base"
-    done < <(find "$GLUERUN_SCHEMA_DIR" -maxdepth 1 -name '*.schema.json' -type f 2>/dev/null | sort)
+    local schema base tmp repo_schema="" engine_schema=""
+    if [[ -f "$GLUERUN_ROOT/gluerun.config.json" ]]; then
+      repo_schema="$(python3 - "$GLUERUN_ROOT/gluerun.config.json" <<'PY' 2>/dev/null || true
+import json
+import sys
+value = json.load(open(sys.argv[1], encoding="utf-8")).get("schemaVersion")
+print(value if isinstance(value, str) else "")
+PY
+)"
+    fi
+    if [[ -f "$GLUERUN_ENGINE_HOME/SCHEMA_VERSION" ]]; then
+      engine_schema="$(tr -d '[:space:]' <"$GLUERUN_ENGINE_HOME/SCHEMA_VERSION")"
+    fi
+    # The engine bundle becomes authoritative only after migration has advanced
+    # the consumer config to the same schema version. Until then, preserve every
+    # existing mirror byte-for-byte and do not introduce newer contracts.
+    if [[ -n "$repo_schema" && "$repo_schema" == "$engine_schema" ]]; then
+      while IFS= read -r schema; do
+        [[ -n "$schema" ]] || continue
+        base="$(basename "$schema")"
+        tmp="$GLUERUN_ROOT/schemas/orchestration/.$base.tmp.$$"
+        cp "$schema" "$tmp"
+        mv "$tmp" "$GLUERUN_ROOT/schemas/orchestration/$base"
+      done < <(find "$GLUERUN_SCHEMA_DIR" -maxdepth 1 -name '*.schema.json' -type f 2>/dev/null | sort)
+    fi
   fi
   gluerun_ensure_gitignore_entries ".gluerun-state/" ".worktrees/" ".gluerun-evidence/" ".gluerun-cache/"
 }
@@ -352,6 +460,7 @@ PY
 
 gluerun_packet_has_accept_waiver() {
   local packet="$1"
+  gluerun_unbound_waivers_enabled || return 1
   python3 - "$packet" "$GLUERUN_RUNS_DIR" "$GLUERUN_ORCH_DIR/decisions.md" <<'PY'
 import json
 import os
@@ -410,6 +519,20 @@ if decision_json_ok or decisions_md_ok:
     sys.exit(0)
 sys.exit(1)
 PY
+}
+
+# Unbound decider waivers predate exact-artifact human approvals. Schema v2
+# disables them unless the operator deliberately selects the legacy
+# compatibility switch; pre-v2 consumers retain their historical behavior.
+gluerun_unbound_waivers_enabled() {
+  local selected="${GLUERUN_LEGACY_UNBOUND_WAIVERS:-}"
+  if [[ -n "$selected" ]]; then
+    case "${selected,,}" in
+      1|true|yes|on) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  [[ "${GLUERUN_CONFIG_SCHEMA_VERSION:-}" != "v2" ]]
 }
 
 gluerun_packet_acceptance_mode() {
@@ -1125,7 +1248,7 @@ gate_status = sys.argv[1]
 # passed -> nothing to promote; failed/blocked -> promotion was ATTEMPTED and
 # refused, so the node needs more work and must stay plannable (suppressing
 # here would deadlock an all-integrated node behind a red gate).
-if gate_status in ("passed", "failed", "blocked") or not tasks:
+if gate_status in ("passed", "passed-with-acknowledged-baseline", "failed", "blocked") or not tasks:
     sys.exit(1)
 
 OPEN = {"ready", "planned", "running", "needs-review", "accepted", ""}
@@ -1267,60 +1390,1179 @@ if reasons:
 PY
 }
 
-gluerun_planner_failure_class() {
-  local log_file="$1" exit_code="${2:-0}" output_file="${3:-}"
-  python3 - "$log_file" "$exit_code" "$output_file" <<'PY'
+# Provider runner contract v1 --------------------------------------------------
+#
+# Provider output contains model-authored prose, repository text and command
+# transcripts. None of those are provider status. Runners therefore normalize
+# only provider-controlled terminal envelopes into two durable sidecars:
+# runner-result.v0 (every invocation) and provider-error.v0 (terminal errors).
+# Quota/backoff code consumes these sidecars exclusively.
+
+gluerun_capability_b64_decode() {
+  python3 - "$1" <<'PY'
+import base64
+import sys
+sys.stdout.write(base64.b64decode(sys.argv[1]).decode("utf-8"))
+PY
+}
+
+gluerun_capability_optional_warn_once() {
+  local provider="$1" role="$2" profile="$3" capability="$4" reason="$5"
+  local warning_dir="$GLUERUN_STATE_DIR/warnings/capabilities"
+  local warning_key marker marker_rc=0
+  warning_key="$(gluerun_sha256_text "$capability")"
+  marker="$warning_dir/$warning_key.warned"
+  mkdir -p "$warning_dir"
+  python3 - "$marker" "$capability" <<'PY' 2>/dev/null || marker_rc=$?
+import json
 import os
 import sys
+from datetime import datetime, timezone
 
-log_file, exit_raw, output_file = sys.argv[1:4]
+path, capability = sys.argv[1:3]
+try:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except FileExistsError:
+    raise SystemExit(1)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump({
+        "capability": capability,
+        "warnedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    }, handle, separators=(",", ":"))
+    handle.write("\n")
+PY
+  [[ "$marker_rc" -eq 1 ]] && return 0
+  echo "gluerun: optional capability unavailable for $profile ($role): $capability ($reason); continuing" >&2
+  local event_json
+  event_json="$(python3 - "$provider" "$role" "$profile" "$capability" "$reason" <<'PY'
+import json
+import sys
+provider, role, profile, capability, reason = sys.argv[1:6]
+print(json.dumps({
+    "provider": provider,
+    "role": role,
+    "profile": profile,
+    "capability": capability,
+    "reason": reason,
+}, separators=(",", ":")))
+PY
+)"
+  gluerun_append_event "capability.optional_unavailable" \
+    "optional capability unavailable; provider run continues" "$event_json" || true
+}
+
+# Resolve roleProfiles over the call-site fallback, validate the selected
+# capability profile, and preflight its required/optional capabilities. Results
+# are returned through these globals:
+#   GLUERUN_RESOLVED_CAPABILITY_PROFILE
+#   GLUERUN_RESOLVED_CAPABILITY_STRICT (yes|no)
+#   GLUERUN_RESOLVED_PROVIDER_ARGS[] (literal argv; never eval'd)
+#
+# A consumer with no declared capabilityProfiles remains legacy-compatible:
+# the fallback profile name is recorded, strict isolation is off, and no new
+# capability gate is introduced.
+gluerun_runner_capability_prepare() {
+  local provider="$1" role="$2" fallback_profile="$3" worktree="$4" provider_bin="${5:-}"
+  local report rc=0 kind first second decoded
+  local profiles_json="${GLUERUN_CAPABILITY_PROFILES_JSON:-}"
+  local roles_json="${GLUERUN_ROLE_PROFILES_JSON:-}"
+  local registry_json="${GLUERUN_CAPABILITIES_JSON:-}"
+  local schema_version="${GLUERUN_CONFIG_SCHEMA_VERSION:-}"
+  local -a errors=()
+
+  GLUERUN_RESOLVED_CAPABILITY_PROFILE="$fallback_profile"
+  GLUERUN_RESOLVED_CAPABILITY_STRICT="no"
+  GLUERUN_RESOLVED_CAPABILITY_DECLARED="no"
+  GLUERUN_RESOLVED_PROVIDER_ARGS=()
+  GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT=0
+
+  report="$(python3 - "$profiles_json" "$roles_json" "$registry_json" \
+    "$schema_version" "$provider" "$role" "$fallback_profile" "$worktree" \
+    "$provider_bin" "$GLUERUN_ENGINE_HOME" "${HOME:-}" <<'PY'
+import base64
+import json
+import os
+import pathlib
+import re
+import shutil
+import sys
+
+(profiles_raw, roles_raw, registry_raw, schema_version, provider, role,
+ fallback, worktree_raw, provider_bin, engine_home_raw, home_raw) = sys.argv[1:12]
+worktree = pathlib.Path(worktree_raw)
+engine_home = pathlib.Path(engine_home_raw)
+home = pathlib.Path(home_raw) if home_raw else pathlib.Path("/")
+
+def enc(value):
+    return base64.b64encode(str(value).encode("utf-8")).decode("ascii")
+
+def emit(kind, first="", second=""):
+    print("\t".join((kind, enc(first), enc(second))))
+
+def load_object(raw, label):
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        emit("ERROR", label, f"invalid JSON: {exc}")
+        raise SystemExit(78)
+    if not isinstance(value, dict):
+        emit("ERROR", label, "must be a JSON object")
+        raise SystemExit(78)
+    return value
+
+profiles = load_object(profiles_raw, "capabilityProfiles")
+roles = load_object(roles_raw, "roleProfiles")
+registry = load_object(registry_raw, "capabilities")
+
+# No profile declaration means the pre-v2 compatibility path.
+if not profiles:
+    emit("PROFILE", fallback, "legacy")
+    raise SystemExit(0)
+
+mapped = roles.get(role)
+if mapped is not None and (not isinstance(mapped, str) or not mapped):
+    emit("ERROR", "roleProfiles", f"role {role!r} must map to a non-empty profile name")
+    raise SystemExit(78)
+profile_name = mapped if isinstance(mapped, str) and mapped else fallback
+profile = profiles.get(profile_name)
+if not isinstance(profile, dict):
+    emit("ERROR", profile_name or "(empty)", f"selected profile for role {role!r} is not declared")
+    raise SystemExit(78)
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", profile_name):
+    emit("ERROR", profile_name, "profile name contains unsupported characters")
+    raise SystemExit(78)
+
+startup = profile.get("startup", "lazy")
+if startup != "lazy":
+    emit("ERROR", profile_name, "startup must be 'lazy'")
+    raise SystemExit(78)
+
+schema_match = re.fullmatch(r"v([0-9]+)", schema_version or "")
+strict_default = bool(schema_match and int(schema_match.group(1)) >= 2)
+strict = profile.get("strict", strict_default)
+if not isinstance(strict, bool):
+    emit("ERROR", profile_name, "strict must be a boolean")
+    raise SystemExit(78)
+
+def capability_list(key):
+    value = profile.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        emit("ERROR", profile_name, f"{key} must be an array of non-empty strings")
+        raise SystemExit(78)
+    return list(dict.fromkeys(value))
+
+required = capability_list("required")
+optional = [item for item in capability_list("optional") if item not in required]
+
+emit("PROFILE", profile_name, "strict" if strict else "declared")
+
+provider_args_raw = profile.get("providerArgs", [])
+if isinstance(provider_args_raw, dict):
+    unknown = sorted(set(provider_args_raw) - {"codex", "claude", "gemini", "opencode", "cursor", "grok", "default"})
+    if unknown:
+        emit("ERROR", profile_name, "providerArgs has unsupported provider keys: " + ", ".join(unknown))
+        raise SystemExit(78)
+    provider_args = provider_args_raw.get(provider, provider_args_raw.get("default", []))
+elif isinstance(provider_args_raw, list):
+    provider_args = provider_args_raw
+else:
+    emit("ERROR", profile_name, "providerArgs must be an argv array or provider-to-argv object")
+    raise SystemExit(78)
+if not isinstance(provider_args, list) or len(provider_args) > 64:
+    emit("ERROR", profile_name, "providerArgs argv must contain at most 64 entries")
+    raise SystemExit(78)
+for arg in provider_args:
+    if (
+        not isinstance(arg, str)
+        or not arg
+        or len(arg) > 4096
+        or arg != arg.strip()
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in arg)
+    ):
+        emit("ERROR", profile_name, "providerArgs entries must be bounded, non-empty strings without control or edge whitespace")
+        raise SystemExit(78)
+
+capability_args_raw = profile.get("capabilityArgs", {})
+if not isinstance(capability_args_raw, dict):
+    emit("ERROR", profile_name, "capabilityArgs must map capability IDs to provider argv")
+    raise SystemExit(78)
+unknown_capability_args = sorted(set(capability_args_raw) - set(required) - set(optional))
+if unknown_capability_args:
+    emit(
+        "ERROR",
+        profile_name,
+        "capabilityArgs contains undeclared capabilities: " + ", ".join(unknown_capability_args),
+    )
+    raise SystemExit(78)
+
+def selected_capability_args(capability):
+    raw = capability_args_raw.get(capability)
+    if raw is None:
+        return []
+    if isinstance(raw, dict):
+        unknown = sorted(
+            set(raw)
+            - {"codex", "claude", "gemini", "opencode", "cursor", "grok", "default"}
+        )
+        if unknown:
+            emit(
+                "ERROR",
+                profile_name,
+                f"capabilityArgs.{capability} has unsupported provider keys: "
+                + ", ".join(unknown),
+            )
+            raise SystemExit(78)
+        argv = raw.get(provider, raw.get("default", []))
+    elif isinstance(raw, list):
+        argv = raw
+    else:
+        emit(
+            "ERROR",
+            profile_name,
+            f"capabilityArgs.{capability} must be an argv array or provider-to-argv object",
+        )
+        raise SystemExit(78)
+    if not isinstance(argv, list) or len(argv) > 64:
+        emit(
+            "ERROR",
+            profile_name,
+            f"capabilityArgs.{capability} must contain at most 64 argv entries",
+        )
+        raise SystemExit(78)
+    for arg in argv:
+        if (
+            not isinstance(arg, str)
+            or not arg
+            or len(arg) > 4096
+            or arg != arg.strip()
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in arg)
+        ):
+            emit(
+                "ERROR",
+                profile_name,
+                f"capabilityArgs.{capability} entries must be bounded, non-empty strings "
+                "without control or edge whitespace",
+            )
+            raise SystemExit(78)
+    return argv
+
+activation_args = {
+    capability: selected_capability_args(capability)
+    for capability in required + optional
+}
+
+if strict and provider in {"cursor", "grok"} and not provider_args:
+    emit(
+        "ERROR",
+        profile_name,
+        (
+            f"{provider} has no proven built-in strict isolation mode; configure "
+            f"capabilityProfiles.{profile_name}.providerArgs.{provider} as a validated "
+            "literal argv array, or explicitly set strict:false"
+        ),
+    )
+
+def mcp_names():
+    names = set()
+    roots = [pathlib.Path(os.environ.get("GLUERUN_ROOT", worktree_raw)) / ".mcp.json", home / ".claude.json"]
+    for path in roots:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            servers = value.get("mcpServers", {})
+            if isinstance(servers, dict):
+                names.update(map(str, servers))
+        except (OSError, json.JSONDecodeError):
+            pass
+    try:
+        text = (home / ".codex/config.toml").read_text(encoding="utf-8")
+        names.update(re.findall(r"^\[mcp_servers\.([^\]]+)\]", text, flags=re.MULTILINE))
+    except OSError:
+        pass
+    return names
+
+def plugin_names():
+    names = set()
+    for root in (engine_home / "plugin", home / ".codex/plugins"):
+        try:
+            names.update(path.name for path in root.iterdir() if path.is_dir())
+        except OSError:
+            pass
+    return names
+
+mcps = mcp_names()
+plugins = plugin_names()
+
+def available(capability):
+    if capability == "filesystem":
+        return worktree.is_dir(), f"worktree is unavailable: {worktree}"
+    if capability == "git":
+        return shutil.which("git") is not None, "git is not on PATH"
+    if capability == "schemas":
+        return (engine_home / "schemas").is_dir(), f"schema bundle is missing under {engine_home}"
+    if capability == "skills":
+        ok = (engine_home / "plugin/skills").is_dir() or (worktree / ".agents/skills").is_dir()
+        return ok, "no engine or worktree skill directory is available"
+    if capability == "runner-contract":
+        return True, ""
+    if capability == "provider-executable":
+        ok = bool(provider_bin) and os.path.isfile(provider_bin) and os.access(provider_bin, os.X_OK)
+        return ok, f"{provider} executable is unavailable"
+    if capability.startswith("mcp:"):
+        name = capability.split(":", 1)[1]
+        return name in mcps, f"MCP server {name} is not configured"
+    if capability.startswith("plugin:"):
+        name = capability.split(":", 1)[1]
+        return name in plugins, f"plugin {name} is not installed"
+    if capability.startswith("executable:"):
+        name = capability.split(":", 1)[1]
+        return shutil.which(name) is not None, f"{name} is not on PATH"
+    if capability.startswith("file:"):
+        path = pathlib.Path(capability.split(":", 1)[1])
+        if not path.is_absolute():
+            path = worktree / path
+        return path.is_file(), f"{path} is missing"
+    descriptor = registry.get(capability)
+    if not isinstance(descriptor, dict):
+        return False, "no capability descriptor is declared"
+    kind = descriptor.get("type")
+    value = descriptor.get("value") or descriptor.get("name")
+    if kind == "builtin":
+        return bool(descriptor.get("available", True)), "capability is disabled"
+    if kind == "executable" and isinstance(value, str):
+        return shutil.which(value) is not None, f"{value} is not on PATH"
+    if kind == "file" and isinstance(value, str):
+        path = pathlib.Path(value)
+        if not path.is_absolute():
+            path = worktree / path
+        return path.is_file(), f"{path} is missing"
+    if kind == "mcp" and isinstance(value, str):
+        return value in mcps, f"MCP server {value} is not configured"
+    if kind == "plugin" and isinstance(value, str):
+        return value in plugins, f"plugin {value} is not installed"
+    if kind == "environment" and isinstance(value, str):
+        return bool(os.environ.get(value)), f"environment variable {value} is absent"
+    return False, "capability descriptor is unsupported"
+
+def external(capability):
+    if capability.startswith(("mcp:", "plugin:")):
+        return True
+    descriptor = registry.get(capability)
+    return isinstance(descriptor, dict) and descriptor.get("type") in {"mcp", "plugin"}
+
+def requires_explicit_activation(capability):
+    # Native strict modes intentionally start without user skills, MCP servers,
+    # or plugins. A validated provider argv override is therefore required
+    # before claiming one of those capabilities is active.
+    return capability == "skills" or external(capability)
+
+for capability in required:
+    ok, reason = available(capability)
+    if not ok:
+        emit("ERROR", capability, reason)
+    elif strict and requires_explicit_activation(capability) and not activation_args[capability]:
+        emit(
+            "ERROR",
+            capability,
+            (
+                "strict isolation requires capabilityArgs."
+                f"{capability} bound to this exact external capability"
+            ),
+        )
+for capability in optional:
+    ok, reason = available(capability)
+    if strict and requires_explicit_activation(capability) and not activation_args[capability]:
+        emit(
+            "WARN",
+            capability,
+            "strict isolation did not activate this optional capability (capabilityArgs absent)",
+        )
+    elif not ok:
+        emit("WARN", capability, reason)
+
+combined_provider_args = list(provider_args)
+for capability in required:
+    ok, _ = available(capability)
+    if ok:
+        for arg in activation_args[capability]:
+            if arg not in combined_provider_args:
+                combined_provider_args.append(arg)
+for capability in optional:
+    ok, _ = available(capability)
+    if ok:
+        for arg in activation_args[capability]:
+            if arg not in combined_provider_args:
+                combined_provider_args.append(arg)
+
+if strict:
+    sys.path.insert(0, str(engine_home / "engine"))
+    try:
+        from capability_policy import strict_provider_arg_violation
+    except (ImportError, OSError) as exc:
+        emit("ERROR", profile_name, f"strict provider argument policy is unavailable: {exc}")
+        raise SystemExit(78)
+    violation = strict_provider_arg_violation(provider, combined_provider_args)
+    if violation:
+        emit("ERROR", profile_name, violation)
+        raise SystemExit(78)
+
+for arg in combined_provider_args:
+    emit("ARG", arg)
+PY
+)" || rc=$?
+
+  while IFS=$'\t' read -r kind first second; do
+    [[ -n "$kind" ]] || continue
+    first="$(gluerun_capability_b64_decode "$first")"
+    second="$(gluerun_capability_b64_decode "$second")"
+    case "$kind" in
+      PROFILE)
+        GLUERUN_RESOLVED_CAPABILITY_PROFILE="$first"
+        GLUERUN_RESOLVED_CAPABILITY_DECLARED="yes"
+        if [[ "$second" == "strict" ]]; then
+          GLUERUN_RESOLVED_CAPABILITY_STRICT="yes"
+        elif [[ "$second" == "legacy" ]]; then
+          GLUERUN_RESOLVED_CAPABILITY_DECLARED="no"
+        fi
+        ;;
+      ARG)
+        GLUERUN_RESOLVED_PROVIDER_ARGS+=("$first")
+        GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT=$((GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT + 1))
+        ;;
+      WARN)
+        gluerun_capability_optional_warn_once \
+          "$provider" "$role" "$GLUERUN_RESOLVED_CAPABILITY_PROFILE" "$first" "$second"
+        ;;
+      ERROR)
+        errors+=("$first: $second")
+        ;;
+    esac
+  done <<<"$report"
+
+  if [[ "$rc" -ne 0 || ${#errors[@]} -gt 0 ]]; then
+    local error
+    for error in "${errors[@]}"; do
+      echo "gluerun: capability preflight failed for $provider/$role ($GLUERUN_RESOLVED_CAPABILITY_PROFILE): $error" >&2
+      local event_json
+      event_json="$(python3 - "$provider" "$role" "$GLUERUN_RESOLVED_CAPABILITY_PROFILE" "$error" <<'PY'
+import json
+import sys
+provider, role, profile, error = sys.argv[1:5]
+print(json.dumps({
+    "provider": provider,
+    "role": role,
+    "profile": profile,
+    "error": error,
+    "remediation": "Repair required capabilities/profile providerArgs before retrying.",
+}, separators=(",", ":")))
+PY
+)"
+      gluerun_append_event "capability.preflight_failed" \
+        "required capability or strict isolation preflight failed" "$event_json" || true
+    done
+    [[ ${#errors[@]} -gt 0 ]] || echo "gluerun: capability profile preflight failed for $provider/$role" >&2
+    return 78
+  fi
+  return 0
+}
+
+gluerun_runner_reject_strict_legacy_extra_args() {
+  local provider="$1" variable_name="$2" raw_value="${3:-}"
+  if [[ "$GLUERUN_RESOLVED_CAPABILITY_STRICT" == "yes" && -n "$raw_value" ]]; then
+    echo "gluerun: $variable_name is disabled for strict $provider capability profiles; use bounded profile providerArgs/capabilityArgs" >&2
+    return 78
+  fi
+  return 0
+}
+
+gluerun_runner_describe_contract() {
+  local provider="$1"
+  python3 - "$provider" <<'PY'
+import json, sys
+provider = sys.argv[1]
+print(json.dumps({
+    "schema": "gluerun.runner-contract.v1",
+    "version": 1,
+    "provider": provider,
+    "arguments": [
+        "--worktree", "--prompt-file", "--level", "--run-id",
+        "--output-schema", "--output-last-message", "--no-output-capture",
+        "--allow-prefix", "--session-meta", "--resume-session",
+        "--role", "--capability-profile", "--result-file",
+        "--describe-contract",
+    ],
+    "structuredResult": "gluerun.orchestration.runner-result.v0",
+    "structuredProviderError": "gluerun.orchestration.provider-error.v0",
+}, separators=(",", ":")))
+PY
+}
+
+gluerun_runner_contract_prepare() {
+  local runner="$1" role="$2" capability_profile="$3" result_file="$4"
+  local runner_key probe should_probe="no"
+  GLUERUN_RUNNER_CONTRACT_ARGS=()
+
+  # Contract probing is bounded and cached for this host process. A legacy
+  # custom runner receives the pre-v1 environment variables only; a conforming
+  # v1 runner receives the public argv contract on every actual invocation.
+  if ! declare -p GLUERUN_RUNNER_CONTRACT_CACHE >/dev/null 2>&1; then
+    declare -gA GLUERUN_RUNNER_CONTRACT_CACHE=()
+  fi
+  runner_key="$(python3 - "$runner" <<'PY'
+import hashlib
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1]).expanduser()
+try:
+    resolved = path.resolve()
+    stat = resolved.stat()
+    fingerprint = f"{resolved}\0{stat.st_mtime_ns}\0{stat.st_size}"
+except OSError:
+    fingerprint = os.path.abspath(str(path))
+print(hashlib.sha256(fingerprint.encode("utf-8")).hexdigest())
+PY
+)"
+  probe="${GLUERUN_RUNNER_CONTRACT_CACHE[$runner_key]:-}"
+  if [[ -z "$probe" ]]; then
+    # Do not execute an unmarked legacy runner merely to ask its version:
+    # historical custom runners may ignore unknown argv and begin real work.
+    # Built-ins and normal script/binary v1 implementations advertise the
+    # literal option; opaque launchers can opt in explicitly.
+    if [[ "${GLUERUN_RUNNER_CONTRACT_VERSION:-}" == "1" ]] \
+      || { [[ -f "$runner" ]] && LC_ALL=C grep -a -q -- '--describe-contract' "$runner" 2>/dev/null; }; then
+      should_probe="yes"
+    fi
+    if [[ "$should_probe" == "yes" ]]; then
+      probe="$(python3 - "$runner" <<'PY'
+import json
+import subprocess
+import sys
+
+runner = sys.argv[1]
+required = {
+    "--describe-contract",
+    "--role",
+    "--capability-profile",
+    "--result-file",
+}
+try:
+    result = subprocess.run(
+        [runner, "--describe-contract"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=3,
+        check=False,
+    )
+    contract = json.loads(result.stdout) if result.returncode == 0 else {}
+    arguments = set(contract.get("arguments", []))
+    valid = (
+        contract.get("schema") == "gluerun.runner-contract.v1"
+        and contract.get("version") == 1
+        and required.issubset(arguments)
+        and "--stage-dir" not in arguments
+        and contract.get("structuredResult")
+        == "gluerun.orchestration.runner-result.v0"
+        and contract.get("structuredProviderError")
+        == "gluerun.orchestration.provider-error.v0"
+    )
+except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
+    valid = False
+print("v1" if valid else "legacy")
+PY
+)"
+    else
+      probe="legacy"
+    fi
+    GLUERUN_RUNNER_CONTRACT_CACHE["$runner_key"]="$probe"
+  fi
+  if [[ "$probe" == "v1" ]]; then
+    GLUERUN_RUNNER_CONTRACT_ARGS=(
+      --role "$role"
+      --capability-profile "$capability_profile"
+      --result-file "$result_file"
+    )
+  fi
+}
+
+gluerun_runner_default_result_file() {
+  local run_id="$1"
+  printf '%s\n' "$GLUERUN_STATE_DIR/runs/$run_id/runner-result.json"
+}
+
+# Write the contract sidecars atomically. envelope_file must contain the raw
+# provider stdout envelope/JSONL. stderr_file is accepted for providers (Gemini)
+# that place their JSON envelope on stderr, but arbitrary stderr prose is never
+# classified. output_file is recorded as a reference only and is never parsed.
+gluerun_runner_result_write() {
+  local provider="$1" run_id="$2" role="${3:-unknown}" capability_profile="${4:-default}"
+  local result_file="$5" exit_code="${6:-1}" envelope_file="${7:-}" stderr_file="${8:-}"
+  local output_file="${9:-}"
+  [[ -n "$result_file" ]] || return 2
+  mkdir -p "$(dirname "$result_file")"
+  python3 - "$provider" "$run_id" "$role" "$capability_profile" "$result_file" \
+    "$exit_code" "$envelope_file" "$stderr_file" "$output_file" <<'PY'
+import datetime
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+
+(provider, run_id, role, capability_profile, result_path, exit_raw,
+ envelope_path, stderr_path, output_path) = sys.argv[1:10]
 try:
     exit_code = int(exit_raw)
-except ValueError:
-    exit_code = 0
-text = ""
-if log_file and os.path.exists(log_file):
-    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-        text = f.read().lower()
-quota_markers = (
-    "usage limit",
-    "rate limit",
-    "quota",
-    "too many requests",
-    "try again at",
-    # Claude session/usage-limit notices (e.g. "You've hit your session
-    # limit · resets 10:40pm"). Without these the limit was misclassified
-    # codex-exit and the quota sleep-through never engaged. Limit-specific;
-    # real code failures still classify codex-exit and still trip the breaker.
-    "session limit",
-    "you've hit your",
-    "limit reached",
-    # Claude (Anthropic) overload / rate signals: the runner logs the JSON
-    # envelope, whose api_error_status carries the HTTP status, and 529 surfaces
-    # as an "Overloaded" error. These are distinctive substrings that only appear
-    # on a failing run, so a longer (quota) backoff here is safe and correct.
-    "overloaded",
-    'api_error_status":429',
-    'api_error_status":529',
-    'api_error_status":503',
-)
-timeout_markers = (
-    "timed out",
-    "timeout",
-    "deadline exceeded",
-    "context deadline",
-)
-if any(marker in text for marker in quota_markers):
-    print("quota")
-elif exit_code in (124, 137) or any(marker in text for marker in timeout_markers):
-    print("timeout")
-elif exit_code != 0:
-    print("codex-exit")
-elif not output_file or not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
-    print("empty-output")
+except Exception:
+    exit_code = 1
+role = role or "unknown"
+capability_profile = capability_profile or "default"
+result_stem = os.path.basename(result_path)
+if result_stem.endswith(".json"):
+    result_stem = result_stem[:-5]
+
+# Preserve the byte-identical provider envelope beside the normalized result.
+# Runners may delete their private temp file after this function returns; audit
+# and operators still retain a hash-verifiable raw artifact.
+provider_envelope_path = None
+provider_envelope_bytes = b""
+for candidate in (
+    envelope_path,
+    stderr_path if provider == "gemini" else "",
+):
+    if not candidate or not os.path.isfile(candidate):
+        continue
+    try:
+        raw_candidate = open(candidate, "rb").read()
+    except OSError:
+        continue
+    if raw_candidate:
+        provider_envelope_bytes = raw_candidate
+        provider_envelope_path = os.path.join(
+            os.path.dirname(result_path), result_stem + ".provider-envelope.raw"
+        )
+        break
+
+def read_objects(path):
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        raw = open(path, "r", encoding="utf-8", errors="replace").read()
+    except OSError:
+        return []
+    if not raw.strip():
+        return []
+    try:
+        value = json.loads(raw)
+        return [value]
+    except Exception:
+        pass
+    values = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            values.append(json.loads(line))
+        except Exception:
+            continue
+    # Gemini has emitted a warning followed by one JSON object on stderr.
+    if not values:
+        start = raw.find("{")
+        if start >= 0:
+            try:
+                value, _ = json.JSONDecoder().raw_decode(raw[start:])
+                values.append(value)
+            except Exception:
+                pass
+    return values
+
+objects = read_objects(envelope_path)
+if provider == "gemini" and not objects:
+    objects = read_objects(stderr_path)
+
+def is_terminal_error(obj):
+    if not isinstance(obj, dict):
+        return False
+    typ = str(obj.get("type", "") or "").lower()
+    if provider == "codex":
+        return typ in {
+            "error", "turn.failed", "response.failed", "request.failed",
+            "session.failed", "thread.failed",
+        } and (typ == "error" or obj.get("error") is not None)
+    if provider == "claude":
+        return typ == "result" and (
+            obj.get("is_error") is True or obj.get("api_error_status") is not None
+            or str(obj.get("subtype", "")).lower() in {"error", "failed"}
+        )
+    if provider == "gemini":
+        return obj.get("error") is not None
+    if provider == "opencode":
+        return typ == "error" and obj.get("error") is not None
+    if provider == "cursor":
+        return typ == "error" or obj.get("is_error") is True
+    if provider == "grok":
+        return typ == "error" or obj.get("error") is not None
+    return False
+
+terminal = None
+for candidate in reversed(objects):
+    if is_terminal_error(candidate):
+        terminal = candidate
+        break
+
+STATUS_KEYS = {
+    "status", "statuscode", "status_code", "httpstatus", "http_status",
+    "api_error_status",
+}
+CODE_KEYS = {"code", "error_code", "errorcode", "name"}
+MESSAGE_KEYS = {"message", "detail", "error_description", "description"}
+
+def walk(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                yield from walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            if isinstance(child, (dict, list)):
+                yield from walk(child)
+
+def int_status(scope):
+    for obj in walk(scope):
+        for key, value in obj.items():
+            if key.lower() not in STATUS_KEYS:
+                continue
+            if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599:
+                return value
+            if isinstance(value, str) and re.fullmatch(r"[1-5][0-9]{2}", value.strip()):
+                return int(value.strip())
+    return None
+
+def string_field(scope, keys):
+    for obj in walk(scope):
+        for key, value in obj.items():
+            if key.lower() in keys and isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+def error_scope(obj):
+    if not isinstance(obj, dict):
+        return {}
+    # Only fields of a terminal error envelope enter this scope. Successful
+    # result/assistant payloads and item/command events never reach here.
+    if provider in {"gemini", "opencode"} and isinstance(obj.get("error"), (dict, list)):
+        return obj["error"]
+    return obj
+
+provider_error = None
+raw_event_bytes = b""
+if terminal is not None:
+    scope = error_scope(terminal)
+    status = int_status(scope)
+    if status is None and provider == "claude":
+        status = int_status({"api_error_status": terminal.get("api_error_status")})
+    raw_code = string_field(scope, CODE_KEYS).lower().replace("-", "_").replace(" ", "_")
+    message = string_field(scope, MESSAGE_KEYS)
+    if not message and provider in {"claude", "cursor"}:
+        # In an is_error terminal result, result is provider error text rather
+        # than an assistant message. It is used only for the narrow 403
+        # entitlement recognizer and a bounded diagnostic excerpt.
+        value = terminal.get("result")
+        if isinstance(value, str):
+            message = value
+    message_l = message.lower()
+    entitlement_phrases = (
+        "organization has disabled",
+        "subscription access",
+        "disabled claude subscription",
+        "entitlement disabled",
+        "account is not entitled",
+    )
+    # Quota classes require the exact provider-controlled HTTP status. Provider
+    # error codes alone are not authoritative: SDKs and wrappers also surface
+    # those strings in non-terminal/local failure paths.
+    if status == 429:
+        kind, canonical_code, retryable = "usage-limit", "rate_limit_exceeded", True
+    elif status in (503, 529):
+        kind, canonical_code, retryable = "overloaded", "provider_overloaded", True
+    elif status == 403 and any(p in message_l for p in entitlement_phrases):
+        kind, canonical_code, retryable = "entitlement", "entitlement_denied", False
+    else:
+        kind, canonical_code, retryable = "provider-error", (raw_code or None), False
+    event_type = str(terminal.get("type") or terminal.get("subtype") or f"{provider}.error")
+    excerpt = re.sub(r"\s+", " ", message).strip()[:512]
+    canonical = json.dumps(terminal, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    raw_event_bytes = canonical.encode("utf-8")
+    provider_error = {
+        "schema": "gluerun.orchestration.provider-error.v0",
+        "provider": provider,
+        "runId": run_id,
+        "role": role,
+        "source": "terminal-envelope",
+        "eventType": event_type,
+        "kind": kind,
+        "httpStatus": status,
+        "code": canonical_code,
+        "retryable": retryable,
+        "excerpt": excerpt,
+        "rawEventSha256": hashlib.sha256(raw_event_bytes).hexdigest(),
+        "recordedAt": datetime.datetime.now(datetime.timezone.utc).replace(
+            microsecond=0).isoformat().replace("+00:00", "Z"),
+    }
+
+provider_error_path = None
+raw_event_path = None
+if provider_error is not None:
+    provider_error_path = os.path.join(
+        os.path.dirname(result_path), result_stem + ".provider-error.json"
+    )
+    raw_event_path = os.path.join(
+        os.path.dirname(result_path), result_stem + ".provider-event.json"
+    )
+    provider_error["rawEventRef"] = raw_event_path
+
+# Optional usage comes only from provider-owned metadata containers. Missing
+# counters stay absent; we never estimate from prompt/output bytes.
+def usage_containers():
+    allowed_codex = {
+        "turn.completed", "response.completed", "session.completed",
+        "thread.completed", "turn.failed", "response.failed", "error",
+    }
+    for obj in reversed(objects):
+        if not isinstance(obj, dict):
+            continue
+        typ = str(obj.get("type", "") or "").lower()
+        if provider == "codex" and typ not in allowed_codex:
+            continue
+        if provider == "opencode" and typ not in {
+            "session.idle", "session.completed", "message.updated", "error",
+        }:
+            continue
+        for key in ("usage", "token_usage", "usageMetadata", "stats"):
+            value = obj.get(key)
+            if isinstance(value, dict):
+                yield value
+        # Claude/Cursor/Grok error/result envelopes sometimes place token
+        # counters directly at top level.
+        if provider in {"claude", "cursor", "grok"}:
+            yield obj
+
+def token_value(scope, aliases):
+    for obj in walk(scope):
+        for key, value in obj.items():
+            if key in aliases and isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+    return None
+
+usage = {}
+for container in usage_containers():
+    found = {
+        "inputTokens": token_value(container, {
+            "input_tokens", "inputTokens", "prompt_tokens", "promptTokenCount",
+        }),
+        "cachedInputTokens": token_value(container, {
+            "cached_input_tokens", "cachedInputTokens",
+            "cache_read_input_tokens", "cachedContentTokenCount",
+        }),
+        "outputTokens": token_value(container, {
+            "output_tokens", "outputTokens", "completion_tokens",
+            "candidatesTokenCount",
+        }),
+    }
+    found = {key: value for key, value in found.items() if value is not None}
+    if found:
+        usage = found
+        break
+
+if exit_code in (124, 137):
+    outcome, failure_class = "timed-out", "timeout"
+elif provider_error is not None:
+    outcome = "provider-error"
+    failure_class = "quota" if provider_error["kind"] in {
+        "usage-limit", "overloaded", "entitlement"
+    } else "provider-exit"
+elif exit_code == 0:
+    outcome, failure_class = "succeeded", "none"
 else:
-    print("invalid-output")
+    outcome, failure_class = "failed", "provider-exit"
+
+now = datetime.datetime.now(datetime.timezone.utc).replace(
+    microsecond=0).isoformat().replace("+00:00", "Z")
+result = {
+    "schema": "gluerun.orchestration.runner-result.v0",
+    "contractVersion": 1,
+    "provider": provider,
+    "runId": run_id,
+    "role": role,
+    "capabilityProfile": capability_profile,
+    "exitCode": exit_code,
+    "outcome": outcome,
+    "failureClass": failure_class,
+    "providerErrorRef": provider_error_path,
+    "outputRef": output_path or None,
+    "recordedAt": now,
+}
+if usage:
+    result["usage"] = usage
+if provider_envelope_path is not None:
+    result["providerEnvelopeRef"] = provider_envelope_path
+    result["providerEnvelopeSha256"] = hashlib.sha256(
+        provider_envelope_bytes
+    ).hexdigest()
+
+def atomic_json(path, value):
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".runner-result.", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+def atomic_bytes(path, value):
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".runner-evidence.", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+if provider_envelope_path is not None:
+    atomic_bytes(provider_envelope_path, provider_envelope_bytes)
+if provider_error is not None:
+    atomic_bytes(raw_event_path, raw_event_bytes)
+    atomic_json(provider_error_path, provider_error)
+atomic_json(result_path, result)
 PY
+
+  local provider_error_json
+  provider_error_json="$(python3 - "$result_file" <<'PY' 2>/dev/null || true
+import json, os, sys
+try:
+    result = json.load(open(sys.argv[1], encoding="utf-8"))
+    ref = result.get("providerErrorRef")
+    if ref and not os.path.isabs(ref):
+        ref = os.path.join(os.path.dirname(sys.argv[1]), ref)
+    error = json.load(open(ref, encoding="utf-8")) if ref else None
+    if isinstance(error, dict):
+        print(json.dumps(error, separators=(",", ":")))
+except Exception:
+    pass
+PY
+)"
+  if [[ -n "$provider_error_json" ]]; then
+    gluerun_append_event "provider.error" "provider terminal error normalized" \
+      "{\"runnerResultRef\":$(printf '%s' "$result_file" | gluerun_json_escape),\"providerError\":$provider_error_json}" \
+      2>/dev/null || true
+  fi
+}
+
+# Validate a runner-result and its provider-error binding. On quota evidence,
+# print a compact normalized record; otherwise return nonzero. Validation is
+# deliberately independent of jsonschema availability so it is always active.
+gluerun_runner_quota_evidence_json() {
+  local result_file="$1"
+  [[ -f "$result_file" ]] || return 1
+  python3 - "$result_file" <<'PY'
+import hashlib, json, os, re, sys
+result_path = os.path.abspath(sys.argv[1])
+try:
+    result = json.load(open(result_path, encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+required_result = {
+    "schema", "contractVersion", "provider", "runId", "role",
+    "capabilityProfile", "exitCode", "outcome", "failureClass",
+    "providerErrorRef", "outputRef", "recordedAt",
+}
+providers = {"codex", "claude", "gemini", "opencode", "cursor", "grok"}
+optional_result = {"usage", "providerEnvelopeRef", "providerEnvelopeSha256"}
+if not required_result.issubset(result) or not set(result).issubset(required_result | optional_result):
+    sys.exit(1)
+if result.get("schema") != "gluerun.orchestration.runner-result.v0":
+    sys.exit(1)
+if result.get("contractVersion") != 1 or result.get("provider") not in providers:
+    sys.exit(1)
+if result.get("failureClass") != "quota" or result.get("outcome") != "provider-error":
+    sys.exit(1)
+if not isinstance(result.get("exitCode"), int) or isinstance(result.get("exitCode"), bool):
+    sys.exit(1)
+if "usage" in result:
+    usage = result["usage"]
+    if not isinstance(usage, dict) or not usage or not set(usage).issubset({
+        "inputTokens", "cachedInputTokens", "outputTokens",
+    }):
+        sys.exit(1)
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+           for value in usage.values()):
+        sys.exit(1)
+envelope_ref = result.get("providerEnvelopeRef")
+envelope_sha = result.get("providerEnvelopeSha256")
+if bool(envelope_ref) != bool(envelope_sha):
+    sys.exit(1)
+if envelope_ref:
+    if not isinstance(envelope_ref, str) or not re.fullmatch(r"[0-9a-f]{64}", str(envelope_sha)):
+        sys.exit(1)
+    if not os.path.isabs(envelope_ref):
+        envelope_ref = os.path.join(os.path.dirname(result_path), envelope_ref)
+    try:
+        envelope_raw = open(envelope_ref, "rb").read()
+    except OSError:
+        sys.exit(1)
+    if hashlib.sha256(envelope_raw).hexdigest() != envelope_sha:
+        sys.exit(1)
+ref = result.get("providerErrorRef")
+if not isinstance(ref, str) or not ref:
+    sys.exit(1)
+if not os.path.isabs(ref):
+    ref = os.path.join(os.path.dirname(result_path), ref)
+try:
+    error = json.load(open(ref, encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+required_error = {
+    "schema", "provider", "runId", "role", "source", "eventType", "kind",
+    "httpStatus", "code", "retryable", "excerpt", "rawEventSha256", "recordedAt",
+}
+optional_error = {"rawEventRef"}
+if not required_error.issubset(error) or not set(error).issubset(required_error | optional_error):
+    sys.exit(1)
+if error.get("schema") != "gluerun.orchestration.provider-error.v0":
+    sys.exit(1)
+if error.get("provider") != result.get("provider") or error.get("runId") != result.get("runId"):
+    sys.exit(1)
+if error.get("role") != result.get("role") or error.get("source") != "terminal-envelope":
+    sys.exit(1)
+kind, status, code = error.get("kind"), error.get("httpStatus"), error.get("code")
+retryable = error.get("retryable")
+excerpt = error.get("excerpt")
+if not isinstance(excerpt, str):
+    sys.exit(1)
+entitlement_phrases = (
+    "organization has disabled",
+    "subscription access",
+    "disabled claude subscription",
+    "entitlement disabled",
+    "account is not entitled",
+)
+valid = (
+    kind == "usage-limit"
+    and status == 429
+    and code == "rate_limit_exceeded"
+    and retryable is True
+) or (
+    kind == "overloaded"
+    and status in (503, 529)
+    and code == "provider_overloaded"
+    and retryable is True
+) or (
+    kind == "entitlement"
+    and status == 403
+    and code == "entitlement_denied"
+    and retryable is False
+    and any(phrase in excerpt.lower() for phrase in entitlement_phrases)
+)
+if not valid:
+    sys.exit(1)
+digest = error.get("rawEventSha256")
+if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+    sys.exit(1)
+raw_event_ref = error.get("rawEventRef")
+if raw_event_ref is not None:
+    if not isinstance(raw_event_ref, str) or not raw_event_ref:
+        sys.exit(1)
+    if not os.path.isabs(raw_event_ref):
+        raw_event_ref = os.path.join(os.path.dirname(ref), raw_event_ref)
+    try:
+        raw_event = open(raw_event_ref, "rb").read()
+    except OSError:
+        sys.exit(1)
+    if hashlib.sha256(raw_event).hexdigest() != digest:
+        sys.exit(1)
+print(json.dumps({
+    "resultRef": result_path,
+    "providerErrorRef": os.path.abspath(ref),
+    "provider": error["provider"],
+    "runId": error["runId"],
+    "role": error["role"],
+    "eventType": error["eventType"],
+    "kind": kind,
+    "httpStatus": status,
+    "code": code,
+    "retryable": error["retryable"],
+    "excerpt": error["excerpt"],
+    "rawEventSha256": digest,
+}, separators=(",", ":")))
+PY
+}
+
+gluerun_runner_result_failure_class() {
+  local result_file="$1"
+  [[ -f "$result_file" ]] || return 1
+  python3 - "$result_file" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+if data.get("schema") != "gluerun.orchestration.runner-result.v0":
+    sys.exit(1)
+value = data.get("failureClass")
+if value not in {"none", "quota", "timeout", "provider-exit"}:
+    sys.exit(1)
+if value == "quota":
+    sys.exit(1)  # quota requires the bound provider-error validation path
+print(value)
+PY
+}
+
+gluerun_planner_failure_class() {
+  local log_file="$1" exit_code="${2:-0}" output_file="${3:-}" result_file="${4:-}"
+  local structured=""
+  if [[ -n "$result_file" ]] && gluerun_runner_quota_evidence_json "$result_file" >/dev/null 2>&1; then
+    echo "quota"
+    return 0
+  fi
+  if [[ -n "$result_file" ]]; then
+    structured="$(gluerun_runner_result_failure_class "$result_file" 2>/dev/null || true)"
+  fi
+  case "$structured" in
+    timeout) echo "timeout"; return 0 ;;
+    provider-exit) echo "codex-exit"; return 0 ;;
+    none) ;;
+  esac
+  if [[ "$exit_code" == "124" || "$exit_code" == "137" ]]; then
+    echo "timeout"
+  elif [[ "$exit_code" =~ ^[0-9]+$ && "$exit_code" -ne 0 ]]; then
+    echo "codex-exit"
+  elif [[ ! -s "$output_file" ]]; then
+    echo "empty-output"
+  else
+    echo "invalid-output"
+  fi
 }
 
 gluerun_planner_backoff_active_json() {
@@ -1346,16 +2588,32 @@ PY
 }
 
 gluerun_planner_backoff_set() {
-  local failure_class="$1" run_id="${2:-}" node="${3:-}" log_ref="${4:-}"
-  # A quota backoff without a logRef is unfalsifiable — every false backoff in
-  # the field audit carried logRef:"" — so refuse to arm one. Callers with real
-  # provider evidence always have the failing run's log path.
-  if [[ "$failure_class" == "quota" && -z "$log_ref" ]]; then
-    gluerun_append_event "backoff.rejected_no_evidence" \
-      "quota backoff refused: no logRef evidence" \
-      "{\"runId\":\"$run_id\",\"node\":\"$node\"}" 2>/dev/null || true
-    echo "quota backoff refused: no logRef evidence (runId=$run_id node=$node)" >&2
-    return 1
+  local failure_class="$1" run_id="${2:-}" node="${3:-}" evidence_ref="${4:-}"
+  local quota_evidence=""
+  # A path is not evidence. Quota backoff requires a schema-valid runner result
+  # bound to a normalized provider terminal envelope. Legacy/custom runner logs
+  # intentionally fail this gate and remain ordinary failures.
+  if [[ "$failure_class" == "quota" ]]; then
+    if [[ -n "$evidence_ref" ]]; then
+      quota_evidence="$(gluerun_runner_quota_evidence_json "$evidence_ref" 2>/dev/null || true)"
+    fi
+    if [[ -z "$quota_evidence" ]]; then
+      local rejected_json
+      rejected_json="$(python3 - "$run_id" "$node" "$evidence_ref" <<'PY'
+import json, sys
+print(json.dumps({
+    "runId": sys.argv[1],
+    "node": sys.argv[2],
+    "evidenceRef": sys.argv[3] or None,
+}, separators=(",", ":")))
+PY
+)"
+      gluerun_append_event "backoff.rejected_invalid_evidence" \
+        "quota backoff refused: structured provider evidence missing or invalid" \
+        "$rejected_json" 2>/dev/null || true
+      echo "quota backoff refused: structured provider evidence missing or invalid (runId=$run_id node=$node)" >&2
+      return 1
+    fi
   fi
   local seconds
   if [[ "$failure_class" == "quota" ]]; then
@@ -1365,20 +2623,30 @@ gluerun_planner_backoff_set() {
   fi
   [[ "$seconds" =~ ^[0-9]+$ && "$seconds" -ge 1 ]] || seconds=900
   gluerun_ensure_state_dirs
-  python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" "$failure_class" "$seconds" "$run_id" "$node" "$log_ref" <<'PY'
+  python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" "$failure_class" "$seconds" "$run_id" "$node" \
+    "$evidence_ref" "$quota_evidence" <<'PY'
 import json
 import sys
 from datetime import datetime, timedelta, timezone
 
-path, failure_class, seconds_raw, run_id, node, log_ref = sys.argv[1:7]
+path, failure_class, seconds_raw, run_id, node, evidence_ref, evidence_raw = sys.argv[1:8]
 now = datetime.now(timezone.utc).replace(microsecond=0)
 until = now + timedelta(seconds=int(seconds_raw))
+evidence = json.loads(evidence_raw) if evidence_raw else {}
 data = {
     "schema": "gluerun.orchestration.planner-backoff.v0",
     "failureClass": failure_class,
     "runId": run_id,
     "node": node,
-    "logRef": log_ref,
+    # logRef remains for v0 readers, but now points to the normalized
+    # provider-error record rather than an untrusted transcript.
+    "logRef": evidence.get("providerErrorRef", evidence_ref),
+    "evidenceRef": evidence_ref or None,
+    "providerErrorRef": evidence.get("providerErrorRef"),
+    "provider": evidence.get("provider"),
+    "providerEventType": evidence.get("eventType"),
+    "providerCode": evidence.get("code"),
+    "httpStatus": evidence.get("httpStatus"),
     "startedAt": now.isoformat().replace("+00:00", "Z"),
     "until": until.isoformat().replace("+00:00", "Z"),
 }
@@ -1404,62 +2672,16 @@ gluerun_planner_backoff_clear() {
   echo "backoff cleared (was: $prior)"
 }
 
-# Scan ONE file for usage-limit / overload / 403-entitlement markers. This is
-# the single marker source for gluerun_planner_failure_class and the cycle
-# limit-window detector. Markers are word-boundary contextual regexes — a bare
-# repo word like "quota" (e.g. a quota-banner feature) must NOT match; only
-# provider-error phrasings do. On match prints {"marker":...,"line":N}; rc 1
-# when clean/unreadable.
+# Compatibility name retained for extensions. A "marker scan" now means strict
+# runner-result/provider-error validation; arbitrary text files never match.
 gluerun_limit_marker_scan() {
   local file="$1"
-  [[ -f "$file" ]] || return 1
-  python3 - "$file" <<'PY'
-import json
-import re
-import sys
-
-path = sys.argv[1]
-markers = [
-    r"usage limit",
-    r"\bquota (?:exceeded|reached|exhausted|limit)",
-    r"\brate[ -]?limit(?:ed|s)?\b",
-    r"too many requests",
-    r"\btry again at\b",
-    r"session limit",
-    r"you've hit your",
-    r"\blimit reached\b",
-    r"\boverloaded\b",
-    r"api_error_status\":(?:429|529|503)",
-    r"organization has disabled",
-    r"subscription access for claude code",
-    r"disabled claude subscription",
-]
-pattern = re.compile("|".join(f"(?:{m})" for m in markers))
-try:
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for lineno, line in enumerate(handle, 1):
-            m = pattern.search(line.lower())
-            if m:
-                print(json.dumps({"marker": m.group(0), "line": lineno}, separators=(",", ":")))
-                sys.exit(0)
-except OSError:
-    pass
-sys.exit(1)
-PY
+  gluerun_runner_quota_evidence_json "$file"
 }
 
-# C2 (0.5.0 rewrite): detect a usage-limit / 403-org-disabled / overload window
-# from THIS cycle's RUNNER logs and print structured evidence
-# {"logRef","marker","line"} — the non-empty logRef is the arming contract for
-# gluerun_planner_backoff_set. The 0.4.0 detector free-text-scanned every
-# .log/.md/.json in the runs dir, so repo prose (a "quota-banner" feature, the
-# word "quota" in a prompt .md) armed 30-minute backoffs from healthy cycles
-# (field audit: >=13 false backoffs). Now:
-#   - only engine-written runner output files are scanned (exact-name
-#     whitelist; NEVER .md — prompts embed repo content),
-#   - markers are word-boundary contextual regexes (gluerun_limit_marker_scan),
-#   - still bounded to files modified within GLUERUN_LIMIT_SCAN_WINDOW_SEC.
-# FAIL-CLOSED: no evidence -> rc 1 -> the breaker still trips on real failures.
+# Detect a usage-limit/overload/entitlement window from this cycle's durable,
+# validated runner results. Raw runner logs, prompts, packets, verdicts, command
+# output and repository/test prose are excluded by construction.
 gluerun_cycle_limit_window_evidence_json() {
   local runs_dir="${GLUERUN_RUNS_DIR:-$GLUERUN_STATE_DIR/runs}"
   [[ -d "$runs_dir" ]] || return 1
@@ -1475,19 +2697,6 @@ try:
 except ValueError:
     window = 900
 now = time.time()
-
-# Engine-written runner output files only. Prompts (*.md), packets, verdicts,
-# and task files are excluded by construction.
-RUNNER_LOG_NAMES = {
-    "worker-codex.log",
-    "planner-codex.log",
-    "auditor-codex.log",
-    "decider-codex.log",
-    "plan.log",
-    "gate-check.log",
-    "claude-envelope.json",
-}
-RUNNER_LOG_SUFFIXES = (".runner.log", "-codex.log", "-claude.log", "-ctl.log")
 
 
 def recent(path):
@@ -1510,11 +2719,14 @@ for entry in entries:
         continue
     for root, _dirs, files in os.walk(entry.path):
         for name in files:
-            if name in RUNNER_LOG_NAMES or name.endswith(RUNNER_LOG_SUFFIXES):
+            if name == "runner-result.json" or name.endswith("-runner-result.json") or name.endswith(".runner-result.json"):
                 path = os.path.join(root, name)
                 if recent(path):
-                    out.append(path)
-for p in out:
+                    try:
+                        out.append((os.path.getmtime(path), path))
+                    except OSError:
+                        pass
+for _mtime, p in sorted(out, reverse=True):
     print(p)
 PY
 )"
@@ -1522,16 +2734,8 @@ PY
   local file hit
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
-    if hit="$(gluerun_limit_marker_scan "$file")"; then
-      python3 - "$file" "$hit" <<'PY'
-import json
-import sys
-
-log_ref, hit_raw = sys.argv[1], sys.argv[2]
-hit = json.loads(hit_raw)
-hit["logRef"] = log_ref
-print(json.dumps(hit, separators=(",", ":")))
-PY
+    if hit="$(gluerun_runner_quota_evidence_json "$file" 2>/dev/null)"; then
+      printf '%s\n' "$hit"
       return 0
     fi
   done <<<"$candidates"
@@ -2708,9 +3912,9 @@ gluerun_supervisor_digest() {
   gluerun_ensure_state_dirs
   local status health frontier gates events cfgenv whitelist
   status="$(cat "$GLUERUN_STATUS_FILE" 2>/dev/null || true)"; [[ -n "$status" ]] || status="(no STATUS.md written yet)"
-  health="$(bash "$GLUERUN_ENGINE_DIR/ops.sh" health --json 2>/dev/null || true)"; [[ -n "$health" ]] || health="{}"
-  frontier="$(bash "$GLUERUN_ENGINE_DIR/dag.sh" next-areas 2>/dev/null || true)"; [[ -n "$frontier" ]] || frontier="{}"
-  gates="$(bash "$GLUERUN_ENGINE_DIR/ops.sh" gates --json 2>/dev/null || true)"; [[ -n "$gates" ]] || gates="{}"
+  health="$("$(gluerun_bash_bin)" "$GLUERUN_ENGINE_DIR/ops.sh" health --json 2>/dev/null || true)"; [[ -n "$health" ]] || health="{}"
+  frontier="$("$(gluerun_bash_bin)" "$GLUERUN_ENGINE_DIR/dag.sh" next-areas 2>/dev/null || true)"; [[ -n "$frontier" ]] || frontier="{}"
+  gates="$("$(gluerun_bash_bin)" "$GLUERUN_ENGINE_DIR/ops.sh" gates --json 2>/dev/null || true)"; [[ -n "$gates" ]] || gates="{}"
   events="$(tail -n 30 "$GLUERUN_EVENTS_FILE" 2>/dev/null | python3 -c '
 import json, sys
 for line in sys.stdin:
@@ -3390,8 +4594,13 @@ gluerun_l1_import_staged() {
 	  for node in "$@"; do
     stage_dir="$GLUERUN_RUNS_DIR/$run_id/l1-staging/$node"
     local -a cands=()
+    local candidate_batch_dir=""
     if [[ -d "$stage_dir" ]]; then
-      mapfile -t cands < <(find "$stage_dir" -maxdepth 1 -name '*.candidate.md' -type f 2>/dev/null | sort)
+      candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir" 2>/dev/null || true)"
+      if [[ -n "$candidate_batch_dir" ]]; then
+        mapfile -t cands < <(find "$candidate_batch_dir" -maxdepth 1 \
+          -name '*.candidate.md' -type f 2>/dev/null | sort)
+      fi
     fi
 	    if [[ "${#cands[@]}" -eq 0 ]]; then
 	      if [[ -f "$stage_dir/NO-TASKS" ]]; then
@@ -3524,6 +4733,119 @@ gluerun_sha256_file() {
 
 gluerun_sha256_text() {
   python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "$1"
+}
+
+gluerun_tracked_source_snapshot() {
+  local worktree="$1" output="$2"
+  python3 - "$worktree" "$output" <<'PY'
+import json
+import os
+import stat
+import subprocess
+import sys
+
+root, output = sys.argv[1:3]
+result = subprocess.run(
+    ["git", "-C", root, "ls-files", "-z"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    check=False,
+)
+if result.returncode:
+    sys.stderr.buffer.write(result.stderr)
+    raise SystemExit(result.returncode)
+snapshot = {}
+for raw in result.stdout.split(b"\0"):
+    if not raw:
+        continue
+    relative = os.fsdecode(raw)
+    path = os.path.join(root, relative)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        snapshot[relative] = {"missing": True}
+        continue
+    snapshot[relative] = {
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "kind": stat.S_IFMT(info.st_mode),
+        "mode": stat.S_IMODE(info.st_mode),
+        "size": info.st_size,
+        "mtimeNs": info.st_mtime_ns,
+        "ctimeNs": info.st_ctime_ns,
+    }
+temporary = output + ".tmp"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(snapshot, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+os.replace(temporary, output)
+PY
+}
+
+gluerun_tracked_source_changes() {
+  local before="$1" after="$2"
+  python3 - "$before" "$after" <<'PY'
+import json
+import sys
+
+before_path, after_path = sys.argv[1:3]
+with open(before_path, encoding="utf-8") as handle:
+    before = json.load(handle)
+with open(after_path, encoding="utf-8") as handle:
+    after = json.load(handle)
+for path in sorted(set(before) | set(after)):
+    if before.get(path) != after.get(path):
+        print(path)
+PY
+}
+
+gluerun_check_result_write() {
+  local output="$1" check_id="$2" status="$3" exit_code="$4" log_ref="${5:-}"
+  python3 - "$output" "$check_id" "$status" "$exit_code" "$log_ref" <<'PY'
+import datetime
+import hashlib
+import json
+import os
+import sys
+import tempfile
+
+output, check_id, status, exit_raw, log_ref = sys.argv[1:6]
+if status not in {"passed", "failed", "not-run", "inconclusive"}:
+    raise SystemExit(2)
+try:
+    exit_code = int(exit_raw)
+except ValueError:
+    raise SystemExit(2)
+record = {
+    "schema": "gluerun.orchestration.check-result.v0",
+    "check": check_id,
+    "status": status,
+    "exitCode": exit_code,
+    "logRef": log_ref or None,
+    "logSha256": None,
+    "recordedAt": datetime.datetime.now(datetime.timezone.utc)
+    .replace(microsecond=0)
+    .isoformat()
+    .replace("+00:00", "Z"),
+}
+if log_ref and os.path.isfile(log_ref):
+    record["logSha256"] = hashlib.sha256(open(log_ref, "rb").read()).hexdigest()
+directory = os.path.dirname(output) or "."
+os.makedirs(directory, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix=".check-result.", dir=directory, text=True)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(record, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, output)
+finally:
+    try:
+        os.unlink(temporary)
+    except OSError:
+        pass
+PY
 }
 
 # --- Session affinity / runtime resume (T-E5) --------------------------------
@@ -4297,22 +5619,27 @@ gluerun_render_reaudit_prompt() {
 
   # Diff only when prior_head is a genuine ancestor of new_head; otherwise history
   # was rewritten (amend/rebase) and a range diff would be meaningless.
-  local ancestry_ok="no" stat_out="" diff_out=""
+  local ancestry_ok="no" stat_out=""
+  local diff_ref="reaudit-diff-attempt-${n}.patch"
+  local diff_artifact="$run_dir/$diff_ref"
   if git -C "$worktree" merge-base --is-ancestor "$prior_head" "$new_head" 2>/dev/null; then
     ancestry_ok="yes"
     stat_out="$(git -C "$worktree" diff --stat "$prior_head..$new_head" 2>/dev/null || true)"
-    diff_out="$(git -C "$worktree" diff "$prior_head..$new_head" 2>/dev/null || true)"
+    git -C "$worktree" diff --binary "$prior_head..$new_head" \
+      >"$diff_artifact" 2>/dev/null || return 1
+  else
+    rm -f "$diff_artifact" 2>/dev/null || true
   fi
 
-  GLUERUN_REAUDIT_STAT="$stat_out" GLUERUN_REAUDIT_DIFF="$diff_out" \
-  python3 - "$out_path" "$base_prompt" "$ledger" "$n" "$prior_head" "$new_head" "$ancestry_ok" <<'PY'
+  GLUERUN_REAUDIT_STAT="$stat_out" \
+  python3 - "$out_path" "$base_prompt" "$ledger" "$n" "$prior_head" "$new_head" \
+    "$ancestry_ok" "$diff_ref" <<'PY'
 import json
 import os
 import sys
 
-(out_path, base_prompt, ledger_path, n_raw, prior_head, new_head, ancestry_ok) = sys.argv[1:8]
-DIFF_CAP = 12000
-TRUNC = "\n[diff truncated to fit the context budget...]"
+(out_path, base_prompt, ledger_path, n_raw, prior_head, new_head,
+ ancestry_ok, diff_ref) = sys.argv[1:9]
 
 with open(base_prompt, "r", encoding="utf-8") as f:
     base = f.read()
@@ -4341,13 +5668,14 @@ else:
     parts.append("(no ledger findings recorded)")
 
 if ancestry_ok == "yes":
-    stat = os.environ.get("GLUERUN_REAUDIT_STAT", "")
-    diff = os.environ.get("GLUERUN_REAUDIT_DIFF", "")
-    if len(diff) > DIFF_CAP:
-        diff = diff[:max(0, DIFF_CAP - len(TRUNC))] + TRUNC
+    stat = os.environ.get("GLUERUN_REAUDIT_STAT", "")[:2048]
     parts.append(f"### Fix diff since your last audit ({prior_head}..{new_head})")
     parts.append(stat)
-    parts.append(diff)
+    parts.append(
+        f"The raw delta is artifact `{diff_ref}` in the evidence manifest. "
+        "Its bytes are intentionally not embedded in this prompt; retrieve only "
+        "the bounded portion needed for a named finding through evidence-show.sh."
+    )
 else:
     parts.append(
         f"History was rewritten since your last audit ({prior_head} is not an "
@@ -4734,7 +6062,7 @@ gluerun_run_in_worktree_env() {
         GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" \
         GLUERUN_ENGINE_HOME="$GLUERUN_ENGINE_HOME" \
         GLUERUN_WORKTREE_ENV_FILE="$GLUERUN_WORKTREE_ENV_FILE" \
-        bash -c 'set -a; . "$GLUERUN_WORKTREE_ENV_FILE"; set +a; exec "$@"' bash "$@"
+        "$(gluerun_bash_bin)" -c 'set -a; . "$GLUERUN_WORKTREE_ENV_FILE"; set +a; exec "$@"' bash "$@"
     )
   else
     ( cd "$worktree" && GLUERUN_ROOT="$GLUERUN_ROOT" GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" "$@" )
@@ -4811,7 +6139,7 @@ if os.path.isdir(gates_dir):
             g = json.load(open(os.path.join(gates_dir, name)))
         except Exception:
             continue
-        if g.get("status") == "passed":
+        if g.get("status") in ("passed", "passed-with-acknowledged-baseline"):
             completed.append(str(g.get("node", name.removesuffix(".gate-result.json"))))
 
 task_counts = {}

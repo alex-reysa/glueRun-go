@@ -7,6 +7,56 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.13.0] — 2026-07-24 — Operational resilience and governance
+
+- Adaptive worktree scheduling now accounts for free space, reserve, and
+  estimated worktree cost, with one conservative garbage-collection retry and
+  the calculation exposed in health output.
+- Added contained, lockfile-bound worktree bootstrap; structured `doctor`
+  coverage; and owner-, answer-, expiry-, evidence-, and artifact-hash-bound
+  human gates whose descendants remain blocked whenever approval becomes stale.
+- Disabled artifact-unbound accept-waivers in schema v2; they remain available
+  only through the explicit `legacyCompatibility.unboundWaivers` switch.
+- Advanced the consumer contract to `schemaVersion: v2`, with an idempotent
+  v1→v2 migration, authoritative schema-mirror synchronization, additive
+  configuration defaults, dual-read compatibility for existing v0 records,
+  and validation-preserving support for consumer-only schema extensions.
+- Added a non-destructive release-promotion canary for the captured 26-node
+  localization graph and all ten field-report regression scenarios.
+- Added strict `GLUERUN_CODEX_BIN` resolution shared by doctor and the Codex
+  runner. Doctor now spawns the selected CLI with bounded `--version` and
+  authentication probes, catching broken packaged native executables.
+- Added bootstrap-only `GLUERUN_BASH_BIN` so Bash ≥4 can be selected without
+  reordering `PATH`; launchd keeps deprecated `CODEX_BIN` as a fallback alias.
+- Active non-quota planner backoffs now defer replanning without creating L1
+  leases or repeatedly incrementing the circuit breaker. Imports,
+  integrations, ready dispatches, and unrelated failure accounting continue.
+
+## [0.12.0] — 2026-07-24 — Evidence and operator clarity
+
+- Added bounded, hash-addressed evidence manifests and raw-artifact access;
+  role/capability profiles; atomic lifecycle status; grouped structured
+  diagnostics; and strict baseline-bound gate reports.
+- Auditor prompts consume the compact manifest by default, while raw evidence
+  remains separately hash-verifiable and subject to composed, excerpt,
+  retrieval, and token-canary budgets.
+- `gate-result.v1` now carries the four verification classifications, rehashes
+  every referenced artifact at frontier evaluation, and requires a fully bound
+  gate report for deterministic passes. `audit-verdict.v1` classifications are
+  host-bound so evidence-only verification cannot be upgraded to a rerun pass.
+
+## [0.11.2] — 2026-07-24 — Immediate stabilization
+
+- Plan revision now shares host-side task-batch extraction and validation with
+  initial planning, preserves task identity, and replaces staged candidates
+  only after complete validation through an atomic immutable-generation pointer
+  (including interruption and concurrent-reader coverage), without extending
+  the runner contract with `--stage-dir`.
+- Provider backoff now requires validated provider-owned terminal envelopes;
+  auditor verification uses disposable writable worktrees and hash-bound
+  classifications; durable control transitions commit immediately while idle
+  snapshots default to a 300-second interval.
+
 ## [0.11.1] — 2026-07-19 — Thread sub-menu; home flicker fix
 
 - **IA**: the header surface-tab row is gone — Home / Plan / Consoles / Agents

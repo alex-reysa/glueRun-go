@@ -67,6 +67,8 @@ gluerun_ctx_plan_critic_stage_file() {
 gluerun_ctx_plan_critic_context() {
   local node="$1" stage_dir="$2" out_file="$3" summary_file="${4:-}"
   [[ -n "$out_file" ]] || return 2
+  local candidate_batch_dir
+  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
 
   [[ -n "$summary_file" ]] || summary_file="$stage_dir/existing-tasks.md"
   local stage_file; stage_file="$(gluerun_ctx_plan_critic_stage_file "$node")"
@@ -79,7 +81,7 @@ gluerun_ctx_plan_critic_context() {
 
     printf '## Candidate Tasks\n\n'
     local c
-    for c in "$stage_dir"/*.candidate.md; do
+    for c in "$candidate_batch_dir"/*.candidate.md; do
       [[ -e "$c" ]] || continue
       printf '### %s\n\n' "$(basename "$c")"
       cat "$c"

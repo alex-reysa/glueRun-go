@@ -243,8 +243,10 @@ gluerun_plan_recritic_run() {
 
   # Authoritative batch ids from the rendered candidate files staged for this node
   # (not whatever the runner echoed), mirroring the fresh driver.
+  local candidate_batch_dir
+  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
   local batch_csv="" f base tid
-  for f in "$stage_dir"/TASK-*.md; do
+  for f in "$candidate_batch_dir"/TASK-*.md; do
     [[ -e "$f" ]] || continue
     base="$(basename "$f" .md)"
     tid="$(printf '%s' "$base" | grep -oE '^TASK-[0-9]{4,}' || true)"
@@ -253,9 +255,18 @@ gluerun_plan_recritic_run() {
   done
 
   # ONE read-only resume pass on the DEFAULT runner WITH --resume-session.
-  rm -f "$raw" 2>/dev/null || true
+  local result_file="$stage_dir/plan-recritic-resume-runner-result.json"
+  rm -f "$raw" "$result_file" 2>/dev/null || true
   local rc=0
-  "$runner" --level readonly -C "$worktree" --run-id "$run_id" \
+  local critic_capability_profile="${GLUERUN_CRITIC_CAPABILITY_PROFILE:-audit-core}"
+  gluerun_runner_contract_prepare \
+    "$runner" critic "$critic_capability_profile" "$result_file"
+  GLUERUN_RUNNER_ROLE=critic \
+  GLUERUN_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
+  GLUERUN_RUNNER_RESULT_FILE="$result_file" \
+  GLUERUN_RUNNER_RUN_ID="$run_id" \
+  "$runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    --level readonly -C "$worktree" --run-id "$run_id" \
     --prompt-file "$prompt" --output-last-message "$raw" \
     --session-meta "$session_meta" --resume-session "$sid" >/dev/null 2>&1 || rc=$?
 

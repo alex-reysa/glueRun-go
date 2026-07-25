@@ -11,3 +11,9 @@ __pycache__/
 *.pyc
 .gluerun-evidence/
 .gluerun-cache/
+
+# Locally installed agent skills + their lockfile. The engine reads
+# .agents/skills as a capability source, but the installed contents are
+# operator tooling, not part of the engine release.
+.agents/
+skills-lock.json

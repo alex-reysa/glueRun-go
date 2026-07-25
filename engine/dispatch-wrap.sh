@@ -2,6 +2,10 @@
 set -uo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "dispatch-wrap.sh requires bash >= 4" >&2; exit 1
 fi

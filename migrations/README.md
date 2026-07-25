@@ -1,7 +1,7 @@
 # Schema migrations
 
 The engine's data contract version lives in the root `SCHEMA_VERSION` file
-(currently `v1`). Each consumer repo declares the schema it was scaffolded
+(currently `v2`). Each consumer repo declares the schema it was scaffolded
 against in `gluerun.config.json` → `schemaVersion`. When an engine release bumps
 `SCHEMA_VERSION`, it must ship migration scripts here so existing repos can
 catch up via `gluerun migrate`.
@@ -43,6 +43,10 @@ Only per-repo, committed orchestration surface in the target repo (`$1`):
   `schemaVersion`, see above).
 - `docs/orchestration/**` — DAG manifest, task packets, area docs, gate docs,
   prompt skeletons.
+- `schemas/orchestration/**` — consumer copies of the engine's public schema
+  bundle. A migration may replace engine-owned basenames after staging and
+  validating the complete authoritative set; consumer-only custom schemas must
+  be preserved.
 
 A migration script must NOT touch: engine files, `~/.gluerun/`, `.gluerun-state/`
 (runtime state), `.worktrees/`, the repo's source code, or `.gluerun-version`
@@ -60,6 +64,11 @@ is a release bug. `gluerun doctor` reports the same mismatch as a FAIL, and
 `gluerun update` warns and points at `gluerun migrate` when the freshly pinned
 engine's schema differs from the repo's.
 
-The current public contract is `v1`; `migrations/v0-to-v1.sh` backfills the
-current scaffold and rewrites legacy `pmgo.orchestration.*` namespace references
-to `gluerun.orchestration.*`.
+The current public contract is `v2`. `migrations/v0-to-v1.sh` backfills the
+original scaffold and rewrites legacy `pmgo.orchestration.*` namespace
+references to `gluerun.orchestration.*`. `migrations/v1-to-v2.sh` stages and
+validates the authoritative schema bundle, replaces matching consumer mirrors,
+adds the role/capability, evidence, bootstrap, resource, and control-state
+configuration defaults when absent, and creates the human-gate and strict-gate
+baseline directories. Existing v0 artifacts remain readable; v1 result
+artifacts are written only after the migration runner advances the repo to v2.

@@ -1,0 +1,430 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Re-run a committed worker gate in a disposable writable worktree. The
+# original audited worktree is never used as the command's cwd.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib.sh"
+
+run_dir=""
+task_id=""
+source_worktree=""
+head_sha=""
+gate_command=""
+worker_gate_report=""
+worker_gate_command=""
+attempt="1"
+try_number="0"
+evidence_only="no"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --run-dir) run_dir="${2:-}"; shift 2 ;;
+    --task-id) task_id="${2:-}"; shift 2 ;;
+    --source-worktree) source_worktree="${2:-}"; shift 2 ;;
+    --head-sha) head_sha="${2:-}"; shift 2 ;;
+    --gate-command) gate_command="${2:-}"; shift 2 ;;
+    --worker-gate-report) worker_gate_report="${2:-}"; shift 2 ;;
+    --worker-gate-command) worker_gate_command="${2:-}"; shift 2 ;;
+    --attempt) attempt="${2:-}"; shift 2 ;;
+    --try) try_number="${2:-}"; shift 2 ;;
+    --evidence-only) evidence_only="yes"; shift ;;
+    *) echo "audit-verify: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ -n "$run_dir" && -d "$run_dir" ]] || { echo "audit-verify: --run-dir is required" >&2; exit 2; }
+[[ "$task_id" =~ ^TASK-[0-9]{4,}$ ]] || { echo "audit-verify: valid --task-id is required" >&2; exit 2; }
+[[ -n "$source_worktree" && -d "$source_worktree" ]] || { echo "audit-verify: --source-worktree is required" >&2; exit 2; }
+[[ "$head_sha" =~ ^[0-9a-fA-F]{40,64}$ ]] || { echo "audit-verify: valid --head-sha is required" >&2; exit 2; }
+[[ -n "$gate_command" ]] || { echo "audit-verify: --gate-command is required" >&2; exit 2; }
+[[ -n "$worker_gate_report" ]] || worker_gate_report="$run_dir/gate-check.json"
+[[ -n "$worker_gate_command" ]] || worker_gate_command="$gate_command"
+
+output="$run_dir/audit-verification.json"
+if [[ "$evidence_only" == "yes" ]]; then
+  "$SCRIPT_DIR/gate-report.py" copy-evidence \
+    --report "$worker_gate_report" \
+    --output "$output" \
+    --expected-head "$head_sha" \
+    --expected-command "$worker_gate_command"
+  printf '%s\n' "$output"
+  exit 0
+fi
+
+safe_run_id="${run_dir##*/}"
+safe_run_id="${safe_run_id//[^A-Za-z0-9_.-]/_}"
+sandbox_base="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-audit-${safe_run_id}.XXXXXX")"
+verify_worktree="$sandbox_base/worktree"
+cache_root="$sandbox_base/cache"
+log="$run_dir/audit-verification-${attempt}-${try_number}.log"
+worktree_added="no"
+
+cleanup() {
+  if [[ "$worktree_added" == "yes" ]]; then
+    if gluerun_git_lock_acquire 2>/dev/null; then
+      git -C "$GLUERUN_ROOT" worktree remove --force "$verify_worktree" >/dev/null 2>&1 || true
+      git -C "$GLUERUN_ROOT" worktree prune >/dev/null 2>&1 || true
+      gluerun_git_lock_release
+    fi
+  fi
+  rm -rf "$sandbox_base"
+}
+trap cleanup EXIT
+
+workspace_fingerprint() {
+  python3 - "$1" <<'PY'
+import hashlib
+import subprocess
+import sys
+
+root = sys.argv[1]
+head = subprocess.run(
+    ["git", "-C", root, "rev-parse", "HEAD"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    check=False,
+).stdout
+status = subprocess.run(
+    ["git", "-C", root, "status", "--porcelain=v1", "--untracked-files=all"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    check=False,
+).stdout
+print(hashlib.sha256(head + b"\0" + status).hexdigest())
+PY
+}
+
+tracked_source_snapshot() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import os
+import stat
+import subprocess
+import sys
+
+root, output = sys.argv[1:3]
+result = subprocess.run(
+    ["git", "-C", root, "ls-files", "-z"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    check=False,
+)
+if result.returncode:
+    sys.stderr.buffer.write(result.stderr)
+    raise SystemExit(result.returncode)
+
+snapshot = {}
+for raw in result.stdout.split(b"\0"):
+    if not raw:
+        continue
+    relative = os.fsdecode(raw)
+    path = os.path.join(root, relative)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        snapshot[relative] = {"missing": True}
+        continue
+    snapshot[relative] = {
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "kind": stat.S_IFMT(info.st_mode),
+        "mode": stat.S_IMODE(info.st_mode),
+        "size": info.st_size,
+        # Reads may update atime. Writes, replacements, and chmod operations
+        # necessarily change at least ctime on supported audit hosts, even if a
+        # command restores the original bytes and mtime before it exits.
+        "mtimeNs": info.st_mtime_ns,
+        "ctimeNs": info.st_ctime_ns,
+    }
+
+temporary = output + ".tmp"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(snapshot, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+os.replace(temporary, output)
+PY
+}
+
+tracked_source_changes() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+before_path, after_path = sys.argv[1:3]
+with open(before_path, encoding="utf-8") as handle:
+    before = json.load(handle)
+with open(after_path, encoding="utf-8") as handle:
+    after = json.load(handle)
+for path in sorted(set(before) | set(after)):
+    if before.get(path) != after.get(path):
+        print(path)
+PY
+}
+
+emit_setup_failure() {
+  local reason="$1"
+  printf 'audit verification setup failed: %s\n' "$reason" >"$log"
+  local report_rc=0
+  "$SCRIPT_DIR/gate-report.py" create \
+    --output "$output" \
+    --task-id "$task_id" \
+    --run-id "${run_dir##*/}" \
+    --head-sha "$head_sha" \
+    --command "$gate_command" \
+    --exit-code 125 \
+    --log "$log" \
+    --phase audit-verification \
+    --workspace-kind disposable \
+    --integrity-status not-checked \
+    --setup-error "$reason" || report_rc=$?
+  printf '%s\n' "$output"
+  [[ "$report_rc" -eq 0 ]] && report_rc=20
+  return "$report_rc"
+}
+
+original_before="$(workspace_fingerprint "$source_worktree")"
+
+if [[ "${GLUERUN_AUDIT_VERIFY_FORCE_SETUP_FAILURE:-0}" == "1" ]]; then
+  emit_setup_failure "forced-setup-failure"
+  exit $?
+fi
+
+if ! gluerun_git_lock_acquire; then
+  emit_setup_failure "git-lock-timeout"
+  exit $?
+fi
+add_rc=0
+git -C "$GLUERUN_ROOT" worktree add --detach -q "$verify_worktree" "$head_sha" >"$log" 2>&1 || add_rc=$?
+if [[ "$add_rc" -eq 0 ]]; then worktree_added="yes"; fi
+gluerun_git_lock_release
+if [[ "$add_rc" -ne 0 ]]; then
+  emit_setup_failure "worktree-create-failed"
+  exit $?
+fi
+
+resolved_head="$(git -C "$verify_worktree" rev-parse HEAD 2>/dev/null || true)"
+if [[ "$resolved_head" != "$head_sha" ]]; then
+  emit_setup_failure "worktree-head-mismatch"
+  exit $?
+fi
+
+if ! gluerun_worktree_provision "$verify_worktree" "" >>"$log" 2>&1; then
+  emit_setup_failure "worktree-provision-failed"
+  exit $?
+fi
+# Copy dependency trees into the disposable root. macOS clonefile copies are
+# copy-on-write; other platforms use GNU reflinks when available, then a plain
+# recursive copy. The default covers the common Turbo/Vitest/Bun root layout;
+# monorepos may add clean relative paths through the JSON knob.
+mirror_json="${GLUERUN_AUDIT_VERIFY_COPY_PATHS_JSON:-[\"node_modules\"]}"
+mapfile -t mirror_paths < <(python3 - "$mirror_json" <<'PY'
+import json
+import pathlib
+import sys
+try:
+    values = json.loads(sys.argv[1])
+except Exception:
+    raise SystemExit(2)
+if not isinstance(values, list):
+    raise SystemExit(2)
+for value in values:
+    if not isinstance(value, str) or not value:
+        raise SystemExit(2)
+    path = pathlib.PurePosixPath(value)
+    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+        raise SystemExit(2)
+    print(value)
+PY
+) || {
+  emit_setup_failure "invalid-copy-paths-json"
+  exit $?
+}
+
+for relative in "${mirror_paths[@]}"; do
+  source_path="$source_worktree/$relative"
+  target_path="$verify_worktree/$relative"
+  [[ -e "$source_path" ]] || continue
+  mkdir -p "$(dirname "$target_path")"
+  copy_ok="no"
+  if cp -cR "$source_path" "$target_path" >/dev/null 2>&1; then
+    copy_ok="yes"
+  else
+    rm -rf "$target_path"
+    if cp -a --reflink=auto "$source_path" "$target_path" >/dev/null 2>&1; then
+      copy_ok="yes"
+    else
+      rm -rf "$target_path"
+      if cp -R "$source_path" "$target_path" >/dev/null 2>&1; then
+        copy_ok="yes"
+      fi
+    fi
+  fi
+  if [[ "$copy_ok" != "yes" ]]; then
+    emit_setup_failure "dependency-copy-failed:$relative"
+    exit $?
+  fi
+done
+
+if ! "$SCRIPT_DIR/bootstrap-worktree.sh" --worktree "$verify_worktree" >>"$log" 2>&1; then
+  emit_setup_failure "worktree-bootstrap-failed"
+  exit $?
+fi
+
+mkdir -p "$cache_root/tmp" "$cache_root/xdg" "$cache_root/turbo" \
+  "$cache_root/vite" "$cache_root/bun" "$cache_root/npm" "$cache_root/yarn" \
+  "$cache_root/corepack" "$cache_root/node" "$cache_root/cargo" "$cache_root/go"
+
+source_snapshot_before="$sandbox_base/tracked-source-before.json"
+source_snapshot_after="$sandbox_base/tracked-source-after.json"
+if ! tracked_source_snapshot "$verify_worktree" "$source_snapshot_before" >>"$log" 2>&1; then
+  emit_setup_failure "source-integrity-snapshot-failed"
+  exit $?
+fi
+
+observation="$run_dir/audit-gate-observation-${attempt}-${try_number}.json"
+rm -f "$observation"
+gate_timeout="${GLUERUN_AUDIT_GATE_TIMEOUT_SEC:-1200}"
+[[ "$gate_timeout" =~ ^[0-9]+$ ]] || gate_timeout=1200
+
+run_gate_command() {
+  # Reuse the worker gate's allowlisted environment boundary so a denied host
+  # variable cannot leak into verification. Cache variables are supplied only
+  # to the disposable command and remain outside the source checkout.
+  gluerun_run_in_worktree_env "$verify_worktree" env \
+    GLUERUN_GATE_REPORT_FILE="$observation" \
+    TMPDIR="$cache_root/tmp/" \
+    TMP="$cache_root/tmp" \
+    TEMP="$cache_root/tmp" \
+    XDG_CACHE_HOME="$cache_root/xdg" \
+    TURBO_CACHE_DIR="$cache_root/turbo" \
+    VITE_CACHE_DIR="$cache_root/vite" \
+    BUN_INSTALL_CACHE_DIR="$cache_root/bun" \
+    BUN_TMPDIR="$cache_root/tmp" \
+    npm_config_cache="$cache_root/npm" \
+    YARN_CACHE_FOLDER="$cache_root/yarn" \
+    COREPACK_HOME="$cache_root/corepack" \
+    NODE_COMPILE_CACHE="$cache_root/node" \
+    CARGO_TARGET_DIR="$cache_root/cargo" \
+    GOCACHE="$cache_root/go" \
+    "$(gluerun_bash_bin)" -c "$gate_command"
+}
+
+started_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
+gate_exit=0
+gate_timed_out="no"
+if [[ "$gate_timeout" -gt 0 ]]; then
+  run_gate_command >"$log" 2>&1 &
+  gate_pid=$!
+  gate_deadline=$((SECONDS + gate_timeout))
+  while kill -0 "$gate_pid" 2>/dev/null; do
+    if [[ "$SECONDS" -ge "$gate_deadline" ]]; then
+      gate_timed_out="yes"
+      gluerun_kill_tree "$gate_pid"
+      kill -KILL "$gate_pid" 2>/dev/null || true
+      wait "$gate_pid" 2>/dev/null || true
+      gate_exit=124
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$gate_timed_out" != "yes" ]]; then
+    if wait "$gate_pid"; then
+      gate_exit=0
+    else
+      gate_exit=$?
+    fi
+  else
+    printf 'audit verification gate timed out after %ss\n' "$gate_timeout" >>"$log"
+  fi
+else
+  run_gate_command >"$log" 2>&1 || gate_exit=$?
+fi
+finished_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
+
+if ! tracked_source_snapshot "$verify_worktree" "$source_snapshot_after" >>"$log" 2>&1; then
+  emit_setup_failure "source-integrity-snapshot-failed"
+  exit $?
+fi
+
+mapfile -t changed_paths < <(
+  git -C "$verify_worktree" status --porcelain=v1 --untracked-files=all 2>/dev/null \
+    | sed -E 's/^.. //' | sed '/^[[:space:]]*$/d'
+)
+mapfile -t metadata_changed_paths < <(
+  tracked_source_changes "$source_snapshot_before" "$source_snapshot_after"
+)
+changed_paths+=("${metadata_changed_paths[@]}")
+integrity_status="verified"
+[[ ${#changed_paths[@]} -eq 0 ]] || integrity_status="violation"
+original_after="$(workspace_fingerprint "$source_worktree")"
+if [[ "$original_before" != "$original_after" ]]; then
+  integrity_status="violation"
+  changed_paths+=("original-worktree-changed-during-verification")
+fi
+
+report_args=(
+  --task-id "$task_id"
+  --run-id "${run_dir##*/}"
+  --head-sha "$head_sha"
+  --command "$gate_command"
+  --duration-ms "$((finished_ms - started_ms))"
+  --phase audit-verification
+  --workspace-kind disposable
+  --integrity-status "$integrity_status"
+)
+for changed in "${changed_paths[@]}"; do
+  report_args+=(--changed-path "$changed")
+done
+report_rc=0
+if [[ "${GLUERUN_CONFIG_SCHEMA_VERSION:-}" == "v2" ]]; then
+  strict_args=(
+    "${report_args[@]}"
+    --raw-exit-code "$gate_exit"
+    --log-ref "$log"
+    --log-path "$log"
+    --output "$output"
+    --require-observation
+  )
+  [[ -f "$observation" ]] && strict_args+=(--observation "$observation")
+  normalize_rc=0
+  "$SCRIPT_DIR/gate_report.py" "${strict_args[@]}" \
+    >"$run_dir/audit-gate-normalize-${attempt}-${try_number}.out" \
+    2>"$run_dir/audit-gate-normalize-${attempt}-${try_number}.err" \
+    || normalize_rc=$?
+  if [[ "$normalize_rc" -ne 0 || ! -f "$output" ]]; then
+    setup_reason="gate-report-normalization-failed"
+    [[ -f "$observation" ]] || setup_reason="strict-gate-observation-missing"
+    fallback_args=(
+      create
+      --output "$output"
+      --exit-code "$gate_exit"
+      --log "$log"
+      --setup-error "$setup_reason"
+      "${report_args[@]}"
+    )
+    if [[ "$gate_exit" -eq 124 || "$gate_exit" -eq 137 || "$gate_exit" -eq 143 ]]; then
+      fallback_args+=(--setup-error gate-command-timeout)
+    fi
+    "$SCRIPT_DIR/gate-report.py" "${fallback_args[@]}" || report_rc=$?
+  else
+    normalized_outcome="$(gluerun_json_field "$output" outcome 2>/dev/null || true)"
+    case "$normalized_outcome" in
+      passed|passed-with-acknowledged-baseline) report_rc=0 ;;
+      failed-product) report_rc=10 ;;
+      *) report_rc=20 ;;
+    esac
+  fi
+else
+  legacy_args=(
+    create
+    --output "$output"
+    --exit-code "$gate_exit"
+    --log "$log"
+    "${report_args[@]}"
+  )
+  "$SCRIPT_DIR/gate-report.py" "${legacy_args[@]}" || report_rc=$?
+fi
+printf '%s\n' "$output"
+exit "$report_rc"

@@ -49,7 +49,9 @@ rc=0; lib_sleep "gluerun_interruptible_sleep 30" || rc=$?
 rm -f "$root/.gluerun-state/STOP"
 
 # watch_backoff: clearing the backoff ends the nap.
-lib_sleep "gluerun_planner_backoff_set quota RUN-x node-x '$root/log'"
+printf '%s\n' \
+  '{"schema":"gluerun.orchestration.planner-backoff.v0","failureClass":"quota","until":"2999-01-01T00:00:00Z"}' \
+  >"$root/.gluerun-state/planner-backoff.json"
 ( sleep 2 && rm -f "$root/.gluerun-state/planner-backoff.json" ) &
 rc=0; lib_sleep "gluerun_interruptible_sleep 30 1" || rc=$?
 [[ "$rc" -eq 1 ]] || fail "backoff clear should end a watched nap (rc=$rc)"

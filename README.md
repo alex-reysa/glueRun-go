@@ -82,8 +82,12 @@ Prerequisites:
 - Bash >= 4, `python3`, and `git`.
 - At least one supported runner CLI on `PATH` (`claude`, `codex`, or another
   configured runner).
-- macOS users may need `brew install bash` and a `PATH` entry that resolves
-  `bash` to the Homebrew version before `/bin/bash`.
+- macOS users may need `brew install bash`. Set
+  `GLUERUN_BASH_BIN=/opt/homebrew/bin/bash` in the shell/service environment to
+  select it without reordering `PATH`.
+- When multiple Codex installations exist, set
+  `GLUERUN_CODEX_BIN=/absolute/path/to/codex`. Doctor and the runner use that
+  exact executable and do not fall back when it is broken.
 
 ```bash
 # Clone and install the engine to ~/.gluerun
@@ -102,6 +106,54 @@ gluerun init      # scaffold gluerun.config.json, docs/orchestration/, .gluerun-
 gluerun doctor    # check deps, engine resolution, repo config
 ```
 
+`GLUERUN_BASH_BIN` is bootstrap-only and is ignored in `gluerun.config.json`;
+set it before invoking `gluerun`. `GLUERUN_CODEX_BIN` may be supplied through
+the normal engine environment/config layers. For the standard Codex runner,
+`gluerun doctor` performs bounded `--version` and `login status` probes against
+the exact selected executable.
+
+Doctor is also the machine-readable preflight for unattended runs:
+
+```bash
+gluerun doctor --json | jq '.summary, .checks[] | select(.status != "pass")'
+gluerun doctor --repair-model-cache  # explicit: backup first, then regenerate later
+```
+
+Every JSON check has a stable `id`, `severity`, `requiredFor`, `remediation`,
+and `dedupeKey`. Required capability failures block doctor; a missing optional
+capability produces one warning even when several roles share it. Doctor checks
+deployment credentials only while a deployment-capable DAG node is actually in
+the ready frontier. It never silently deletes or rewrites Codex model cache
+data: the repair flag moves the original to a timestamped, SHA-tagged backup.
+
+Role profiles are local-only by default. Repositories that need extra tools,
+MCP servers, or plugins can declare lazy profiles explicitly:
+
+```json
+{
+  "capabilityProfiles": {
+    "audit-core": {
+      "startup": "lazy",
+      "required": ["filesystem", "git", "schemas", "runner-contract"],
+      "optional": ["mcp:browser"]
+    }
+  },
+  "roleProfiles": {
+    "auditor": "audit-core",
+    "decider": "audit-core"
+  }
+}
+```
+
+Capability IDs may use `mcp:NAME`, `plugin:NAME`, `executable:NAME`, or
+`file:REPO_PATH`. More specialized capabilities can be declared in the
+top-level `capabilities` registry with a `type` of `builtin`, `executable`,
+`file`, `mcp`, `plugin`, or `environment`.
+In strict profiles, external skills, MCP servers, and plugins are activated
+only by `capabilityArgs.<exact-capability>`; unrelated `providerArgs` never
+claim a capability. Legacy `GLUERUN_*_EXTRA_ARGS` variables are rejected for
+strict runs because they are not capability-bound.
+
 Each repo pins its engine version in `.gluerun-version` (overrides `gluerun.config.json`
 `engineVersion`). The `gluerun` launcher resolves that version from `~/.gluerun/versions/<ver>`,
 binds `GLUERUN_ROOT` to the current repo, loads its config, and execs the engine. Run
@@ -118,6 +170,13 @@ gluerun drive TASK-0001
 
 # Self-driving autonomy loop (wall-clock budget: GLUERUN_MAX_HOURS)
 gluerun auto
+
+# Create, approve, or inspect an owner- and artifact-hash-bound human gate
+gluerun human-gate request --help
+gluerun human-gate approve --help
+gluerun human-gate status --help
+
+# The old promote-gate --operator route is schema-v2 legacy compatibility only
 
 # Block until all detached workers finish (useful in CI or clean shutdown)
 gluerun reconcile --drain
@@ -141,13 +200,38 @@ All per-repo variation lives in the consumer repo, never in engine files:
 
 - **`gluerun.config.json`** — declarative: `targetBranch`, `gateCommand`, `runner`,
   `areas{}`, `areaPrefix`, `prewarm`, `modules[]`, `identity{}`, `env{}`,
-  `provisionFiles[]`, `envAllowlist[]`.
+  `provisionFiles[]`, `envAllowlist[]`, `capabilityProfiles{}`, `roleProfiles{}`,
+  `evidence{}`, `bootstrap{}`, `resources{}`, `controlState{}`, and
+  `legacyCompatibility{}`.
 - **`gluerun.config.sh`** — optional shell extras (computed values, functions).
 - **`.gluerun-state/config.local.sh`** — gitignored operator overrides and secrets.
 
 The starter config deliberately sets `gateCommand` to `false` so a newly
 scaffolded repo fails closed until you replace it with the command that proves
 the repo is healthy.
+
+The v2 starter profile is local-only and lazy: each runner role requires the
+filesystem, Git, schema bundle, runner contract, and selected provider
+executable, while external skills, MCP servers, and plugins must be opted into
+explicitly. Evidence composition defaults to 256 KiB, excerpts to 2 KiB,
+cumulative raw retrieval to 256 KiB, and the audit input canary to 100,000
+tokens. Worktree scheduling reserves 2 GiB, estimates 256 MiB per worktree,
+and caps the starter at three workers. Semantic control snapshots default to a
+300-second interval; set `controlState.commitIntervalSeconds` to `0` only for
+legacy every-cycle snapshots.
+
+`bootstrap.commands` is an ordered list of `{command, required, lockfiles}`
+records. Every declared lockfile must exist and be tracked before any command
+runs; an optional command may warn and continue, while a required failure
+blocks the worktree. The singular `bootstrap.command` field remains a legacy
+shorthand. Shared-store links must stay under declared roots and target
+gitignored, untracked paths.
+
+Schema v2 rejects the historical, artifact-unbound `accept-waiver` and
+`promote-gate --operator --evidence` paths by default. Prefer a `human-gate`
+request and exact-hash approval. An operator may temporarily restore the old
+behavior only by explicitly setting
+`legacyCompatibility.unboundWaivers` to `true`.
 
 `provisionFiles` entries copy repo-local, gitignored files into each worker
 worktree after `git worktree add`: `{ "source": ".env.local", "target":
@@ -266,6 +350,13 @@ candidates never reach import (fail closed). Critic infrastructure failure fails
 OPEN with an event — the critic is an added safety layer; the un-bypassable
 implementation auditor remains the floor.
 
+In schema v2, a successful revision is published as an immutable generation
+under the node staging directory. One atomically replaced
+`.candidate-current.json` manifest selects the authoritative generation, and
+all engine readers pin that generation before enumerating files. Direct
+`TASK-*.candidate.md` files are a legacy pre-migration read fallback only; new
+revision batches are never published through sequential direct-file moves.
+
 ## Modules
 
 The generic `engine/` references **zero** project-specific symbols — enforced by
@@ -289,20 +380,27 @@ Two versions move independently:
 - **Engine pin** — `.gluerun-version` is the canonical per-repo pin (overrides
   `gluerun.config.json` `engineVersion`; if they disagree `.gluerun-version` wins and
   `gluerun doctor` warns). `gluerun update <ver>` rewrites it.
-- **Schema** — `SCHEMA_VERSION` (repo root) holds the data-contract version (`v1` today).
+- **Schema** — `SCHEMA_VERSION` (repo root) holds the data-contract version (`v2` today).
   A repo records the schema it was scaffolded against in `gluerun.config.json` →
   `schemaVersion`. `gluerun doctor` fails on a schema mismatch; `gluerun migrate` runs
   the shipped `migrations/<from>-to-<to>.sh` chain and rewrites `schemaVersion`.
-  All runtime JSON schema identifiers follow the namespace `gluerun.orchestration.*.v0`.
+  Runtime JSON schema identifiers follow the namespace
+  `gluerun.orchestration.*.vN`. v2 keeps reading existing v0 records while
+  writing the structured audit and gate v1 contracts.
 
 ## Development and tests
 
 ```bash
 bash tests/run.sh    # full regression suite (120+ tests)
+bash tests/field-report-canary.sh  # required before promoting 0.11.2, 0.12.0, or 0.13.0
 ```
 
 The test suite uses no live state — all fixtures use a generic layer vocabulary. The
 `tests/test-engine-clean.sh` gate enforces the abstraction contract on `engine/`.
+The promotion canary is also non-destructive: it validates the captured 26-node
+localization graph and composes the ten field-report regression scenarios from
+their focused hermetic tests. It stays outside `tests/run.sh` to avoid running
+those same scenarios twice in an ordinary development pass.
 
 ## Contributing
 

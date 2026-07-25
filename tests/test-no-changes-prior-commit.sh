@@ -26,6 +26,15 @@ git -C "$root" checkout -q -b target
 cp "$ENGINE_HOME/templates/prompts/l2-test-first-developer.md" "$root/docs/orchestration/prompts/"
 cp "$ENGINE_HOME/templates/prompts/auditor.md" "$root/docs/orchestration/prompts/"
 printf '# Decider Prompt\n[TASK-ID] [FAILURE CLASS]\n' >"$root/docs/orchestration/prompts/decider.md"
+cat >"$root/gluerun.config.json" <<'JSON'
+{"schemaVersion":"v2","targetBranch":"target","gateCommand":"bash strict-gate.sh"}
+JSON
+cat >"$root/strict-gate.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schema":"gluerun.orchestration.gate-observation.v0","failures":[]}' \
+  >"$GLUERUN_GATE_REPORT_FILE"
+SH
+chmod +x "$root/strict-gate.sh"
 
 cat >"$root/docs/orchestration/tasks/TASK-0001.md" <<'EOF'
 # TASK-0001: Empty-diff retry fixture
@@ -35,7 +44,7 @@ Area: widget
 Target branch: `target`
 Worker branch: `agent/widget/TASK-0001-generic`
 Test policy: `strict_test_first`
-Gate command: `true`
+Gate command: `bash strict-gate.sh`
 Dispatch mode: canonical
 Depends on: []
 
@@ -67,12 +76,13 @@ mock="$workroot/mock-runner.sh"
 cat >"$mock" <<'MOCK'
 #!/usr/bin/env bash
 set -uo pipefail
-level=""; worktree=""; out=""
+level=""; worktree=""; out=""; prompt=""
 args=("$@"); i=0
 while [[ $i -lt ${#args[@]} ]]; do
   case "${args[$i]}" in
     --level) level="${args[$((i+1))]}"; i=$((i+2)) ;;
     -C|--worktree) worktree="${args[$((i+1))]}"; i=$((i+2)) ;;
+    --prompt-file) prompt="${args[$((i+1))]}"; i=$((i+2)) ;;
     --output-last-message) out="${args[$((i+1))]}"; i=$((i+2)) ;;
     *) i=$((i+1)) ;;
   esac
@@ -89,10 +99,52 @@ PKT
 fi
 ac=0; [[ -f "${AUDIT_COUNT_FILE:-/dev/null}" ]] && ac="$(cat "$AUDIT_COUNT_FILE" 2>/dev/null || echo 0)"
 ac=$((ac+1)); [[ -n "${AUDIT_COUNT_FILE:-}" ]] && echo "$ac" >"$AUDIT_COUNT_FILE"
+if [[ "$ac" -eq 1 && -n "${AUDIT_HOLD_FILE:-}" ]]; then
+  printf '%s\n' "$$" >"$AUDIT_HOLD_FILE"
+  while [[ ! -f "${AUDIT_RELEASE_FILE:-}" ]]; do sleep 0.05; done
+fi
 if [[ "$ac" -eq 1 ]]; then
-  [[ -n "$out" ]] && printf '{"verdict":"needs-fix","findings":[{"summary":"tighten tests"}]}\n' >"$out"
+  audit_verdict="needs-fix"
+  audit_findings="tighten tests"
 else
-  [[ -n "$out" ]] && printf '{"verdict":"accepted","findings":[]}\n' >"$out"
+  audit_verdict="accepted"
+  audit_findings=""
+fi
+audit_status="${AUDIT_STATUS_OVERRIDE:-}"
+if [[ -z "$audit_status" && -f "$prompt" ]]; then
+  audit_status="$(sed -n 's/.*classification is `\([^`]*\)`.*/\1/p' "$prompt" | tail -1)"
+fi
+[[ -n "$audit_status" ]] || audit_status="passed"
+if [[ -n "$out" ]]; then
+  AUDIT_OUT="$out" AUDIT_STATUS="$audit_status" AUDIT_VERDICT="$audit_verdict" \
+    AUDIT_FINDINGS="$audit_findings" python3 - <<'PY'
+import json
+import os
+
+finding = os.environ["AUDIT_FINDINGS"]
+record = {
+    "schema": "gluerun.orchestration.audit-verdict.v1",
+    "taskId": "TASK-0001",
+    "runId": "r",
+    "branch": "agent/widget/TASK-0001-generic",
+    "verdict": os.environ["AUDIT_VERDICT"],
+    "evidenceReviewed": ["evidence-manifest.json", "audit-verification.json"],
+    "verificationResults": [{
+        "status": os.environ["AUDIT_STATUS"],
+        "command": "bash strict-gate.sh",
+        "exitCode": 0,
+        "evidenceRefs": ["audit-verification.json"],
+        "rationale": "matches the host-derived classification",
+    }],
+    "commandsRun": [],
+    "findings": [finding] if finding else [],
+    "requiredFixes": [finding] if finding else [],
+    "rationale": "tests need tightening" if finding else "accepted",
+}
+with open(os.environ["AUDIT_OUT"], "w", encoding="utf-8") as handle:
+    json.dump(record, handle)
+    handle.write("\n")
+PY
 fi
 exit 0
 MOCK
@@ -110,26 +162,161 @@ run_drive() {
 }
 
 # 1. needs-fix then retry-with-identical-content: reconciled, accepted.
-out="$(run_drive env WRITE_MODE=fixed)" || fail "drive should accept (out: $out)"
+drive_output="$workroot/drive-output.log"
+run_drive env WRITE_MODE=fixed \
+  AUDIT_HOLD_FILE="$workroot/auditor.pid" \
+  AUDIT_RELEASE_FILE="$workroot/auditor.release" >"$drive_output" 2>&1 &
+drive_pid=$!
+for _ in $(seq 1 400); do
+  [[ -s "$workroot/auditor.pid" ]] && break
+  sleep 0.05
+done
+[[ -s "$workroot/auditor.pid" ]] || {
+  touch "$workroot/auditor.release"
+  wait "$drive_pid" || true
+  fail "auditor did not enter the observable active phase: $(cat "$drive_output")"
+}
+active_status=""
+auditor_pid="$(cat "$workroot/auditor.pid")"
+for _ in $(seq 1 400); do
+  active_status="$(find "$root/.gluerun-state/runs" -name run-status.json -type f | head -1)"
+  if [[ -n "$active_status" ]] && python3 - "$active_status" "$auditor_pid" <<'PY' >/dev/null 2>&1
+import json
+import sys
+status = json.load(open(sys.argv[1]))
+process = status.get("process", {})
+raise SystemExit(
+    0
+    if status.get("phase") == "auditing"
+    and process.get("type") == "auditor"
+    and process.get("pid") == int(sys.argv[2])
+    else 1
+)
+PY
+  then
+    break
+  fi
+  sleep 0.05
+done
+if [[ -z "$active_status" ]] || ! python3 - "$active_status" "$auditor_pid" <<'PY' >/dev/null 2>&1
+import json
+import sys
+status = json.load(open(sys.argv[1]))
+process = status.get("process", {})
+raise SystemExit(0 if process.get("type") == "auditor" and process.get("pid") == int(sys.argv[2]) else 1)
+PY
+then
+  touch "$workroot/auditor.release"
+  wait "$drive_pid" || true
+  fail "active lifecycle record did not switch to the auditor PID"
+fi
+python3 - "$active_status" "$workroot/auditor.pid" <<'PY'
+import json
+import os
+import sys
+
+status = json.load(open(sys.argv[1]))
+auditor_pid = int(open(sys.argv[2]).read().strip())
+assert status["phase"] == "auditing"
+assert status["state"] == "active"
+assert status["process"]["type"] == "auditor"
+assert status["process"]["pid"] == auditor_pid
+os.kill(auditor_pid, 0)
+PY
+touch "$workroot/auditor.release"
+if wait "$drive_pid"; then
+  out="$(cat "$drive_output")"
+else
+  out="$(cat "$drive_output")"
+  fail "drive should accept (out: $out)"
+fi
 events="$(cat "$root/.gluerun-state/events.ndjson")"
 assert_contains "$events" '"type":"l1.no_changes_reconciled"' "empty-diff retry reconciled"
 assert_contains "$events" '"type":"l1.task_accepted"' "task accepted after reconciled retry"
+audit_path="$(ls "$root"/.gluerun-state/runs/*/audit.json | head -1)"
+[[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "$audit_path")" \
+  == "gluerun.orchestration.audit-verdict.v1" ]] || fail "v2 repo did not write audit-verdict.v1"
+run_status="${audit_path%/audit.json}/run-status.json"
+python3 - "$run_status" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["schema"] == "gluerun.orchestration.run-status.v0"
+assert data["phase"] == "terminal"
+assert data["state"] == "completed"
+assert data["outcome"] == "accepted"
+assert data["safeCancel"] is True
+assert data["process"]["type"] == "l1-driver"
+assert data["process"]["pid"] > 0
+assert data["process"]["pgid"] > 0
+PY
 # 0.6.0: the auditor's runner output must be durable in the run dir.
 ls "$root"/.gluerun-state/runs/*/auditor-codex.log >/dev/null 2>&1 \
   || fail "auditor-codex.log not written by audit phase"
 
-# 2. Regression: a worker that writes nothing on a FRESH task still fails
-#    no-changes (truly no content vs base).
-rm -rf "$root/.gluerun-state/runs" "$root/.gluerun-state/leases" "$root/.gluerun-state/inbox" "$root/.worktrees"
-: >"$root/.gluerun-state/events.ndjson"
-rm -f "$workroot/audit-count"
-git -C "$root" worktree prune 2>/dev/null || true
-git -C "$root" branch -D agent/widget/TASK-0001-generic 2>/dev/null || true
-python3 - "$root/docs/orchestration/tasks/TASK-0001.md" <<'PY'
+reset_fixture() {
+  rm -rf "$root/.gluerun-state/runs" "$root/.gluerun-state/leases" \
+    "$root/.gluerun-state/inbox" "$root/.worktrees"
+  : >"$root/.gluerun-state/events.ndjson"
+  rm -f "$workroot/audit-count"
+  git -C "$root" worktree prune 2>/dev/null || true
+  git -C "$root" branch -D agent/widget/TASK-0001-generic 2>/dev/null || true
+  python3 - "$root/docs/orchestration/tasks/TASK-0001.md" <<'PY'
 import re, sys
 p = sys.argv[1]; t = open(p).read()
 open(p, "w").write(re.sub(r"Status: \w+", "Status: ready", t, count=1))
 PY
+}
+
+# 2. When disposable verification is disabled, the host verifies the original
+# hash-bound gate evidence. The model fixture reads the host-derived prompt
+# classification and must preserve not-rerun-evidence-verified through the v1
+# verdict; the task may still be accepted on that explicitly weaker basis.
+reset_fixture
+if ! out="$(
+  run_drive env WRITE_MODE=fixed GLUERUN_AUDIT_VERIFY=0
+)"; then
+  fail "evidence-only verification with a matching v1 classification should accept: $out"
+fi
+events="$(cat "$root/.gluerun-state/events.ndjson")"
+assert_contains "$events" '"type":"audit.evidence_only_verified"' \
+  "evidence-only host verification recorded"
+assert_contains "$events" '"verification":"not-rerun-evidence-verified"' \
+  "audit completion preserves evidence-only classification"
+assert_contains "$events" '"type":"l1.task_accepted"' \
+  "matching evidence-only audit accepted"
+audit_path="$(ls "$root"/.gluerun-state/runs/*/audit.json | head -1)"
+python3 - "$audit_path" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+statuses = [item["status"] for item in data["verificationResults"]]
+assert statuses == ["not-rerun-evidence-verified"], statuses
+PY
+grep -q 'host verification classification is `not-rerun-evidence-verified`' \
+  "${audit_path%/audit.json}"/auditor-bound-prompt-attempt-*.md \
+  || fail "auditor prompt omitted the host-derived evidence-only classification"
+
+# 3. A model that upgrades the same evidence-only host result to passed is
+# rejected before its accepted verdict can influence task state.
+reset_fixture
+rc=0
+out="$(
+  run_drive env WRITE_MODE=fixed GLUERUN_AUDIT_VERIFY=0 \
+    GLUERUN_AUDIT_INFRA_MAX=0 AUDIT_STATUS_OVERRIDE=passed
+)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "mismatched evidence-only v1 classification must fail closed"
+events="$(cat "$root/.gluerun-state/events.ndjson")"
+assert_contains "$events" '"type":"l1.audit_verification_mismatch"' \
+  "host/model classification mismatch recorded"
+[[ "$events" != *'"type":"l1.task_accepted"'* ]] \
+  || fail "mismatched evidence-only audit must not accept the task"
+
+# 4. Regression: a worker that writes nothing on a FRESH task still fails
+#    no-changes (truly no content vs base).
+reset_fixture
 rc=0
 out="$(run_drive env WRITE_MODE=never)" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "empty fresh attempt must not accept"

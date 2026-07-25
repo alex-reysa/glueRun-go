@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "gluerun.orchestration.audit-verdict.v1",
+  "title": "gluerun Auditor Verdict v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "taskId",
+    "runId",
+    "branch",
+    "verdict",
+    "evidenceReviewed",
+    "verificationResults",
+    "commandsRun",
+    "findings",
+    "requiredFixes",
+    "rationale"
+  ],
+  "properties": {
+    "schema": { "const": "gluerun.orchestration.audit-verdict.v1" },
+    "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
+    "runId": { "type": "string", "minLength": 1 },
+    "branch": { "type": "string", "minLength": 1 },
+    "verdict": {
+      "type": "string",
+      "enum": ["accepted", "needs-fix", "blocked", "needs-human"]
+    },
+    "evidenceReviewed": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "verificationResults": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "command", "evidenceRefs", "rationale"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed-product",
+              "inconclusive-infrastructure",
+              "not-rerun-evidence-verified"
+            ]
+          },
+          "command": { "type": "string", "minLength": 1 },
+          "exitCode": { "type": "integer" },
+          "evidenceRefs": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "commandsRun": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "findings": { "type": "array", "items": { "type": "string" } },
+    "requiredFixes": { "type": "array", "items": { "type": "string" } },
+    "rationale": { "type": "string", "minLength": 1 },
+    "findingsStatus": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["resolved", "still-open"]
+      }
+    }
+  }
+}

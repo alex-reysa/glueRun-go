@@ -696,7 +696,10 @@ JSON
   local body; body="$(cat "$out")"
   assert_contains "$body" "$s1..$s2" "reaudit: diff range"
   assert_contains "$body" "f.txt" "reaudit: diff stat path"
-  assert_contains "$body" "+two" "reaudit: diff body"
+  assert_contains "$body" "reaudit-diff-attempt-2.patch" "reaudit: bounded diff artifact reference"
+  assert_not_contains "$body" "+two" "reaudit: raw diff is not embedded outside evidence budget"
+  assert_contains "$(cat "$rd/reaudit-diff-attempt-2.patch")" "+two" \
+    "reaudit: raw diff remains available as a separate artifact"
   assert_contains "$body" "Verification targets" "reaudit: verification header"
   assert_contains "$body" "f-o1: open finding to verify" "reaudit: open verification target"
   assert_not_contains "$body" "f-r1: resolved already" "reaudit: resolved not a verification target"

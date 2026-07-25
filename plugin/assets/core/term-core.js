@@ -51,6 +51,22 @@ function toneDot(state, cls) {
   return `<span class="tone-dot${cls ? " " + cls : ""}" data-tone="${toneOf(state)}"></span>`;
 }
 
+function diagnosticTone(diagnostic) {
+  if (!diagnostic) return "idle";
+  if (diagnostic.category === "acknowledged-baseline") return "awaiting";
+  if (diagnostic.category === "infrastructure-inconclusive") return "warn";
+  if (diagnostic.severity === "error") return "error";
+  if (diagnostic.severity === "warning") return "warn";
+  return "idle";
+}
+
+function diagnosticBadge(ln) {
+  const d = ln && ln.diagnostic;
+  if (!d || d.category === "info") return "";
+  const count = Number(ln.count || 1);
+  return `<span class="gate-tag tl-diagnostic" data-tone="${diagnosticTone(d)}">${esc(d.category)}${count > 1 ? ` ×${count}` : ""}</span>`;
+}
+
 // ---- pane state ----
 // A pane-state object is { el, body, cursor, raw, lineEls, count, atBottom,
 // inflight, loaded }. Callers create the DOM (`el`/`body`) and wire the scroll
@@ -77,14 +93,15 @@ export function termLineHtml(ln, now) {
       return `<div class="term-line tl-message tl-reasoning"><span class="tl-gutter">think</span><span class="tl-text">${esc(ln.text)}</span></div>`;
     case "command": {
       const running = ln.status !== "completed" && ln.exitCode == null;
+      const commandTone = diagnosticTone(ln.diagnostic);
       const tail = running
         ? `<span class="tl-running">running…</span>`
         : (ln.exitCode != null
-          ? `<span class="tl-exit gate-tag" data-tone="${toneOf(ln.exitCode === 0 ? "integrated" : "blocked")}">${toneDot(ln.exitCode === 0 ? "integrated" : "blocked")}<span class="lbl">exit ${esc(ln.exitCode)}</span></span>`
+          ? `<span class="tl-exit gate-tag" data-tone="${commandTone === "idle" ? toneOf(ln.exitCode === 0 ? "integrated" : "blocked") : commandTone}">${toneDot(ln.exitCode === 0 ? "integrated" : "blocked")}<span class="lbl">exit ${esc(ln.exitCode)}</span></span>`
           : "");
       const out = (ln.output && ln.output.trim())
         ? `<div class="tl-output">${esc(ln.output)}${ln.outputTruncated ? "\n…" : ""}</div>` : "";
-      return `<div class="term-line tl-command"><div class="tl-cmd-line"><span class="tl-prompt">$</span><span class="tl-cmd-text">${esc(ln.command)}</span>${tail}</div>${out}</div>`;
+      return `<div class="term-line tl-command"><div class="tl-cmd-line"><span class="tl-prompt">$</span><span class="tl-cmd-text">${esc(ln.command)}</span>${diagnosticBadge(ln)}${tail}</div>${out}</div>`;
     }
     case "file": {
       const items = (ln.changes || []).map((c) =>
@@ -92,13 +109,15 @@ export function termLineHtml(ln, now) {
       return `<div class="term-line tl-file">✎ ${items || "file change"}</div>`;
     }
     case "event":
-      return `<div class="term-line tl-event"><span class="tl-ev-ts">${esc(relTime(ln.ts, now))}</span><span class="tl-ev-type" data-tone="${eventTone(ln.eventType)}">${esc(ln.eventType)}</span><span class="tl-ev-msg">${esc(ln.text)}</span></div>`;
+      return `<div class="term-line tl-event"><span class="tl-ev-ts">${esc(relTime(ln.ts, now))}</span><span class="tl-ev-type" data-tone="${eventTone(ln.eventType)}">${esc(ln.eventType)}</span>${diagnosticBadge(ln)}<span class="tl-ev-msg">${esc(ln.text)}</span></div>`;
+    case "diagnostic":
+      return `<div class="term-line tl-log">${diagnosticBadge(ln)} ${esc(ln.text || "")}</div>`;
     case "meta":
       return `<div class="term-line tl-meta">${esc(ln.text)}</div>`;
     case "log":
     default: {
       const lvl = ln.level ? `<span class="tl-lvl">${esc(ln.level)}</span>` : "";
-      return `<div class="term-line tl-log${ln.level ? " lvl-" + esc(ln.level) : ""}">${lvl}${esc(ln.text || "")}</div>`;
+      return `<div class="term-line tl-log${ln.level ? " lvl-" + esc(ln.level) : ""}">${lvl}${diagnosticBadge(ln)}${esc(ln.text || "")}</div>`;
     }
   }
 }

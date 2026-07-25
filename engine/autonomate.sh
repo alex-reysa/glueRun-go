@@ -2,6 +2,10 @@
 set -uo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "autonomate.sh requires bash >= 4" >&2; exit 1
 fi
@@ -58,10 +62,11 @@ if [[ "$detach" == "yes" && "${GLUERUN_AUTONOMATE_DETACHED:-}" != "1" ]]; then
   detach_log="$GLUERUN_STATE_DIR/autonomate.log"
   detach_args=()
   [[ "$once" == "yes" ]] && detach_args+=("--once")
-  GLUERUN_AUTONOMATE_DETACHED=1 python3 - "$BASH_SOURCE" "$detach_log" ${detach_args[@]+"${detach_args[@]}"} <<'PY'
+  GLUERUN_AUTONOMATE_DETACHED=1 python3 - "$BASH_SOURCE" "$detach_log" \
+    "$(gluerun_bash_bin)" ${detach_args[@]+"${detach_args[@]}"} <<'PY'
 import os, sys
-script, log = sys.argv[1], sys.argv[2]
-extra = sys.argv[3:]
+script, log, bash_bin = sys.argv[1:4]
+extra = sys.argv[4:]
 if os.fork() == 0:
     os.setsid()
     if os.fork() == 0:
@@ -70,7 +75,7 @@ if os.fork() == 0:
         os.dup2(devnull, 0)
         os.dup2(fd, 1)
         os.dup2(fd, 2)
-        os.execvp("bash", ["bash", script] + extra)
+        os.execv(bash_bin, [bash_bin, script] + extra)
     os._exit(0)
 os.wait()
 PY
@@ -139,8 +144,10 @@ while true; do
   # STOP is honored before and after the nap, and a total wait budget escalates an
   # unbounded limit to STOP rather than idling forever. With no active quota
   # backoff this block is a no-op and behavior is identical to before.
+  planner_backoff_at_cycle_start=0
   bo_json="$(gluerun_planner_backoff_active_json 2>/dev/null || true)"
   if [[ -n "$bo_json" ]]; then
+    planner_backoff_at_cycle_start=1
     bo_class=""; bo_remaining=0
     read -r bo_class bo_remaining < <(python3 - "$bo_json" <<'PY'
 import json, sys
@@ -191,11 +198,20 @@ PY
   dispatched="$(field dispatched_this_run)"; integrated="$(field integrated_this_run)"
   faild="$(field failed_dispatches)"; faili="$(field failed_integrations)"
   planner_failures="$(field planner_failures_this_run)"
+  planner_backoff_deferred="$(field planner_backoff_active_this_run)"
   l1_import_rejections="$(field l1_import_rejections_this_run)"
   reaped_ok="$(field reaped_ok)"; reaped_failures="$(field reaped_failures)"
   workers_running="$(field workers_running)"
   promoted="$(field gates_promoted_this_run)"
-  for v in dispatched integrated faild faili planner_failures l1_import_rejections reaped_ok reaped_failures workers_running promoted; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
+  for v in dispatched integrated faild faili planner_failures planner_backoff_deferred l1_import_rejections reaped_ok reaped_failures workers_running promoted; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
+  if [[ "$planner_backoff_at_cycle_start" -eq 1 && "$planner_failures" -gt 0 ]]; then
+    echo "  [autonomate] active planner backoff made planner refusal neutral; ignoring $planner_failures planner failure(s) for breaker accounting"
+    gluerun_append_event "autonomate.planner_backoff_neutral" \
+      "active planner backoff suppressed repeated planner failure accounting" \
+      "{\"iteration\":$iteration,\"suppressedPlannerFailures\":$planner_failures}"
+    planner_failures=0
+    planner_backoff_deferred=1
+  fi
   gen_complete="no"; printf '%s\n' "$cycle_out" | grep -q 'all-areas-complete' && gen_complete="yes"
   gen_made="no"; printf '%s\n' "$cycle_out" | grep -q 'gen:.*generated:' && gen_made="yes"
   # Reconcile's frontier selector already performs the authoritative duplicate,
@@ -221,9 +237,9 @@ PY
   elif [[ "$faild" -gt 0 || "$faili" -gt 0 || "$planner_failures" -gt 0 || "$l1_import_rejections" -gt 0 || ( "${GLUERUN_DETACHED_DISPATCH:-0}" == "1" && "$reaped_failures" -gt 0 ) ]]; then
     # C2 (0.5.0): a usage-limit / 403 / overload window can poison the decider,
     # auditor, L1 fanout, or dispatch paths, producing cycle failures with NO
-    # active quota backoff. When STRUCTURED evidence exists in this cycle's
-    # runner logs (gluerun_cycle_limit_window_evidence_json; non-empty logRef is
-    # the arming contract), ARM a quota backoff so the next iteration sleeps
+    # active quota backoff. When a validated runner-result/provider-error pair
+    # exists in this cycle (gluerun_cycle_limit_window_evidence_json), ARM a
+    # quota backoff so the next iteration sleeps
     # through, and do NOT increment the breaker. Import rejections are
     # deterministic validation outcomes (duplicate candidates, bad batches) and
     # can never be quota evidence — they are excluded from limit ELIGIBILITY
@@ -240,19 +256,19 @@ PY
     if [[ "$sleepthrough" == "1" && "$limit_eligible" -gt 0 ]]; then
       limit_evidence="$(gluerun_cycle_limit_window_evidence_json 2>/dev/null || true)"
     fi
-    ev_logref=""
+    ev_resultref=""
     if [[ -n "$limit_evidence" ]]; then
-      ev_logref="$(printf '%s' "$limit_evidence" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("logRef",""))' 2>/dev/null || true)"
+      ev_resultref="$(printf '%s' "$limit_evidence" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("resultRef",""))' 2>/dev/null || true)"
     fi
-    if [[ -n "$ev_logref" ]] && gluerun_planner_backoff_set quota "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_logref"; then
-      echo "  [autonomate] no progress + limit/403 evidence ($ev_logref); armed quota backoff, NO breaker increment (breaker stays $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
+    if [[ -n "$ev_resultref" ]] && gluerun_planner_backoff_set quota "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_resultref"; then
+      echo "  [autonomate] no progress + structured provider limit evidence ($ev_resultref); armed quota backoff, NO breaker increment (breaker stays $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
       gluerun_append_event "autonomate.limit_window_detected" "limit/403 window at breaker chokepoint; armed quota backoff instead of tripping" "{\"iteration\":$iteration,\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections,\"evidence\":$limit_evidence}"
     else
       nb="$(gluerun_breaker_trip)"; echo "  [autonomate] no progress + failure; breaker -> $nb"
     fi
   fi
 
-  gluerun_write_status "$iteration" "running (disp=$dispatched int=$integrated failD=$faild failI=$faili planFail=$planner_failures importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
+  gluerun_write_status "$iteration" "running (disp=$dispatched int=$integrated failD=$faild failI=$faili planFail=$planner_failures planBackoff=$planner_backoff_deferred importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
 
   # Periodic supervisor briefing (0.10.0). BYTE-INERT when the interval knob is
   # unset/0: a single string test skips the whole block, so no supervisor/ dir,
@@ -269,7 +285,7 @@ PY
     if (( now - sup_last >= sup_int * 60 )); then
       mkdir -p "$sup_dir"
       printf '%s\n' "$now" >"$sup_dir/last-run"
-      ( bash "$SCRIPT_DIR/supervise.sh" --once >>"$sup_dir/spawn.log" 2>&1 & ) || true
+      ( "$(gluerun_bash_bin)" "$SCRIPT_DIR/supervise.sh" --once >>"$sup_dir/spawn.log" 2>&1 & ) || true
     fi
   fi
 

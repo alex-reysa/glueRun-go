@@ -77,6 +77,24 @@
               "agent-review-allowed"
             ]
           },
+          "humanGate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requestRef",
+              "approvalRef"
+            ],
+            "properties": {
+              "requestRef": {
+                "type": "string",
+                "minLength": 1
+              },
+              "approvalRef": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
           "dependsOn": {
             "type": "array",
             "items": {

@@ -131,7 +131,9 @@ env_lib() {
     GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" \
     bash -c "source '$SCRIPT_DIR/lib.sh'; $1"
 }
-env_lib "gluerun_planner_backoff_set quota RUN-x node-x '$root/x.log'"
+printf '%s\n' \
+  '{"schema":"gluerun.orchestration.planner-backoff.v0","failureClass":"quota","until":"2999-01-01T00:00:00Z"}' \
+  >"$root/.gluerun-state/planner-backoff.json"
 out="$(ops clear-backoff)"
 assert_contains "$out" "backoff cleared" "clear-backoff"
 
@@ -148,7 +150,9 @@ out="$(ops resume)"
 assert_contains "$out" "STOP removed" "resume"
 [[ -f "$root/.gluerun-state/STOP" ]] && fail "STOP gone"
 
-env_lib "gluerun_planner_backoff_set quota RUN-y node-y '$root/y.log'"
+printf '%s\n' \
+  '{"schema":"gluerun.orchestration.planner-backoff.v0","failureClass":"quota","until":"2999-01-01T00:00:00Z"}' \
+  >"$root/.gluerun-state/planner-backoff.json"
 env_lib "gluerun_breaker_trip >/dev/null"
 touch "$root/.gluerun-state/STOP"
 out="$(ops wake)"

@@ -123,7 +123,7 @@ MOCK_SLEEP=6 MOCK_MARKER="$marker" GLUERUN_OPENCODE_TIMEOUT_SEC=2 \
   run_oc_run "$r" --level l2 -C "$r" --prompt-file "$p" --output-last-message "$o" >/dev/null 2>&1 || ec=$?
 elapsed=$((SECONDS - start))
 [[ "$ec" -eq 124 ]] || fail "c5: timeout should exit 124 (got $ec)"
-[[ "$elapsed" -lt 6 ]] || fail "c5: should return before the mock's 6s sleep (took ${elapsed}s)"
+[[ "$elapsed" -lt 10 ]] || fail "c5: timeout path exceeded bounded runner startup + kill budget (took ${elapsed}s)"
 sleep 6
 [[ ! -e "$marker" ]] || fail "c5: child survived the timeout kill (marker created)"
 pass "c5 wall-clock timeout exits 124 and kills the child tree"

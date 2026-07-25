@@ -39,6 +39,10 @@ allow_prefixes=()
 # written best-effort (no sessionId); --resume-session is refused (exit 86).
 session_meta_path=""
 resume_session_id=""
+runner_role="${GLUERUN_RUNNER_ROLE:-unknown}"
+capability_profile="${GLUERUN_RUNNER_CAPABILITY_PROFILE:-default}"
+result_file="${GLUERUN_RUNNER_RESULT_FILE:-}"
+describe_contract="no"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,9 +56,37 @@ while [[ $# -gt 0 ]]; do
     --allow-prefix) allow_prefixes+=("$2"); shift 2 ;;
     --session-meta) session_meta_path="$2"; shift 2 ;;
     --resume-session) resume_session_id="$2"; shift 2 ;;
+    --role) runner_role="$2"; shift 2 ;;
+    --capability-profile) capability_profile="$2"; shift 2 ;;
+    --result-file) result_file="$2"; shift 2 ;;
+    --describe-contract) describe_contract="yes"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+if [[ "$describe_contract" == "yes" ]]; then
+  gluerun_runner_describe_contract gemini
+  exit 0
+fi
+
+if [[ -z "$run_id" ]]; then
+  run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+fi
+if [[ -z "$result_file" ]]; then
+  result_file="$(gluerun_runner_default_result_file "$run_id")"
+fi
+runner_result_written="no"
+gluerun_gemini_result_on_exit() {
+  local rc=$?
+  trap - EXIT
+  if [[ "$runner_result_written" != "yes" ]]; then
+    gluerun_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
+      "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
+  fi
+  [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
+  exit "$rc"
+}
+trap gluerun_gemini_result_on_exit EXIT
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -63,7 +95,7 @@ fi
 
 gluerun_require_target_branch
 
-command -v gemini >/dev/null 2>&1 || { echo "gemini CLI not found on PATH" >&2; exit 127; }
+gemini_bin="$(command -v gemini 2>/dev/null || true)"
 
 # --output-schema is accepted for contract parity; the Gemini CLI cannot enforce
 # a caller-supplied JSON schema headlessly, so we capture + validate downstream.
@@ -84,16 +116,31 @@ if [[ -z "$prompt_file" ]]; then
   exit 2
 fi
 
+profile_rc=0
+gluerun_runner_capability_prepare gemini "$runner_role" "$capability_profile" \
+  "$worktree" "$gemini_bin" || profile_rc=$?
+capability_profile="$GLUERUN_RESOLVED_CAPABILITY_PROFILE"
+profile_provider_args=()
+if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  profile_provider_args=("${GLUERUN_RESOLVED_PROVIDER_ARGS[@]}")
+fi
+[[ "$profile_rc" -eq 0 ]] || exit "$profile_rc"
+gluerun_runner_reject_strict_legacy_extra_args \
+  gemini GLUERUN_GEMINI_EXTRA_ARGS "${GLUERUN_GEMINI_EXTRA_ARGS:-}" || exit $?
+[[ -n "$gemini_bin" ]] || { echo "gemini CLI not found on PATH" >&2; exit 127; }
+profile_native_args=()
+if [[ "$GLUERUN_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
+  # An empty MCP allowlist plus the documented `none` extension selector keeps
+  # strict runs from inheriting user-configured MCP servers or extensions.
+  profile_native_args+=(--allowed-mcp-server-names "" --extensions none)
+fi
+
 # ---- Session affinity: resume refusal (exit 86) -----------------------------
 # Gemini v1 has no captured/resumable session id, so any resume request is
 # refused up front; the host re-runs fresh (a pure optimization miss).
 if [[ -n "$resume_session_id" ]]; then
   echo "gemini-run: resume unsupported (no session affinity); signalling resume-refusal" >&2
   exit 86
-fi
-
-if [[ -z "$run_id" ]]; then
-  run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 fi
 
 if [[ "$capture_packet" == "auto" && "$level" == "l2" ]]; then
@@ -123,7 +170,13 @@ gem_model="$(gemini_model)"
 # Prompt travels on STDIN; -p "" keeps the CLI in non-interactive (headless) mode
 # with the stdin content as the prompt. --skip-trust trusts the worktree so --yolo
 # is honored (an untrusted folder silently downgrades approval to prompt-for-each).
-cmd=(gemini -p "" -o json --skip-trust)
+cmd=("$gemini_bin" -p "" -o json --skip-trust)
+if [[ ${#profile_native_args[@]} -gt 0 ]]; then
+  cmd+=("${profile_native_args[@]}")
+fi
+if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  cmd+=("${profile_provider_args[@]}")
+fi
 [[ -n "$gem_model" ]] && cmd+=(-m "$gem_model")
 if [[ "$readonly_run" == "yes" ]]; then
   cmd+=(--approval-mode plan)
@@ -148,7 +201,6 @@ fi
 # to SEPARATE files so a stray stderr line never corrupts the JSON parse.
 envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-gemini-env.XXXXXX")"
 envelope_err="$envelope.err"
-trap 'rm -f "$envelope" "$envelope_err" 2>/dev/null || true' EXIT
 
 run_gemini() {
   ( cd "$worktree" && "${cmd[@]}" <"$prompt_file" ) >"$envelope" 2>"$envelope_err"
@@ -281,6 +333,11 @@ fi
 
 if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
+fi
+
+if gluerun_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
+  "$result_file" "$exit_code" "$envelope" "$envelope_err" "$output_last_message"; then
+  runner_result_written="yes"
 fi
 
 exit "$exit_code"

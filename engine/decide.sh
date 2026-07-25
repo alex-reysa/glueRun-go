@@ -2,6 +2,10 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "decide.sh requires bash >= 4" >&2; exit 1
 fi
@@ -46,6 +50,36 @@ done
 gluerun_ensure_state_dirs
 run_dir="$(gluerun_run_dir "$run_id")"
 mkdir -p "$run_dir"
+
+decider_status_activity="Decision failed for $failure_class"
+decider_status_next_action="Inspect the decider evidence"
+decider_status_outcome="decision-failed"
+
+gluerun_decider_status_write() {
+  local activity="$1" next_action="$2" process_type="${3:-decider}" process_pid="${4:-$$}"
+  "$SCRIPT_DIR/run-status.sh" write \
+    --run-id "$run_id" --task-id "${task_id:-}" --phase deciding --state active \
+    --activity "$activity" --safe-cancel true --next-action "$next_action" \
+    --process-type "$process_type" --pid "$process_pid" >/dev/null 2>&1 || true
+}
+
+gluerun_decider_status_on_exit() {
+  local rc=$?
+  local state="failed"
+  trap - EXIT
+  [[ "$rc" -eq 0 ]] && state="completed"
+  "$SCRIPT_DIR/run-status.sh" write \
+    --run-id "$run_id" --task-id "${task_id:-}" --phase terminal --state "$state" \
+    --activity "$decider_status_activity" --safe-cancel false \
+    --next-action "$decider_status_next_action" --process-type decider --pid "$$" \
+    --outcome "$decider_status_outcome" >/dev/null 2>&1 || true
+  exit "$rc"
+}
+
+gluerun_decider_status_write \
+  "Preparing decision for ${task_id:-unscoped} ($failure_class)" \
+  "Run the configured decider"
+trap gluerun_decider_status_on_exit EXIT
 
 retry_count="$(gluerun_lease_field "$task_id" retryCount 2>/dev/null || echo 0)"
 max_retries="$(gluerun_lease_field "$task_id" maxRetries 2>/dev/null || echo "$GLUERUN_MAX_RETRIES")"
@@ -137,14 +171,27 @@ run_ec=0
 # streams the log as a labeled pane; previously both went to /dev/null.
 decider_log="$run_dir/decider-codex.log"
 decider_meta="$run_dir/session-decider.json"
+decider_result="$run_dir/decider-runner-result.json"
+rm -f "$decider_result"
+decider_capability_profile="${GLUERUN_DECIDER_CAPABILITY_PROFILE:-decider-core}"
+gluerun_runner_contract_prepare \
+  "$GLUERUN_RUNNER_BIN" decider "$decider_capability_profile" "$decider_result"
 (
-  "$GLUERUN_RUNNER_BIN" --level readonly -C "$worktree" \
+  GLUERUN_RUNNER_ROLE=decider \
+  GLUERUN_RUNNER_CAPABILITY_PROFILE="$decider_capability_profile" \
+  GLUERUN_RUNNER_RESULT_FILE="$decider_result" \
+  GLUERUN_RUNNER_RUN_ID="$run_id" \
+  "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    --level readonly -C "$worktree" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \
     --output-last-message "$verdict" \
     --session-meta "$decider_meta"
 ) >>"$decider_log" 2>&1 &
 decider_pid=$!
+gluerun_decider_status_write \
+  "Running the decider for ${task_id:-unscoped} ($failure_class)" \
+  "Validate and record the decider verdict" provider-runner "$decider_pid"
 deadline=$((SECONDS + decider_timeout_sec))
 while kill -0 "$decider_pid" 2>/dev/null; do
   if [[ "$SECONDS" -ge "$deadline" ]]; then
@@ -159,6 +206,9 @@ done
 if [[ "$timed_out" != "yes" ]]; then
   wait "$decider_pid" || run_ec=$?
 fi
+gluerun_decider_status_write \
+  "Validating the decider verdict for ${task_id:-unscoped}" \
+  "Persist the selected recovery action"
 gluerun_session_meta_finalize "$decider_meta" "decider" "$task_id" "$run_id" \
   "$(basename "$GLUERUN_RUNNER_BIN")" "$(gluerun_prompt_sha "$prompt_file")" "" 1 || true
 
@@ -212,5 +262,8 @@ else
     "$(decider_event_data)"
 fi
 
+decider_status_activity="Decision recorded for ${task_id:-unscoped}: $action"
+decider_status_next_action="Apply the recorded recovery action"
+decider_status_outcome="decision-$action"
 echo "verdict=$verdict"
 echo "action=$action"

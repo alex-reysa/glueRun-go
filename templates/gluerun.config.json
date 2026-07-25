@@ -1,6 +1,6 @@
 {
-  "schemaVersion": "v1",
-  "engineVersion": "0.11.1",
+  "schemaVersion": "v2",
+  "engineVersion": "0.13.0",
   "targetBranch": "agent/integration",
   "gateCommand": "false # replace with your real gate, e.g. npm test && npm run build",
   "runner": "claude-run.sh",
@@ -15,6 +15,109 @@
   "proofLayers": [],
   "proofGrandfather": [],
   "prewarm": "",
+  "capabilityProfiles": {
+    "planner-core": {
+      "startup": "lazy",
+      "required": [
+        "filesystem",
+        "git",
+        "schemas",
+        "runner-contract",
+        "provider-executable"
+      ],
+      "optional": []
+    },
+    "implementer-core": {
+      "startup": "lazy",
+      "required": [
+        "filesystem",
+        "git",
+        "schemas",
+        "runner-contract",
+        "provider-executable"
+      ],
+      "optional": []
+    },
+    "audit-core": {
+      "startup": "lazy",
+      "required": [
+        "filesystem",
+        "git",
+        "schemas",
+        "runner-contract",
+        "provider-executable"
+      ],
+      "optional": []
+    },
+    "decider-core": {
+      "startup": "lazy",
+      "required": [
+        "filesystem",
+        "git",
+        "schemas",
+        "runner-contract",
+        "provider-executable"
+      ],
+      "optional": []
+    },
+    "integrator-core": {
+      "startup": "lazy",
+      "required": [
+        "filesystem",
+        "git",
+        "schemas",
+        "runner-contract",
+        "provider-executable"
+      ],
+      "optional": []
+    },
+    "supervisor-core": {
+      "startup": "lazy",
+      "required": [
+        "filesystem",
+        "git",
+        "schemas",
+        "runner-contract",
+        "provider-executable"
+      ],
+      "optional": []
+    }
+  },
+  "roleProfiles": {
+    "planner": "planner-core",
+    "critic": "audit-core",
+    "implementer": "implementer-core",
+    "auditor": "audit-core",
+    "decider": "decider-core",
+    "integrator": "integrator-core",
+    "supervisor": "supervisor-core",
+    "assistant": "supervisor-core"
+  },
+  "evidence": {
+    "maxComposedBytes": 262144,
+    "maxExcerptBytes": 2048,
+    "retrievalBudgetBytes": 262144,
+    "auditInputTokenCanary": 100000
+  },
+  "bootstrap": {
+    "required": true,
+    "command": "",
+    "commands": [],
+    "lockfiles": [],
+    "sharedStoreRoots": [],
+    "sharedLinks": []
+  },
+  "resources": {
+    "diskReserveBytes": 2147483648,
+    "estimatedWorktreeBytes": 268435456,
+    "maxConcurrent": 3
+  },
+  "controlState": {
+    "commitIntervalSeconds": 300
+  },
+  "legacyCompatibility": {
+    "unboundWaivers": false
+  },
   "identity": {
     "l0": {
       "name": "myproj L0",

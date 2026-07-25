@@ -2,6 +2,10 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "generate-tasks.sh requires bash >= 4" >&2; exit 1
 fi
@@ -107,7 +111,35 @@ for _ssl in ${single_slice_layers//,/ }; do
   if [[ "$active_layer" == "$_ssl" ]]; then effective_slice_budget=1; break; fi
 done
 
-run_id="$(gluerun_worker_run_id)"
+run_id="${GLUERUN_PLANNING_RUN_ID:-$(gluerun_worker_run_id)}"
+planner_status_activity="Planning failed for $active_node"
+planner_status_next_action="Inspect the planner evidence"
+planner_status_outcome="planning-failed"
+
+gluerun_planner_status_write() {
+  local phase="$1" state="$2" activity="$3" safe_cancel="$4" next_action="$5"
+  "$SCRIPT_DIR/run-status.sh" write \
+    --run-id "$run_id" --node "$active_node" --phase "$phase" --state "$state" \
+    --activity "$activity" --safe-cancel "$safe_cancel" --next-action "$next_action" \
+    --process-type planner --pid "$$" >/dev/null 2>&1 || true
+}
+
+gluerun_planner_status_on_exit() {
+  local rc=$?
+  local state="failed"
+  trap - EXIT
+  [[ "$rc" -eq 0 ]] && state="completed"
+  "$SCRIPT_DIR/run-status.sh" write \
+    --run-id "$run_id" --node "$active_node" --phase terminal --state "$state" \
+    --activity "$planner_status_activity" --safe-cancel false \
+    --next-action "$planner_status_next_action" --process-type planner --pid "$$" \
+    --outcome "$planner_status_outcome" >/dev/null 2>&1 || true
+  exit "$rc"
+}
+
+gluerun_planner_status_write planning active \
+  "Planning tasks for $active_node" true "Validate and stage planner output"
+trap gluerun_planner_status_on_exit EXIT
 
 # Planner suppression (0.5.0, GLUERUN_SUPPRESS_UNPROMOTED_REPLAN=1): a node
 # whose tasks are all integrated/satisfied but whose gate is unpublished must
@@ -116,6 +148,9 @@ run_id="$(gluerun_worker_run_id)"
 # operator manually promoted. Not a failure: exit 0, distinct event.
 if [[ "${GLUERUN_SUPPRESS_UNPROMOTED_REPLAN:-1}" == "1" && -n "$active_node" ]]   && gluerun_node_pending_promotion "$active_node" 2>/dev/null; then
   gluerun_append_event "planner.suppressed_pending_promotion"     "node tasks complete; awaiting gate promotion — not re-planning"     "{\"node\":\"$active_node\",\"area\":\"$active_area\",\"runId\":\"$run_id\"}"
+  planner_status_activity="Planning suppressed for $active_node; promotion is pending"
+  planner_status_next_action="Promote the node gate"
+  planner_status_outcome="suppressed-pending-promotion"
   echo "planner-suppressed (pending-promotion node=$active_node)"
   exit 0
 fi
@@ -192,7 +227,12 @@ task_summary="$(
 )"
 [[ -n "$task_summary" ]] || task_summary="(none yet)"
 
-run_dir="$(gluerun_run_dir "$run_id")"
+# Parallel L1 planners share the parent orchestration run id for lineage, but
+# their prompts, provider output, logs, and result sidecars must never share a
+# filesystem namespace. l1-plan-node.sh binds this internal directory to the
+# node-private staging directory. Direct/serial callers retain the canonical
+# per-run directory.
+run_dir="${GLUERUN_PLANNING_ARTIFACT_DIR:-$(gluerun_run_dir "$run_id")}"
 mkdir -p "$run_dir"
 prompt_file="$run_dir/planner-prompt.md"
 
@@ -239,12 +279,16 @@ PY
 
 echo "planner: node=$active_node stage=$active_stage area=$active_area layer=$active_layer next_ids=$next_ids_csv count=$count slice_budget=$effective_slice_budget"
 if [[ "$dry_run" == "yes" ]]; then
+  planner_status_activity="Planning dry run completed for $active_node"
+  planner_status_next_action="Review the generated planner prompt"
+  planner_status_outcome="dry-run"
   echo "DRY RUN — prompt at $prompt_file (no codex, no task writes)"
   exit 0
 fi
 
 out="$run_dir/planner-out.md"
 codex_log="$run_dir/planner-codex.log"
+runner_result="$run_dir/planner-runner-result.json"
 codex_runner="${GLUERUN_RUNNER:-${GLUERUN_CODEX_RUNNER:-$SCRIPT_DIR/codex-run.sh}}"
 codex_exit=0
 # Planner session-meta hook (default-OFF): when GLUERUN_PLANNER_SESSION=1, offer
@@ -299,7 +343,15 @@ if [[ "${GLUERUN_PLANNER_SESSION:-0}" == "1" ]]; then
   fi
 fi
 
-"$codex_runner" "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
+rm -f "$runner_result"
+gluerun_runner_contract_prepare \
+  "$codex_runner" planner planner-core "$runner_result"
+GLUERUN_RUNNER_ROLE=planner \
+GLUERUN_RUNNER_CAPABILITY_PROFILE=planner-core \
+GLUERUN_RUNNER_RESULT_FILE="$runner_result" \
+GLUERUN_RUNNER_RUN_ID="$run_id" \
+  "$codex_runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
 
 # rc-86 in-run fresh fallback: the runner refused the resume. Drop
 # --resume-session and re-run the planner FRESH within the SAME run (a pure
@@ -310,7 +362,15 @@ if [[ "$codex_exit" -eq 86 && -n "$planner_resume_id" ]]; then
     "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"sessionId\":\"$planner_resume_id\"}" || true
   planner_runner_args=("${planner_base_args[@]}")
   codex_exit=0
-  "$codex_runner" "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
+  rm -f "$runner_result"
+  gluerun_runner_contract_prepare \
+    "$codex_runner" planner planner-core "$runner_result"
+  GLUERUN_RUNNER_ROLE=planner \
+  GLUERUN_RUNNER_CAPABILITY_PROFILE=planner-core \
+  GLUERUN_RUNNER_RESULT_FILE="$runner_result" \
+  GLUERUN_RUNNER_RUN_ID="$run_id" \
+    "$codex_runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+      "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
 fi
 
 # Release the planner session-lease after the run returns — including after an
@@ -320,15 +380,16 @@ if [[ -n "$planner_lease_path" ]]; then
 fi
 
 if [[ "$codex_exit" -ne 0 ]]; then
-  failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out")"
+  failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out" "$runner_result")"
   case "$failure_class" in
-    quota|timeout|codex-exit) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
+    quota) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
+    timeout|codex-exit) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
   esac
-  event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$failure_class" "$codex_exit" "$codex_log" "$out" <<'PY'
+  event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$failure_class" "$codex_exit" "$codex_log" "$out" "$runner_result" <<'PY'
 import json
 import sys
 
-node, area, run_id, failure_class, exit_code, log_ref, output_ref = sys.argv[1:8]
+node, area, run_id, failure_class, exit_code, log_ref, output_ref, result_ref = sys.argv[1:9]
 print(json.dumps({
     "node": node,
     "area": area,
@@ -337,6 +398,7 @@ print(json.dumps({
     "exitCode": int(exit_code),
     "logRef": log_ref,
     "outputRef": output_ref,
+    "runnerResultRef": result_ref,
 }, separators=(",", ":")))
 PY
 )"
@@ -346,15 +408,16 @@ PY
 fi
 
 if [[ ! -s "$out" ]]; then
-  failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out")"
+  failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out" "$runner_result")"
   case "$failure_class" in
-    quota|timeout|codex-exit) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
+    quota) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
+    timeout|codex-exit) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
   esac
-  event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$failure_class" "$codex_exit" "$codex_log" "$out" <<'PY'
+  event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$failure_class" "$codex_exit" "$codex_log" "$out" "$runner_result" <<'PY'
 import json
 import sys
 
-node, area, run_id, failure_class, exit_code, log_ref, output_ref = sys.argv[1:8]
+node, area, run_id, failure_class, exit_code, log_ref, output_ref, result_ref = sys.argv[1:9]
 print(json.dumps({
     "node": node,
     "area": area,
@@ -363,6 +426,7 @@ print(json.dumps({
     "exitCode": int(exit_code),
     "logRef": log_ref,
     "outputRef": output_ref,
+    "runnerResultRef": result_ref,
 }, separators=(",", ":")))
 PY
 )"
@@ -394,55 +458,15 @@ fi
 batch_file="$run_dir/planner-batch.json"
 body_file="$run_dir/planner-body.txt"
 printf '%s\n' "$body" >"$body_file"
-# Tolerantly recover the JSON batch object from any reasoning prose or code fences
-# the model wrapped it in, using the same extractor the worker/auditor/decider
-# paths already trust (gluerun_extract_json). Codex clean JSON normalizes
-# byte-equivalently (the extractor's first step is a whole-text json.loads), so
-# this is a no-op for the codex path; it lets prose-prone runners (e.g. Claude)
-# pass the same strict schema validation below.
-parse_src="$body_file"
-extracted_body="$run_dir/planner-extracted.json"
-if gluerun_extract_json "$body_file" "$extracted_body" 2>/dev/null; then
-  parse_src="$extracted_body"
-fi
+# Provider runners return only a final message. The host owns extraction,
+# validation, id assignment, and candidate materialization through the same
+# helper the revision loop uses; no provider receives a staging path.
+batch_expected_json="$(printf '%s\n' "${next_ids[@]}" | python3 -c \
+  'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')"
+materialized_dir="$run_dir/planner-candidates"
 batch_rc=0
-python3 - "$GLUERUN_TASKBATCH_SCHEMA" "$batch_file" "$count" "$parse_src" <<'PY' || batch_rc=$?
-import json
-import sys
-
-schema_path, out_path, count_raw, body_path = sys.argv[1:5]
-with open(body_path, "r", encoding="utf-8") as f:
-    raw = f.read()
-try:
-    data = json.loads(raw)
-except json.JSONDecodeError:
-    sys.exit(3)
-with open(schema_path, "r", encoding="utf-8") as f:
-    schema = json.load(f)
-required = schema["required"]
-missing = [key for key in required if key not in data]
-if missing:
-    print("missing batch fields: " + ", ".join(missing), file=sys.stderr)
-    sys.exit(2)
-if data.get("schema") != "gluerun.orchestration.task-batch.v0":
-    print("unsupported task batch schema", file=sys.stderr)
-    sys.exit(2)
-tasks = data.get("tasks")
-if not isinstance(tasks, list) or len(tasks) > int(count_raw):
-    print("invalid task batch size", file=sys.stderr)
-    sys.exit(2)
-if not tasks:
-    # A schema-valid EMPTY batch is a legitimate planner statement ("nothing to
-    # plan on this node right now"), not invalid output. rc 4 -> no-op path.
-    sys.exit(4)
-for item in tasks:
-    if not isinstance(item, dict) or not item.get("taskId") or not item.get("markdown"):
-        print("invalid task batch item", file=sys.stderr)
-        sys.exit(2)
-with open(out_path, "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
+gluerun_task_batch_materialize "$body_file" "$batch_file" "$materialized_dir" \
+  "$active_area" "$batch_expected_json" assign "$GLUERUN_TASKBATCH_SCHEMA" || batch_rc=$?
 
 # Empty batch (rc 4): a valid no-op, NOT a planner failure. 0.4.0 classified
 # {"tasks": []} as invalid-output; the failure then fed the autonomate
@@ -459,11 +483,13 @@ if [[ "$batch_rc" -eq 4 ]]; then
   gluerun_ctx_planner_session_finalize "$active_node" 0 "" "$run_id" \
     "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
     "$planner_head_sha" 1 >/dev/null 2>&1 || true
+  planner_status_activity="Planning completed with no tasks for $active_node"
+  planner_status_next_action="Advance or re-evaluate the DAG frontier"
+  planner_status_outcome="no-tasks"
   exit 0
 fi
 
-if [[ "$batch_rc" -eq 0 ]]
-then
+if [[ "$batch_rc" -eq 0 ]]; then
   mapfile -t batch_ids < <(python3 - "$batch_file" <<'PY'
 import json, sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
@@ -472,47 +498,8 @@ for item in data["tasks"]:
     print(item["taskId"])
 PY
 )
-  batch_ids_json="$(printf '%s\n' "${batch_ids[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
-  batch_expected_json="$(printf '%s\n' "${next_ids[@]:0:${#batch_ids[@]}}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
-  for i in "${!batch_ids[@]}"; do
-    expected="${next_ids[$i]}"
-    body_id="${batch_ids[$i]}"
-    tmp="$run_dir/$expected.candidate.md"
-    python3 - "$batch_file" "$i" "$tmp" <<'PY'
-import json, sys
-batch_file, idx, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-with open(batch_file, "r", encoding="utf-8") as f:
-    data = json.load(f)
-with open(out, "w", encoding="utf-8") as f:
-    f.write(data["tasks"][idx]["markdown"].strip() + "\n")
-PY
-    v_id="$(gluerun_task_field "$tmp" taskId 2>/dev/null || echo '')"
-    if [[ -n "$v_id" && "$body_id" != "$v_id" ]]; then
-      gluerun_append_event "planner.failed" "planner batch task id mismatch" \
-        "{\"area\":\"$active_area\",\"runId\":\"$run_id\",\"batchTaskId\":\"$body_id\",\"markdownTaskId\":\"$v_id\"}"
-      echo "planner-failed (batchTaskId=$body_id markdownTaskId=$v_id)"; exit 1
-    fi
-    if [[ -n "$v_id" && "$v_id" != "$expected" ]]; then
-      gluerun_rewrite_task_id_token "$tmp" "$v_id" "$expected"
-    fi
-    v_id="$(gluerun_task_field "$tmp" taskId 2>/dev/null || echo '')"
-    v_status="$(gluerun_task_field "$tmp" status 2>/dev/null || echo '')"
-    v_area="$(gluerun_task_field "$tmp" area 2>/dev/null || echo '')"
-    v_owned="$(gluerun_task_field "$tmp" ownedFiles 2>/dev/null || echo '[]')"
-    v_mode="$(gluerun_task_field "$tmp" dispatchMode 2>/dev/null || echo '')"
-    v_deps="$(gluerun_task_field "$tmp" dependsOn 2>/dev/null || echo '[]')"
-    internal_dep="$(python3 - "$v_deps" "$batch_ids_json" "$batch_expected_json" <<'PY'
-import json, sys
-deps = set(json.loads(sys.argv[1]))
-batch = set(json.loads(sys.argv[2])) | set(json.loads(sys.argv[3]))
-print("yes" if deps & batch else "no")
-PY
-)"
-    if [[ "$v_id" != "$expected" || "$v_status" != "ready" || "$v_area" != "$active_area" || "$v_owned" == "[]" || "$v_mode" != "canonical" || "$internal_dep" == "yes" ]]; then
-      gluerun_append_event "planner.failed" "planner batch task failed validation" \
-        "{\"area\":\"$active_area\",\"runId\":\"$run_id\",\"failureClass\":\"invalid-output\",\"taskId\":\"$expected\",\"status\":\"$v_status\",\"area_field\":\"$v_area\",\"dispatchMode\":\"$v_mode\",\"internalDep\":\"$internal_dep\",\"logRef\":\"$codex_log\",\"outputRef\":\"$out\"}"
-      echo "planner-failed (task=$expected status=$v_status area=$v_area owned=$v_owned mode=$v_mode internalDep=$internal_dep)"; exit 1
-    fi
+  for tid in "${batch_ids[@]}"; do
+    tmp="$materialized_dir/$tid.candidate.md"
     if [[ -z "$stage_dir" ]]; then
       duplicate_json="$(gluerun_find_duplicate_task_signature "$tmp" "$active_node" 2>/dev/null || true)"
       if [[ -n "$duplicate_json" ]]; then
@@ -523,16 +510,15 @@ PY
       fi
     fi
   done
-  for i in "${!batch_ids[@]}"; do
-    tid="${next_ids[$i]}"
+  for tid in "${batch_ids[@]}"; do
     if [[ -n "$stage_dir" ]]; then
       mkdir -p "$stage_dir"
-      mv "$run_dir/$tid.candidate.md" "$stage_dir/$tid.candidate.md"
+      mv "$materialized_dir/$tid.candidate.md" "$stage_dir/$tid.candidate.md"
       gluerun_append_event "planner.staged" "task staged" \
         "{\"area\":\"$active_area\",\"taskId\":\"$tid\",\"runId\":\"$run_id\",\"node\":\"$active_node\"}"
       echo "staged:$tid"
     else
-      mv "$run_dir/$tid.candidate.md" "$GLUERUN_TASKS_DIR/$tid.md"
+      mv "$materialized_dir/$tid.candidate.md" "$GLUERUN_TASKS_DIR/$tid.md"
       gluerun_append_event "planner.generated" "task generated" \
         "{\"area\":\"$active_area\",\"taskId\":\"$tid\",\"runId\":\"$run_id\"}"
       echo "generated:$tid"
@@ -543,6 +529,15 @@ PY
   gluerun_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
     "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
     "$planner_head_sha" 1 >/dev/null 2>&1 || true
+  if [[ -n "$stage_dir" ]]; then
+    planner_status_activity="Planning staged ${#batch_ids[@]} task candidate(s) for $active_node"
+    planner_status_next_action="Critique or import the staged candidates"
+    planner_status_outcome="tasks-staged"
+  else
+    planner_status_activity="Planning generated ${#batch_ids[@]} task(s) for $active_node"
+    planner_status_next_action="Dispatch the generated tasks"
+    planner_status_outcome="tasks-generated"
+  fi
   exit 0
 fi
 
@@ -598,8 +593,14 @@ if [[ -n "$stage_dir" ]]; then
   gluerun_append_event "planner.staged" "task staged" \
     "{\"area\":\"$active_area\",\"taskId\":\"$next_id\",\"runId\":\"$run_id\",\"node\":\"$active_node\"}"
   echo "staged:$next_id"
+  planner_status_activity="Planning staged task $next_id for $active_node"
+  planner_status_next_action="Critique or import the staged candidate"
+  planner_status_outcome="task-staged"
 else
   gluerun_append_event "planner.generated" "task generated" \
     "{\"area\":\"$active_area\",\"taskId\":\"$next_id\",\"runId\":\"$run_id\"}"
   echo "generated:$next_id"
+  planner_status_activity="Planning generated task $next_id for $active_node"
+  planner_status_next_action="Dispatch the generated task"
+  planner_status_outcome="task-generated"
 fi

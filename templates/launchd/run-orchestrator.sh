@@ -31,10 +31,10 @@ if [[ -f "$GLUERUN_ENV_FILE" ]]; then
   set +a
 fi
 
-# Resolve a working codex binary. The Homebrew shim and fnm multishell paths are
-# unreliable under launchd; prefer an explicit CODEX_BIN, then the Codex.app
-# bundle, then whatever is on PATH.
-codex_bin="${CODEX_BIN:-}"
+# Resolve a working codex binary. GLUERUN_CODEX_BIN is canonical; CODEX_BIN is
+# retained as a deprecated launchd-only fallback. The selected path is exported
+# so doctor and codex-run execute exactly what this preflight checks.
+codex_bin="${GLUERUN_CODEX_BIN:-${CODEX_BIN:-}}"
 if [[ -z "$codex_bin" ]]; then
   for cand in \
     "/Applications/Codex.app/Contents/Resources/codex" \
@@ -43,12 +43,15 @@ if [[ -z "$codex_bin" ]]; then
   done
 fi
 
-codex_dir=""
-[[ -n "$codex_bin" ]] && codex_dir="$(dirname "$codex_bin")"
-
-# Standard tool locations plus the codex dir; keep git (/usr/bin) and go
-# (/opt/homebrew/bin) reachable.
-export PATH="${codex_dir:+$codex_dir:}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Standard tool locations; executable pinning deliberately does not prepend a
+# provider or shell directory to PATH.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+if [[ -z "$codex_bin" ]]; then
+  codex_bin="$(command -v codex 2>/dev/null || true)"
+fi
+if [[ -n "$codex_bin" ]]; then
+  export GLUERUN_CODEX_BIN="$codex_bin"
+fi
 
 export GLUERUN_TARGET_BRANCH="${GLUERUN_TARGET_BRANCH:-codex/gluerun-bootstrap-target}"
 # Full autonomy for unattended runs.
@@ -83,6 +86,8 @@ if [[ "$mode" == "--print-env" ]]; then
   echo "GLUERUN_MAX_DISPATCH=$GLUERUN_MAX_DISPATCH"
   echo "GLUERUN_MAX_HOURS=$GLUERUN_MAX_HOURS"
   echo "GLUERUN_DETACHED_DISPATCH=$GLUERUN_DETACHED_DISPATCH"
+  echo "GLUERUN_CODEX_BIN=${GLUERUN_CODEX_BIN:-}"
+  echo "GLUERUN_BASH_BIN=${GLUERUN_BASH_BIN:-}"
   exit 0
 fi
 
@@ -92,23 +97,35 @@ fail=0
 if ! command -v git >/dev/null 2>&1; then log "ERROR: git not found on PATH ($PATH)"; fail=1; fi
 if ! command -v go  >/dev/null 2>&1; then log "ERROR: go not found on PATH ($PATH)"; fail=1; fi
 
-# The reconciler uses mapfile (bash >= 4). macOS /bin/bash is 3.2; the scripts
-# re-exec under Homebrew bash, but verify one is actually present so we fail here
-# with a clear message instead of mid-run.
-resolved_bash="$(command -v bash || true)"
-if [[ -z "$resolved_bash" ]] || ! "$resolved_bash" -c '[[ "${BASH_VERSINFO[0]}" -ge 4 ]]' 2>/dev/null; then
-  if [[ ! -x /opt/homebrew/bin/bash ]]; then
-    log "ERROR: bash >= 4 not found (needed for mapfile); run 'brew install bash'"; fail=1
+# The reconciler uses mapfile (bash >= 4). Prefer the bootstrap-only explicit
+# path; otherwise retain the existing PATH/Homebrew fallback.
+bash_bin="${GLUERUN_BASH_BIN:-}"
+if [[ -n "$bash_bin" && ( "$bash_bin" != /* || ! -x "$bash_bin" ) ]]; then
+  log "ERROR: GLUERUN_BASH_BIN must be an absolute executable path ($bash_bin)"
+  fail=1
+elif [[ -z "$bash_bin" ]]; then
+  bash_bin="$(command -v bash 2>/dev/null || true)"
+  if [[ -z "$bash_bin" ]] || ! "$bash_bin" -c '[[ "${BASH_VERSINFO[0]}" -ge 4 ]]' 2>/dev/null; then
+    [[ -x /opt/homebrew/bin/bash ]] && bash_bin=/opt/homebrew/bin/bash
   fi
+fi
+if [[ -z "$bash_bin" ]] || ! "$bash_bin" -c '[[ "${BASH_VERSINFO[0]}" -ge 4 ]]' 2>/dev/null; then
+  log "ERROR: bash >= 4 not found (set GLUERUN_BASH_BIN or run 'brew install bash')"
+  fail=1
+else
+  export GLUERUN_BASH_BIN="$bash_bin"
 fi
 
 # Resolve and FUNCTIONALLY test codex (an executable bit is not enough; the
 # Homebrew codex shim is broken on some setups).
-codex_check="${codex_bin:-codex}"
-if "$codex_check" --version >/dev/null 2>&1; then
+codex_check="${GLUERUN_CODEX_BIN:-}"
+if [[ -z "$codex_check" || "$codex_check" != /* || ! -x "$codex_check" ]]; then
+  log "ERROR: GLUERUN_CODEX_BIN must resolve to an absolute executable path ($codex_check)"
+  fail=1
+elif "$codex_check" --version >/dev/null 2>&1; then
   log "codex: $codex_check ($("$codex_check" --version 2>/dev/null | head -1))"
 else
-  log "ERROR: codex not runnable ($codex_check); set CODEX_BIN to a working binary"; fail=1
+  log "ERROR: codex not runnable ($codex_check); set GLUERUN_CODEX_BIN to a working binary"; fail=1
 fi
 
 if [[ ! -r "$CODEX_HOME/auth.json" ]]; then
@@ -124,6 +141,6 @@ cd "$repo_root"
 # Watchdog: (re)launch the self-driving loop; autonomate's pidfile guard makes
 # this a no-op if it is already running. Any other mode runs a single reconcile.
 case "$mode" in
-  --watchdog) exec ./scripts/orchestration/autonomate.sh ;;
-  *)          exec ./scripts/orchestration/reconcile.sh "$mode" ;;
+  --watchdog) exec "$bash_bin" ./scripts/orchestration/autonomate.sh ;;
+  *)          exec "$bash_bin" ./scripts/orchestration/reconcile.sh "$mode" ;;
 esac

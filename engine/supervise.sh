@@ -2,6 +2,10 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "supervise.sh requires bash >= 4" >&2; exit 1
 fi
@@ -78,10 +82,20 @@ gluerun_render_supervisor_prompt "$tmpl" "$digest_file" "$prompt_file"
 raw="$run_dir/report-raw.json"
 log="$run_dir/supervisor-codex.log"
 meta="$run_dir/session-supervisor.json"
+runner_result="$run_dir/supervisor-runner-result.json"
 
 timed_out="no"
+rm -f "$runner_result"
+supervisor_capability_profile="${GLUERUN_SUPERVISOR_CAPABILITY_PROFILE:-supervisor-core}"
+gluerun_runner_contract_prepare \
+  "$GLUERUN_RUNNER_BIN" supervisor "$supervisor_capability_profile" "$runner_result"
 (
-  "$GLUERUN_RUNNER_BIN" --level readonly -C "$GLUERUN_ROOT" \
+  GLUERUN_RUNNER_ROLE=supervisor \
+  GLUERUN_RUNNER_CAPABILITY_PROFILE="$supervisor_capability_profile" \
+  GLUERUN_RUNNER_RESULT_FILE="$runner_result" \
+  GLUERUN_RUNNER_RUN_ID="$run_id" \
+  "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    --level readonly -C "$GLUERUN_ROOT" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \
     --output-last-message "$raw" \

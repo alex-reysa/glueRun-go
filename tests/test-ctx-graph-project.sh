@@ -253,6 +253,17 @@ done <<< "$g_pass"
 g_pass_b="$(gluerun_graph_project_gate_results "$gp")" || fail "second gate_results(passed) failed"
 [[ "$g_pass" == "$g_pass_b" ]] || fail "project_gate_results is not idempotent"
 
+# acknowledged-baseline pass -> verifies edge too (v1 success classification).
+ga="$(gate_record passed-with-acknowledged-baseline)"
+g_ack="$(gluerun_graph_project_gate_results "$ga")" \
+  || fail "project_gate_results(passed-with-acknowledged-baseline) failed"
+printf '%s\n' "$g_ack" | validates \
+  || fail "gate-result(passed-with-acknowledged-baseline) line failed validation: $g_ack"
+[[ "$(count_where "$g_ack" type verifies)" == "1" ]] \
+  || fail "acknowledged-baseline pass: expected exactly one verifies edge"
+[[ "$(count_where "$g_ack" type invalidates)" == "0" ]] \
+  || fail "acknowledged-baseline pass: must not emit invalidates"
+
 # failed -> node + invalidates edge (no verifies).
 gf="$(gate_record failed)"
 g_fail="$(gluerun_graph_project_gate_results "$gf")" || fail "project_gate_results(failed) failed"

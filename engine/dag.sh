@@ -10,16 +10,32 @@ shift || true
 
 dag_file="${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}"
 gates_dir="${GLUERUN_GATES_DIR:-$GLUERUN_ORCH_DIR/gates}"
+gate_schema_v1="${GLUERUN_GATE_SCHEMA_V1:-$GLUERUN_SCHEMA_DIR/gate-result.v1.schema.json}"
+gate_report_schema="${GLUERUN_GATE_REPORT_SCHEMA:-$GLUERUN_SCHEMA_DIR/gate-report.v0.schema.json}"
 
-python3 - "$cmd" "$dag_file" "$gates_dir" "$GLUERUN_GATE_SCHEMA" "$GLUERUN_ROOT" "$@" <<'PY'
+python3 - "$cmd" "$dag_file" "$gates_dir" "$GLUERUN_GATE_SCHEMA" "$gate_schema_v1" "$gate_report_schema" "$GLUERUN_ROOT" "$SCRIPT_DIR" "$@" <<'PY'
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
+import stat
 import sys
 from datetime import datetime
 
-cmd, dag_file, gates_dir, gate_schema, repo_root, *args = sys.argv[1:]
+(
+    cmd,
+    dag_file,
+    gates_dir,
+    gate_schema_v0,
+    gate_schema_v1,
+    gate_report_schema,
+    repo_root,
+    engine_dir,
+    *args,
+) = sys.argv[1:]
+sys.path.insert(0, engine_dir)
+from human_gate import validate_gate as validate_human_gate  # noqa: E402
 
 # Proof-layer regime (generic, opt-in). A project lists its proof layers and any
 # grandfathered node ids in its config; the generic engine leaves both empty.
@@ -89,6 +105,17 @@ def validate_dag(data):
         authority = node.get("authority")
         if authority is not None and authority not in ("operator", "agent-review-allowed"):
             fail(f"unknown authority for {node_id}: {authority} (operator | agent-review-allowed)")
+        human_gate = node.get("humanGate")
+        if human_gate is not None:
+            if not isinstance(human_gate, dict):
+                fail(f"humanGate must be an object for {node_id}")
+            if set(human_gate) != {"requestRef", "approvalRef"}:
+                fail(f"humanGate for {node_id} requires only requestRef and approvalRef")
+            if not all(isinstance(human_gate.get(key), str) and human_gate.get(key)
+                       for key in ("requestRef", "approvalRef")):
+                fail(f"humanGate references must be non-empty strings for {node_id}")
+            if authority == "agent-review-allowed":
+                fail(f"humanGate for {node_id} cannot use agent-review-allowed authority")
 
     for req in required_nodes:
         if req not in by_id:
@@ -121,14 +148,39 @@ def gate_path(node_id):
     return os.path.join(gates_dir, f"{node_id}.gate-result.json")
 
 
-def load_gate_schema():
-    if not os.path.exists(gate_schema):
-        fail(f"gate schema not found: {gate_schema}")
-    with open(gate_schema, "r", encoding="utf-8") as f:
+def load_gate_schema(schema_id):
+    paths = {
+        "gluerun.orchestration.gate-result.v0": gate_schema_v0,
+        "gluerun.orchestration.gate-result.v1": gate_schema_v1,
+    }
+    path = paths.get(schema_id)
+    if path is None:
+        fail(f"unsupported gate-result schema: {schema_id!r}")
+    if not os.path.exists(path):
+        fail(f"gate schema not found: {path}")
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def check_against_spec(val, spec, where):
+def resolve_schema_ref(spec, schema_root, where):
+    ref = spec.get("$ref")
+    if ref is None:
+        return spec
+    if not isinstance(ref, str) or not ref.startswith("#/") or schema_root is None:
+        fail(f"{where} uses unsupported schema reference: {ref!r}")
+    resolved = schema_root
+    for part in ref[2:].split("/"):
+        key = part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(resolved, dict) or key not in resolved:
+            fail(f"{where} uses unresolved schema reference: {ref}")
+        resolved = resolved[key]
+    if not isinstance(resolved, dict):
+        fail(f"{where} schema reference does not resolve to an object: {ref}")
+    return resolved
+
+
+def check_against_spec(val, spec, where, schema_root=None):
+    spec = resolve_schema_ref(spec, schema_root, where)
     kind = spec.get("type")
     if kind == "string" and not isinstance(val, str):
         fail(f"{where} must be a string")
@@ -140,6 +192,8 @@ def check_against_spec(val, spec, where):
         fail(f"{where} must be an object")
     if kind == "integer" and (not isinstance(val, int) or isinstance(val, bool)):
         fail(f"{where} must be an integer")
+    if kind == "integer" and "minimum" in spec and val < spec["minimum"]:
+        fail(f"{where} must be at least {spec['minimum']}")
     if "const" in spec and val != spec["const"]:
         fail(f"{where} must equal {spec['const']!r}")
     if "enum" in spec and val not in spec["enum"]:
@@ -162,7 +216,9 @@ def check_against_spec(val, spec, where):
             fail(f"{where} must have at least {min_items} item(s)")
         item_spec = spec.get("items", {})
         for idx, item in enumerate(val):
-            check_against_spec(item, item_spec, f"{where}[{idx}]")
+            check_against_spec(
+                item, item_spec, f"{where}[{idx}]", schema_root=schema_root
+            )
     if kind == "object":
         props = spec.get("properties", {})
         if spec.get("additionalProperties") is False:
@@ -174,7 +230,12 @@ def check_against_spec(val, spec, where):
             fail(f"{where} missing required field(s): {', '.join(sorted(missing))}")
         for key, child_spec in props.items():
             if key in val:
-                check_against_spec(val[key], child_spec, f"{where}.{key}")
+                check_against_spec(
+                    val[key],
+                    child_spec,
+                    f"{where}.{key}",
+                    schema_root=schema_root,
+                )
 
 
 def sha256_file(path):
@@ -185,10 +246,321 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+repo_root_path = Path(repo_root).resolve()
+
+
+def safe_repo_artifact(ref, label):
+    if not isinstance(ref, str) or not ref:
+        fail(f"{label} must be a non-empty repository-relative path")
+    try:
+        relative = Path(ref)
+    except (OSError, ValueError) as exc:
+        fail(f"{label} is invalid: {ref!r} ({exc})")
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        fail(f"{label} must be a safe repository-relative path: {ref}")
+    target = repo_root_path.joinpath(*relative.parts)
+    cursor = repo_root_path
+    for part in relative.parts[:-1]:
+        cursor = cursor / part
+        try:
+            mode = cursor.lstat().st_mode
+        except OSError as exc:
+            fail(f"{label} does not exist: {ref} ({exc})")
+        if stat.S_ISLNK(mode):
+            fail(f"{label} traverses a symlink: {ref}")
+    try:
+        mode = target.lstat().st_mode
+    except OSError as exc:
+        fail(f"{label} does not exist: {ref} ({exc})")
+    return target, mode
+
+
+def source_artifact_sha256(ref, label):
+    target, mode = safe_repo_artifact(ref, label)
+
+    def file_digest(path):
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.digest()
+
+    if stat.S_ISREG(mode):
+        return file_digest(target).hex()
+    if stat.S_ISLNK(mode):
+        digest = hashlib.sha256()
+        digest.update(b"gluerun-symlink.v0\0")
+        digest.update(os.fsencode(os.readlink(target)))
+        return digest.hexdigest()
+    if not stat.S_ISDIR(mode):
+        fail(f"{label} has unsupported artifact type: {ref}")
+
+    digest = hashlib.sha256()
+    digest.update(b"gluerun-tree.v0\0")
+
+    def frame(kind, relative, payload=b""):
+        body = kind + b"\0" + os.fsencode(relative) + b"\0" + payload
+        digest.update(len(body).to_bytes(8, "big"))
+        digest.update(body)
+
+    def visit(directory, prefix):
+        with os.scandir(directory) as entries:
+            ordered = sorted(entries, key=lambda item: os.fsencode(item.name))
+        for entry in ordered:
+            relative = entry.name if not prefix else f"{prefix}/{entry.name}"
+            entry_mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISLNK(entry_mode):
+                frame(b"L", relative, os.fsencode(os.readlink(entry.path)))
+            elif stat.S_ISREG(entry_mode):
+                frame(b"F", relative, file_digest(Path(entry.path)))
+            elif stat.S_ISDIR(entry_mode):
+                frame(b"D", relative)
+                visit(entry.path, relative)
+            else:
+                fail(f"{label} has unsupported artifact type: {ref}/{relative}")
+
+    visit(target, "")
+    return digest.hexdigest()
+
+
+def regular_repo_file(ref, label):
+    target, mode = safe_repo_artifact(ref, label)
+    if not stat.S_ISREG(mode):
+        fail(f"{label} must reference a regular file: {ref}")
+    return target
+
+
 def repo_file(path):
-    if os.path.isabs(path):
-        fail(f"logRef must be repository-relative: {path}")
-    return os.path.normpath(os.path.join(repo_root, path))
+    return str(regular_repo_file(path, "command-log logRef"))
+
+
+def task_set_sha256(evidence):
+    payload = {"ref": evidence["ref"], "taskIds": evidence["taskIds"]}
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_v1_evidence_hashes(data, node_id):
+    if data.get("schema") != "gluerun.orchestration.gate-result.v1":
+        return
+    for idx, evidence in enumerate(data.get("evidence", [])):
+        label = f"gate-result.v1 for {node_id} evidence[{idx}]"
+        kind = evidence.get("kind")
+        if kind == "source-path":
+            actual = source_artifact_sha256(evidence.get("ref"), f"{label} ref")
+        elif kind == "task-set":
+            if not isinstance(evidence.get("taskIds"), list):
+                fail(f"{label} task-set requires taskIds")
+            actual = task_set_sha256(evidence)
+        elif kind == "command-log":
+            log_ref = evidence.get("logRef")
+            if not isinstance(log_ref, str) or not log_ref:
+                fail(f"{label} command-log requires logRef")
+            actual = sha256_file(regular_repo_file(log_ref, f"{label} logRef"))
+        elif kind in ("gate-report", "human-approval"):
+            actual = sha256_file(
+                regular_repo_file(evidence.get("ref"), f"{label} ref")
+            )
+        else:
+            fail(f"{label} has unsupported evidence kind: {kind!r}")
+        if actual != evidence.get("sha256"):
+            fail(
+                f"{label} sha256 mismatch: expected {evidence.get('sha256')} "
+                f"actual {actual}"
+            )
+
+
+def load_json_object(path, label):
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            value = json.load(stream)
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"{label} is unreadable: {path} ({exc})")
+    if not isinstance(value, dict):
+        fail(f"{label} must be a JSON object: {path}")
+    return value
+
+
+def validate_object_against_schema(value, schema_path, label):
+    try:
+        with open(schema_path, "r", encoding="utf-8") as stream:
+            schema = json.load(stream)
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"{label} schema is unreadable: {schema_path} ({exc})")
+    check_against_spec(value, schema, label, schema_root=schema)
+
+
+def validate_strict_gate_report(data, node_id):
+    report_ref = data.get("gateReportRef")
+    report_items = [
+        item for item in data.get("evidence", []) if item.get("kind") == "gate-report"
+    ]
+    if not isinstance(report_ref, str) or not report_ref:
+        fail(f"deterministic-proof gate for {node_id} requires gateReportRef")
+    if len(report_items) != 1:
+        fail(
+            f"deterministic-proof gate for {node_id} requires exactly one "
+            "gate-report evidence item"
+        )
+    if report_items[0].get("ref") != report_ref:
+        fail(
+            f"deterministic-proof gate for {node_id} gateReportRef does not "
+            "match its gate-report evidence item"
+        )
+
+    report_path = regular_repo_file(
+        report_ref, f"deterministic-proof gate for {node_id} gateReportRef"
+    )
+    report = load_json_object(report_path, f"gate report for {node_id}")
+    validate_object_against_schema(
+        report, gate_report_schema, f"gate report for {node_id}"
+    )
+
+    outcome = report.get("outcome")
+    status = data.get("status")
+    expected_status = (
+        "passed-with-acknowledged-baseline"
+        if outcome == "passed-with-acknowledged-baseline"
+        else "passed"
+    )
+    if outcome not in ("passed", "passed-with-acknowledged-baseline"):
+        fail(
+            f"deterministic-proof gate for {node_id} cannot pass with gate "
+            f"report outcome {outcome!r}"
+        )
+    if status != expected_status:
+        fail(
+            f"deterministic-proof gate for {node_id} status {status!r} does "
+            f"not match gate report outcome {outcome!r}"
+        )
+    if data.get("verificationClassification") != "passed":
+        fail(
+            f"deterministic-proof gate for {node_id} requires "
+            "verificationClassification='passed'"
+        )
+
+    command = report.get("command")
+    command_sha = hashlib.sha256(command.encode("utf-8")).hexdigest()
+    if command_sha != report.get("commandSha256"):
+        fail(f"gate report for {node_id} commandSha256 mismatch")
+    report_log = regular_repo_file(
+        report.get("logRef"), f"gate report for {node_id} logRef"
+    )
+    actual_log_sha = sha256_file(report_log)
+    if actual_log_sha != report.get("logSha256"):
+        fail(f"gate report for {node_id} logSha256 mismatch")
+    if report_log.stat().st_size != report.get("logBytes"):
+        fail(f"gate report for {node_id} logBytes mismatch")
+
+    baseline_ref = report.get("baselineRef")
+    baseline_sha = report.get("baselineSha256")
+    if (baseline_ref is None) != (baseline_sha is None):
+        fail(
+            f"gate report for {node_id} must provide baselineRef and "
+            "baselineSha256 together"
+        )
+    if baseline_ref is not None:
+        baseline_path = regular_repo_file(
+            baseline_ref, f"gate report for {node_id} baselineRef"
+        )
+        if sha256_file(baseline_path) != baseline_sha:
+            fail(f"gate report for {node_id} baselineSha256 mismatch")
+        baseline = load_json_object(
+            baseline_path, f"gate baseline for {node_id}"
+        )
+        if baseline.get("schema") != "gluerun.orchestration.gate-baseline.v0":
+            fail(f"gate baseline for {node_id} has unsupported schema")
+        if baseline.get("commandSha256") != command_sha:
+            fail(f"gate baseline for {node_id} commandSha256 mismatch")
+    if outcome == "passed-with-acknowledged-baseline":
+        if baseline_ref is None or not report.get("expectedFailures"):
+            fail(
+                f"acknowledged-baseline gate report for {node_id} requires a "
+                "bound baseline and expected failures"
+            )
+    elif report.get("rawExitCode") != 0:
+        fail(f"passed gate report for {node_id} must have rawExitCode 0")
+    if report.get("unexpectedFailures"):
+        fail(f"passing gate report for {node_id} has unexpected failures")
+    if report.get("failureSignals"):
+        fail(f"passing gate report for {node_id} has failure signals")
+    if report.get("infrastructureSignals"):
+        fail(f"passing gate report for {node_id} has infrastructure signals")
+    source_integrity = report.get("sourceIntegrity")
+    if isinstance(source_integrity, dict) and source_integrity.get("status") == "violation":
+        fail(f"passing gate report for {node_id} has a source integrity violation")
+
+    bound = {
+        "headSha": report.get("headSha"),
+        "commandSha256": report.get("commandSha256"),
+        "rawExitCode": report.get("rawExitCode"),
+        "logSha256": report.get("logSha256"),
+        "outcome": report.get("outcome"),
+        "baselineSha256": report.get("baselineSha256", ""),
+    }
+    actual_binding = hashlib.sha256(
+        json.dumps(bound, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if actual_binding != report.get("evidenceBindingSha256"):
+        fail(f"gate report for {node_id} evidenceBindingSha256 mismatch")
+
+    command_logs = [
+        item
+        for item in data.get("evidence", [])
+        if item.get("kind") == "command-log"
+    ]
+    matching_logs = [
+        item
+        for item in command_logs
+        if item.get("command") == command
+        and item.get("exitCode") == report.get("rawExitCode")
+        and item.get("logRef") == report.get("logRef")
+        and item.get("sha256") == report.get("logSha256")
+        and item.get("headSha") == report.get("headSha")
+    ]
+    if len(matching_logs) != 1:
+        fail(
+            f"gate report for {node_id} must bind exactly one matching "
+            "command-log evidence item"
+        )
+    task_ids = {
+        task_id
+        for item in data.get("evidence", [])
+        if item.get("kind") == "task-set"
+        for task_id in item.get("taskIds", [])
+    }
+    if report.get("taskId") not in task_ids:
+        fail(
+            f"gate report for {node_id} taskId is not present in its "
+            "hash-bound task-set evidence"
+        )
+
+
+def validate_v1_verification(data, node_id):
+    if data.get("schema") != "gluerun.orchestration.gate-result.v1":
+        return
+    passing = (
+        data.get("status") in ("passed", "passed-with-acknowledged-baseline")
+        and data.get("authoritative") is True
+    )
+    if not passing:
+        return
+    classification = data.get("verificationClassification")
+    if not isinstance(classification, str):
+        fail(
+            f"authoritative passing gate-result.v1 for {node_id} requires "
+            "verificationClassification"
+        )
+    if data.get("evidenceClass") == "deterministic-proof":
+        validate_strict_gate_report(data, node_id)
+    elif classification != "not-rerun-evidence-verified":
+        fail(
+            f"non-executable authoritative gate-result.v1 for {node_id} "
+            "requires verificationClassification="
+            "'not-rerun-evidence-verified'"
+        )
 
 
 def validate_deterministic_proof_gate(data, node_id):
@@ -209,7 +581,7 @@ def validate_deterministic_proof_gate(data, node_id):
     # schema-legal evidenceClass. Without this the early return below would turn
     # the validator into a no-op for such a gate.
     if (
-        data.get("status") == "passed"
+        data.get("status") in ("passed", "passed-with-acknowledged-baseline")
         and data.get("authoritative") is True
         and is_proof
         and not grandfathered
@@ -221,7 +593,7 @@ def validate_deterministic_proof_gate(data, node_id):
             "this prevents bypassing the mandatory red/green skip-guard"
         )
     if not (
-        data.get("status") == "passed"
+        data.get("status") in ("passed", "passed-with-acknowledged-baseline")
         and data.get("authoritative") is True
         and data.get("evidenceClass") == "deterministic-proof"
     ):
@@ -263,12 +635,12 @@ def validate_deterministic_proof_gate(data, node_id):
         fail(f"proof-layer gate for {node_id} requires a red skip-guard command-log (a non-zero-exit run proving the proof fails when its real dependency is stripped)")
 
 
-# Validate a gate-result against gate-result.v0.schema.json before it is ever
-# trusted. The schema file is the single source of truth (no rule duplication);
-# any violation fails closed via fail() (exit 2) so an incomplete or malformed
-# authoritative record can never advance the frontier.
+# Validate a gate-result against the schema declared by the record before it is
+# ever trusted. v2 consumers write v1, while existing v0 records remain valid.
+# The selected schema remains the source of truth and every proof-layer rule is
+# applied identically after structural validation.
 def validate_gate(data, path, node_id):
-    schema = load_gate_schema()
+    schema = load_gate_schema(data.get("schema"))
     props = schema.get("properties", {})
     if schema.get("additionalProperties") is False:
         unknown = sorted(set(data) - set(props))
@@ -279,7 +651,14 @@ def validate_gate(data, path, node_id):
         fail(f"gate for {node_id} missing required field(s): {', '.join(sorted(missing))} ({path})")
     for key, spec in props.items():
         if key in data:
-            check_against_spec(data[key], spec, f"gate for {node_id} field '{key}'")
+            check_against_spec(
+                data[key],
+                spec,
+                f"gate for {node_id} field '{key}'",
+                schema_root=schema,
+            )
+    validate_v1_evidence_hashes(data, node_id)
+    validate_v1_verification(data, node_id)
     validate_deterministic_proof_gate(data, node_id)
 
 
@@ -302,9 +681,39 @@ def gate_data(node_id):
     return data
 
 
+human_gate_cache = {}
+
+
+def human_gate_state(node_id):
+    if node_id in human_gate_cache:
+        return human_gate_cache[node_id]
+    config = by_id.get(node_id, {}).get("humanGate")
+    if not isinstance(config, dict):
+        result = None
+    else:
+        result = validate_human_gate(
+            Path(repo_root).resolve(),
+            config["requestRef"],
+            config["approvalRef"],
+            node_id,
+        )
+    human_gate_cache[node_id] = result
+    return result
+
+
 def gate_passed(node_id):
     data = gate_data(node_id)
-    return bool(data and data.get("status") == "passed" and data.get("authoritative") is True)
+    passed = bool(
+        data
+        and data.get("status") in ("passed", "passed-with-acknowledged-baseline")
+        and data.get("authoritative") is True
+    )
+    if not passed:
+        return False
+    human = human_gate_state(node_id)
+    if human is not None and human.get("state") != "approved":
+        return False
+    return True
 
 
 def gate_authoritative_blocked(node_id):
@@ -326,6 +735,8 @@ elif cmd == "next-area":
             continue
         all_passed = False
         if gate_authoritative_blocked(node_id):
+            continue
+        if node.get("humanGate") is not None:
             continue
         if all(gate_passed(dep) for dep in node.get("dependsOn", [])):
             for key in ("id", "stage", "area", "layer", "kind", "requiredCompletion"):
@@ -361,6 +772,16 @@ elif cmd == "next-areas":
             if explain:
                 excluded.append({"node": node_id, "reason": "authoritative-blocked"})
             continue
+        human = human_gate_state(node_id)
+        if human is not None:
+            if explain:
+                excluded.append({
+                    "node": node_id,
+                    "reason": f"human-gate-{human.get('state', 'invalid')}",
+                    "owner": human.get("owner"),
+                    "detail": human.get("reason"),
+                })
+            continue
         unmet = [dep for dep in node.get("dependsOn", []) if not gate_passed(dep)]
         if unmet:
             if explain:
@@ -391,6 +812,9 @@ elif cmd == "node-fields":
         fail(f"node already gate-passed: {node_id}")
     if gate_authoritative_blocked(node_id):
         fail(f"node has authoritative blocked gate: {node_id}")
+    human = human_gate_state(node_id)
+    if human is not None:
+        fail(f"node awaits human gate: {node_id} ({human.get('state')}: {human.get('reason')})")
     if not all(gate_passed(dep) for dep in node.get("dependsOn", [])):
         fail(f"node dependencies are not all gated: {node_id}")
     for key in ("id", "stage", "area", "layer", "kind", "requiredCompletion"):

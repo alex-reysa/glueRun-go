@@ -4,6 +4,10 @@ set -euo pipefail
 # Require bash >= 4 (mapfile). macOS /bin/bash is 3.2; re-exec under Homebrew bash
 # if launched with an old interpreter.
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
+    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "integrate.sh requires bash >= 4 (mapfile); install via 'brew install bash'" >&2
   exit 1
@@ -75,10 +79,44 @@ fi
 
 [[ -n "$run_id" ]] || run_id="$(gluerun_run_id)"
 
+integration_status_activity="Integration failed"
+integration_status_next_action="Inspect the integration evidence"
+integration_status_outcome="integration-failed"
+
+gluerun_integration_status_write() {
+  local activity="$1" next_action="$2" task="${3:-}"
+  local args=(
+    write --run-id "$run_id" --phase integrating --state active
+    --activity "$activity" --safe-cancel true --next-action "$next_action"
+    --process-type integrator --pid "$$"
+  )
+  [[ -n "$task" ]] && args+=(--task-id "$task")
+  "$SCRIPT_DIR/run-status.sh" "${args[@]}" >/dev/null 2>&1 || true
+}
+
+gluerun_integrate_on_exit() {
+  local rc=$?
+  local state="failed"
+  trap - EXIT
+  [[ "$rc" -eq 0 ]] && state="completed"
+  "$SCRIPT_DIR/run-status.sh" write \
+    --run-id "$run_id" --phase terminal --state "$state" \
+    --activity "$integration_status_activity" --safe-cancel false \
+    --next-action "$integration_status_next_action" --process-type integrator --pid "$$" \
+    --outcome "$integration_status_outcome" >/dev/null 2>&1 || true
+  if [[ "$from_reconcile" != "yes" ]]; then
+    gluerun_release_lock "$run_id" || true
+  fi
+  exit "$rc"
+}
+
+gluerun_integration_status_write \
+  "Discovering accepted work for integration" "Verify eligible worker heads"
+trap gluerun_integrate_on_exit EXIT
+
 # ---- Lock (shared with reconcile when invoked via --from-reconcile) ----
 if [[ "$from_reconcile" != "yes" ]]; then
   gluerun_acquire_lock "$run_id"
-  trap 'gluerun_release_lock "$run_id"' EXIT
 fi
 
 gate_cmd="${GLUERUN_DEFAULT_GATE_CMD}"
@@ -115,6 +153,9 @@ integration_decide() {
   local out
   out="$("$SCRIPT_DIR/decide.sh" --task "$task" --failure-class "$fc" --branch "$branch" \
     --run "$run_id" --context-file "${ctx:-/dev/null}" --worktree "$GLUERUN_ROOT" 2>/dev/null || true)"
+  gluerun_integration_status_write \
+    "Resuming integration after the decision for $task" \
+    "Apply the selected integration recovery action" "$task"
   printf '%s\n' "$out" | sed -n 's/^action=//p' | tail -1
 }
 
@@ -225,6 +266,8 @@ PY
   fi
 
   eligible=$((eligible + 1))
+  gluerun_integration_status_write \
+    "Integrating accepted task $task_id" "Verify and finalize the merge" "$task_id"
 
   if [[ "$dry_run" == "yes" ]]; then
     echo "eligible: $task_id -> merge $branch ($actual_head) into $GLUERUN_TARGET_BRANCH"
@@ -266,7 +309,9 @@ PY
         "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"branch\":\"$branch\"}"
       if git -C "$rb_wt" rebase "$GLUERUN_TARGET_BRANCH" >/dev/null 2>&1; then
         rb_gate_ec=0
-        gluerun_run_in_worktree_env "$rb_wt" "$SCRIPT_DIR/gate-check.sh" "$run_id-rebase-$task_id" -- bash -c "$gate_cmd" \
+        gluerun_run_in_worktree_env "$rb_wt" "$SCRIPT_DIR/gate-check.sh" "$run_id-rebase-$task_id" \
+          --task-id "$task_id" --phase integration --workspace-kind integration -- \
+          "$(gluerun_bash_bin)" -c "$gate_cmd" \
           >/dev/null 2>&1 || rb_gate_ec=$?
         if [[ "$rb_gate_ec" -eq 0 ]]; then
           rb_old_head="$actual_head"
@@ -321,7 +366,9 @@ PY
   # Gate-verify the staged merged tree.
   gate_ec=0
   ( cd "$GLUERUN_ROOT" && GLUERUN_ROOT="$GLUERUN_ROOT" GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" \
-      "$SCRIPT_DIR/gate-check.sh" "$run_id-integrate-$task_id" -- bash -c "$gate_cmd" ) >/dev/null 2>&1 || gate_ec=$?
+      "$SCRIPT_DIR/gate-check.sh" "$run_id-integrate-$task_id" \
+      --task-id "$task_id" --phase integration --workspace-kind integration -- \
+      "$(gluerun_bash_bin)" -c "$gate_cmd" ) >/dev/null 2>&1 || gate_ec=$?
   if [[ "$gate_ec" -ne 0 ]]; then
     gluerun_with_git_lock git -C "$GLUERUN_ROOT" merge --abort 2>/dev/null || true
     action="$(integration_decide "integration-gate-red" "$task_id" "$branch" "$GLUERUN_RUNS_DIR/$run_id-integrate-$task_id/gate-check.log")"
@@ -378,6 +425,9 @@ PY
 done
 
 if [[ "$dry_run" == "yes" ]]; then
+  integration_status_activity="Integration dry run found $eligible eligible task(s)"
+  integration_status_next_action="Review the eligible integration set"
+  integration_status_outcome="dry-run"
   echo "eligible=$eligible (dry-run; no merges performed)"
   echo "skipped=$skipped"
   exit 0
@@ -412,4 +462,13 @@ echo "skipped=$skipped"
 gluerun_append_event "integration.completed" "integration run completed" \
   "{\"runId\":\"$run_id\",\"eligible\":$eligible,\"integratedThisRun\":$integrated_this_run,\"failedIntegrations\":$failed_integrations,\"skipped\":$skipped}"
 
+if [[ "$failed_integrations" -eq 0 ]]; then
+  integration_status_activity="Integration completed; $integrated_this_run task(s) merged"
+  integration_status_next_action="Continue orchestration"
+  integration_status_outcome="integrated-$integrated_this_run"
+else
+  integration_status_activity="Integration completed with $failed_integrations failure(s)"
+  integration_status_next_action="Inspect and repair failed integrations"
+  integration_status_outcome="integration-failures-$failed_integrations"
+fi
 [[ "$failed_integrations" -eq 0 ]]

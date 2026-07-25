@@ -18,6 +18,10 @@ output_schema=""
 output_last_message=""
 capture_packet="auto"
 allow_prefixes=()
+runner_role="${GLUERUN_RUNNER_ROLE:-unknown}"
+capability_profile="${GLUERUN_RUNNER_CAPABILITY_PROFILE:-default}"
+result_file="${GLUERUN_RUNNER_RESULT_FILE:-}"
+describe_contract="no"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,9 +33,37 @@ while [[ $# -gt 0 ]]; do
     --output-last-message) output_last_message="$2"; capture_packet="yes"; shift 2 ;;
     --no-output-capture) capture_packet="no"; shift ;;
     --allow-prefix) allow_prefixes+=("$2"); shift 2 ;;
+    --role) runner_role="$2"; shift 2 ;;
+    --capability-profile) capability_profile="$2"; shift 2 ;;
+    --result-file) result_file="$2"; shift 2 ;;
+    --describe-contract) describe_contract="yes"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+if [[ "$describe_contract" == "yes" ]]; then
+  gluerun_runner_describe_contract grok
+  exit 0
+fi
+
+if [[ -z "$run_id" ]]; then
+  run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+fi
+if [[ -z "$result_file" ]]; then
+  result_file="$(gluerun_runner_default_result_file "$run_id")"
+fi
+runner_result_written="no"
+gluerun_grok_result_on_exit() {
+  local rc=$?
+  trap - EXIT
+  if [[ "$runner_result_written" != "yes" ]]; then
+    gluerun_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
+      "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
+  fi
+  [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
+  exit "$rc"
+}
+trap gluerun_grok_result_on_exit EXIT
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -40,7 +72,7 @@ fi
 
 gluerun_require_target_branch
 
-command -v grok >/dev/null 2>&1 || { echo "grok CLI not found on PATH" >&2; exit 127; }
+grok_bin="$(command -v grok 2>/dev/null || true)"
 
 readonly_run="no"
 case "$level" in
@@ -52,9 +84,23 @@ case "$level" in
   *) echo "unknown level: $level" >&2; exit 2 ;;
 esac
 
-if [[ -z "$run_id" ]]; then
-  run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+if [[ -z "$prompt_file" ]]; then
+  echo "grok-run: --prompt-file is required" >&2
+  exit 2
 fi
+
+profile_rc=0
+gluerun_runner_capability_prepare grok "$runner_role" "$capability_profile" \
+  "$worktree" "$grok_bin" || profile_rc=$?
+capability_profile="$GLUERUN_RESOLVED_CAPABILITY_PROFILE"
+profile_provider_args=()
+if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  profile_provider_args=("${GLUERUN_RESOLVED_PROVIDER_ARGS[@]}")
+fi
+[[ "$profile_rc" -eq 0 ]] || exit "$profile_rc"
+gluerun_runner_reject_strict_legacy_extra_args \
+  grok GLUERUN_GROK_EXTRA_ARGS "${GLUERUN_GROK_EXTRA_ARGS:-}" || exit $?
+[[ -n "$grok_bin" ]] || { echo "grok CLI not found on PATH" >&2; exit 127; }
 
 if [[ "$capture_packet" == "auto" && "$level" == "l2" ]]; then
   capture_packet="yes"
@@ -111,7 +157,10 @@ grok_effort="$(gluerun_grok_effort "$level" "$prompt_file")"
 
 grok_system_prompt="${GLUERUN_GROK_SYSTEM_PROMPT:-Your FINAL assistant message MUST be exactly one JSON object and nothing else: no prose, no preamble, no code fences, no trailing commentary. If you cannot comply, still emit a single JSON object describing the problem.}"
 
-cmd=(grok --output-format json --model "$grok_model" --cwd "$worktree")
+cmd=("$grok_bin" --output-format json --model "$grok_model" --cwd "$worktree")
+if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  cmd+=("${profile_provider_args[@]}")
+fi
 [[ -n "$grok_effort" ]] && cmd+=(--effort "$grok_effort")
 [[ -n "${GLUERUN_GROK_MAX_TURNS:-}" ]] && cmd+=(--max-turns "$GLUERUN_GROK_MAX_TURNS")
 
@@ -137,12 +186,7 @@ if [[ -n "${GLUERUN_GROK_EXTRA_ARGS:-}" ]]; then
   cmd+=(${GLUERUN_GROK_EXTRA_ARGS})
 fi
 
-if [[ -n "$prompt_file" ]]; then
-  cmd+=(--prompt-file "$prompt_file")
-else
-  echo "grok-run: --prompt-file is required" >&2
-  exit 2
-fi
+cmd+=(--prompt-file "$prompt_file")
 
 ro_before_untracked=""
 ro_before_mod=""
@@ -153,7 +197,6 @@ fi
 
 envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-grok-env.XXXXXX")"
 envelope_err="$envelope.err"
-trap 'rm -f "$envelope" "$envelope_err" 2>/dev/null || true' EXIT
 
 exit_code=0
 echo "grok-run: level=$level model=$grok_model worktree=$worktree run_id=$run_id" >&2
@@ -236,6 +279,11 @@ fi
 
 if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
+fi
+
+if gluerun_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
+  "$result_file" "$exit_code" "$envelope" "$envelope_err" "$output_last_message"; then
+  runner_result_written="yes"
 fi
 
 exit "$exit_code"
