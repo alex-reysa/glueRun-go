@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-[[ "$(tr -d '[:space:]' <"$ROOT/VERSION")" == "0.14.0" ]]
-[[ "$(tr -d '[:space:]' <"$ROOT/.gluerun-version")" == "0.14.0" ]]
+[[ "$(tr -d '[:space:]' <"$ROOT/VERSION")" == "0.14.1" ]]
+[[ "$(tr -d '[:space:]' <"$ROOT/.gluerun-version")" == "0.14.1" ]]
 [[ "$(tr -d '[:space:]' <"$ROOT/SCHEMA_VERSION")" == "v2" ]]
 [[ -x "$ROOT/migrations/v1-to-v2.sh" ]]
 
@@ -14,7 +14,7 @@ import sys
 configs = [json.load(open(path, encoding="utf-8")) for path in sys.argv[1:]]
 for config in configs:
     assert config["schemaVersion"] == "v2"
-    assert config["engineVersion"] == "0.14.0"
+    assert config["engineVersion"] == "0.14.1"
     profiles = config["capabilityProfiles"]
     roles = config["roleProfiles"]
     required_roles = {

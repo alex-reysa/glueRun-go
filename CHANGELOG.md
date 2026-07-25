@@ -7,6 +7,40 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.14.1] — 2026-07-25 — A passing gate passes
+
+Two fixes for the same class of defect: things that worked for this repo and
+broke for everyone else.
+
+- **A passing gate no longer parks the task.** `schemaVersion: v2` implied
+  `--require-observation` for every gate, and `gate_report.py` raises on a
+  missing observation *before* it reads the exit code — so a green test suite
+  normalized to `inconclusive-infrastructure`, which maps to `audit-infra`,
+  which the decider parks **unconditionally** (it does not consult the retry
+  budget: a model cannot fix broken infrastructure).
+
+  Nothing shipped or documented an emitter for that sidecar — not the README,
+  not `doctor`, and not the scaffold, whose suggested gate is
+  `npm test && npm run build`. So `gluerun init` produced a repo in which every
+  task parked on a passing gate, reported as an infrastructure fault with no
+  actionable cause. The engine only worked on itself because the same commit
+  that added the requirement also taught `tests/run.sh` to satisfy it.
+
+  The observation is now required only where it does real work — reconciling a
+  registered `gate-baseline.v0` — which `gate_report.py` enforces itself, with a
+  better message. It bought nothing elsewhere: a green gate has no failures to
+  classify, and a red gate without a report is already covered by the
+  `gate-command-nonzero-without-report` signature.
+
+- **A missing optional payload no longer aborts `install.sh`.** `copy()` is
+  written as `[[ -e ... ]] && cp`, declaring items optional, but under `set -e` a
+  missing one returned 1 and killed the script mid-loop — leaving a
+  half-populated `versions/<ver>` while `current` still pointed at the previous
+  release, and reporting it only through an exit code most callers discard. An
+  empty, untracked `promoters/` directory (git cannot track empty directories, so
+  nothing recorded its existence) was enough to take the whole install down after
+  copying `engine/` and `schemas/`.
+
 ## [0.14.0] — 2026-07-25 — Console reliability, observability and redaction
 
 Remediates the console-side half of the 2026-07-24 field report. (Its engine

@@ -101,8 +101,16 @@ if python3 "$ROOT/engine/gate_report.py" \
   exit 1
 fi
 
-# A v2 gate wrapper cannot promote a bare zero exit when its adapter omitted the
-# required observation sidecar.
+# A PASSING gate that emits no observation passes. The strict observation is a
+# baseline-reconciliation input, not a universal precondition.
+#
+# This used to assert the opposite — exit 20 and inconclusive-infrastructure —
+# and that assertion was the bug, written down. schemaVersion v2 implied
+# --require-observation for every gate, and gate_report.py raises before it
+# reads the exit code, so a green suite normalized to infrastructure-broken,
+# which the decider parks unconditionally. Nothing shipped or documented an
+# emitter: `gluerun init` suggests `npm test && npm run build`, which cannot
+# satisfy it. Every task in every fresh v2 repo parked on a passing gate.
 strict_missing_rc=0
 GLUERUN_ROOT="$ROOT" \
 GLUERUN_STATE_DIR="$tmp/state" \
@@ -110,8 +118,8 @@ GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
   "$ROOT/engine/gate-check.sh" RUN-strict-missing \
     --task-id TASK-0001 -- true >"$tmp/strict-missing.out" 2>&1 \
   || strict_missing_rc=$?
-[[ "$strict_missing_rc" -eq 20 ]] || {
-  echo "v2 missing strict observation should exit 20, got $strict_missing_rc" >&2
+[[ "$strict_missing_rc" -eq 0 ]] || {
+  echo "a green v2 gate without an observation must pass, got exit $strict_missing_rc" >&2
   cat "$tmp/strict-missing.out" >&2
   exit 1
 }
@@ -120,7 +128,33 @@ import json
 import sys
 
 data = json.load(open(sys.argv[1]))
-assert data["outcome"] == "inconclusive-infrastructure"
+assert data["outcome"] == "passed", data["outcome"]
+assert data["rawExitCode"] == 0
+PY
+
+# ...but once a baseline IS registered, the observation becomes load-bearing —
+# expected/unexpected classification is impossible without it — so gate-check
+# must still fail closed rather than silently treat acknowledged failures as
+# absent. This is the invariant the blanket requirement was over-applying.
+baseline_missing_rc=0
+GLUERUN_ROOT="$ROOT" \
+GLUERUN_STATE_DIR="$tmp/state" \
+GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
+GLUERUN_GATE_BASELINE_FILE="$tmp/baseline.json" \
+  "$ROOT/engine/gate-check.sh" RUN-baseline-missing \
+    --task-id TASK-0001 -- true >"$tmp/baseline-missing.out" 2>&1 \
+  || baseline_missing_rc=$?
+[[ "$baseline_missing_rc" -ne 0 ]] || {
+  echo "a registered baseline without an observation must fail closed" >&2
+  cat "$tmp/baseline-missing.out" >&2
+  exit 1
+}
+python3 - "$tmp/state/runs/RUN-baseline-missing/gate-report.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["outcome"] == "inconclusive-infrastructure", data["outcome"]
 assert "gate-report-normalization-failed" in data["infrastructureSignals"]
 PY
 

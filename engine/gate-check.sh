@@ -101,10 +101,32 @@ for changed_path in "${changed_paths[@]}"; do
   normalize_args+=(--changed-path "$changed_path")
 done
 [[ -f "$observation" ]] && normalize_args+=(--observation "$observation")
-[[ "${GLUERUN_CONFIG_SCHEMA_VERSION:-}" == "v2" ]] \
-  && normalize_args+=(--require-observation)
-[[ -n "${GLUERUN_GATE_BASELINE_FILE:-}" ]] \
-  && normalize_args+=(--baseline "$GLUERUN_GATE_BASELINE_FILE")
+# The strict observation is required only where it does real work: reconciling a
+# registered baseline's acknowledged failures. It is NOT implied by schemaVersion.
+#
+# It used to be. Every v2 gate got --require-observation, and gate_report.py
+# raises "strict gate observation missing" BEFORE it looks at the exit code — so
+# a gate that passed cleanly normalized to inconclusive-infrastructure, which
+# l1-drive maps to audit-infra, which the decider parks UNCONDITIONALLY (it does
+# not even consult the retry budget: a model cannot fix broken infrastructure).
+# A green test suite therefore parked the task, permanently, with the failure
+# reported as an infrastructure problem nobody could act on.
+#
+# Nothing in the engine told a consumer to emit that document — not the README,
+# not the scaffold, whose suggested gate is `npm test && npm run build`. So a
+# fresh `gluerun init` produced a repo where every task parks on a passing gate.
+# The requirement was invisible and total.
+#
+# It also bought nothing. On a green gate there are no failures to classify; on
+# a red gate without a report, the `gate-command-nonzero-without-report`
+# signature below already covers it. Only the baseline path genuinely needs the
+# structured signatures, and gate_report.py enforces that itself.
+# No --require-observation is passed at all: gate_report.py already refuses a
+# baseline whose observation is missing, with a message naming the baseline —
+# strictly better than the generic one this flag would raise first.
+if [[ -n "${GLUERUN_GATE_BASELINE_FILE:-}" ]]; then
+  normalize_args+=(--baseline "$GLUERUN_GATE_BASELINE_FILE")
+fi
 
 outcome=""
 normalize_rc=0

@@ -1009,25 +1009,13 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
                 return json.dumps(payload, indent=2)
 
             # 0.14.0 intentionally adds ONE settings knob:
-            # GLUERUN_SUPERVISOR_INTERVAL_MIN. Home's "enable auto-briefing"
-            # button POSTed it while no whitelist contained it, so the write was
-            # rejected 400 and the button could never work. Strip exactly that
-            # row before the byte-identity comparison — narrow enough that any
-            # OTHER settings drift still fails here, and asserted below so the
-            # exemption cannot silently outlive the change that needed it.
-            NEW_KEY = "GLUERUN_SUPERVISOR_INTERVAL_MIN"
-
-            def drop_new_key(groups):
-                return [
-                    {**g, "items": [i for i in g.get("items", [])
-                                    if i.get("envKey") != NEW_KEY]}
-                    for g in groups
-                ]
-
-            current_settings = srv.collect_settings(repo)
-            self.assertIn(NEW_KEY, [i["envKey"] for g in current_settings
-                                    for i in g["items"]],
-                          "the settings exemption below is stale — remove it")
+            # 0.14.0 carried a narrow exemption here for the one settings row it
+            # added (GLUERUN_SUPERVISOR_INTERVAL_MIN). That row is in HEAD now,
+            # so the exemption is spent and removed. Note for next time: its
+            # self-staleness check asserted the key was present in the CURRENT
+            # spec, which stays true forever — the condition that actually
+            # expires is "HEAD still lacks it". A payload exemption should assert
+            # against HEAD, not against itself.
 
             # /api/state is intentionally NOT compared since 0.5.0: the built-in
             # probes went native (no make orch-* subprocesses), gateD0/gateD1
@@ -1035,12 +1023,9 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             # non-blocking background peek — see NativeFrontierTests /
             # ValidateDagNativeTests / SnapshotNoSubprocessTests below.
             # /api/overview (includes settings groups)
-            current_overview = srv.collect_overview(repo)
-            if isinstance(current_overview.get("settings"), list):
-                current_overview = {**current_overview,
-                                    "settings": drop_new_key(current_overview["settings"])}
-            self.assertEqual(wire(current_overview), wire(head.collect_overview(repo)))
-            self.assertEqual(wire(drop_new_key(current_settings)),
+            self.assertEqual(wire(srv.collect_overview(repo)),
+                             wire(head.collect_overview(repo)))
+            self.assertEqual(wire(srv.collect_settings(repo)),
                              wire(head.collect_settings(repo)))
             # /api/events live overlay
             self.assertEqual(wire(srv.collect_events_overlay(repo, None, 120, None)),
