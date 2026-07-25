@@ -16,9 +16,12 @@ set -euo pipefail
 # with exit 86 (host falls back to a fresh run).
 #
 # Privilege levels:
-#   readonly  -> OpenCode `run` has no read-only mode flag; enforcement is the
-#                post-run git restore guard, which reverts any mutation the run
-#                leaves behind (bulletproof regardless of the model's tools).
+#   readonly  -> `--agent plan`, OpenCode's built-in read-only primary agent,
+#                plus the post-run restore guard as the backstop. This block
+#                used to say the guard was the whole enforcement — it isn't
+#                enough on its own: the guard reverts what a run LEFT BEHIND,
+#                which cannot undo a `git commit` and cannot help at all if the
+#                process is SIGKILLed before it runs.
 #   l2        -> unconstrained write; file scope enforced downstream.
 #   l0|l1     -> writes limited to --allow-prefix paths, verified by scope-check.sh
 #                after the run (mirrors codex-run.sh).
@@ -77,9 +80,23 @@ if [[ -z "$result_file" ]]; then
   result_file="$(gluerun_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
+ro_journal=""
 gluerun_opencode_result_on_exit() {
   local rc=$?
   trap - EXIT
+  # An interrupted run leaves the provider CLI and its descendants alive; they
+  # would keep writing to the worktree while the guard restores it, and the
+  # restore would lose the race. Kill first, then restore.
+  if [[ -n "${oc_pid:-}" ]]; then
+    gluerun_kill_tree "$oc_pid" 2>/dev/null || true
+    wait "$oc_pid" 2>/dev/null || true
+  fi
+  # Before the result write, because a containment failure that outlives the
+  # process is the worse outcome. ask/supervise/decide background this runner
+  # and kill it on timeout; the old guard was straight-line code after the run,
+  # so on every one of those paths it simply never executed.
+  gluerun_readonly_guard_restore "${ro_journal:-}" || true
+  ro_journal=""
   if [[ "$runner_result_written" != "yes" ]]; then
     gluerun_runner_result_write opencode "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
@@ -88,6 +105,12 @@ gluerun_opencode_result_on_exit() {
   exit "$rc"
 }
 trap gluerun_opencode_result_on_exit EXIT
+# Exiting from a signal handler runs the EXIT trap, so these buy the guard a
+# chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
+# itself remains uncoverable; `gluerun_readonly_guard_sweep` is the answer there.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -174,6 +197,14 @@ if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
   cmd+=("${profile_provider_args[@]}")
 fi
 [[ -n "$oc_model" ]] && cmd+=(-m "$oc_model")
+if [[ "$readonly_run" == "yes" ]]; then
+  # `plan` is OpenCode's built-in read-only primary agent. Until now this runner
+  # passed NOTHING for a read-only run — its header said so outright, treating
+  # the post-run restore guard as the entire enforcement. That made opencode the
+  # only provider with no in-run restriction at all: codex takes an OS sandbox,
+  # grok --sandbox read-only, gemini --approval-mode plan, cursor --mode ask.
+  cmd+=(--agent "${GLUERUN_OPENCODE_READONLY_AGENT:-plan}")
+fi
 
 if [[ -n "${GLUERUN_OPENCODE_EXTRA_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
@@ -181,11 +212,8 @@ if [[ -n "${GLUERUN_OPENCODE_EXTRA_ARGS:-}" ]]; then
 fi
 
 # --- Read-only snapshot (for restore-after) -------------------------------------
-ro_before_untracked=""
-ro_before_mod=""
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_before_untracked="$(git -C "$worktree" ls-files --others --exclude-standard 2>/dev/null | sort || true)"
-  ro_before_mod="$(git -C "$worktree" diff --name-only HEAD 2>/dev/null | sort || true)"
+  ro_journal="$(gluerun_readonly_guard_capture "$worktree" "opencode-$run_id")"
 fi
 
 envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-opencode-env.XXXXXX")"
@@ -198,8 +226,13 @@ run_opencode() {
 exit_code=0
 echo "opencode-run: level=$level model=${oc_model:-<default>} worktree=$worktree run_id=$run_id" >&2
 oc_timeout="${GLUERUN_OPENCODE_TIMEOUT_SEC:-1200}"
+# The provider always runs in the BACKGROUND, even with the timeout disabled.
+# bash defers a trapped signal until the foreground child finishes, so a
+# foreground run would swallow the SIGTERM that ask/supervise/decide send on
+# their way to a kill -- and with it the read-only guard's only chance to run.
+# `wait` is interruptible by a trapped signal; a foreground child is not.
+run_opencode & oc_pid=$!
 if [[ "$oc_timeout" =~ ^[0-9]+$ && "$oc_timeout" -gt 0 ]]; then
-  run_opencode & oc_pid=$!
   oc_deadline=$((SECONDS + oc_timeout)); oc_timed_out="no"
   while kill -0 "$oc_pid" 2>/dev/null; do
     if [[ "$SECONDS" -ge "$oc_deadline" ]]; then
@@ -217,8 +250,9 @@ if [[ "$oc_timeout" =~ ^[0-9]+$ && "$oc_timeout" -gt 0 ]]; then
     echo "opencode-run: TIMED OUT after ${oc_timeout}s; killed run $run_id" >&2
   fi
 else
-  run_opencode || exit_code=$?
+  oc_ec=0; wait "$oc_pid" || oc_ec=$?; exit_code="$oc_ec"
 fi
+oc_pid=""
 
 cat "$envelope" >&2 || true
 [[ -s "$envelope_err" ]] && cat "$envelope_err" >&2 || true
@@ -322,17 +356,12 @@ PY
 fi
 
 # --- Read-only restore guard: revert anything the run mutated -------------------
+# Explicitly here, and not only from the EXIT trap, because scope-check.sh below
+# must see the restored tree. The trap still holds the timeout and signal paths;
+# a second restore of a consumed journal is a no-op.
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_after_untracked="$(git -C "$worktree" ls-files --others --exclude-standard 2>/dev/null | sort || true)"
-  comm -13 <(printf '%s\n' "$ro_before_untracked") <(printf '%s\n' "$ro_after_untracked") \
-    | while IFS= read -r f; do
-        [[ -n "$f" ]] && rm -rf "$worktree/$f" 2>/dev/null || true
-      done
-  ro_after_mod="$(git -C "$worktree" diff --name-only HEAD 2>/dev/null | sort || true)"
-  comm -13 <(printf '%s\n' "$ro_before_mod") <(printf '%s\n' "$ro_after_mod") \
-    | while IFS= read -r f; do
-        [[ -n "$f" ]] && git -C "$worktree" checkout -- "$f" 2>/dev/null || true
-      done
+  gluerun_readonly_guard_restore "$ro_journal" || true
+  ro_journal=""
 fi
 
 # --- Scope enforcement for L0/L1 (mirrors codex-run.sh) -------------------------

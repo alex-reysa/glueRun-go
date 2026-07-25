@@ -53,9 +53,23 @@ if [[ -z "$result_file" ]]; then
   result_file="$(gluerun_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
+ro_journal=""
 gluerun_grok_result_on_exit() {
   local rc=$?
   trap - EXIT
+  # An interrupted run leaves the provider CLI and its descendants alive; they
+  # would keep writing to the worktree while the guard restores it, and the
+  # restore would lose the race. Kill first, then restore.
+  if [[ -n "${grok_pid:-}" ]]; then
+    gluerun_kill_tree "$grok_pid" 2>/dev/null || true
+    wait "$grok_pid" 2>/dev/null || true
+  fi
+  # Before the result write, because a containment failure that outlives the
+  # process is the worse outcome. ask/supervise/decide background this runner
+  # and kill it on timeout; the old guard was straight-line code after the run,
+  # so on every one of those paths it simply never executed.
+  gluerun_readonly_guard_restore "${ro_journal:-}" || true
+  ro_journal=""
   if [[ "$runner_result_written" != "yes" ]]; then
     gluerun_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
@@ -64,6 +78,12 @@ gluerun_grok_result_on_exit() {
   exit "$rc"
 }
 trap gluerun_grok_result_on_exit EXIT
+# Exiting from a signal handler runs the EXIT trap, so these buy the guard a
+# chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
+# itself remains uncoverable; `gluerun_readonly_guard_sweep` is the answer there.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -188,11 +208,8 @@ fi
 
 cmd+=(--prompt-file "$prompt_file")
 
-ro_before_untracked=""
-ro_before_mod=""
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_before_untracked="$(git -C "$worktree" ls-files --others --exclude-standard 2>/dev/null | sort || true)"
-  ro_before_mod="$(git -C "$worktree" diff --name-only HEAD 2>/dev/null | sort || true)"
+  ro_journal="$(gluerun_readonly_guard_capture "$worktree" "grok-$run_id")"
 fi
 
 envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-grok-env.XXXXXX")"
@@ -201,13 +218,21 @@ envelope_err="$envelope.err"
 exit_code=0
 echo "grok-run: level=$level model=$grok_model worktree=$worktree run_id=$run_id" >&2
 grok_timeout="${GLUERUN_GROK_TIMEOUT_SEC:-1200}"
+# The provider always runs in the BACKGROUND, even with the timeout disabled.
+# bash defers a trapped signal until the foreground child finishes, so a
+# foreground run would swallow the SIGTERM that ask/supervise/decide send on
+# their way to a kill -- and with it the read-only guard's only chance to run.
+# `wait` is interruptible by a trapped signal; a foreground child is not.
+"${cmd[@]}" >"$envelope" 2>"$envelope_err" & grok_pid=$!
 if [[ "$grok_timeout" =~ ^[0-9]+$ && "$grok_timeout" -gt 0 ]]; then
-  "${cmd[@]}" >"$envelope" 2>"$envelope_err" & grok_pid=$!
   grok_deadline=$((SECONDS + grok_timeout)); grok_timed_out="no"
   while kill -0 "$grok_pid" 2>/dev/null; do
     if [[ "$SECONDS" -ge "$grok_deadline" ]]; then
       grok_timed_out="yes"
-      kill -9 "$grok_pid" 2>/dev/null || true
+      # kill -9 on the direct child only left grok's descendants running, which
+      # is exactly what gluerun_kill_tree exists to prevent; the other runners
+      # already used it.
+      gluerun_kill_tree "$grok_pid"
       wait "$grok_pid" 2>/dev/null || true
       exit_code=124
       break
@@ -220,8 +245,9 @@ if [[ "$grok_timeout" =~ ^[0-9]+$ && "$grok_timeout" -gt 0 ]]; then
     echo "grok-run: TIMED OUT after ${grok_timeout}s; killed run $run_id" >&2
   fi
 else
-  "${cmd[@]}" >"$envelope" 2>"$envelope_err" || exit_code=$?
+  grok_ec=0; wait "$grok_pid" || grok_ec=$?; exit_code="$grok_ec"
 fi
+grok_pid=""
 
 cat "$envelope" >&2 || true
 [[ -s "$envelope_err" ]] && cat "$envelope_err" >&2 || true
@@ -256,17 +282,13 @@ PY
   if [[ "$parse_ec" -ne 0 && "$exit_code" -eq 0 ]]; then exit_code="$parse_ec"; fi
 fi
 
+# --- Read-only restore guard: revert anything the run mutated -------------------
+# Explicitly here, and not only from the EXIT trap, because scope-check.sh below
+# must see the restored tree. The trap still holds the timeout and signal paths;
+# a second restore of a consumed journal is a no-op.
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_after_untracked="$(git -C "$worktree" ls-files --others --exclude-standard 2>/dev/null | sort || true)"
-  comm -13 <(printf '%s\n' "$ro_before_untracked") <(printf '%s\n' "$ro_after_untracked") \
-    | while IFS= read -r f; do
-        [[ -n "$f" ]] && rm -rf "$worktree/$f" 2>/dev/null || true
-      done
-  ro_after_mod="$(git -C "$worktree" diff --name-only HEAD 2>/dev/null | sort || true)"
-  comm -13 <(printf '%s\n' "$ro_before_mod") <(printf '%s\n' "$ro_after_mod") \
-    | while IFS= read -r f; do
-        [[ -n "$f" ]] && git -C "$worktree" checkout -- "$f" 2>/dev/null || true
-      done
+  gluerun_readonly_guard_restore "$ro_journal" || true
+  ro_journal=""
 fi
 
 if [[ "$level" == "l0" || "$level" == "l1" ]]; then

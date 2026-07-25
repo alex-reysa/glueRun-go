@@ -282,7 +282,19 @@ if [[ "$readonly_run" == "yes" ]]; then
   # viewing logs) the way the codex read-only sandbox permits. The system-prompt
   # clause additionally forbids state-mutating commands, since tool-denial alone
   # does not stop a Bash `git commit`/`git checkout` the codex OS sandbox blocked.
-  cmd+=(--disallowedTools "Edit,Write,NotebookEdit,MultiEdit")
+  # The tool denials stop the edit tools; the Bash denials stop the one class of
+  # mutation the restore guard genuinely cannot repair. The guard puts the
+  # WORKING TREE back — it does not move HEAD back, so a Bash `git commit` or
+  # `git reset --hard` leaves damage no post-run restore can express. Bash stays
+  # open otherwise, because read-only review (git diff, git log, reading files)
+  # is the entire point of a read-only run.
+  ro_denied_tools="Edit,Write,NotebookEdit,MultiEdit"
+  for ro_git_verb in add commit checkout switch reset rebase merge cherry-pick \
+                     revert push stash apply am clean restore rm mv tag branch \
+                     update-ref update-index gc prune reflog; do
+    ro_denied_tools+=",Bash(git $ro_git_verb:*)"
+  done
+  cmd+=(--disallowedTools "$ro_denied_tools")
   claude_system_prompt+=" You are STRICTLY READ-ONLY: do not create, modify, or delete any file, and do not run any state-mutating command (no git add/commit/checkout/reset/rebase/push/stash, no redirections that write files); use only reads and read-only inspection commands."
 fi
 if [[ -n "$claude_system_prompt" ]]; then

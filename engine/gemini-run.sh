@@ -76,9 +76,23 @@ if [[ -z "$result_file" ]]; then
   result_file="$(gluerun_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
+ro_journal=""
 gluerun_gemini_result_on_exit() {
   local rc=$?
   trap - EXIT
+  # An interrupted run leaves the provider CLI and its descendants alive; they
+  # would keep writing to the worktree while the guard restores it, and the
+  # restore would lose the race. Kill first, then restore.
+  if [[ -n "${gem_pid:-}" ]]; then
+    gluerun_kill_tree "$gem_pid" 2>/dev/null || true
+    wait "$gem_pid" 2>/dev/null || true
+  fi
+  # Before the result write, because a containment failure that outlives the
+  # process is the worse outcome. ask/supervise/decide background this runner
+  # and kill it on timeout; the old guard was straight-line code after the run,
+  # so on every one of those paths it simply never executed.
+  gluerun_readonly_guard_restore "${ro_journal:-}" || true
+  ro_journal=""
   if [[ "$runner_result_written" != "yes" ]]; then
     gluerun_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
@@ -87,6 +101,12 @@ gluerun_gemini_result_on_exit() {
   exit "$rc"
 }
 trap gluerun_gemini_result_on_exit EXIT
+# Exiting from a signal handler runs the EXIT trap, so these buy the guard a
+# chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
+# itself remains uncoverable; `gluerun_readonly_guard_sweep` is the answer there.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -190,11 +210,8 @@ if [[ -n "${GLUERUN_GEMINI_EXTRA_ARGS:-}" ]]; then
 fi
 
 # --- Read-only snapshot (for restore-after) -------------------------------------
-ro_before_untracked=""
-ro_before_mod=""
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_before_untracked="$(git -C "$worktree" ls-files --others --exclude-standard 2>/dev/null | sort || true)"
-  ro_before_mod="$(git -C "$worktree" diff --name-only HEAD 2>/dev/null | sort || true)"
+  ro_journal="$(gluerun_readonly_guard_capture "$worktree" "gemini-$run_id")"
 fi
 
 # stdout (the -o json envelope) and stderr (gemini's copious notices) are captured
@@ -211,8 +228,13 @@ echo "gemini-run: level=$level model=${gem_model:-<default>} worktree=$worktree 
 # Wall-clock guard (default 1200s; 0 disables). Kill the whole process tree on
 # timeout so a stuck run never holds a worker slot; surface exit 124.
 gem_timeout="${GLUERUN_GEMINI_TIMEOUT_SEC:-1200}"
+# The provider always runs in the BACKGROUND, even with the timeout disabled.
+# bash defers a trapped signal until the foreground child finishes, so a
+# foreground run would swallow the SIGTERM that ask/supervise/decide send on
+# their way to a kill -- and with it the read-only guard's only chance to run.
+# `wait` is interruptible by a trapped signal; a foreground child is not.
+run_gemini & gem_pid=$!
 if [[ "$gem_timeout" =~ ^[0-9]+$ && "$gem_timeout" -gt 0 ]]; then
-  run_gemini & gem_pid=$!
   gem_deadline=$((SECONDS + gem_timeout)); gem_timed_out="no"
   while kill -0 "$gem_pid" 2>/dev/null; do
     if [[ "$SECONDS" -ge "$gem_deadline" ]]; then
@@ -230,8 +252,9 @@ if [[ "$gem_timeout" =~ ^[0-9]+$ && "$gem_timeout" -gt 0 ]]; then
     echo "gemini-run: TIMED OUT after ${gem_timeout}s; killed run $run_id" >&2
   fi
 else
-  run_gemini || exit_code=$?
+  gem_ec=0; wait "$gem_pid" || gem_ec=$?; exit_code="$gem_ec"
 fi
+gem_pid=""
 
 cat "$envelope" >&2 || true
 [[ -s "$envelope_err" ]] && cat "$envelope_err" >&2 || true
@@ -309,17 +332,12 @@ PY
 fi
 
 # --- Read-only restore guard: revert anything the run mutated -------------------
+# Explicitly here, and not only from the EXIT trap, because scope-check.sh below
+# must see the restored tree. The trap still holds the timeout and signal paths;
+# a second restore of a consumed journal is a no-op.
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_after_untracked="$(git -C "$worktree" ls-files --others --exclude-standard 2>/dev/null | sort || true)"
-  comm -13 <(printf '%s\n' "$ro_before_untracked") <(printf '%s\n' "$ro_after_untracked") \
-    | while IFS= read -r f; do
-        [[ -n "$f" ]] && rm -rf "$worktree/$f" 2>/dev/null || true
-      done
-  ro_after_mod="$(git -C "$worktree" diff --name-only HEAD 2>/dev/null | sort || true)"
-  comm -13 <(printf '%s\n' "$ro_before_mod") <(printf '%s\n' "$ro_after_mod") \
-    | while IFS= read -r f; do
-        [[ -n "$f" ]] && git -C "$worktree" checkout -- "$f" 2>/dev/null || true
-      done
+  gluerun_readonly_guard_restore "$ro_journal" || true
+  ro_journal=""
 fi
 
 # --- Scope enforcement for L0/L1 (mirrors codex-run.sh) -------------------------

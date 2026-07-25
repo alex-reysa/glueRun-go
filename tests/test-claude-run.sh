@@ -295,4 +295,23 @@ wait "$kill_pid" 2>/dev/null || true
   || fail "c19: a killed readonly run left its mutation behind (got: $(cat "$r/killed.txt"))"
 pass "c19 readonly guard restores on SIGTERM, not only on a clean exit"
 
+# --- Case 20: readonly denies the Bash mutations the guard cannot repair ------
+# The guard restores the WORKING TREE. It does not move HEAD back, so a Bash
+# `git commit` or `git reset --hard` leaves damage no post-run restore can
+# express — which is why tool denial alone was never sufficient and why this
+# runner's own comment used to admit the hole. Bash stays open otherwise;
+# read-only review is the point of a read-only run.
+r="$workroot/c20"; new_repo "$r"; o="$(out)"; args="$workroot/c20.args"
+MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args" \
+  run_claude_run "$r" --level readonly -C "$r" --output-last-message "$o" >/dev/null 2>&1
+for denied in "Bash(git commit:*)" "Bash(git reset:*)" "Bash(git push:*)" "Bash(git checkout:*)"; do
+  grep -qF -- "$denied" "$args" || fail "c20: readonly did not deny $denied"
+done
+grep -qF -- "Bash(git diff:*)" "$args" && fail "c20: read-only inspection must stay available"
+args2="$workroot/c20b.args"
+MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args2" \
+  run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" >/dev/null 2>&1
+grep -qF -- "Bash(git commit:*)" "$args2" && fail "c20: l2 must not inherit the readonly denials"
+pass "c20 readonly denies state-mutating git via Bash; l2 unaffected"
+
 echo "ALL CLAUDE-RUN CONTRACT TESTS PASSED"

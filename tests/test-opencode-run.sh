@@ -165,4 +165,22 @@ MOCK_ARGS_OUT="$args" \
 [[ ! -f "$args" ]] || fail "c9: runner should not have invoked opencode on resume refusal"
 pass "c9 --resume-session -> exit 86 (refused, no model run)"
 
+# --- Case 10: readonly asks opencode for its own restriction ------------------
+# opencode was the only provider that passed NOTHING for a read-only run — its
+# header said the post-run restore guard was the whole enforcement. A guard that
+# runs afterwards cannot undo a `git commit` and does not run at all if the
+# process is SIGKILLed, so cleanup alone was never enough.
+r="$workroot/c10"; new_repo "$r"; o="$(out)"; p="$(prompt)"; args="$workroot/c10.args"
+MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args" \
+  run_oc_run "$r" --level readonly -C "$r" --prompt-file "$p" \
+  --output-last-message "$o" >/dev/null 2>&1
+grep -q -- "--agent plan" "$args" \
+  || fail "c10: readonly did not select the read-only agent (got: $(cat "$args"))"
+args2="$workroot/c10b.args"
+MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args2" \
+  run_oc_run "$r" --level l2 -C "$r" --prompt-file "$p" \
+  --output-last-message "$o" >/dev/null 2>&1
+grep -q -- "--agent" "$args2" && fail "c10: l2 must not be pinned to the read-only agent"
+pass "c10 readonly selects the read-only agent; l2 does not"
+
 echo "ALL OPENCODE-RUN CONTRACT TESTS PASSED"
