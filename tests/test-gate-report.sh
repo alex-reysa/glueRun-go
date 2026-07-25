@@ -246,4 +246,68 @@ then
   exit 1
 fi
 
+# A gate that could not RUN is infrastructure, not a product defect — on the v2
+# path too. The log heuristics existed only in engine/gate-report.py, a module
+# the v2 normalizer never calls, so every non-zero gate without an adapter report
+# normalized to failed-product. A disposable audit worktree missing its
+# dependencies therefore read as a code defect, and the decider spent the entire
+# retry budget asking a model to fix code that was never broken.
+classify() { # <log text> -> "<outcome> <signals>"
+  printf '%s\n' "$1" >"$tmp/classify.log"
+  python3 "$ROOT/engine/gate_report.py" \
+    --task-id TASK-0001 --run-id RUN-classify \
+    --head-sha 0123456789012345678901234567890123456789 \
+    --command "npm test" --raw-exit-code 1 \
+    --log-ref gate.log --log-path "$tmp/classify.log" \
+    --output "$tmp/classify.json" >/dev/null
+  python3 - "$tmp/classify.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+print(data["outcome"], ",".join(data["infrastructureSignals"]))
+PY
+}
+
+# TS2688 is the exact signature that killed TASK-0006: a worktree without the
+# monorepo's nested node_modules cannot resolve the @types tsconfig asks for.
+[[ "$(classify "error TS2688: Cannot find type definition file for 'node'.")" \
+   == "inconclusive-infrastructure missing-type-definitions" ]] \
+  || { echo "TS2688 must classify as infrastructure, not a product defect" >&2; exit 1; }
+[[ "$(classify "Error: ENOSPC: no space left on device, write")" \
+   == "inconclusive-infrastructure disk-full" ]] \
+  || { echo "a full disk must not read as a product defect" >&2; exit 1; }
+
+# The other direction matters more, and is why the pattern table has a scope
+# column. An infrastructure verdict maps to audit-infra, which the decider parks
+# UNCONDITIONALLY — it does not even consult the retry budget. So a signature
+# that ordinary application code can produce must NOT be trusted here, or fixing
+# a budget-burn bug would have bought a task-death bug. All three below are
+# everyday product failures.
+for product_log in \
+  "Error: ENOENT: no such file or directory, open 'fixtures/a.json'" \
+  "AggregateError: ECONNREFUSED 127.0.0.1:5432" \
+  "Error: EACCES: permission denied, open '/tmp/out'" \
+  "AssertionError: expected 1 to equal 2"
+do
+  [[ "$(classify "$product_log")" == "failed-product "* ]] || {
+    echo "a product failure must not be parked as infrastructure: $product_log" >&2
+    exit 1
+  }
+done
+
+# The v0 adapter keeps the full table, strict plus heuristic, because there the
+# classification only annotates a result rather than deciding a task's fate.
+python3 - "$ROOT/engine" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import infra_patterns
+
+strict = {label for label, _ in infra_patterns.load(infra_patterns.STRICT)}
+every = {label for label, _ in infra_patterns.load(infra_patterns.ALL)}
+assert strict, "strict tier is empty"
+assert "missing-type-definitions" in strict, "TS2688 must reach the v2 path"
+assert "network" in every - strict, "network must stay heuristic-only"
+assert "missing-path" in every - strict, "ENOENT must stay heuristic-only"
+assert "permission-denied" in every - strict, "EACCES must stay heuristic-only"
+PY
+
 echo "gate report tests passed"

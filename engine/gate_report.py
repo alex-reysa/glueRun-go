@@ -11,6 +11,8 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import infra_patterns
+
 
 def sha_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -98,6 +100,10 @@ def main() -> None:
     command_sha = sha_bytes(args.command.encode("utf-8"))
     observed: list[dict[str, str]] = []
     infrastructure = False
+    # Named signatures recognised in the log when no adapter report exists, so
+    # the report says WHICH environment problem it was rather than the generic
+    # adapter reason.
+    log_signals: list[str] = []
     observation: dict[str, Any] = {}
     observation_path = Path(args.observation) if args.observation else None
     if observation_path and observation_path.is_file():
@@ -109,9 +115,28 @@ def main() -> None:
     elif args.require_observation:
         raise ValueError("strict gate observation missing")
     elif args.raw_exit_code != 0:
-        # A non-zero command without a strict adapter report is an unexpected
-        # product failure. Raw stdout is never mined for signatures.
-        observed = [{"signature": "gate-command-nonzero-without-report"}]
+        # A non-zero command without a strict adapter report is a product
+        # failure UNLESS the log unmistakably shows the gate could not run.
+        #
+        # Signatures are still never mined from raw stdout — the list below is
+        # about whether the gate ran at all, not about what it found. That
+        # distinction was missing entirely: the patterns lived in
+        # engine/gate-report.py, a module this one never calls, so on the v2
+        # path every non-zero gate normalized to failed-product. A worktree
+        # missing its dependencies then read as a code defect, and the decider
+        # spent the whole retry budget asking a model to fix code that was never
+        # broken. That is what produced TASK-0006's five identical attempts.
+        infrastructure_signals = infra_patterns.matches(
+            log_path.read_text(encoding="utf-8", errors="replace")
+            if log_path.is_file()
+            else "",
+            scope=infra_patterns.STRICT,
+        )
+        if infrastructure_signals:
+            infrastructure = True
+            log_signals = infrastructure_signals
+        else:
+            observed = [{"signature": "gate-command-nonzero-without-report"}]
 
     baseline_path = Path(args.baseline) if args.baseline else None
     baseline_failures: list[dict[str, str]] = []
@@ -198,9 +223,10 @@ def main() -> None:
                             or "adapter-infrastructure-failure"
                         )
                     ]
-                    if infrastructure
+                    if infrastructure and not log_signals
                     else []
                 )
+                + log_signals
                 + ([terminal_infrastructure] if terminal_infrastructure else [])
                 + (
                     ["source-integrity-violation"]

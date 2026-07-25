@@ -528,6 +528,15 @@ cmd_init() {
 EOF
     echo "  new   docs/orchestration/dag.v0.json (1 starter node — define your graph)"
   fi
+  # Gate adapter. Nothing shipped one before, and nothing documented the
+  # gate-observation sidecar either — so the only gates that existed in the wild
+  # were bare commands, and the engine had to infer everything about a failure
+  # from an exit code and a log.
+  if [[ -f "$home/templates/gate-adapter.sh" && ! -f "$root/docs/orchestration/gates/gate.sh" ]]; then
+    cp "$home/templates/gate-adapter.sh" "$root/docs/orchestration/gates/gate.sh"
+    chmod +x "$root/docs/orchestration/gates/gate.sh"
+    echo "  new   docs/orchestration/gates/gate.sh (optional adapter — read the header)"
+  fi
   GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" "${GLUERUN_BASH_BIN:-bash}" "$home/engine/scaffold.sh"
   echo "  ok    docs/orchestration scaffold + schema mirrors"
   # version pin

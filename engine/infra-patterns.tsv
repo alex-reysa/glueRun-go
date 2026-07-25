@@ -1,0 +1,43 @@
+# Log signatures that suggest the gate could not RUN, as opposed to running and
+# finding a defect.   scope <TAB> label <TAB> extended regular expression
+# Matched case-insensitively. Lines starting with # are comments.
+#
+# Shared by engine/gate-report.py (the v0 log-heuristic adapter) and
+# engine/gate_report.py (the v2 normalizer) through engine/infra_patterns.py.
+# They used to disagree: the patterns lived only in the hyphenated module, which
+# the v2 path never calls, so on v2 they were dead code and every gate that
+# exited non-zero without an observation was reported as a product failure.
+#
+# SCOPE is what keeps fixing that from causing the opposite bug. The two callers
+# have very different costs of being wrong:
+#
+#   strict     — used by BOTH paths. An infrastructure verdict on v2 becomes
+#                inconclusive-infrastructure, which l1-drive maps to audit-infra,
+#                which the decider parks UNCONDITIONALLY without consulting the
+#                retry budget. So a false positive here kills a task that a retry
+#                would have fixed. Only signatures that application code under
+#                test cannot plausibly produce on its own belong in this tier.
+#   heuristic  — v0 adapter only, where the classification merely annotates a
+#                result. These fire on real application failures often enough
+#                that promoting them would trade a budget-burn bug for a
+#                task-death bug: a test opening a missing fixture prints "no such
+#                file or directory"; a service test refusing a connection prints
+#                ECONNREFUSED; an app writing somewhere it shouldn't prints
+#                EACCES. All three are ordinary product defects.
+strict	read-only-filesystem	\bread-only file system\b|\berofs\b
+strict	disk-full	\bno space left on device\b|\benospc\b
+strict	resource-exhausted	\btoo many open files\b|\bemfile\b|\benfile\b
+strict	missing-executable	\bcommand not found\b|\bis not recognized as an internal or external command\b
+# TS2688 / a bare "cannot find module" with no adapter report. A worktree that is
+# missing a nested node_modules cannot resolve the @types packages tsconfig asks
+# for, and tsc reports it exactly like this. It is what killed TASK-0006: the
+# auditor's disposable worktree never received the monorepo's nested dependency
+# trees, so a gate that was green for the worker failed there and normalized to a
+# product defect nobody could fix. A worker CAN write a genuinely broken import
+# that looks the same — but only when the gate emitted no structured observation
+# at all, which for a repo with a real gate adapter never happens.
+strict	missing-type-definitions	\bcannot find type definition file\b|\berror ts2688\b
+strict	missing-dependency	\bcannot find module\b|\bmodule not found\b|\bmissing dependency\b|\bmodulenotfounderror\b|\bcannot find package\b
+heuristic	permission-denied	\bpermission denied\b|\beacces\b|\beperm\b
+heuristic	missing-path	\bno such file or directory\b
+heuristic	network	\b(?:enotfound|econnreset|econnrefused|etimedout|temporary failure in name resolution|network is unreachable)\b

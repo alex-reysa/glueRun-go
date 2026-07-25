@@ -12,6 +12,8 @@ import re
 import sys
 from typing import Any
 
+import infra_patterns
+
 
 PRODUCT_PATTERNS = (
     ("assertion", re.compile(r"\b(assertionerror|assertion failed|expected .+ (?:to|but)|received:)\b", re.I)),
@@ -25,21 +27,11 @@ PRODUCT_PATTERNS = (
     ("compile-error", re.compile(r"\b(?:syntaxerror|typeerror:|compilation failed|build failed)\b", re.I)),
 )
 
-INFRA_PATTERNS = (
-    ("read-only-filesystem", re.compile(r"\bread-only file system\b|\berofs\b", re.I)),
-    ("permission-denied", re.compile(r"\bpermission denied\b|\beacces\b|\beperm\b", re.I)),
-    ("disk-full", re.compile(r"\bno space left on device\b|\benospc\b", re.I)),
-    ("resource-exhausted", re.compile(r"\btoo many open files\b|\bemfile\b|\benfile\b", re.I)),
-    ("missing-executable", re.compile(r"\bcommand not found\b|\bno such file or directory\b", re.I)),
-    ("missing-dependency", re.compile(r"\bmodule not found\b|\bcannot find module\b|\bmissing dependency\b", re.I)),
-    (
-        "network",
-        re.compile(
-            r"\b(?:enotfound|econnreset|econnrefused|etimedout|temporary failure in name resolution|network is unreachable)\b",
-            re.I,
-        ),
-    ),
-)
+# Loaded from engine/infra-patterns.tsv through the shared module, so the v2
+# normalizer in gate_report.py classifies with exactly the same table. It used
+# to be a tuple literal here, in a module the v2 path never imports, which made
+# infrastructure detection dead code for every current consumer.
+INFRA_PATTERNS = infra_patterns.load(infra_patterns.ALL)
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 HEX_RE = re.compile(r"\b[0-9a-f]{8,}\b", re.I)

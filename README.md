@@ -59,6 +59,24 @@ audit verdict (`audit-verdict.v0.schema.json`). The **decider** maps the
 `(failure-class, retries-left)` pair to a recovery action — retry, amend-scope, escalate, or
 park — using a deterministic fast-path table before falling back to a model round-trip.
 
+A bare command works: exit 0 passes, non-zero fails. The exit code cannot answer
+two questions the engine would use if it could, so a gate may optionally write a
+**gate observation** (`gate-observation.v0.schema.json`) to the path in
+`GLUERUN_GATE_REPORT_FILE`:
+
+- `failures[].signature` — stable per-failure identifiers. Required for
+  `gluerun gate baseline` to tell an acknowledged failure from a new one.
+- `infrastructureFailure` / `infrastructureReason` — the gate could not **run**
+  (missing dependencies, full disk, unreachable network). The engine reports
+  that as `inconclusive-infrastructure` instead of spending a task's retry
+  budget asking a model to fix code that was never broken.
+
+`gluerun init` scaffolds `docs/orchestration/gates/gate.sh` as a starting point.
+The sidecar is never required — including on `schemaVersion: v2`. Without one
+the engine falls back to the exit code plus a deliberately narrow set of log
+signatures (`engine/infra-patterns.tsv`) covering only environment failures that
+application code cannot plausibly produce.
+
 ## Dispatch model
 
 **Detached dispatch is ON by default.** When `GLUERUN_DETACHED_DISPATCH=1` (the default),
