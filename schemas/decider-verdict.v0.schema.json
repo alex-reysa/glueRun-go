@@ -4,11 +4,24 @@
   "title": "gluerun Autonomous Decider Verdict",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "failureClass", "action", "rationale", "nextOwner"],
+  "required": [
+    "schema",
+    "failureClass",
+    "action",
+    "rationale",
+    "nextOwner"
+  ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.decider-verdict.v0" },
-    "failureClass": { "type": "string", "minLength": 1 },
-    "taskId": { "type": "string" },
+    "schema": {
+      "const": "gluerun.orchestration.decider-verdict.v0"
+    },
+    "failureClass": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taskId": {
+      "type": "string"
+    },
     "action": {
       "type": "string",
       "enum": [
@@ -24,12 +37,24 @@
         "split-task",
         "accept-waiver",
         "release",
+        "escalate-infra",
         "escalate-parked"
       ]
     },
-    "rationale": { "type": "string", "minLength": 1 },
-    "params": { "type": "object", "additionalProperties": true },
-    "nextOwner": { "type": "string", "minLength": 1 },
-    "confidence": { "type": "number" }
+    "rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "nextOwner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "confidence": {
+      "type": "number"
+    }
   }
 }

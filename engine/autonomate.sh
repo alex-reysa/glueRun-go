@@ -45,6 +45,31 @@ gluerun_ensure_state_dirs
 gluerun_require_target_branch
 
 pidfile="$GLUERUN_STATE_DIR/autonomate.pid"
+# The process identity lives BESIDE the pidfile, not inside it. ops.sh, doctor
+# and the console all read the pidfile with `cat` and expect a bare number;
+# adding a second line to it broke `gluerun auto --detach` outright and would
+# have broken five more readers quietly.
+pididfile="$pidfile.identity"
+pid_start_of() { ps -p "$1" -o lstart= 2>/dev/null | sed 's/^ *//;s/ *$//'; }
+
+# True when the pidfile names a process that is genuinely still this loop.
+#
+# `kill -0` alone cannot: a pid is a small recycled integer, and an unrelated
+# long-running process that inherits the number reads as "autonomate is already
+# running" forever, with no way to start the loop again short of deleting the
+# file by hand. Recording `ps lstart` at claim time and comparing it here is what
+# tells the two apart.
+autonomate_holder_alive() {
+  local holder_pid holder_start
+  holder_pid="$(sed -n '1p' "$pidfile" 2>/dev/null | tr -d '[:space:]')"
+  [[ -n "$holder_pid" ]] || return 1
+  kill -0 "$holder_pid" 2>/dev/null || return 1
+  holder_start="$(sed -n '1p' "$pididfile" 2>/dev/null)"
+  # No recorded identity: a pidfile written by an older engine. Trust the pid,
+  # since refusing to start is the safer of the two wrong answers there.
+  [[ -n "$holder_start" ]] || return 0
+  [[ "$holder_start" == "$(pid_start_of "$holder_pid")" ]]
+}
 
 # --detach (0.5.0): supported daemonized launch. The field run hand-rolled
 # python setsid double-forks 6+ times because plain `nohup ... &` dies on
@@ -52,12 +77,11 @@ pidfile="$GLUERUN_STATE_DIR/autonomate.pid"
 # this script with GLUERUN_AUTONOMATE_DETACHED=1; the parent waits for the
 # pidfile to prove liveness, prints it, and exits.
 if [[ "$detach" == "yes" && "${GLUERUN_AUTONOMATE_DETACHED:-}" != "1" ]]; then
-  if [[ -f "$pidfile" ]]; then
-    oldpid="$(cat "$pidfile" 2>/dev/null || true)"
-    if [[ -n "$oldpid" ]] && kill -0 "$oldpid" 2>/dev/null; then
-      echo "autonomate already running (pid $oldpid)"
-      exit 0
-    fi
+  # Identity-aware, like the claim below. This check used to be `kill -0` alone,
+  # so a recycled pid made `gluerun auto --detach` a permanent no-op.
+  if autonomate_holder_alive; then
+    echo "autonomate already running (pid $(sed -n '1p' "$pidfile" 2>/dev/null))"
+    exit 0
   fi
   detach_log="$GLUERUN_STATE_DIR/autonomate.log"
   detach_args=()
@@ -81,7 +105,7 @@ os.wait()
 PY
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 0.5
-    newpid="$(cat "$pidfile" 2>/dev/null || true)"
+    newpid="$(sed -n '1p' "$pidfile" 2>/dev/null | tr -d '[:space:]' || true)"
     if [[ -n "$newpid" && "$newpid" != "$$" ]] && kill -0 "$newpid" 2>/dev/null; then
       echo "autonomate: detached pid=$newpid log=$detach_log"
       exit 0
@@ -91,15 +115,58 @@ PY
   tail -5 "$detach_log" 2>/dev/null >&2 || true
   exit 1
 fi
-if [[ -f "$pidfile" ]]; then
-  oldpid="$(cat "$pidfile" 2>/dev/null || true)"
-  if [[ -n "$oldpid" ]] && kill -0 "$oldpid" 2>/dev/null; then
-    echo "autonomate already running (pid $oldpid); exiting"
-    exit 0
+# Single-instance guard.
+#
+# This used to read the pidfile, decide, and then write it — two processes
+# racing that window both saw a dead predecessor and both started. The habitual
+# `breaker reset; wake; auto` recovery sequence sits right on top of it: `wake`
+# drops STOP while the previous loop is still exiting, and `auto` follows within
+# a second.
+#
+# mkdir is the atomic primitive (the same one gluerun_git_lock_acquire uses):
+# exactly one process can create the directory, so exactly one can claim the
+# pidfile. Liveness is decided by autonomate_holder_alive above, which is
+# pid-reuse-safe.
+pidlock="$pidfile.lock"
+
+autonomate_write_pidfile() {
+  printf '%s\n' "$$" >"$pidfile"
+  printf '%s\n' "$(pid_start_of $$)" >"$pididfile"
+}
+
+autonomate_claim_pidfile() {
+  if mkdir "$pidlock" 2>/dev/null; then
+    if autonomate_holder_alive; then
+      rmdir "$pidlock" 2>/dev/null || true
+      return 1
+    fi
+    autonomate_write_pidfile
+    rmdir "$pidlock" 2>/dev/null || true
+    return 0
   fi
+  # Another process holds the lock right now; give it a moment to finish
+  # writing, then defer to it.
+  local waited=0
+  while [[ -d "$pidlock" && "$waited" -lt 50 ]]; do sleep 0.1; waited=$((waited + 1)); done
+  autonomate_holder_alive && return 1
+  if mkdir "$pidlock" 2>/dev/null; then
+    autonomate_write_pidfile
+    rmdir "$pidlock" 2>/dev/null || true
+    return 0
+  fi
+  return 1
+}
+
+if ! autonomate_claim_pidfile; then
+  echo "autonomate already running (pid $(sed -n '1p' "$pidfile" 2>/dev/null)); exiting"
+  exit 0
 fi
-echo "$$" >"$pidfile"
-cleanup() { [[ "$(cat "$pidfile" 2>/dev/null)" == "$$" ]] && rm -f "$pidfile"; }
+cleanup() {
+  if [[ "$(sed -n '1p' "$pidfile" 2>/dev/null | tr -d '[:space:]')" == "$$" ]]; then
+    rm -f "$pidfile" "$pididfile"
+  fi
+  rmdir "$pidlock" 2>/dev/null || true
+}
 trap cleanup EXIT
 
 start_ts="$(date +%s)"

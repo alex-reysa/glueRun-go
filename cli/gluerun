@@ -862,7 +862,8 @@ Operate / recover:
   breaker [show|reset] circuit-breaker state
   stop [--wait[=S]]    write STOP (and optionally wait for autonomate to exit)
   resume               remove STOP
-  wake                 clear backoff + reset breaker + drop STOP + end the current nap
+  wake [--keep-stop]   clear backoff + reset breaker + drop STOP + end the current nap
+                       (--keep-stop ends the nap WITHOUT un-halting a stopped loop)
   gc [--dry-run]       cap runs history, prune integrated worktrees, rotate events
   ask "<question>" [--wait]   ask the read-only supervisor a question (propose-only)
   report               request a one-shot supervisor briefing (writes latest.json)

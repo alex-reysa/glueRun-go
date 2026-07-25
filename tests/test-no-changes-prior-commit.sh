@@ -318,8 +318,24 @@ assert_contains "$events" '"type":"l1.audit_verification_mismatch"' \
 #    no-changes (truly no content vs base).
 reset_fixture
 rc=0
-out="$(run_drive env WRITE_MODE=never)" || rc=$?
+out="$(run_drive env WRITE_MODE=never GLUERUN_MAX_RETRIES=5)" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "empty fresh attempt must not accept"
-assert_contains "$(cat "$root/.gluerun-state/events.ndjson")" 'no-changes' "no-changes failure recorded"
+events="$(cat "$root/.gluerun-state/events.ndjson")"
+assert_contains "$events" 'no-changes' "no-changes failure recorded"
+
+# 5. ...and it stops after the SECOND identical attempt instead of spending the
+# whole retry budget. A worker that writes nothing produces the same head, the
+# same (empty) uncommitted diff and the same failure every time, so every
+# further attempt is a full worker + gate + decider cycle that cannot differ.
+# TASK-0006 burned attempts 2 through 6 exactly this way — 25 minutes on reruns
+# at a byte-identical head SHA.
+assert_contains "$events" '"type":"l1.no_progress_parked"' "no-progress guard fired"
+# maxRetries=5 means up to 6 attempts; the guard must stop at 2. Counted from
+# the archived attempt directories, which is what the loop actually produced.
+attempts="$(find "$root/.gluerun-state/runs" -type f -path '*/attempts/*/failure.txt' 2>/dev/null | wc -l | tr -d ' ')"
+[[ "$attempts" -le 2 && "$attempts" -ge 1 ]] \
+  || fail "no-progress guard did not stop the loop: $attempts attempts archived (expected <= 2)"
+assert_contains "$out" "parking (no progress since the previous attempt)" \
+  "no-progress parking is reported with its own reason"
 
 echo "PASS: test-no-changes-prior-commit"

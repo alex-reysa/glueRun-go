@@ -310,4 +310,68 @@ assert "missing-path" in every - strict, "ENOENT must stay heuristic-only"
 assert "permission-denied" in every - strict, "EACCES must stay heuristic-only"
 PY
 
+# A hung gate is killed, tree and all, and reported as infrastructure.
+#
+# There was no bound at all here: no timeout, no watchdog, no kill. A gate
+# waiting on a port or a package-manager prompt held the worker slot forever,
+# and because the STOP sentinel is only checked between cycles, one hung gate
+# made cooperative STOP never work.
+cat >"$tmp/hanging-gate.sh" <<'SH'
+#!/usr/bin/env bash
+# The sleep is a grandchild: killing only the direct child leaves it running,
+# which is the whole reason this uses a kill-tree.
+bash -c 'sleep 45; touch "$1"' _ "$1" &
+wait
+SH
+chmod +x "$tmp/hanging-gate.sh"
+hang_marker="$tmp/hang.marker"
+hang_rc=0
+hang_start=$SECONDS
+GLUERUN_ROOT="$ROOT" \
+GLUERUN_STATE_DIR="$tmp/state" \
+GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
+GLUERUN_GATE_TIMEOUT_SEC=3 \
+GLUERUN_KILL_GRACE_SEC=1 \
+  "$ROOT/engine/gate-check.sh" RUN-hang --task-id TASK-0001 -- \
+    "$tmp/hanging-gate.sh" "$hang_marker" >"$tmp/hang.out" 2>&1 || hang_rc=$?
+hang_elapsed=$((SECONDS - hang_start))
+[[ "$hang_elapsed" -lt 30 ]] || {
+  echo "a hung gate must be killed at the timeout, took ${hang_elapsed}s" >&2
+  exit 1
+}
+[[ "$hang_rc" -eq 20 ]] || {
+  echo "a timed-out gate must be inconclusive-infrastructure (exit 20), got $hang_rc" >&2
+  cat "$tmp/hang.out" >&2
+  exit 1
+}
+python3 - "$tmp/state/runs/RUN-hang/gate-report.json" <<'PY'
+import json
+import sys
+
+data = json.load(open(sys.argv[1]))
+assert data["outcome"] == "inconclusive-infrastructure", data["outcome"]
+# 124 already maps to gate-command-timeout, so a hung gate never reaches a model
+# as a product defect to fix.
+assert "gate-command-timeout" in data["infrastructureSignals"], data["infrastructureSignals"]
+PY
+sleep 4   # past nothing in particular; the grandchild had 45s of work to do
+[[ ! -e "$hang_marker" ]] || {
+  echo "the gate's grandchild survived the timeout kill" >&2
+  exit 1
+}
+
+# Zero disables the bound, for a consumer whose gate is legitimately unbounded.
+fast_rc=0
+GLUERUN_ROOT="$ROOT" \
+GLUERUN_STATE_DIR="$tmp/state" \
+GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
+GLUERUN_GATE_TIMEOUT_SEC=0 \
+  "$ROOT/engine/gate-check.sh" RUN-unbounded --task-id TASK-0001 -- true \
+  >"$tmp/unbounded.out" 2>&1 || fast_rc=$?
+[[ "$fast_rc" -eq 0 ]] || {
+  echo "GLUERUN_GATE_TIMEOUT_SEC=0 must run the gate unbounded and pass, got $fast_rc" >&2
+  cat "$tmp/unbounded.out" >&2
+  exit 1
+}
+
 echo "gate report tests passed"

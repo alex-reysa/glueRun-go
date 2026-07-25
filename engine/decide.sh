@@ -255,7 +255,15 @@ fi
   --rationale "$failure_class -> $action: $rationale" --run "$run_id" --branch "$branch" \
   --authority decider >/dev/null 2>&1 || true
 
-if [[ "$action" == "escalate-parked" ]]; then
+if [[ "$action" == "escalate-infra" ]]; then
+  # Distinct from escalate-parked on purpose: this says the work is fine and the
+  # environment is not, which is a different queue for whoever reads it — one
+  # needs a human to judge, the other needs a human to fix. Both come back
+  # through `gluerun unpark`.
+  gluerun_append_event "decider.parked_infrastructure" \
+    "decision parked on an environment failure, not a product defect" \
+    "$(decider_event_data "$rationale")"
+elif [[ "$action" == "escalate-parked" ]]; then
   gluerun_append_event "decider.parked" "decision parked for human review" \
     "$(decider_event_data "$rationale")"
 else

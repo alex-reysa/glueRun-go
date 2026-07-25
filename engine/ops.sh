@@ -296,15 +296,41 @@ ops_resume() {
 ops_wake() {
   # One-shot "make the loop runnable": clear backoff, reset breaker, drop STOP,
   # then signal any live nap to end. Each step reports individually.
+  local keep_stop="no"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-stop) keep_stop="yes"; shift ;;
+      *) echo "usage: gluerun wake [--keep-stop]" >&2; return 2 ;;
+    esac
+  done
   gluerun_planner_backoff_clear
   ops_breaker reset
   if [[ -f "$GLUERUN_STOP_FILE" ]]; then
-    rm -f "$GLUERUN_STOP_FILE"; echo "STOP removed"
+    if [[ "$keep_stop" == "yes" ]]; then
+      echo "STOP kept (--keep-stop); the loop stays halted"
+    else
+      # Dropping STOP is the part of `wake` that surprises people. The habitual
+      # `breaker reset; wake; auto` sequence used to be one second away from two
+      # concurrent loops: wake removes the sentinel a still-exiting loop has not
+      # noticed yet, and `auto` then started a second one. `auto`'s pidfile is
+      # atomic now, so the second one refuses — but say plainly what happened,
+      # because a silent un-stop is how the sequence got habitual.
+      rm -f "$GLUERUN_STOP_FILE"
+      echo "STOP removed — the loop is no longer halted (use --keep-stop to only end the nap)"
+      if [[ -f "$GLUERUN_STATE_DIR/autonomate.pid" ]]; then
+        local live_pid
+        live_pid="$(head -1 "$GLUERUN_STATE_DIR/autonomate.pid" 2>/dev/null | tr -d '[:space:]')"
+        if [[ -n "$live_pid" ]] && gluerun_pid_alive "$live_pid"; then
+          echo "note: autonomate (pid $live_pid) is still running and will resume; do NOT start another"
+        fi
+      fi
+    fi
   else
     echo "no STOP sentinel present"
   fi
   gluerun_request_wake
-  gluerun_append_event "operator.wake" "wake verb completed" "{}"
+  gluerun_append_event "operator.wake" "wake verb completed" \
+    "{\"keptStop\":\"$keep_stop\"}"
 }
 
 # --- gates ----------------------------------------------------------------------
@@ -1204,7 +1230,7 @@ case "$verb" in
   breaker)       ops_breaker "$@" ;;
   stop)          ops_stop "$@" ;;
   resume)        ops_resume "$@" ;;
-  wake)          ops_wake ;;
+  wake)          ops_wake "$@" ;;
   gates)         ops_gates "$@" ;;
   health)        ops_health "$@" ;;
   gc)            ops_gc "$@" ;;

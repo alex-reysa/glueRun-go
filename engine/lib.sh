@@ -611,8 +611,16 @@ gluerun_decider_fast_action() {
     scope-violation)
       if [[ "$has_budget" == "yes" ]]; then printf 'amend-scope'; else printf 'escalate-parked'; fi ;;
     worker-infra|audit-infra)
-      # A model decider cannot fix broken infrastructure — park unconditionally.
-      printf 'escalate-parked' ;;
+      # A model decider cannot fix broken infrastructure, so this never consults
+      # the retry budget. It parks as `escalate-infra` rather than
+      # `escalate-parked` because the two mean opposite things to whoever reads
+      # the queue: escalate-parked is "a human must judge this work",
+      # escalate-infra is "the work is fine, the environment is not". The
+      # decider correctly diagnosed exactly that in the field ("a
+      # dependency-provisioning gap in the disposable audit workspace, not a
+      # product defect") and had no action in its vocabulary to say it. Both
+      # come back through `gluerun unpark`.
+      printf 'escalate-infra' ;;
     audit-needs-fix)
       # Buildable while budget remains; otherwise the model weighs accept-waiver.
       if [[ "$has_budget" == "yes" ]]; then printf 'retry'; else return 0; fi ;;
@@ -4978,6 +4986,45 @@ gluerun_readonly_guard_sweep() {
   python3 "$GLUERUN_ENGINE_DIR/readonly_guard.py" sweep --root "$base" \
     >/dev/null 2>&1 || true
   return 0
+}
+
+# A fingerprint of everything an attempt could have changed, plus how it failed.
+# Two attempts with the same fingerprint did the same thing and got the same
+# answer, so the next one will too.
+#
+# TASK-0006 spent attempts 2 through 6 at a byte-identical head SHA on an
+# identical failure — 25 minutes of worker, gate and decider cycles on a rerun
+# that could not have differed. `prev_failure_class` already existed but was only
+# used to escalate the fast path to the model decider, never to stop.
+#
+# The head SHA alone is not enough. Most failure classes (scope-violation,
+# packet-invalid, gate-red) happen BEFORE any commit, so head stays put whether
+# or not the model did useful work — parking on that would kill tasks the next
+# attempt would have fixed. The uncommitted diff is what tells those apart, so
+# it is hashed too, along with the gate's structured signals when there are any.
+gluerun_attempt_progress_signature() {
+  local worktree="$1" failure_class="$2" head_sha="$3" gate_report="${4:-}"
+  {
+    printf '%s\n%s\n' "$failure_class" "$head_sha"
+    git -C "$worktree" diff HEAD 2>/dev/null || true
+    git -C "$worktree" ls-files --others --exclude-standard -z 2>/dev/null || true
+    if [[ -n "$gate_report" && -f "$gate_report" ]]; then
+      python3 - "$gate_report" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+for key in ("failureSignals", "infrastructureSignals"):
+    value = data.get(key)
+    if isinstance(value, list):
+        for item in sorted(str(v) for v in value):
+            print(f"{key}:{item}")
+PY
+    fi
+  } | shasum -a 256 | awk '{print $1}'
 }
 
 gluerun_tracked_source_snapshot() {

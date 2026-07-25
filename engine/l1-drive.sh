@@ -1695,6 +1695,7 @@ PY
 # next prepare_worker_prompt (the per-iteration reset clears attempt_failure
 # before the structured fix prompt is rendered); they mirror fix_hints.
 accepted="no"; waiver="no"; fix_hints=""; prev_failure_class=""; prev_attempt_ctx=""; terminal_action=""
+prev_progress_signature=""
 terminal_authority="decider"
 terminal_rationale=""
 attempt_started_at=""
@@ -1734,6 +1735,30 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
     archive_attempt "$n" "$attempt_failure" "escalate-parked" "l1"
     break
   fi
+
+  # No-progress guard. An attempt that produced the same code and the same
+  # failure as the one before it will produce them again; there is nothing for a
+  # retry to act on. Checked BEFORE the decider so a provably pointless cycle
+  # does not also pay for a decider round-trip.
+  #
+  # Parked with a reason of its own, not as a product failure, because the two
+  # call for opposite responses: a product failure wants another attempt, this
+  # wants a human or a changed environment. `gluerun unpark` is how it comes
+  # back once something outside the loop is different.
+  progress_signature="$(gluerun_attempt_progress_signature \
+    "$worktree" "$attempt_failure" "$head_sha" "$run_dir/gate-report.json" 2>/dev/null || true)"
+  if [[ -n "$progress_signature" && "$progress_signature" == "$prev_progress_signature" ]]; then
+    terminal_action="escalate-parked"
+    terminal_authority="l1"
+    terminal_rationale="no progress: attempt $n reproduced attempt $((n - 1)) exactly — same head ($([[ -n "$head_sha" ]] && echo "${head_sha:0:12}" || echo "no commit")), same uncommitted changes, same $attempt_failure failure. A further retry cannot differ; unpark once the environment or the task changes."
+    echo "  $attempt_failure: parking (no progress since the previous attempt)"
+    gluerun_append_event "l1.no_progress_parked" \
+      "task parked because an attempt reproduced the previous one exactly" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"failureClass\":\"$attempt_failure\",\"headSha\":\"$head_sha\"}" || true
+    archive_attempt "$n" "$attempt_failure" "escalate-parked" "l1"
+    break
+  fi
+  prev_progress_signature="$progress_signature"
 
   # Failure -> decider. Try the policy fast-path first (T-F1): for clear-cut
   # classes with retry budget it resolves the action WITHOUT a model round-trip,
@@ -1835,7 +1860,13 @@ done
 if [[ "$accepted" != "yes" ]]; then
   _l1_outcome="terminal"
   [[ -n "$terminal_action" ]] || terminal_action="escalate-parked"
-  [[ -n "$terminal_rationale" ]] || terminal_rationale="decider terminal action after $attempt_failure"
+  if [[ -z "$terminal_rationale" ]]; then
+    if [[ "$terminal_action" == "escalate-infra" ]]; then
+      terminal_rationale="environment failure ($attempt_failure), not a product defect: the workspace could not run the gate. Repair the environment, then \`gluerun unpark $task_id\`."
+    else
+      terminal_rationale="decider terminal action after $attempt_failure"
+    fi
+  fi
   l1_status terminal failed "Task ended without acceptance: $terminal_action" true \
     "Inspect the decision and referenced failure evidence" "$terminal_action"
   case "$terminal_action" in

@@ -129,15 +129,30 @@ test_fast_action_table() {
   out="$(gluerun_decider_fast_action scope-violation 3 3 "$prev")"
   assert_eq "$out" "escalate-parked" "fast table scope-violation left<=0"
 
-  # Infra classes park unconditionally (budget irrelevant).
+  # Infra classes park unconditionally (budget irrelevant), and as
+  # `escalate-infra` rather than `escalate-parked`. The two mean opposite things
+  # to whoever reads the queue: escalate-parked is "a human must judge this
+  # work", escalate-infra is "the work is fine, the environment is not". The
+  # decider diagnosed exactly that in the field and had no action to say it.
   out="$(gluerun_decider_fast_action worker-infra 0 3 "$prev")"
-  assert_eq "$out" "escalate-parked" "fast table worker-infra budget"
+  assert_eq "$out" "escalate-infra" "fast table worker-infra budget"
   out="$(gluerun_decider_fast_action worker-infra 3 3 "$prev")"
-  assert_eq "$out" "escalate-parked" "fast table worker-infra no-budget"
+  assert_eq "$out" "escalate-infra" "fast table worker-infra no-budget"
   out="$(gluerun_decider_fast_action audit-infra 0 3 "$prev")"
-  assert_eq "$out" "escalate-parked" "fast table audit-infra budget"
+  assert_eq "$out" "escalate-infra" "fast table audit-infra budget"
   out="$(gluerun_decider_fast_action audit-infra 3 3 "$prev")"
-  assert_eq "$out" "escalate-parked" "fast table audit-infra no-budget"
+  assert_eq "$out" "escalate-infra" "fast table audit-infra no-budget"
+
+  # ...and it is a declared action, not a string the engine invented: the
+  # decider-verdict schema has to accept what the fast path emits, or a model
+  # decider choosing the same action fails validation.
+  python3 - "$ENGINE_HOME/schemas/decider-verdict.v0.schema.json" <<'SCHEMA'
+import json
+import sys
+
+actions = json.load(open(sys.argv[1]))["properties"]["action"]["enum"]
+assert "escalate-infra" in actions, "escalate-infra missing from decider-verdict.v0"
+SCHEMA
 
   # audit-needs-fix: retry while budget remains, else EMPTY (model weighs waiver).
   out="$(gluerun_decider_fast_action audit-needs-fix 0 3 "$prev")"

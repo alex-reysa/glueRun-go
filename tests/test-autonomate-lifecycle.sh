@@ -74,12 +74,37 @@ out="$(env_common GLUERUN_RECONCILE_SCRIPT="$stub" GLUERUN_SLEEP=2 \
 assert_contains "$out" "detached pid=" "detach reports the pid"
 pid="$(sed -n 's/.*detached pid=\([0-9]*\).*/\1/p' <<<"$out")"
 kill -0 "$pid" 2>/dev/null || fail "detached loop not alive"
-[[ "$(cat "$root/.gluerun-state/autonomate.pid")" == "$pid" ]] || fail "pidfile owned by detached loop"
+# The pidfile stays a bare number — ops.sh, doctor and the console all `cat` it
+# and expect exactly that, so the process identity lives in a sibling file. The
+# start time is what makes the single-instance check safe against pid reuse:
+# `kill -0` alone cannot tell a live predecessor from an unrelated process that
+# inherited a recycled pid, and treating a recycled pid as "still running" locks
+# the loop out permanently — worse than the race the check was there to prevent.
+[[ "$(cat "$root/.gluerun-state/autonomate.pid")" == "$pid" ]] \
+  || fail "pidfile owned by detached loop"
+[[ -s "$root/.gluerun-state/autonomate.pid.identity" ]] \
+  || fail "no process identity recorded beside the pidfile"
 
 # Second --detach is a no-op while running.
 out2="$(env_common GLUERUN_RECONCILE_SCRIPT="$stub" GLUERUN_SLEEP=2 \
   bash "$SCRIPT_DIR/autonomate.sh" --detach 2>&1)"
 assert_contains "$out2" "already running" "second detach refuses"
+
+# A pidfile whose recorded identity does not match the live process is stale, no
+# matter how alive that pid looks. This is the pid-reuse case: some unrelated
+# long-running process now owns the number, and without the identity check the
+# loop could never start again.
+cp "$root/.gluerun-state/autonomate.pid" "$root/.gluerun-state/pid.real"
+cp "$root/.gluerun-state/autonomate.pid.identity" "$root/.gluerun-state/id.real"
+printf '%s\n' "$$" >"$root/.gluerun-state/autonomate.pid"
+printf 'Sun Jan  1 00:00:00 2000\n' >"$root/.gluerun-state/autonomate.pid.identity"
+out3="$(env_common GLUERUN_RECONCILE_SCRIPT="$stub" GLUERUN_SLEEP=2 \
+  bash "$SCRIPT_DIR/autonomate.sh" --detach 2>&1)"
+assert_contains "$out3" "detached pid=" "a recycled pid must not lock the loop out"
+pid3="$(sed -n 's/.*detached pid=\([0-9]*\).*/\1/p' <<<"$out3")"
+kill "$pid3" 2>/dev/null || true
+cp "$root/.gluerun-state/pid.real" "$root/.gluerun-state/autonomate.pid"
+cp "$root/.gluerun-state/id.real" "$root/.gluerun-state/autonomate.pid.identity"
 
 # STOP written mid-nap ends the detached loop within a few poll chunks.
 touch "$root/.gluerun-state/STOP"

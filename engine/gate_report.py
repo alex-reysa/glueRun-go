@@ -13,6 +13,10 @@ from typing import Any
 
 import infra_patterns
 
+# Exit codes that mean the gate was TERMINATED rather than that it finished and
+# disagreed: `timeout`'s 124, and the shell's 128+SIGKILL / 128+SIGTERM.
+TERMINATION_EXITS = frozenset({124, 137, 143})
+
 
 def sha_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -135,8 +139,15 @@ def main() -> None:
         if infrastructure_signals:
             infrastructure = True
             log_signals = infrastructure_signals
-        else:
+        elif args.raw_exit_code not in TERMINATION_EXITS:
             observed = [{"signature": "gate-command-nonzero-without-report"}]
+        # ...and for a terminated gate, nothing. A timeout or a signal is the
+        # host deciding to stop the gate, not the gate reporting a defect, so
+        # fabricating a failure signature there manufactures product evidence
+        # out of an act of the engine's own. `terminal_infrastructure` below
+        # already classifies these — but it is evaluated AFTER `unexpected`, so
+        # the fabricated signature won every time and the 124/137/143 branch has
+        # never once been reached.
 
     baseline_path = Path(args.baseline) if args.baseline else None
     baseline_failures: list[dict[str, str]] = []
@@ -169,7 +180,7 @@ def main() -> None:
     ]
 
     terminal_infrastructure = ""
-    if args.raw_exit_code in {124, 137, 143}:
+    if args.raw_exit_code in TERMINATION_EXITS:
         terminal_infrastructure = "gate-command-timeout"
     elif args.raw_exit_code != 0 and not observed and not infrastructure:
         terminal_infrastructure = f"unknown-terminal-exit:{args.raw_exit_code}"

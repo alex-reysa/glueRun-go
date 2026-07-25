@@ -48,9 +48,46 @@ git -C "$PWD" status --porcelain=v1 --untracked-files=all 2>/dev/null \
   | sed -E '\#^.. (\.gluerun-state|\.gluerun-cache|\.gluerun-evidence)(/|$)#d' \
   >"$status_before" || true
 
+# Wall-clock bound on the consumer's gate. There was none: no timeout, no
+# watchdog, no kill. A gate that hangs — a test waiting on a port, a package
+# manager waiting on a prompt — held the worker slot forever, and because the
+# STOP sentinel is only checked between cycles, one hung gate made cooperative
+# STOP never work at all.
+#
+# Exit 124 matches `timeout`, and gate_report.py already maps 124/137/143 to
+# `gate-command-timeout` infrastructure, so a timed-out gate is inconclusive
+# rather than a product failure the model gets asked to fix.
+# Set GLUERUN_GATE_TIMEOUT_SEC=0 to disable.
+gate_timeout="${GLUERUN_GATE_TIMEOUT_SEC:-3600}"
+[[ "$gate_timeout" =~ ^[0-9]+$ ]] || gate_timeout=3600
 set +e
-GLUERUN_GATE_REPORT_FILE="$observation" "$@" >"$log" 2>&1
-exit_code=$?
+if [[ "$gate_timeout" -gt 0 ]]; then
+  GLUERUN_GATE_REPORT_FILE="$observation" "$@" >"$log" 2>&1 &
+  gate_pid=$!
+  gate_deadline=$((SECONDS + gate_timeout)); gate_timed_out="no"
+  while kill -0 "$gate_pid" 2>/dev/null; do
+    if [[ "$SECONDS" -ge "$gate_deadline" ]]; then
+      gate_timed_out="yes"
+      # The whole tree: a gate is usually a shell wrapping a test runner
+      # wrapping workers, and killing only the shell leaves all of it running.
+      gluerun_kill_tree "$gate_pid" "$(gluerun_kill_grace_sec)"
+      wait "$gate_pid" 2>/dev/null
+      exit_code=124
+      break
+    fi
+    sleep 2
+  done
+  if [[ "$gate_timed_out" != "yes" ]]; then
+    wait "$gate_pid"
+    exit_code=$?
+  else
+    echo "gate-check: TIMED OUT after ${gate_timeout}s; killed the gate tree" >&2
+    printf '\ngate-check: TIMED OUT after %ss\n' "$gate_timeout" >>"$log"
+  fi
+else
+  GLUERUN_GATE_REPORT_FILE="$observation" "$@" >"$log" 2>&1
+  exit_code=$?
+fi
 set -e
 finished_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
 if [[ "$integrity_status" == "verified" ]]; then
