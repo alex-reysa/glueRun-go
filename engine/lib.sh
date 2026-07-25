@@ -4773,6 +4773,123 @@ gluerun_secret_scan_patterns() {
   return 0
 }
 
+# --- Read-only working-tree guard ---------------------------------------------
+# A read-only run must leave the working tree exactly as it found it. Two of the
+# six runners can be told that by their CLI (codex takes an OS sandbox; the rest
+# take tool denials that a shell command can walk around), so the engine takes a
+# snapshot before the run and puts the tree back after.
+#
+# The snapshot is of content, not of paths — engine/readonly_guard.py explains at
+# length why the path-diff version this replaces could not be made correct. The
+# short version: a list of paths cannot describe a state you want to return to,
+# so the old guard let an agent's overwrite of an already-dirty file survive,
+# restored everything else from HEAD (discarding whatever uncommitted work was
+# in it), missed staged mutations entirely, and deleted untracked files that
+# appeared mid-run — which, since read-only runs execute against $GLUERUN_ROOT
+# for up to 1200s while the rest of the engine keeps writing there, meant it
+# deleted freshly imported task files.
+#
+# GLUERUN_READONLY_GUARD_MODE selects restore (default), report (log what it
+# would do and change nothing) or off.
+gluerun_readonly_guard_mode() {
+  printf '%s\n' "${GLUERUN_READONLY_GUARD_MODE:-restore}"
+}
+
+# Express an absolute engine directory as a worktree-relative prefix, or print
+# nothing when it lives outside the worktree and so cannot collide with it.
+gluerun_readonly_guard_relative() {
+  local worktree="$1" candidate="$2"
+  [[ -n "$candidate" ]] || return 0
+  python3 - "$worktree" "$candidate" <<'PY' 2>/dev/null || true
+import os
+import sys
+
+worktree, candidate = (os.path.abspath(p) for p in sys.argv[1:3])
+if candidate == worktree:
+    raise SystemExit(0)
+rel = os.path.relpath(candidate, worktree)
+if rel.startswith(os.pardir + os.sep) or rel == os.pardir:
+    raise SystemExit(0)
+print(rel)
+PY
+}
+
+# Snapshot $1 and print the journal directory the restore will need. Prints
+# nothing (and succeeds) when the guard is off or cannot be armed — a guard that
+# fails to start must never take the run down with it.
+gluerun_readonly_guard_capture() {
+  local worktree="$1" label="${2:-run}"
+  [[ "$(gluerun_readonly_guard_mode)" != "off" ]] || return 0
+  [[ -n "$worktree" && -d "$worktree" ]] || return 0
+
+  local base="$GLUERUN_STATE_DIR/readonly-guard"
+  mkdir -p "$base" 2>/dev/null || return 0
+  local journal
+  journal="$(mktemp -d "$base/${label}.XXXXXX" 2>/dev/null)" || return 0
+
+  # The engine writes to these directories from other processes for the whole
+  # duration of a read-only run. They are engine-owned state, not agent output —
+  # read-only runs report through the packet, never by writing files — so the
+  # guard stays out of them entirely rather than racing whoever else is there.
+  local args=(capture --worktree "$worktree" --journal "$journal"
+              --label "$label" --owner-pid "$$")
+  local dir rel
+  for dir in "$GLUERUN_ORCH_DIR" "$GLUERUN_STATE_DIR" \
+             "$GLUERUN_ROOT/.gluerun-cache" "$GLUERUN_ROOT/.gluerun-evidence"; do
+    rel="$(gluerun_readonly_guard_relative "$worktree" "$dir")"
+    [[ -n "$rel" ]] && args+=(--exclude "$rel")
+  done
+
+  if ! python3 "$GLUERUN_ENGINE_DIR/readonly_guard.py" "${args[@]}" \
+       >"$journal/capture.json" 2>"$journal/capture.err"; then
+    echo "readonly guard: capture failed, run is unguarded (see $journal/capture.err)" >&2
+    return 0
+  fi
+  printf '%s\n' "$journal"
+}
+
+# Put the worktree back. Safe to call with an empty journal argument, and safe to
+# call twice — the second call finds no journal and reports no-journal.
+gluerun_readonly_guard_restore() {
+  local journal="${1:-}"
+  [[ -n "$journal" && -d "$journal" ]] || return 0
+  local mode result outcome
+  mode="$(gluerun_readonly_guard_mode)"
+  [[ "$mode" != "off" ]] || return 0
+  [[ "$mode" == "report" ]] || mode="restore"
+
+  result="$(python3 "$GLUERUN_ENGINE_DIR/readonly_guard.py" restore \
+    --journal "$journal" --mode "$mode" --consume 2>"$journal/restore.err")" || {
+    echo "readonly guard: restore failed (see $journal/restore.err)" >&2
+    return 0
+  }
+  outcome="$(printf '%s' "$result" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("outcome",""))' 2>/dev/null || true)"
+  case "$outcome" in
+    restored|reported|degraded)
+      # Worth an event on every one of these: a read-only run that changed the
+      # tree is a containment failure whether or not the guard undid it, and a
+      # degraded guard means the run was effectively unguarded.
+      echo "readonly guard: $outcome ($journal)" >&2
+      gluerun_append_event "readonly_guard.$outcome" \
+        "read-only guard $outcome" "$result" || true
+      ;;
+  esac
+  return 0
+}
+
+# Finish the restores of runs that were SIGKILLed. Nothing runs inside a killed
+# process, so its journal is still on disk with its owner pid recorded; this is
+# how that tree eventually gets put back.
+gluerun_readonly_guard_sweep() {
+  local base="$GLUERUN_STATE_DIR/readonly-guard"
+  [[ -d "$base" ]] || return 0
+  [[ "$(gluerun_readonly_guard_mode)" != "off" ]] || return 0
+  python3 "$GLUERUN_ENGINE_DIR/readonly_guard.py" sweep --root "$base" \
+    >/dev/null 2>&1 || true
+  return 0
+}
+
 gluerun_tracked_source_snapshot() {
   local worktree="$1" output="$2"
   python3 - "$worktree" "$output" <<'PY'
