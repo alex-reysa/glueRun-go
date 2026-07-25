@@ -7,6 +7,114 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.15.0] — 2026-07-25 — The seams
+
+0.14.1 shipped clean by every internal measure. Then a real 26-node workload ran
+against it for 25 hours and produced **1 integrated task and 0 of 26 completed
+nodes**. Nothing in the suite was wrong; the defects all live at seams the suite
+never crossed — where the worker worktree must match the audit worktree, where a
+read-only agent meets the operator's live repo, where an environmental fault
+meets a retry budget, and where a parked task meets recovery and finds none.
+
+`schemaVersion` stays **v2**: upgrading from 0.13.0+ is drop-in.
+
+### The read-only guard destroyed work
+
+Five runners carried a guard that snapshotted two lists of **paths** before a
+read-only run and diffed them after. A list of paths cannot describe a state you
+want to return to, and it was wrong in four separate ways because of it:
+
+- a file already dirty before the run was in the "before" list, so the diff saw
+  no change when the agent overwrote it — **the agent's write survived**;
+- the only restore source was HEAD, so any file it did revert **lost whatever
+  uncommitted work was in it**, including work written by somebody else;
+- `git checkout -- <path>` restores from the index, so `git add` was a bypass;
+- untracked files that appeared mid-run were `rm -rf`'d.
+
+That last one was not hypothetical. Read-only runs execute against
+`$GLUERUN_ROOT` for up to 1200s (`decide`), 900s (`supervise`) and 600s (`ask`)
+while `autonomate.sh` keeps importing task files into `docs/orchestration/tasks`
+in that same directory. **The engine was periodically deleting its own freshly
+imported control state.**
+
+The guard is content-addressed now (`engine/readonly_guard.py`): it captures the
+exact bytes and index entry of everything already dirty, and afterwards puts
+every changed path back to *what it was*, not to HEAD. It is also never
+destructive — every byte it removes or overwrites is copied to a quarantine
+directory first — and it stays out of engine-owned directories entirely, so the
+concurrent-writer case cannot arise. Paths are handled null-delimited with
+`:(literal)` pathspecs; the old guard silently no-op'd on any path git would
+quote, which for a localization program is most of them.
+
+It also now runs on the paths that mattered. `ask`/`supervise`/`decide`
+SIGKILLed on timeout, and the guard was straight-line code after the run, so on
+every timeout it never executed at all. `gluerun_kill_tree` takes a grace period
+(`GLUERUN_KILL_GRACE_SEC`, default 10) and the guard moved into each runner's
+EXIT trap. SIGKILL stays uncoverable, so `gluerun reconcile` sweeps the journals
+killed runs leave behind, `gc` ages them out, and `doctor` reports pending ones.
+
+**In-run restrictions are hardened too**, rather than leaning on cleanup:
+`opencode` passed *nothing* for a read-only run and now uses `--agent plan`;
+`claude` denies state-mutating git through Bash, the one mutation class a
+post-run restore cannot repair (the guard restores the working tree — it does
+not move HEAD back).
+
+### The audit worktree was not the worker's worktree
+
+Three sites built worktrees three different ways. The auditor re-runs the gate
+whose result accepts or rejects the work, **in the one worktree that never
+received `prewarm`** — while the worker that produced the green result did. From
+outside, a gate that passes for the worker and fails for the auditor is
+indistinguishable from the work being wrong.
+
+`gluerun_worktree_prepare` is now the only way a worktree becomes runnable, for
+all three sites. Dependency copies are a first-class `worktreeCopyPaths` config
+key that **extends** the `node_modules` default instead of replacing it (a
+monorepo declaring a nested path silently lost the root one), and a declared
+path that does not exist is reported instead of skipped in silence.
+
+### An environment failure spent the whole retry budget
+
+The engine's "the gate could not run" log heuristics lived in
+`engine/gate-report.py` — a module the v2 normalizer never calls. On v2, which
+is every current consumer, they were dead code: any gate that exited non-zero
+without an adapter observation became a **product** failure. A worktree missing
+its dependencies read as a code defect, and the decider spent the entire budget
+asking a model to fix code that was never broken. That is TASK-0006: five
+attempts at a byte-identical head SHA against a TS2688 no edit could fix.
+
+Patterns now live in `engine/infra-patterns.tsv`, shared by both modules, with a
+**scope column** — only signatures application code cannot plausibly produce
+reach the v2 path, because an infrastructure verdict parks a task
+unconditionally and a false positive there is fatal rather than merely wasteful.
+
+- **No-progress guard.** An attempt that reproduces the previous one exactly —
+  same head, same uncommitted diff, same failure — parks immediately instead of
+  burning the budget on a rerun that cannot differ.
+- **`gluerun unpark TASK-XXXX`.** A transient fault used to kill a task
+  permanently: the only operator verb was `supersede`, which buries the task
+  rather than repairing it. `unpark` restores Status, lease status, the
+  **retryCount** nothing else ever resets, and the refusals counter.
+- **`escalate-infra`.** The decider had no way to say "the work is fine, the
+  environment is not"; the nearest action was terminal and meant something else.
+- **Gate timeout.** `GLUERUN_GATE_TIMEOUT_SEC` (default 3600). There was no
+  bound at all: one hung gate held a worker slot forever and made cooperative
+  STOP never fire. A terminated gate no longer fabricates a product failure —
+  the 124/137/143 branch existed but was evaluated after the fabricated
+  signature, so it had never once been reached.
+- **Atomic single-instance guard.** `autonomate` claimed its pidfile
+  check-then-write; it is `mkdir`-atomic now and records process identity, so a
+  recycled pid can no longer lock the loop out permanently. `wake` says plainly
+  that it un-halts a stopped loop, and takes `--keep-stop`.
+- **`bootstrap.required: true` with no commands** is a promise that guarantees
+  nothing; `doctor` warns, and the template stops shipping it.
+- **`gluerun init` scaffolds a gate adapter** and the README documents
+  `infrastructureFailure`. Neither existed, which is why no consumer emitted one.
+- **`tests/test-grok-run.sh`** — grok had shipped with no tests at all. Writing
+  them found its timeout killed only the direct child, orphaning descendants.
+
+---
+
 ## [0.14.1] — 2026-07-25 — A passing gate passes
 
 Two fixes for the same class of defect: things that worked for this repo and

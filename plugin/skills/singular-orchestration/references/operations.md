@@ -193,7 +193,12 @@ expected outcome. Never hand-edit state files; every recipe is a verb.
 
 1. **Supersede a doomed task.** Symptom: task terminally blocked/parked, a
    successor should own its scope. Verify: `gluerun health --json | jq
-   .tasks` and read the task file. Run: `gluerun supersede TASK-XXXX --by
+   .tasks` and read the task file. A task parked on an ENVIRONMENT failure
+   (`escalate-infra`, or `escalate-parked` after `audit-infra`/`worker-infra`)
+   is not broken work — repair the environment, then `gluerun unpark TASK-XXXX`
+   to return it to the frontier with its retry budget reset. Supersede is for
+   work that should be replaced, not for work that was blocked. Run:
+   `gluerun supersede TASK-XXXX --by
    TASK-YYYY --reason "…"` (add `--force` only if a live dispatch must die).
    Expect: `task.superseded` event; file in `tasks/superseded/`; lease
    superseded; queued packets quarantined. All four surfaces in one command.

@@ -322,6 +322,7 @@ to make progress.
 Recovery is CLI verbs since 0.5.0 — never hand-edit state files:
 
 ```bash
+gluerun unpark TASK-XXXX                     # parked task -> frontier (status, lease, retry budget)
 gluerun supersede TASK-XXXX --by TASK-YYYY   # all four surfaces atomically
 gluerun clear-backoff                        # false/stale planner backoff
 gluerun breaker reset                        # after fixing the failing class
@@ -370,7 +371,7 @@ via the sidebar threads list / Home "Previous plans" card, or
 - `.gluerun-state/`, `.worktrees/`, and `.gluerun-evidence/` are runtime
   state — never commit them, never hand-edit them. Every sanctioned mutation
   has a verb: `gluerun stop/resume`, `clear-backoff`, `breaker reset`,
-  `supersede`, `wake`, `gc`.
+  `supersede`, `unpark`, `wake`, `gc`.
 - Singular executes repo-configured shell commands and launches coding
   agents; review `gluerun.config.json` and task files before running it in a
   repo you don't trust.

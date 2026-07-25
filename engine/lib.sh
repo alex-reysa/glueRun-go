@@ -15,7 +15,13 @@ gluerun_repo_root() {
 # assets); resolve them relative to THIS file, not the consumer repo, so a repo
 # that holds only config still validates. GLUERUN_ROOT remains the *consumer* repo.
 # Override GLUERUN_ENGINE_HOME / GLUERUN_SCHEMA_DIR when vendoring or testing.
-GLUERUN_ENGINE_DIR="${GLUERUN_ENGINE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# Where this file actually lives. GLUERUN_ENGINE_DIR below is an overridable
+# knob — tests shim it to a directory of selected ctx-*.sh symlinks to control
+# which bricks load — so engine EXECUTABLES must not resolve through it, or a
+# shimmed brick lookup silently takes bootstrap-worktree.sh and readonly_guard.py
+# with it.
+GLUERUN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GLUERUN_ENGINE_DIR="${GLUERUN_ENGINE_DIR:-$GLUERUN_LIB_DIR}"
 GLUERUN_ENGINE_HOME="${GLUERUN_ENGINE_HOME:-$(cd "$GLUERUN_ENGINE_DIR/.." && pwd)}"
 GLUERUN_SCHEMA_DIR="${GLUERUN_SCHEMA_DIR:-$GLUERUN_ENGINE_HOME/schemas}"
 
@@ -4938,7 +4944,7 @@ gluerun_readonly_guard_capture() {
     [[ -n "$rel" ]] && args+=(--exclude "$rel")
   done
 
-  if ! python3 "$GLUERUN_ENGINE_DIR/readonly_guard.py" "${args[@]}" \
+  if ! python3 "$GLUERUN_LIB_DIR/readonly_guard.py" "${args[@]}" \
        >"$journal/capture.json" 2>"$journal/capture.err"; then
     echo "readonly guard: capture failed, run is unguarded (see $journal/capture.err)" >&2
     return 0
@@ -4956,7 +4962,7 @@ gluerun_readonly_guard_restore() {
   [[ "$mode" != "off" ]] || return 0
   [[ "$mode" == "report" ]] || mode="restore"
 
-  result="$(python3 "$GLUERUN_ENGINE_DIR/readonly_guard.py" restore \
+  result="$(python3 "$GLUERUN_LIB_DIR/readonly_guard.py" restore \
     --journal "$journal" --mode "$mode" --consume 2>"$journal/restore.err")" || {
     echo "readonly guard: restore failed (see $journal/restore.err)" >&2
     return 0
@@ -4983,7 +4989,7 @@ gluerun_readonly_guard_sweep() {
   local base="$GLUERUN_STATE_DIR/readonly-guard"
   [[ -d "$base" ]] || return 0
   [[ "$(gluerun_readonly_guard_mode)" != "off" ]] || return 0
-  python3 "$GLUERUN_ENGINE_DIR/readonly_guard.py" sweep --root "$base" \
+  python3 "$GLUERUN_LIB_DIR/readonly_guard.py" sweep --root "$base" \
     >/dev/null 2>&1 || true
   return 0
 }
@@ -6477,10 +6483,10 @@ gluerun_worktree_prepare() {
   GLUERUN_WORKTREE_PREPARE_STAGE="bootstrap"
   local bootstrap_rc=0
   if [[ "${#child_env[@]}" -gt 0 ]]; then
-    env "${child_env[@]}" "$GLUERUN_ENGINE_DIR/bootstrap-worktree.sh" \
+    env "${child_env[@]}" "$GLUERUN_LIB_DIR/bootstrap-worktree.sh" \
       --worktree "$worktree" >>"$log" 2>&1 || bootstrap_rc=$?
   else
-    "$GLUERUN_ENGINE_DIR/bootstrap-worktree.sh" --worktree "$worktree" \
+    "$GLUERUN_LIB_DIR/bootstrap-worktree.sh" --worktree "$worktree" \
       >>"$log" 2>&1 || bootstrap_rc=$?
   fi
   if [[ "$bootstrap_rc" -ne 0 ]]; then
