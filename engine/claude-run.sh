@@ -85,7 +85,7 @@ gluerun_claude_result_on_exit() {
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
   fi
   [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
-  [[ -n "${strict_mcp_config:-}" ]] && rm -f "$strict_mcp_config" 2>/dev/null || true
+  [[ -n "${strict_mcp_dir:-}" ]] && rm -rf "$strict_mcp_dir" 2>/dev/null || true
   exit "$rc"
 }
 trap gluerun_claude_result_on_exit EXIT
@@ -125,7 +125,16 @@ gluerun_runner_reject_strict_legacy_extra_args \
 profile_native_args=()
 strict_mcp_config=""
 if [[ "$GLUERUN_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
-  strict_mcp_config="$(mktemp "${TMPDIR:-/tmp}/gluerun-claude-empty-mcp.XXXXXX.json")"
+  # A temp DIRECTORY with trailing X's, holding a fixed-name file. The template
+  # must end in the X's: BSD/macOS mktemp only substitutes TRAILING X's, so the
+  # old "...XXXXXX.json" template created a file named literally
+  # "gluerun-claude-empty-mcp.XXXXXX.json". That works once, and the EXIT trap
+  # removes it — but any hard kill (a stopped run, an OOM, a reboot mid-run)
+  # leaves the literal name behind, and every later strict claude run then dies
+  # with "mktemp: mkstemp failed: File exists" until someone deletes it by hand.
+  # A persistent, self-inflicted provider outage from a leaked temp file.
+  strict_mcp_dir="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-claude-mcp.XXXXXX")"
+  strict_mcp_config="$strict_mcp_dir/mcp.json"
   printf '{"mcpServers":{}}\n' >"$strict_mcp_config"
   profile_native_args+=(--safe-mode --strict-mcp-config --mcp-config "$strict_mcp_config")
 fi

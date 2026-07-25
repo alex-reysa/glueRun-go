@@ -1008,14 +1008,40 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             def wire(payload) -> str:  # exactly what send_json serializes
                 return json.dumps(payload, indent=2)
 
+            # 0.14.0 intentionally adds ONE settings knob:
+            # GLUERUN_SUPERVISOR_INTERVAL_MIN. Home's "enable auto-briefing"
+            # button POSTed it while no whitelist contained it, so the write was
+            # rejected 400 and the button could never work. Strip exactly that
+            # row before the byte-identity comparison — narrow enough that any
+            # OTHER settings drift still fails here, and asserted below so the
+            # exemption cannot silently outlive the change that needed it.
+            NEW_KEY = "GLUERUN_SUPERVISOR_INTERVAL_MIN"
+
+            def drop_new_key(groups):
+                return [
+                    {**g, "items": [i for i in g.get("items", [])
+                                    if i.get("envKey") != NEW_KEY]}
+                    for g in groups
+                ]
+
+            current_settings = srv.collect_settings(repo)
+            self.assertIn(NEW_KEY, [i["envKey"] for g in current_settings
+                                    for i in g["items"]],
+                          "the settings exemption below is stale — remove it")
+
             # /api/state is intentionally NOT compared since 0.5.0: the built-in
             # probes went native (no make orch-* subprocesses), gateD0/gateD1
             # were replaced by orchestration.gates, and disk.du became a
             # non-blocking background peek — see NativeFrontierTests /
             # ValidateDagNativeTests / SnapshotNoSubprocessTests below.
             # /api/overview (includes settings groups)
-            self.assertEqual(wire(srv.collect_overview(repo)), wire(head.collect_overview(repo)))
-            self.assertEqual(wire(srv.collect_settings(repo)), wire(head.collect_settings(repo)))
+            current_overview = srv.collect_overview(repo)
+            if isinstance(current_overview.get("settings"), list):
+                current_overview = {**current_overview,
+                                    "settings": drop_new_key(current_overview["settings"])}
+            self.assertEqual(wire(current_overview), wire(head.collect_overview(repo)))
+            self.assertEqual(wire(drop_new_key(current_settings)),
+                             wire(head.collect_settings(repo)))
             # /api/events live overlay
             self.assertEqual(wire(srv.collect_events_overlay(repo, None, 120, None)),
                              wire(head.collect_events_overlay(repo, None, 120, None)))
@@ -3601,6 +3627,447 @@ class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
             self.assertEqual(row["state"], "stale")
             self.assertEqual(row["owner"], "owner@example.com")
             self.assertEqual(row["blockedNodes"], ["deploy"])
+
+
+# Synthetic credentials, assembled at import time from harmless halves.
+#
+# They are NEVER written as literals: engine/secret-scan.sh scans added lines on
+# every commit and would (correctly) refuse a file containing a credential-shaped
+# string. Weakening the gate to accommodate its own tests would be exactly
+# backwards, so the fixtures dodge it by construction instead.
+FAKE = {
+    "jwt-bearer-token": "eyJ" + "hbGciOiJIUzI1NiJ9." + "eyJ" + "zdWIiOiIxMjMifQ." + "dozjgNryP4J3jVmNHl0",
+    "openai-key": "sk" + "-" + "abcdefghijklmnopqrstuvwxyz012345",
+    "github-token": "ghp" + "_" + "abcdefghijklmnopqrstuvwxyz0123456789",
+    # Slug is derived from the engine label "Supabase token (sbp_)".
+    "supabase-token-sbp": "sbp" + "_" + "abcdefghijklmnopqrstuvwxyz0123",
+    "aws-access-key-id": "AKIA" + "IOSFODNN7EXAMPLE",
+    "private-key-block": "-----BEGIN " + "RSA PRIVATE KEY-----",
+}
+FAKE_JWT = FAKE["jwt-bearer-token"]
+
+
+class RedactSecretsTests(unittest.TestCase):
+    """R1: the shared pattern set, token format, identity and idempotence."""
+
+    def test_credential_shapes_are_redacted(self):
+        cases = {
+            FAKE["jwt-bearer-token"]: "jwt-bearer-token",
+            FAKE["openai-key"]: "openai-key",
+            FAKE["github-token"]: "github-token",
+            FAKE["supabase-token-sbp"]: "supabase-token-sbp",
+            FAKE["aws-access-key-id"]: "aws-access-key-id",
+        }
+        for secret, slug in cases.items():
+            out = srv.redact_secrets(f"prefix {secret} suffix")
+            self.assertNotIn(secret, out, slug)
+            self.assertIn(f"[redacted:{slug}]", out)
+
+    def test_authorization_and_key_value_keep_their_names(self):
+        # The key name is the diagnostic value — redacting must not blank it.
+        out = srv.redact_secrets("Authorization: Bearer abc123def456ghi789")
+        self.assertTrue(out.startswith("Authorization: "), out)
+        self.assertNotIn("abc123def456ghi789", out)
+
+        out = srv.redact_secrets('"OPENCODE_AUTH_CONTENT": "abc123def456"')
+        self.assertIn("OPENCODE_AUTH_CONTENT", out)
+        self.assertNotIn("abc123def456", out)
+
+    def test_legitimate_high_entropy_content_survives(self):
+        # This codebase is full of hashes; redacting them would gut the console.
+        # A 40-hex git SHA, a 64-hex sha256 (engine/human_gate.py pins exactly
+        # that shape for artifact hashes), and the prose that broke a naive
+        # prefilter must all pass through untouched.
+        keep = [
+            "commit 8151b8c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6 landed",
+            "sha256 5d2c1219eb3811839bb835d1f912afa8c18126426d9367d1652a59727e10b903",
+            "authoritative auth-status input_tokens output_tokens",
+            "GLUERUN_CLAUDE_MODEL=claude-opus-4-8",
+            "merge 1a2b3c4",
+        ]
+        for text in keep:
+            self.assertEqual(srv.redact_secrets(text), text, text)
+
+    def test_returns_identical_object_when_nothing_matches(self):
+        # The performance contract: >99.9% of log windows are clean, so a clean
+        # window must not be rewritten. Pins the prefilter against a future
+        # unconditional re.sub chain.
+        clean = "ordinary log line with sha 8151b8c and input_tokens=42\n" * 500
+        self.assertIs(srv.redact_secrets(clean), clean)
+
+    def test_idempotent(self):
+        once = srv.redact_secrets(f"API_KEY=supersecretvalue123 and {FAKE_JWT}")
+        self.assertEqual(once, srv.redact_secrets(once))
+
+    def test_prefilter_hits_every_positive_fixture(self):
+        # A prefilter miss is a SILENT leak: the rules never run. Every pattern
+        # that can redact must first be reachable through the cheap gate.
+        positives = list(FAKE.values()) + [
+            "Authorization: Bearer xyz123456789",
+            "API_KEY=supersecretvalue123",
+        ]
+        for text in positives:
+            self.assertIsNotNone(srv._SECRET_PREFILTER.search(text), text)
+
+    def test_patterns_come_from_the_engine_file(self):
+        # Console and engine/secret-scan.sh must not drift to two notions of
+        # "looks like a secret".
+        path = srv._engine_file("secret-patterns.tsv")
+        self.assertIsNotNone(path, "engine/secret-patterns.tsv must be locatable")
+        labels = [
+            line.split("\t", 1)[0]
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertIn("JWT / bearer token", labels)
+        self.assertGreaterEqual(len(labels), 6)
+
+
+class SessionRedactionTests(unittest.TestCase):
+    """R2: every session path redacts — raw mode included."""
+
+    JWT = FAKE_JWT
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state/runs").mkdir(parents=True)
+        return repo
+
+    def test_secret_scan_log_is_redacted_in_both_modes(self):
+        # The motivating leak: engine/secret-scan.sh quotes the offending line
+        # into secret-scan.log when it BLOCKS a commit, and secret-scan.log is in
+        # PLAIN_LOG_NAMES — so the gate that keeps a credential out of git hands
+        # it to the browser instead.
+        repo = self._repo()
+        run = repo / ".gluerun-state/runs/RUN-x"
+        run.mkdir()
+        (run / "secret-scan.log").write_text(
+            f"secret-scan: JWT / bearer token match in added lines:\n"
+            f"    1:+token = {self.JWT}\n")
+        self.assertIn("secret-scan.log", srv.PLAIN_LOG_NAMES)
+        for raw in (True, False):
+            out = srv.read_session(repo, "RUN-x", None, 500, "secret-scan.log", raw)
+            blob = json.dumps(out)
+            self.assertNotIn(self.JWT, blob, f"raw={raw}")
+            self.assertIn("[redacted:jwt-bearer-token]", blob, f"raw={raw}")
+
+    def test_command_output_and_agent_message_are_redacted(self):
+        repo = self._repo()
+        run = repo / ".gluerun-state/runs/RUN-y"
+        run.mkdir()
+        (run / "worker-codex.log").write_text("\n".join([
+            json.dumps({"type": "item.completed", "item": {
+                "type": "command_execution", "command": "echo hi",
+                "aggregated_output": f"token {self.JWT}", "exit_code": 0}}),
+            json.dumps({"type": "item.completed", "item": {
+                "type": "agent_message", "text": f"the key is {self.JWT}"}}),
+        ]) + "\n")
+        out = srv.read_session(repo, "RUN-y", None, 500, "worker-codex.log", False)
+        self.assertNotIn(self.JWT, json.dumps(out))
+
+    def test_session_summary_peek_is_redacted(self):
+        repo = self._repo()
+        run = repo / ".gluerun-state/runs/RUN-z"
+        run.mkdir()
+        (run / "worker-codex.log").write_text(json.dumps({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": f"key {self.JWT}"}}) + "\n")
+        sessions = srv.discover_sessions(repo)
+        self.assertNotIn(self.JWT, json.dumps(sessions))
+
+
+class RawConfigRedactionTests(unittest.TestCase):
+    """R3: /api/raw/config masks env{} values by key NAME, keeping the keys."""
+
+    def _repo(self, config: dict) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state").mkdir(parents=True)
+        (repo / "gluerun.config.json").write_text(json.dumps(config, indent=2))
+        return repo
+
+    def test_credentials_masked_but_model_knobs_survive(self):
+        # providers/surface.js reads obj.env from this endpoint for the model
+        # knobs, so dropping env{} would break a shipped feature. Only the key
+        # NAME distinguishes a model id from a credential.
+        repo = self._repo({"schemaVersion": "v2", "env": {
+            "ANTHROPIC_API_KEY": "sk-ant-secretvalue000",
+            "OPENCODE_AUTH_CONTENT": "opaqueauthblob123",
+            "GLUERUN_CLAUDE_MODEL": "claude-opus-4-8",
+            "GLUERUN_MAX_CONCURRENT": "3",
+        }})
+        out = srv.collect_raw(repo, "config", "gluerun.config.json")
+        self.assertTrue(out["redacted"])
+        env = json.loads(out["content"])["env"]
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "[redacted:config-env]")
+        self.assertEqual(env["OPENCODE_AUTH_CONTENT"], "[redacted:config-env]")
+        self.assertEqual(env["GLUERUN_CLAUDE_MODEL"], "claude-opus-4-8")
+        self.assertEqual(env["GLUERUN_MAX_CONCURRENT"], "3")
+
+    def test_clean_config_is_not_marked_redacted(self):
+        repo = self._repo({"schemaVersion": "v2",
+                           "env": {"GLUERUN_MAX_CONCURRENT": "3"}})
+        out = srv.collect_raw(repo, "config", "gluerun.config.json")
+        self.assertNotIn("redacted", out)
+        self.assertEqual(json.loads(out["content"])["env"]["GLUERUN_MAX_CONCURRENT"], "3")
+
+
+class SnapshotRedactionTests(unittest.TestCase):
+    """R4: /api/state carries no raw loop stdout and no unredacted events."""
+
+    def test_autonomate_tail_is_gone(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state").mkdir(parents=True)
+        (repo / "docs/orchestration").mkdir(parents=True)
+        snap = srv.collect_snapshot(repo)
+        # 80 raw stdout lines on every 10s poll, with zero consumers.
+        self.assertNotIn("autonomateTail", snap)
+
+    def test_events_are_redacted(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state").mkdir(parents=True)
+        jwt = FAKE_JWT
+        (repo / ".gluerun-state/events.ndjson").write_text(json.dumps({
+            "ts": "2026-07-25T10:00:00Z", "type": "l1.worker_completed",
+            "message": f"worker said {jwt}", "data": {"taskId": "TASK-0001"},
+        }) + "\n")
+        events = srv.parse_events(repo / ".gluerun-state/events.ndjson", 40)
+        self.assertNotIn(jwt, json.dumps(events))
+
+
+class ProviderResolutionTests(unittest.TestCase):
+    """P1: the console resolves providers exactly as the engine does."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        (self.repo / ".gluerun-state").mkdir(parents=True)
+        (self.repo / "bin").mkdir()
+        self.good = self.repo / "bin" / "codex"
+        self.good.write_text("#!/bin/sh\necho codex 1.0\n")
+        self.good.chmod(0o755)
+        self.broken = self.repo / "broken-codex"
+        self.broken.write_text("not executable")
+        self.broken.chmod(0o644)
+        srv._CONFIG_CACHE.invalidate()
+        srv._PROVIDERS_CACHE.invalidate()
+        self.addCleanup(srv._PROVIDERS_CACHE.invalidate)
+        self.addCleanup(srv._CONFIG_CACHE.invalidate)
+
+    def _codex(self, config_env: dict) -> dict:
+        (self.repo / "gluerun.config.json").write_text(
+            json.dumps({"schemaVersion": "v2", "env": config_env}))
+        srv._CONFIG_CACHE.invalidate()
+        out = srv.collect_providers(
+            self.repo,
+            env={"PATH": str(self.repo / "bin"), "HOME": str(self.repo)},
+            home=self.repo)
+        return next(p for p in out["providers"] if p["id"] == "codex")
+
+    def test_resolver_loads_in_process(self):
+        # A module loaded by path is absent from sys.modules, and @dataclass
+        # resolves its own module through sys.modules — so the loader must
+        # register it before exec or the class body raises and the console
+        # silently degrades to the old PATH-only behaviour.
+        self.assertIsNotNone(srv._load_provider_resolver())
+
+    def test_no_override_resolves_from_path(self):
+        codex = self._codex({})
+        self.assertTrue(codex["installed"])
+        self.assertEqual(codex["resolution"]["source"], "path")
+        self.assertTrue(codex["resolution"]["authoritative"])
+
+    def test_config_env_override_is_honoured(self):
+        # os.environ alone is NOT enough: the console never sources lib.sh, so
+        # a pin that lives in gluerun.config.json env{} has to be read from there.
+        codex = self._codex({"GLUERUN_CODEX_BIN": str(self.good)})
+        self.assertEqual(codex["resolution"]["source"], "configured")
+        self.assertEqual(codex["path"], str(self.good))
+
+    def test_broken_override_never_falls_back_to_path(self):
+        # The reported defect: a working codex sits on PATH, but the operator
+        # pinned a broken one. Probing the PATH copy would report health for an
+        # executable the orchestration is not running.
+        codex = self._codex({"GLUERUN_CODEX_BIN": str(self.broken)})
+        self.assertEqual(codex["status"], "misconfigured")
+        self.assertFalse(codex["installed"])
+        self.assertIsNone(codex["path"])
+        self.assertIn(str(self.broken), codex["message"])
+
+    def test_relative_override_is_misconfigured_not_missing(self):
+        codex = self._codex({"GLUERUN_CODEX_BIN": "relative/codex"})
+        self.assertEqual(codex["status"], "misconfigured")
+        self.assertIn("absolute", codex["message"])
+
+    def test_misconfigured_counts_toward_attention(self):
+        (self.repo / "gluerun.config.json").write_text(json.dumps(
+            {"schemaVersion": "v2", "env": {"GLUERUN_CODEX_BIN": str(self.broken)}}))
+        srv._CONFIG_CACHE.invalidate()
+        out = srv.collect_providers(
+            self.repo,
+            env={"PATH": str(self.repo / "bin"), "HOME": str(self.repo)},
+            home=self.repo)
+        self.assertEqual(out["summary"]["misconfigured"], 1)
+        self.assertGreaterEqual(out["summary"]["attention"], 1)
+
+
+class DerivePlannerStateTests(unittest.TestCase):
+    """P2: a rejected planner batch must never report as integrated/green."""
+
+    def _ev(self, etype: str, run_id="RUN-x", **data):
+        return {"type": etype, "data": {"runId": run_id, **data}}
+
+    def test_no_state_is_ever_integrated(self):
+        # The reported symptom. `integrated` is a lease vocabulary word; a
+        # planner accepts or rejects a batch, it never integrates one.
+        for critique in (None, {"schema": "gluerun.orchestration.plan-critique.v0",
+                                "verdict": "approve"}):
+            for events in ([], [self._ev("planner.staged")]):
+                state, *_ = srv.derive_planner_state(
+                    fresh=False, has_batch=True, critique=critique,
+                    node_events=events, run_id="RUN-x")
+                self.assertNotEqual(state, "integrated")
+
+    def test_critique_verdicts(self):
+        def run(verdict):
+            return srv.derive_planner_state(
+                fresh=False, has_batch=True,
+                critique={"schema": "gluerun.orchestration.plan-critique.v0",
+                          "verdict": verdict},
+                node_events=[], run_id="RUN-x")[0]
+        self.assertEqual(run("approve"), "accepted")
+        self.assertEqual(run("revise"), "rejected")
+        self.assertEqual(run("park"), "rejected")
+
+    def test_events_settle_the_serial_path(self):
+        # The serial reconcile path never writes plan-critique.json, so events
+        # are the load-bearing signal for the case that actually shipped.
+        cases = {
+            "origin.l1_import_rejected": "rejected",
+            "plan.revise_parked": "rejected",
+            "origin.l1_planner_failed": "failed",
+            "planner.failed": "failed",
+            "origin.l1_no_tasks": "empty",
+            "planner.staged": "accepted",
+        }
+        for etype, expected in cases.items():
+            state, _v, _r, source = srv.derive_planner_state(
+                fresh=False, has_batch=True, critique=None,
+                node_events=[self._ev(etype)], run_id="RUN-x")
+            self.assertEqual(state, expected, etype)
+            self.assertEqual(source, "events", etype)
+
+    def test_import_rejection_beats_an_approving_critique(self):
+        # A critic-approved batch can still be rejected at import (duplicate
+        # candidate, missing lease, id-rewrite failure). The later, louder
+        # disposition wins.
+        state, verdict, _reason, source = srv.derive_planner_state(
+            fresh=False, has_batch=True,
+            critique={"schema": "gluerun.orchestration.plan-critique.v0",
+                      "verdict": "approve"},
+            node_events=[self._ev("origin.l1_import_rejected", reason="plan-critique")],
+            run_id="RUN-x")
+        self.assertEqual(state, "rejected")
+        self.assertEqual(verdict, "approve")
+        self.assertEqual(source, "events")
+
+    def test_terminal_beats_freshness(self):
+        # Writing the critique bumps the run dir mtime, so a just-rejected
+        # planner is "fresh" for the whole live window and would otherwise
+        # paint as a live session.
+        state, *_ = srv.derive_planner_state(
+            fresh=True, has_batch=True,
+            critique={"schema": "gluerun.orchestration.plan-critique.v0",
+                      "verdict": "revise"},
+            node_events=[], run_id="RUN-x")
+        self.assertEqual(state, "rejected")
+
+    def test_events_for_another_run_are_ignored(self):
+        state, *_ = srv.derive_planner_state(
+            fresh=False, has_batch=True, critique=None,
+            node_events=[self._ev("origin.l1_import_rejected", run_id="RUN-other")],
+            run_id="RUN-x")
+        self.assertEqual(state, "accepted")
+
+    def test_malformed_critique_is_not_trusted(self):
+        for bad in ({"verdict": "approve"},                       # no schema
+                    {"schema": "gluerun.orchestration.plan-critique.v0",
+                     "verdict": "maybe"}):                        # bad verdict
+            state, verdict, _r, source = srv.derive_planner_state(
+                fresh=False, has_batch=True, critique=bad,
+                node_events=[], run_id="RUN-x")
+            self.assertIsNone(verdict)
+            self.assertEqual(source, "artifacts")
+            self.assertEqual(state, "accepted")
+
+    def test_terminal_states_are_all_known_to_the_severity_map(self):
+        for state in srv.PLANNER_TERMINAL_STATES:
+            self.assertIn(state, srv.STATE_SEVERITY, state)
+        self.assertEqual(srv.STATE_SEVERITY["rejected"],
+                         srv.STATE_SEVERITY["failed"])
+
+
+class PlannerSessionStateTests(unittest.TestCase):
+    """P3: the derivation reaches /api/sessions end to end."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        (self.repo / ".gluerun-state/runs").mkdir(parents=True)
+        srv._EVENTS_INDEX_CACHE.invalidate()
+        self.addCleanup(srv._EVENTS_INDEX_CACHE.invalidate)
+
+    def _planner(self, *, verdict=None, events=()):
+        run = self.repo / ".gluerun-state/runs/RUN-p"
+        run.mkdir(exist_ok=True)
+        (run / "planner-codex.log").write_text("planning\n")
+        # Must match _PLANNER_NODE_RE / _PLANNER_AREA_RE: the node is how a
+        # planner session finds its events bucket.
+        (run / "planner-prompt.md").write_text(
+            "Area Planner for area `core`\nExecutable DAG node: `D1.contract`\n")
+        (run / "planner-batch.json").write_text(json.dumps(
+            {"schema": "gluerun.orchestration.task-batch.v0",
+             "tasks": [{"taskId": "TASK-0001", "markdown": "x"}]}))
+        if verdict:
+            (run / "plan-critique.json").write_text(json.dumps({
+                "schema": "gluerun.orchestration.plan-critique.v0",
+                "node": "D1.contract", "runId": "RUN-p", "verdict": verdict}))
+        if events:
+            (self.repo / ".gluerun-state/events.ndjson").write_text(
+                "\n".join(json.dumps(e) for e in events) + "\n")
+        srv._EVENTS_INDEX_CACHE.invalidate()
+        sessions = srv.discover_sessions(self.repo)
+        return next(s for s in sessions if s["id"] == "RUN-p")
+
+    def test_rejected_batch_is_not_live_and_not_green(self):
+        sess = self._planner(verdict="revise")
+        self.assertEqual(sess["state"], "rejected")
+        self.assertFalse(sess["live"])         # disarms paneDotTone's short-circuit
+        self.assertTrue(sess["terminal"])
+        self.assertEqual(sess["criticVerdict"], "revise")
+
+    def test_approved_batch_is_accepted(self):
+        sess = self._planner(verdict="approve")
+        self.assertEqual(sess["state"], "accepted")
+        self.assertFalse(sess["live"])
+
+    def test_import_rejection_event_without_a_critique_file(self):
+        sess = self._planner(events=[{
+            "ts": "2026-07-25T10:00:00Z", "type": "origin.l1_import_rejected",
+            "message": "import rejected",
+            "data": {"runId": "RUN-p", "node": "D1.contract",
+                     "reason": "plan-critique", "observed": "revise"}}])
+        self.assertEqual(sess["state"], "rejected")
+        self.assertEqual(sess["stateSource"], "events")
 
 
 if __name__ == "__main__":

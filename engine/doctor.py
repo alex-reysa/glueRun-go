@@ -24,6 +24,7 @@ import tempfile
 from typing import Any, Iterable
 
 from capability_policy import strict_provider_arg_violation
+from provider_resolver import resolve_provider_bin
 
 
 CHECK_SCHEMA = "gluerun.doctor-report.v1"
@@ -774,18 +775,20 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             )
             return
         command_name = PROVIDERS[self.provider][1]
-        configured = (
-            self.runtime_env.get("GLUERUN_CODEX_BIN", "")
-            if self.provider == "codex"
-            else ""
+        # Shared with engine/lib.sh's gluerun_resolve_codex_bin and the console's
+        # Providers probe. All three must answer identically or the operator gets
+        # a card describing an executable the orchestration is not running;
+        # tests/test-provider-resolver-parity.sh pins bash against this module.
+        resolution = resolve_provider_bin(
+            self.provider, command_name, self.runtime_env
         )
-        if configured:
-            path = Path(configured)
-            if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        if not resolution.ok:
+            if resolution.configured:
                 self.add(
                     "provider.executable",
                     "fail",
-                    f"selected Codex executable could not be resolved: {configured}",
+                    "selected Codex executable could not be resolved: "
+                    f"{resolution.configured}",
                     required_for=("selected-provider",),
                     remediation=(
                         "Set GLUERUN_CODEX_BIN to an absolute executable path. "
@@ -793,12 +796,6 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                     ),
                 )
                 return
-            # Preserve the operator-selected spelling (notably macOS /var vs
-            # /private/var) so diagnostics name the exact configured path.
-            resolved = str(path)
-        else:
-            resolved = shutil.which(command_name, path=self.runtime_env.get("PATH"))
-        if not resolved:
             self.add(
                 "provider.executable",
                 "fail",
@@ -807,7 +804,7 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 remediation=f"Install {command_name} or select a different runner.",
             )
             return
-        self.provider_bin = Path(resolved)
+        self.provider_bin = Path(resolution.path)
         label = "Codex" if self.provider == "codex" else self.provider
         self.add(
             "provider.executable",
@@ -1664,7 +1661,13 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             mappings = {
                 "diskReserveBytes": "GLUERUN_DISK_RESERVE_BYTES",
                 "estimatedWorktreeBytes": "GLUERUN_ESTIMATED_WORKTREE_BYTES",
-                "maxConcurrent": "GLUERUN_MAX_L1_CONCURRENT",
+                # engine/lib.sh maps resources.maxConcurrent to
+                # GLUERUN_MAX_CONCURRENT, and that is what reconcile.sh reads for
+                # its dispatch cap. Mapping it to the L1 planner cap here made
+                # doctor evaluate a different slot count than the loop actually
+                # uses — L1 planners create no worktrees, so they never consume
+                # the worktree budget this check is about.
+                "maxConcurrent": "GLUERUN_MAX_CONCURRENT",
             }
             for source, target in mappings.items():
                 if source in resources and target not in os.environ:

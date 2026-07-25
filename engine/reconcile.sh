@@ -147,6 +147,7 @@ resource_effective_slots=0
 resource_available_slots=0
 resource_reason="not-actuating"
 resource_gc_attempted=0
+dispatch_gate="open"
 
 mapfile -t inbox_packets < <(find "$GLUERUN_STATE_DIR/inbox" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
 
@@ -314,6 +315,28 @@ PY
   gluerun_append_event "origin.resource_plan" "adaptive dispatch capacity calculated" \
     "{\"runId\":\"$run_id\",\"configuredSlots\":$resource_configured_slots,\"effectiveSlots\":$resource_effective_slots,\"availableSlots\":$resource_available_slots,\"activeLeases\":$active_leases,\"gcAttempted\":$resource_gc_attempted,\"reason\":\"$resource_reason\"}"
   echo "actuation: capacity $resource_available_slots available / $resource_effective_slots effective / $resource_configured_slots configured ($resource_reason)"
+
+  # Low-disk degraded mode. Zero effective slots is a real operating state, not
+  # an arithmetic coincidence: before this, dispatch_budget simply became 0 and
+  # the loop did nothing, forever, with no event, no log line and no health
+  # signal — indistinguishable from "idle because there is no work".
+  #
+  # Deliberately NOT shaped like the STOP/breaker downgrades above. Those set
+  # mode="apply", which skips this whole block — including the auto-integration
+  # at the top of it and the GC sweep below, the only two in-loop actions that
+  # RECLAIM disk. Copying that shape would build a mode that can never exit
+  # itself. So this is a dispatch gate: integration, promotion, imports,
+  # recovery and snapshots all keep running; only planning and dispatch stop.
+  dispatch_gate="open"
+  if [[ "$resource_configured_slots" -gt 0 && "$resource_effective_slots" -eq 0 ]]; then
+    dispatch_gate="low-disk"
+    free_gb="$(gluerun_free_disk_gb 2>/dev/null || echo 0)"
+    echo "actuation: LOW DISK — reconciliation-only; planning and dispatch suspended (reason=$resource_reason free=${free_gb}GiB, gcAttempted=$resource_gc_attempted)"
+    echo "actuation: integration, promotion and imports continue — they are what reclaim capacity"
+    gluerun_append_event "origin.degraded_low_disk" \
+      "low disk; planning and dispatch suspended, reconciliation continues" \
+      "{\"runId\":\"$run_id\",\"reason\":\"$resource_reason\",\"configuredSlots\":$resource_configured_slots,\"freeGb\":$free_gb,\"gcAttempted\":$resource_gc_attempted,\"exitCondition\":\"effectiveSlots >= 1\"}"
+  fi
   # This list is used only for queue-size/empty checks. Duplicate suppression is
   # authoritative in gluerun_select_dispatch_frontier below, whose single-pass
   # parser also enforces dependencies, leases, and scope conflicts. Re-running
@@ -340,7 +363,8 @@ PY
   # With L1 parallelism enabled, plan several independent DAG nodes concurrently
   # and import their staged proposals serially (L0 stays the only importer);
   # otherwise fall back to the single-node generator (unchanged).
-  if [[ ${#ready_tasks[@]} -eq 0 && "$dispatch_budget" -gt 0 && "${GLUERUN_GENERATE:-1}" == "1" ]]; then
+  if [[ ${#ready_tasks[@]} -eq 0 && "$dispatch_budget" -gt 0 \
+        && "$dispatch_gate" == "open" && "${GLUERUN_GENERATE:-1}" == "1" ]]; then
     planner_backoff_json="$(gluerun_planner_backoff_active_json 2>/dev/null || true)"
     if [[ -n "$planner_backoff_json" ]]; then
       planner_backoff_active_this_run=1
@@ -380,9 +404,15 @@ PY
     mapfile -t ready_tasks < <(gluerun_list_status_ready_tasks)
   fi
 
-  mapfile -t dispatch_tasks < <(gluerun_select_dispatch_frontier "$dispatch_budget")
-  echo "actuation: ready=${#ready_tasks[@]} frontier=${#dispatch_tasks[@]} active_leases=$active_leases cap=$max_concurrent max_dispatch=$max_dispatch available=$available_slots"
-  if [[ "$available_slots" -eq 0 && ${#ready_tasks[@]} -gt 0 ]]; then
+  if [[ "$dispatch_gate" == "open" ]]; then
+    mapfile -t dispatch_tasks < <(gluerun_select_dispatch_frontier "$dispatch_budget")
+  else
+    dispatch_tasks=()
+  fi
+  echo "actuation: ready=${#ready_tasks[@]} frontier=${#dispatch_tasks[@]} active_leases=$active_leases cap=$max_concurrent max_dispatch=$max_dispatch available=$available_slots gate=$dispatch_gate"
+  if [[ "$dispatch_gate" != "open" && ${#ready_tasks[@]} -gt 0 ]]; then
+    echo "actuation: ${#ready_tasks[@]} ready task(s) held by the $dispatch_gate gate"
+  elif [[ "$available_slots" -eq 0 && ${#ready_tasks[@]} -gt 0 ]]; then
     echo "actuation: max-concurrent cap reached ($max_concurrent); deferring ready tasks"
     gluerun_append_event "origin.actuation_deferred" "max concurrent reached" "{\"runId\":\"$run_id\",\"cap\":$max_concurrent}"
   fi
@@ -708,6 +738,7 @@ if [[ "$mode" == "actuate" ]]; then
   echo "effective_slots=$resource_effective_slots"
   echo "available_slots=$resource_available_slots"
   echo "resource_reason=$resource_reason"
+  echo "dispatch_gate=$dispatch_gate"
   echo "resource_gc_attempted=$resource_gc_attempted"
   echo "resource_plan=.gluerun-state/runs/$run_id/resource-plan.json"
 else

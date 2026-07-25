@@ -379,7 +379,23 @@ assert_arg codex-skill-activated --ephemeral
 pass "strict required skills need argv bound to the exact capability"
 
 # Supported providers receive their native strict-isolation flags.
+# Plant the exact artifacts a hard-killed strict run used to leave behind. The
+# strict MCP config was created with a template ending in ".json", but BSD/macOS
+# mktemp only substitutes TRAILING X's, so it produced a file named literally
+# "gluerun-claude-empty-mcp.XXXXXX.json". That works once — the EXIT trap
+# removes it — but a killed run (stopped suite, OOM, reboot) leaves the literal
+# name behind and every later strict claude run dies with "mkstemp failed: File
+# exists". A leaked temp file turned into a permanent provider outage that no
+# test noticed, because nothing ever ran with one present.
+claude_mcp_leaks=(
+  "${TMPDIR:-/tmp}/gluerun-claude-empty-mcp.XXXXXX.json"
+  "${TMPDIR:-/tmp}/gluerun-claude-mcp.XXXXXX"
+)
+: >"${claude_mcp_leaks[0]}"
+: >"${claude_mcp_leaks[1]}"
+
 run_provider claude planner claude-strict "$tmp/claude-strict.err"
+rm -f "${claude_mcp_leaks[@]}"
 run_provider gemini planner gemini-strict "$tmp/gemini-strict.err"
 run_provider opencode planner opencode-strict "$tmp/opencode-strict.err"
 assert_arg codex-first --ignore-user-config

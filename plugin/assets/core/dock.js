@@ -129,9 +129,14 @@ function renderCells() {
     : busy ? "engine busy"
       : (l0.state === "stopped" ? "loop stopped" : "loop idle"));
 
-  // tasks — active (snapshot state counts) · ready (origin state / loop status).
-  const ready = readyCount(snap, ov);
-  setText("dock-tasks-text", active + " active · " + (ready != null ? ready : "—") + " ready");
+  // tasks — BOTH numbers from one payload block. They used to come from two
+  // sources with two definitions and two vintages, which is how a single task
+  // rendered as "1 active · 1 ready". summary.taskCounts is the projection; the
+  // old readyCount() fallback chain stays only for a pre-0.14.0 server.
+  const tc = (snap.summary && snap.summary.taskCounts) || null;
+  const tasksActive = tc ? (tc.active || 0) : active;
+  const ready = tc ? tc.ready : readyCount(snap, ov);
+  setText("dock-tasks-text", tasksActive + " active · " + (ready != null ? ready : "—") + " ready");
 
   // gates — passed/total; ochre when blocked/failed tasks stall gate progress.
   const g = (snap.orchestration && snap.orchestration.gates) || {};

@@ -7,6 +7,89 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.14.0] — 2026-07-25 — Console reliability, observability and redaction
+
+Remediates the console-side half of the 2026-07-24 field report. (Its engine
+findings — free-text quota scanning, auditor cache writes, model-cache errors —
+were already fixed in 0.13.0; that audit ran against a live 0.11.1 daemon.)
+
+### Security
+
+- The console redacts credential-shaped content from **every** text-emitting
+  endpoint: session logs (raw mode included), `/api/sessions` peeks, prompts,
+  raw records, events, and ask answers. Patterns are shared with
+  `engine/secret-scan.sh` through the new `engine/secret-patterns.tsv`, so the
+  commit gate and the browser cannot drift to two notions of "looks like a
+  secret". The motivating leak was concrete: the gate quotes an offending line
+  into `secret-scan.log`, which is in `PLAIN_LOG_NAMES` and streamed verbatim.
+- `/api/raw/config` masks `gluerun.config.json` `env{}` values whose key names
+  denote credentials, keeping the keys so the Providers model knobs still work.
+- Rules are anchored, never entropy-based: 40-hex git SHAs and 64-hex artifact
+  hashes are legitimate content here and are deliberately left intact.
+- `GLUERUN_CONSOLE_REDACT=0` disables it; `/api/health` reports the state so a
+  disabled control cannot be silently off.
+- `/api/state` no longer ships `autonomateTail` — 80 raw loop-stdout lines on
+  every 10s poll, with no consumer anywhere in `plugin/`.
+
+### Correctness
+
+- Provider resolution is shared with the engine via `engine/provider_resolver.py`
+  (the python twin of `gluerun_resolve_codex_bin`, pinned by
+  `tests/test-provider-resolver-parity.sh`). The console reads
+  `GLUERUN_CODEX_BIN` from config `env{}` as the engine does, and a configured
+  but broken path now reports `misconfigured` instead of silently falling back
+  to a different PATH binary.
+- Planner sessions report `accepted` / `rejected` / `failed` / `empty` from the
+  critique verdict and import events. A batch critique rejected used to report
+  `integrated`, painting the same green as a live session.
+- `GLUERUN_SUPERVISOR_INTERVAL_MIN` is a real setting. Home's "enable
+  auto-briefing" button POSTed a key no whitelist contained, so it always failed.
+- `boolValue` is recomputed when config `env{}` overlays a bool, so the System
+  panel no longer shows the opposite of the truth for `GLUERUN_AUTO_INTEGRATE`,
+  `GLUERUN_PUSH`, `GLUERUN_GENERATE` and `GLUERUN_ENABLE_L1_PARALLEL`.
+- The status dock takes both task counts from one payload block with one
+  revision, instead of composing "active" and "ready" from two sources with two
+  definitions — which is how one task rendered as "1 active · 1 ready".
+- `doctor` maps `resources.maxConcurrent` to `GLUERUN_MAX_CONCURRENT`, the
+  variable reconcile actually reads (it was evaluating the L1 planner cap, which
+  governs no worktrees).
+
+### Operability
+
+- Low disk is now a declared mode: reconcile suspends planning and dispatch,
+  emits `origin.degraded_low_disk`, and says so on stdout. Integration,
+  promotion, imports and snapshots keep running — deliberately *not* shaped like
+  the STOP downgrade, which would skip the very work that reclaims disk.
+- The Plan timeline renders L0 cycles and gates when no task has been imported
+  yet. Two independent causes: it bailed on an empty task list, and the cycle
+  strip was painted underneath the opaque sticky axis, so it had never been
+  visible at all.
+- The Consoles left feed is labelled "Origin events" — it is the origin event
+  stream, not a supervisor session.
+
+### Behavior changes worth knowing
+
+- A stale `GLUERUN_CODEX_BIN` now surfaces as a red `misconfigured` provider
+  card rather than a green-ish one describing the wrong executable.
+- Log output in the browser shows `[redacted:<kind>]` tokens where credentials
+  used to appear.
+- `split-task` remains a semantic park: it marks the task blocked and generates
+  nothing. The follow-up task observed in the field was the ordinary planner
+  re-planning on the next cycle. Task-complexity scoring is deferred.
+
+### Also fixed
+
+- `claude-run.sh` created its strict-profile MCP config with a `mktemp` template
+  ending in `.json`. BSD/macOS `mktemp` substitutes only *trailing* X's, so it
+  produced a file named literally `gluerun-claude-empty-mcp.XXXXXX.json`. That
+  works once — the EXIT trap removes it — but any hard kill leaves the literal
+  name behind and every later strict Claude run dies with `mkstemp failed: File
+  exists`. A leaked temp file became a permanent, silent provider outage. Now a
+  `mktemp -d` with trailing X's, and `test-capability-runtime.sh` plants the
+  leaked artifacts so the path is exercised with one present.
+
+Suites: bash 178, python 242.
+
 ## [0.13.0] — 2026-07-24 — Operational resilience and governance
 
 - Adaptive worktree scheduling now accounts for free space, reserve, and

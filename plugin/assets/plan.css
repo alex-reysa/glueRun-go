@@ -536,8 +536,16 @@
 .tl-break-axis .tl-break-lbl { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(90deg); font: 400 8.5px var(--font-mono); color: var(--text-faint); white-space: nowrap; }
 .tl-break-axis .tl-break-lbl.horiz { transform: translate(-50%, -50%); }
 .tl-now { position: absolute; top: 0; width: 0; border-left: 1.5px dashed var(--ink); z-index: 3; }
-.tl-cycle-strip { position: absolute; top: 0; left: 0; height: 4px; }
-.tl-cycle { position: absolute; top: 0; height: 4px; background: var(--n-100); }
+.tl-emptynote {
+  position: absolute; left: 8px; top: 8px; white-space: nowrap;
+  font: 500 11px var(--font-sans); color: var(--text-faint);
+  background: var(--surface-panel); padding: 0 6px; border-radius: 3px;
+}
+/* Rides the bottom edge of the sticky axis band (see buildAxisLabels): at
+   top:0 inside .tl-bg it was painted under the opaque z-index-7 axis strip and
+   never visible at all. */
+.tl-cycle-strip { position: absolute; bottom: 0; left: 0; height: 4px; }
+.tl-cycle { position: absolute; bottom: 0; height: 4px; background: var(--n-100); }
 .tl-detail { right: 26px; bottom: 22px; }
 
 /* responsive — collapse the aside first, then the lens nav */

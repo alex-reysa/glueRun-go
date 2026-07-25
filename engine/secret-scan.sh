@@ -17,14 +17,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-gluerun_secret_scan_patterns() {
-  printf '%s\t%s\n' "Supabase token (sbp_)" 'sbp_[A-Za-z0-9]{20,}'
-  printf '%s\t%s\n' "AWS access key id" 'AKIA[0-9A-Z]{16}'
-  printf '%s\t%s\n' "private key block" '-----BEGIN [A-Z ]*PRIVATE KEY-----'
-  printf '%s\t%s\n' "JWT / bearer token" 'eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}'
-  printf '%s\t%s\n' "GitHub token" 'gh[pousr]_[A-Za-z0-9]{20,}'
-  printf '%s\t%s\n' "OpenAI key" 'sk-[A-Za-z0-9]{20,}'
-}
+# The pattern set now lives in engine/secret-patterns.tsv and is exposed by
+# gluerun_secret_scan_patterns() in lib.sh (sourced above), so the console's
+# python redactor can read the same definition.
 
 worktree="$GLUERUN_ROOT"
 mode="working"

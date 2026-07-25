@@ -153,6 +153,12 @@ gluerun_bash_bin() {
 # Resolve the exact Codex executable used by the runner and doctor. An explicit
 # value is intentionally strict: it must be an absolute executable path and is
 # never replaced by another PATH candidate when broken.
+#
+# This is the authoritative implementation — codex-run.sh resolves once per
+# provider invocation, so it must not pay for a python start. engine/
+# provider_resolver.py is the twin that doctor and the console read, and
+# tests/test-provider-resolver-parity.sh asserts the two agree on path, exit
+# code AND message text. Editing either side is a two-sided edit.
 gluerun_resolve_codex_bin() {
   local configured="${GLUERUN_CODEX_BIN:-}" resolved=""
   if [[ -n "$configured" ]]; then
@@ -198,6 +204,7 @@ GLUERUN_DECIDER_SCHEMA="${GLUERUN_DECIDER_SCHEMA:-$GLUERUN_SCHEMA_DIR/decider-ve
 GLUERUN_GATE_SCHEMA="${GLUERUN_GATE_SCHEMA:-$GLUERUN_SCHEMA_DIR/gate-result.v0.schema.json}"
 GLUERUN_TASKBATCH_SCHEMA="${GLUERUN_TASKBATCH_SCHEMA:-$GLUERUN_SCHEMA_DIR/task-batch.v0.schema.json}"
 GLUERUN_SUPERVISOR_SCHEMA="${GLUERUN_SUPERVISOR_SCHEMA:-$GLUERUN_SCHEMA_DIR/supervisor-report.v0.schema.json}"
+GLUERUN_SECRET_PATTERNS_FILE="${GLUERUN_SECRET_PATTERNS_FILE:-$GLUERUN_ENGINE_DIR/secret-patterns.tsv}"
 # Post-worker + integrate validation. No universal default — a repo MUST set its
 # gate command (per task `Gate command:` or via config). Empty = no implicit gate.
 GLUERUN_DEFAULT_GATE_CMD="${GLUERUN_DEFAULT_GATE_CMD:-}"
@@ -4733,6 +4740,37 @@ gluerun_sha256_file() {
 
 gluerun_sha256_text() {
   python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "$1"
+}
+
+# Emit the shared credential patterns as `<label>\t<ERE>` lines, the contract
+# every consumer already reads with `IFS=$'\t' read -r label regex`.
+#
+# The definition lives in engine/secret-patterns.tsv so the console's python
+# redactor can consume the same list; it previously lived as a function body
+# inside secret-scan.sh (a self-executing script lib.sh does not source), which
+# forced l1-drive.sh to sed it out and eval it. Defining it here means every
+# consumer that sources lib.sh gets it directly.
+#
+# Emits nothing and fails when the file is missing: callers treat an empty
+# pattern set as an internal error rather than silently scanning for nothing.
+gluerun_secret_scan_patterns() {
+  local file="${GLUERUN_SECRET_PATTERNS_FILE:-$GLUERUN_ENGINE_DIR/secret-patterns.tsv}"
+  [[ -f "$file" ]] || {
+    echo "secret patterns file not found: $file" >&2
+    return 2
+  }
+  local emitted=0 label regex
+  while IFS="$(printf '\t')" read -r label regex; do
+    [[ -z "$label" || "${label:0:1}" == "#" ]] && continue
+    [[ -n "$regex" ]] || continue
+    printf '%s\t%s\n' "$label" "$regex"
+    emitted=$((emitted + 1))
+  done <"$file"
+  [[ "$emitted" -gt 0 ]] || {
+    echo "secret patterns file defines no patterns: $file" >&2
+    return 2
+  }
+  return 0
 }
 
 gluerun_tracked_source_snapshot() {

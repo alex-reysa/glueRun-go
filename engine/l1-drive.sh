@@ -1909,14 +1909,10 @@ gluerun_append_event "l1.task_accepted" "l1 task accepted" \
 # the drive. The quarantine/exclude result NEVER feeds back into the accept
 # decision or the exit status.
 if [[ -n "${GLUERUN_CTX_ARTIFACT_SCAN:-}" && "${GLUERUN_CTX_ARTIFACT_SCAN}" != "0" ]]; then
-  # The shared secret patterns (gluerun_secret_scan_patterns) live in
-  # secret-scan.sh — a self-executing script that lib.sh does NOT source — so the
-  # containment bricks would otherwise find the patterns helper unavailable. Load
-  # ONLY its function definition (single source of truth), scoped to this ON
-  # branch so the OFF path stays byte-identical and pays no cost.
-  if [[ "$(type -t gluerun_secret_scan_patterns)" != "function" ]]; then
-    eval "$(sed -n '/^gluerun_secret_scan_patterns()/,/^}/p' "$SCRIPT_DIR/secret-scan.sh")" 2>/dev/null || true
-  fi
+  # gluerun_secret_scan_patterns now lives in lib.sh (reading
+  # engine/secret-patterns.tsv), so it is already defined here. It used to live
+  # inside secret-scan.sh — a self-executing script lib.sh does not source —
+  # which forced this branch to sed the function body out and eval it.
   if ! gluerun_ctx_artifact_quarantine "$run_dir" >/dev/null 2>&1; then
     gluerun_append_event "l1.artifact_scan_failed" "artifact secret-scan quarantine failed (non-fatal)" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}" || true

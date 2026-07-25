@@ -65,7 +65,21 @@ def parse_time(value: str) -> dt.datetime:
 
 
 def utc_now(value: str | None = None) -> dt.datetime:
-    return parse_time(value) if value else dt.datetime.now(dt.UTC)
+    """Current time, with an explicit argument winning over an injected clock.
+
+    GLUERUN_NOW exists because expiry evaluation reaches this module through two
+    doors: the human-gate CLI, which takes --now, and dag.sh's frontier
+    evaluation, which does not. Without an injectable clock a test fixture with
+    a fixed expiresAt is a time bomb — it passes until the wall clock rolls past
+    the expiry and then fails forever, with nothing in the diff to explain why.
+    Mirrors GLUERUN_CONTROL_COMMIT_NOW_EPOCH in reconcile.sh.
+    """
+    if value:
+        return parse_time(value)
+    injected = os.environ.get("GLUERUN_NOW")
+    if injected:
+        return parse_time(injected)
+    return dt.datetime.now(dt.UTC)
 
 
 def iso(value: dt.datetime) -> str:

@@ -17,17 +17,26 @@ import { apiFetch, isHistorical } from "./core/api.js";
   const $ = (id) => document.getElementById(id);
 
   // ---- pure state engine (tone + label) ----
+  // `rejected`/`accepted`/`empty` are planner-batch dispositions (see
+  // PLANNER_TERMINAL_STATES server-side). A rejected batch used to arrive as
+  // "integrated" and painted the same forest green as a healthy live session,
+  // which is how a whole run of discarded plans read as progress.
   const STATE_TONE = {
-    idle: "idle", stopped: "idle", draft: "idle",
+    idle: "idle", stopped: "idle", draft: "idle", empty: "idle",
     active: "active", awaiting: "awaiting", stale: "warn",
-    blocked: "error", failed: "error", integrated: "success",
+    blocked: "error", failed: "error", rejected: "error",
+    integrated: "success", accepted: "success",
   };
   const STATE_LABEL = {
     idle: "idle", stopped: "stopped", draft: "draft", active: "active",
     awaiting: "awaiting release", stale: "stale", blocked: "blocked",
     failed: "failed", integrated: "integrated",
+    accepted: "batch accepted", rejected: "batch rejected", empty: "no tasks",
   };
-  const STATE_ORDER = { blocked: 0, failed: 1, active: 2, awaiting: 3, stale: 4, idle: 5, integrated: 6 };
+  const STATE_ORDER = {
+    blocked: 0, failed: 1, rejected: 1, active: 2, awaiting: 3,
+    stale: 4, idle: 5, empty: 5, integrated: 6, accepted: 6,
+  };
   const toneOf = (state) => STATE_TONE[state] || "idle";
   const labelOf = (state) => STATE_LABEL[state] || state || "unknown";
 

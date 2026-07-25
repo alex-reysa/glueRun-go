@@ -68,6 +68,191 @@ def _load_human_gate_validator():
 VALIDATE_HUMAN_GATE = _load_human_gate_validator()
 
 
+# --------------------------------------------------------------------------- #
+# Credential redaction                                                         #
+# --------------------------------------------------------------------------- #
+# Everything this server hands a browser passes through here. The console binds
+# 127.0.0.1 but renders inside a browser process — reachable by other origins'
+# JS, extensions, and the browser's own cache and history. "The operator could
+# cat the file" is true and beside the point; cat does not put bytes in Chrome.
+#
+# The motivating leak is not hypothetical and not subtle: engine/secret-scan.sh
+# quotes the offending line into secret-scan.log when it blocks a commit, and
+# secret-scan.log is in PLAIN_LOG_NAMES. The gate that stops a credential
+# reaching git writes it into a file the console streams. This repo's own
+# .gluerun-state carries JWT-shaped strings in exactly that file today.
+
+def _engine_file(relative: str) -> Path | None:
+    """Locate an engine-owned file the same way the human-gate validator does."""
+    candidates = []
+    configured = os.environ.get("GLUERUN_ENGINE_HOME")
+    if configured:
+        candidates.append(Path(configured) / "engine" / relative)
+    candidates.append(Path(__file__).resolve().parents[2] / "engine" / relative)
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+# Console-only rules. Deliberately NOT in engine/secret-patterns.tsv: that file
+# gates commits, where a false positive is a refused commit and an operator
+# hunting a phantom. These two are anchored on a key NAME rather than on value
+# entropy, which is what keeps them safe enough to display-redact but too fuzzy
+# to block a commit with.
+# Convention for these rules: the LAST capture group is the credential and is
+# replaced; every earlier group is kept verbatim. That keeps the header/key name
+# on screen, which is the whole diagnostic value of redacting rather than
+# dropping ("an Authorization header was here" beats a blank line).
+_DISPLAY_PATTERNS: tuple[tuple[str, str], ...] = (
+    # The `(?!\[redacted:)` guard on each value group keeps an already-masked
+    # token from being masked again under a different kind — which happens for
+    # real when the config env pass runs before the generic one.
+    ("authorization",
+     r"(?i)\b((?:proxy-)?authorization)(\s*[:=]\s*)"
+     r"(?:(?:bearer|basic|token|digest)\s+)?(?!\[redacted:)(\S+)"),
+    # KEY=VALUE / "key": "value" where the KEY NAME looks secret-ish.
+    ("key",
+     r"(?i)(?<![\w-])([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY"
+     r"|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL|AUTH_CONTENT|SESSION_ID|SESSIONID)"
+     r"[A-Z0-9_]*)([\"']?\s*[:=]\s*[\"']?)(?!\[redacted:)([^\s\"',}]{6,})"),
+)
+
+# Literal fragments that must appear before any rule is worth running. This is
+# the performance contract: >99.9% of 256 KiB log windows contain no credential,
+# and a single literal alternation over one is ~1ms versus ~10-25ms for the full
+# rule set. Bare "auth" or "token" would be catastrophic here — this codebase's
+# logs are dense with "authoritative", "auth-status", "input_tokens" — so the
+# key-name fragments are uppercase-anchored to match env-var shape, not prose.
+_PREFILTER_LITERALS = (
+    "eyJ", "sk-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "sbp_", "AKIA",
+    "-----BEGIN", "authorization", "Authorization", "AUTHORIZATION",
+    "_TOKEN", "_SECRET", "_KEY", "_PASSWORD", "PASSWD", "CREDENTIAL",
+    "AUTH_CONTENT", "SESSION_ID", "SESSIONID", "APIKEY",
+)
+
+
+def _slugify_pattern_label(label: str) -> str:
+    """"JWT / bearer token" -> "jwt-bearer-token" for the [redacted:<slug>] token."""
+    slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+    return slug or "secret"
+
+
+def _load_secret_rules() -> tuple[tuple[re.Pattern, str, int], ...]:
+    """(compiled, replacement, group) rules: engine gate patterns + display rules.
+
+    The gate patterns come from engine/secret-patterns.tsv so the console and
+    engine/secret-scan.sh cannot drift to two notions of "looks like a secret".
+    Fails OPEN on the file (missing or unreadable -> display rules still apply)
+    but never fails open on redaction itself: a missing data file must not cause
+    the console to serve MORE than it otherwise would.
+    """
+    rules: list[tuple[re.Pattern, str, int]] = []
+    path = _engine_file("secret-patterns.tsv")
+    if path is not None:
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.rstrip("\n")
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                label, _, regex = line.partition("\t")
+                if not regex.strip():
+                    continue
+                try:
+                    rules.append((re.compile(regex),
+                                  f"[redacted:{_slugify_pattern_label(label)}]", 0))
+                except re.error as exc:
+                    print(f"gluerun console: skipping unusable secret pattern "
+                          f"{label!r}: {exc}", file=sys.stderr)
+        except OSError as exc:
+            print(f"gluerun console: secret pattern file unreadable ({exc}); "
+                  "display rules still apply", file=sys.stderr)
+    for kind, regex in _DISPLAY_PATTERNS:
+        compiled = re.compile(regex)
+        rules.append((compiled, f"[redacted:{kind}]", compiled.groups))
+    return tuple(rules)
+
+
+REDACT_ENABLED = os.environ.get("GLUERUN_CONSOLE_REDACT", "1") not in ("0", "false", "no")
+_SECRET_RULES = _load_secret_rules()
+_SECRET_PREFILTER = re.compile("|".join(re.escape(s) for s in _PREFILTER_LITERALS))
+
+
+def redact_secrets(text):
+    """Replace credential-shaped substrings with stable [redacted:<kind>] tokens.
+
+    Returns the IDENTICAL object when nothing matches — asserted by tests, so a
+    future unconditional re.sub chain fails rather than quietly tripling the cost
+    of every log poll.
+
+    Deliberately anchored rules only. No bare-entropy rule: a 40-hex git SHA, a
+    64-hex sha256 artifact hash (engine/human_gate.py pins exactly that shape),
+    and base64 diff excerpts are all legitimate content this console exists to
+    display, and every one of them would match a naive high-entropy rule.
+    """
+    if not text:
+        return text if isinstance(text, str) else ""
+    if not REDACT_ENABLED or not _SECRET_PREFILTER.search(text):
+        return text
+    for compiled, replacement, group in _SECRET_RULES:
+        if group:
+            # Keep every group but the last (header/key name and separator),
+            # replace the last one (the credential itself).
+            text = compiled.sub(
+                lambda m, _r=replacement, _g=group: (
+                    "".join(m.group(i) or "" for i in range(1, _g)) + _r),
+                text)
+        else:
+            text = compiled.sub(replacement, text)
+    return text
+
+
+def redact_json_strings(value, _depth: int = 0):
+    """Redact every string leaf of a decoded-JSON structure.
+
+    For payloads whose shape is not fixed — event `data` objects composed by
+    runners, for instance. Depth-capped so a pathological record cannot make the
+    console recurse; realistic event payloads are two or three levels deep.
+    """
+    if not REDACT_ENABLED or _depth > 6:
+        return value
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {k: redact_json_strings(v, _depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_json_strings(v, _depth + 1) for v in value]
+    return value
+
+
+def redact_fields(record: dict, *keys: str) -> dict:
+    """Redact the named string fields of a record in place."""
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, str) and value:
+            record[key] = redact_secrets(value)
+    return record
+
+
+# Row kinds produced by parse_log_lines/classify_codex_record, mapped to the
+# fields that carry free text. The default covers any future kind by construction
+# so a new record type cannot silently open a hole.
+_REDACT_ROW_FIELDS = {
+    "command": ("command", "output", "text"),
+}
+
+
+def redact_lines(records: list) -> list:
+    """Redact every text-bearing field of parsed/raw log rows, in place."""
+    if not REDACT_ENABLED:
+        return records
+    for record in records:
+        if isinstance(record, dict):
+            redact_fields(record, *_REDACT_ROW_FIELDS.get(record.get("kind"),
+                                                          ("text",)))
+    return records
+
+
 def load_repo_target_branch(repo) -> str:
     """Read targetBranch from the target repo's gluerun.config.json so the console is
     not bound to any one project's integration branch. Falls back to the default."""
@@ -326,7 +511,11 @@ def parse_events(path: Path, limit: int = 40, drop_noise: bool = True) -> list[d
         if drop_noise and isinstance(event, dict) and event.get("type") in NOISE_EVENT_TYPES:
             continue
         events.append(event)
-    return events[-limit:]
+    events = events[-limit:]
+    # Event payloads are composed by runners and carry arbitrary free text
+    # (messages, failure reasons, command excerpts), so redact string leaves
+    # before any of this reaches a browser. Bounded: at most `limit` events.
+    return [redact_json_strings(event) for event in events]
 
 
 # --------------------------------------------------------------------------- #
@@ -766,7 +955,49 @@ def derive_l0_state(stop_present: bool, processes: list[dict[str, Any]], active_
     return "idle"
 
 
-STATE_SEVERITY = {"failed": 0, "blocked": 1, "active": 2, "awaiting": 3, "stale": 4, "idle": 5, "integrated": 6}
+STATE_SEVERITY = {"failed": 0, "blocked": 1, "active": 2, "awaiting": 3, "stale": 4, "idle": 5, "integrated": 6,
+                  # Planner-session terminals (see PLANNER_TERMINAL_STATES). Slotted
+                  # alongside the existing six rather than renumbering them, so the
+                  # `.get(state, 9)` default keeps its meaning.
+                  "rejected": 0, "empty": 5, "accepted": 6}
+
+
+def _task_projection(origin_state: Any, state_totals: dict) -> dict[str, Any]:
+    """The dock's counts, from ONE source with ONE revision.
+
+    The audit caught the dock rendering "1 active · 1 ready" for a single task.
+    Cause: `active` came from the console's own derive_task_state pass over the
+    task files, while `ready` came from origin-state.json's readyTasks — two
+    definitions, two vintages, and nothing forbidding a task from landing in
+    both. A task file keeps `Status: ready` while it runs, so a dispatched task
+    is genuinely both "leased and running" and "ready" by header.
+
+    The engine already computes the authoritative answer under the origin lock
+    every cycle (gluerun_write_origin_state), so project from it rather than
+    inventing a third derivation, and carry a `revision` so a client can tell
+    two payloads apart instead of silently blending them.
+    """
+    out: dict[str, Any] = {
+        "active": int(state_totals.get("active", 0) or 0),
+        "ready": None,
+        "source": "console",
+        "revision": None,
+    }
+    if isinstance(origin_state, dict):
+        ready = origin_state.get("readyTasks")
+        if isinstance(ready, list):
+            out["ready"] = len(ready)
+        elif isinstance(ready, int):
+            out["ready"] = ready
+        if out["ready"] is not None:
+            out["source"] = "origin-state"
+        # Content-derived, not a counter: two endpoints reading the same
+        # on-disk state must agree even when computed seconds apart.
+        stamp = origin_state.get("generatedAt")
+        head = origin_state.get("headSha")
+        if stamp or head:
+            out["revision"] = f"{stamp or '-'}:{str(head or '-')[:12]}"
+    return out
 
 
 def classify_health(snapshot: dict[str, Any]) -> str:
@@ -1481,7 +1712,11 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
     if isinstance(origin_state, dict):
         for key in (
             "schema", "runId", "generatedAt", "branch", "headSha", "targetBranch",
-            "packets", "activeLeases", "extraWorktrees", "readyTasks",
+            # taskCounts was missing from this passthrough, which is why the dock
+            # took "ready" from the engine's projection but "active" from the
+            # console's own re-derivation — two vintages of two different
+            # definitions, and one task rendered as "1 active · 1 ready".
+            "packets", "activeLeases", "extraWorktrees", "readyTasks", "taskCounts",
         ):
             if key in origin_state:
                 origin_state_compact[key] = origin_state[key]
@@ -1528,7 +1763,10 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
             "originState": origin_state_compact,
         },
         "events": parse_events(state_path(repo, EVENTS_LOG_REL), 40),
-        "autonomateTail": tail_lines(state_path(repo, resolve_autonomate_log(repo)), 80),
+        # autonomateTail is gone: it shipped 80 raw loop-stdout lines on every
+        # 10s /api/state poll with zero consumers anywhere in plugin/assets or
+        # plugin/adapters (verified by grep). The same log is streamable on
+        # demand — and redacted — via /api/session/origin.
         "disk": collect_disk(repo),
         "resources": collect_resource_plan_native(repo),
         "l1Areas": l1_areas,
@@ -1542,6 +1780,10 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
             "packetsInbox": origin_state.get("packets", {}).get("inbox") if isinstance(origin_state, dict) else None,
             "packetsImported": origin_state.get("packets", {}).get("imported") if isinstance(origin_state, dict) else None,
             "stateCounts": state_totals,
+            # One block carrying BOTH numbers the dock renders, so it never
+            # composes "active" from here with "ready" from somewhere else. See
+            # _task_projection for why that composition was the bug.
+            "taskCounts": _task_projection(origin_state, state_totals),
             "activeAgents": len(agents["l2"]),
             "l1PlannersActive": sum(1 for area in l1_areas if area.get("l1Active")),
             "frontierCount": len(next_areas_parsed.get("frontier", [])),
@@ -1994,7 +2236,8 @@ def _worker_phase(names: set[str], pkt_status: str | None) -> str:
     return "working"
 
 
-def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float) -> dict[str, Any] | None:
+def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float,
+                      events_by_node: dict | None = None) -> dict[str, Any] | None:
     now = time.time()
     fresh = (now - mtime) < SESSION_LIVE_WINDOW
     integ = INTEGRATE_RE.search(name)
@@ -2022,7 +2265,10 @@ def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float) -> dict[s
     if "worker-codex.log" in names:
         session = _worker_session(repo, path, name, mtime, fresh, names)
     elif "planner-codex.log" in names:
-        session = _planner_session(repo, path, name, mtime, fresh, names)
+        # The planner's node is only known after the prompt is parsed, so hand
+        # over the whole by-node map and let the session pick its own bucket.
+        session = _planner_session(repo, path, name, mtime, fresh, names,
+                                   node_events=events_by_node)
     elif "gate-check.log" in names or "audit.json" in names or "auditor-codex.log" in names:
         session = _gate_session(path, name, mtime, fresh, names)
     # 0.10.0 supervisor/ask run dirs (ASK-* / SUP-*): operator-initiated readonly
@@ -2150,20 +2396,116 @@ def _worker_session(repo: Path, path: Path, name: str, mtime: float, fresh: bool
     return sess
 
 
-def _planner_session(repo: Path, path: Path, name: str, mtime: float, fresh: bool, names: set[str]) -> dict[str, Any]:
+# Terminal dispositions for a PLANNER session. Deliberately separate from the
+# lease/task vocabularies above: a planner never "integrates" anything — its
+# batch is accepted or rejected. In particular `accepted` here is a batch
+# disposition and must NOT be folded into DONE_STATUSES, where the same token
+# already means "worker done, L1 reviewing" (see AWAITING_STATUSES).
+PLANNER_TERMINAL_STATES = frozenset({"accepted", "rejected", "failed", "empty"})
+
+# Event types that settle a planner run, newest-first precedence.
+_PLANNER_REJECTED_EVENTS = ("origin.l1_import_rejected", "plan.revise_parked")
+_PLANNER_FAILED_EVENTS = ("origin.l1_planner_failed", "planner.failed")
+_PLANNER_EMPTY_EVENTS = ("origin.l1_no_tasks", "planner.no_tasks")
+_PLANNER_ACCEPTED_EVENTS = ("planner.staged", "planner.generated")
+
+
+def derive_planner_state(*, fresh: bool, has_batch: bool, critique: Any,
+                         node_events: list, run_id: str) -> tuple:
+    """-> (state, criticVerdict, stateReason, stateSource). Pure: no I/O, no clock.
+
+    A planner that emitted a batch used to report `integrated` purely because
+    planner-batch.json existed — so a batch the critic REJECTED painted the same
+    forest green as a healthy live session.
+
+    Two signal sources, and which one leads depends on the path taken:
+      * plan-critique.json sits beside planner-batch.json, but ONLY on the
+        fanout path (engine/l1-plan-node.sh sets GLUERUN_PLANNING_ARTIFACT_DIR).
+        The serial reconcile path never writes one.
+      * events carry the disposition on both paths, so they are load-bearing.
+
+    Rejection wins any disagreement: the critique records the CRITIC's verdict,
+    while origin.l1_import_rejected records L0's disposition, which is strictly
+    later and can reject an approved batch (duplicate candidate, missing lease,
+    id-rewrite failure). The louder, later truth is the operational one.
+    """
+    verdict = None
+    if isinstance(critique, dict) and str(critique.get("schema", "")).endswith(
+            "plan-critique.v0"):
+        raw = critique.get("verdict")
+        if raw in ("approve", "revise", "park"):
+            rid = critique.get("runId")
+            if not rid or rid == run_id:
+                verdict = raw
+
+    ev_state = ev_reason = None
+    for ev in reversed(node_events or []):
+        if not isinstance(ev, dict):
+            continue
+        data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+        if data.get("runId") not in (None, run_id):
+            continue
+        etype = str(ev.get("type") or "")
+        if etype in _PLANNER_REJECTED_EVENTS:
+            ev_state, ev_reason = "rejected", (data.get("reason") or etype)
+            break
+        if etype in _PLANNER_FAILED_EVENTS:
+            ev_state, ev_reason = "failed", etype
+            break
+        if etype in _PLANNER_EMPTY_EVENTS:
+            ev_state, ev_reason = "empty", etype
+            break
+        if etype == "plan.critiqued":
+            v = data.get("verdict")
+            ev_state = "accepted" if v == "approve" else "rejected"
+            ev_reason = f"critique-{v}"
+            break
+        if etype in _PLANNER_ACCEPTED_EVENTS:
+            ev_state, ev_reason = "accepted", etype
+            break
+
+    # Rejection from either source wins.
+    if ev_state == "rejected":
+        return "rejected", verdict, ev_reason, "events"
+    if verdict in ("revise", "park"):
+        return "rejected", verdict, f"critique-{verdict}", "critique"
+    if verdict == "approve" and ev_state not in ("failed", "empty"):
+        return "accepted", verdict, "critique-approve", "critique"
+    if ev_state:
+        return ev_state, verdict, ev_reason, "events"
+    # A terminal signal outranks freshness: writing the critique bumps the run
+    # dir's mtime, so a just-rejected planner would otherwise read as live.
+    if fresh:
+        return "active", verdict, "live", "mtime"
+    if has_batch:
+        return "accepted", verdict, "batch-present", "artifacts"
+    return "idle", verdict, None, "artifacts"
+
+
+def _planner_session(repo: Path, path: Path, name: str, mtime: float, fresh: bool,
+                     names: set[str], node_events: dict | None = None) -> dict[str, Any]:
     info = _parse_planner_prompt(_read_head(path / "planner-prompt.md", 4096)) if "planner-prompt.md" in names else {}
     batch = read_json(path / "planner-batch.json", None) if "planner-batch.json" in names else None
     n_tasks = len(batch.get("tasks", [])) if isinstance(batch, dict) else None
-    state = "active" if fresh else ("integrated" if n_tasks is not None else "idle")
+    critique = read_json(path / "plan-critique.json", None) if "plan-critique.json" in names else None
+    events = (node_events or {}).get(info.get("node")) or []
+    state, verdict, reason, source = derive_planner_state(
+        fresh=fresh, has_batch=n_tasks is not None, critique=critique,
+        node_events=events, run_id=name)
     sess = {
         "id": name, "kind": "planner", "layer": "L1", "role": "planner",
         "node": info.get("node"), "area": info.get("area"),
         "stage": info.get("stage"), "planLayer": info.get("layer"),
         "runId": name, "taskCount": n_tasks,
         "state": state, "phase": ("emitted" if n_tasks is not None else "planning"),
+        "criticVerdict": verdict, "stateReason": reason, "stateSource": source,
+        "terminal": state in PLANNER_TERMINAL_STATES,
         "startedAt": None, "updatedAt": _iso_from_mtime(mtime),
         "logFiles": _session_log_files(path),
-        "live": fresh, "_mtime": mtime, "_dir": str(path),
+        # Derived, not raw mtime freshness. This is what disarms the frontend's
+        # `if (s.live) return "success"` short-circuit at the source, so a
+        # settled planner can never paint as a live one.
+        "live": state == "active", "_mtime": mtime, "_dir": str(path),
     }
     # Planner session-meta is durable under sessions/planner/<node>.json,
     # keyed by node with the runId it belongs to.
@@ -2282,6 +2624,12 @@ def _mark_active_planners(repo: Path, sessions: list[dict[str, Any]]) -> None:
             continue
         lease = by_node.get(sess.get("node"))
         if lease and lease.get("active"):
+            # A NEWER run holding the node's lease must not resurrect an older
+            # run whose batch was already accepted or rejected — otherwise a
+            # re-plan repaints last round's rejection as live activity.
+            lease_run = lease.get("runId")
+            if sess.get("terminal") and lease_run not in (None, sess.get("runId")):
+                continue
             sess["state"] = "active"
             sess["live"] = True
             sess["leaseStatus"] = lease.get("status")
@@ -2301,8 +2649,10 @@ def _attach_summary(repo: Path, sess: dict[str, Any]) -> None:
             last_msg = rec.get("text")
         elif rec["kind"] == "command":
             last_cmd = rec.get("command")
-    sess["lastMessage"] = last_msg[:240] if last_msg else None
-    sess["lastCommand"] = last_cmd[:240] if last_cmd else None
+    # Redact after the 240-char slice: ≤480 chars per session row, so the cost
+    # is negligible even across a full /api/sessions page.
+    sess["lastMessage"] = redact_secrets(last_msg[:240]) if last_msg else None
+    sess["lastCommand"] = redact_secrets(last_cmd[:240]) if last_cmd else None
 
 
 def discover_sessions(repo: Path) -> list[dict[str, Any]]:
@@ -2326,8 +2676,16 @@ def discover_sessions(repo: Path) -> list[dict[str, Any]]:
         # Stat each entry once (DirEntry.stat is cached) and reuse the value for both
         # the recency sort and classification — no second round of stat() syscalls.
         pairs = sorted(((e, _entry_mtime(e)) for e in entries), key=lambda p: p[1], reverse=True)
+        # Read the shared events index ONCE (3s TTL, 4 MiB window) rather than
+        # per run dir: planner sessions need it to tell an accepted batch from a
+        # rejected one, and the serial planner path leaves no critique file.
+        try:
+            events_by_node = load_events_index(repo).get("by_node") or {}
+        except Exception:
+            events_by_node = {}
         for entry, mtime in pairs[:SESSION_SCAN_LIMIT]:
-            sess = _classify_run_dir(repo, Path(entry.path), entry.name, mtime)
+            sess = _classify_run_dir(repo, Path(entry.path), entry.name, mtime,
+                                     events_by_node=events_by_node)
             if sess:
                 sessions.append(sess)
     _mark_active_planners(repo, sessions)
@@ -2538,6 +2896,16 @@ def read_session(repo: Path, session_id: str, cursor: int | None, limit: int,
     lines = parse_log_lines(raw_lines, raw=raw)
     if initial:
         lines = lines[-limit:]
+    # Redact AFTER the slice, so only rows actually returned pay for it, and at
+    # the single choke point both modes and /api/session/origin share.
+    #
+    # raw=True is redacted too, deliberately. "Raw" here means unparsed, not
+    # unredacted: it is not an expert escape hatch but a default rendering path
+    # (consoles/surface.js streams the supervisor pane with raw:true, and
+    # viewSessionPrompt fetches every prompt with raw=1), and secret-scan.log —
+    # the file most likely to contain a live credential, because the commit gate
+    # quotes the offending line into it — is served through exactly this path.
+    lines = redact_lines(lines)
     return {
         "schema": "gluerun.codex.session-lines.v0",
         "sessionId": session_id,
@@ -2699,7 +3067,11 @@ def project_event(ev: dict[str, Any]) -> dict[str, Any]:
     return {
         "ts": ev.get("ts"),
         "type": etype,
-        "label": label,
+        # label/reason are the only free-text fields here and both can carry an
+        # event message a runner composed. Redacting in this pure projector
+        # covers the cached events-index path and the uncached overlay path at
+        # once, rather than scanning the whole 4 MiB index window per rebuild.
+        "label": redact_secrets(label),
         "tone": tone,
         "phase": phase,
         "advancing": bool(advancing),
@@ -2707,7 +3079,7 @@ def project_event(ev: dict[str, Any]) -> dict[str, Any]:
         "nodeId": node,
         "runId": data.get("runId"),
         "branch": data.get("branch"),
-        "reason": reason,
+        "reason": redact_secrets(reason) if reason else reason,
     }
 
 
@@ -3486,12 +3858,35 @@ SETTINGS_SPEC = [
          "on = let planners generate new tasks; off = drain the existing queue only"),
         ("GLUERUN_SLEEP", "cycle sleep", "20", "duration", "s",
          "pause between loop cycles"),
+        # Home's "enable auto-briefing" button POSTs this key. It was absent from
+        # SETTINGS_SPEC and from every _CONFIG_* tuple, so the write whitelist
+        # rejected it with 400 and the button could never work. Listing it here
+        # makes it writable AND gives it a labelled System-panel row, rather than
+        # leaving it a writable-but-invisible knob.
+        ("GLUERUN_SUPERVISOR_INTERVAL_MIN", "auto-briefing interval", "0", "duration", "min",
+         "minutes between automatic read-only supervisor briefings; 0 = off"),
         ("GLUERUN_TARGET_BRANCH", "target branch", "codex/gluerun-bootstrap-target", "identifier", "",
          "branch the loop integrates and pushes to"),
     ]),
 ]
 
 _BOOL_TRUE = {"1", "on", "true", "yes"}
+
+
+def _apply_bool_value(item: dict[str, Any]) -> dict[str, Any]:
+    """Recompute the derived boolValue from item["value"], in place.
+
+    The single place the bool derivation lives. It used to be inline in
+    collect_settings only, so _overlay_config_env — which rewrites `value` when
+    gluerun.config.json env{} sets a key — left a STALE boolValue behind. The
+    frontend short-circuits on `boolValue === true`, so a bool key set to "0" in
+    config rendered as ON: the System panel showed the opposite of the truth for
+    GLUERUN_AUTO_INTEGRATE, GLUERUN_PUSH, GLUERUN_GENERATE and
+    GLUERUN_ENABLE_L1_PARALLEL.
+    """
+    if item.get("kind") == "bool":
+        item["boolValue"] = str(item.get("value") or "").strip().lower() in _BOOL_TRUE
+    return item
 
 # Where the env-overridable shell DEFAULTS live. SETTINGS_SOURCE is an adapter
 # template ("{engineHome}" / "{repo}" placeholders); None means "no adapter
@@ -3589,9 +3984,7 @@ def collect_settings(repo: Path) -> list[dict[str, Any]]:
             row = {"key": key, "envKey": key, "label": label, "value": val,
                    "default": default_val, "source": source, "overridden": source == "env",
                    "kind": kind, "unit": unit, "meaning": meaning}
-            if kind == "bool":
-                row["boolValue"] = val.strip().lower() in _BOOL_TRUE
-            rows.append(row)
+            rows.append(_apply_bool_value(row))
         # `category` kept as an alias of `title` for backward compatibility.
         groups.append({"title": title, "category": title, "layout": layout, "items": rows})
     return groups
@@ -4434,7 +4827,13 @@ def load_config_view(repo: Path) -> dict[str, Any]:
 # GLUERUN_SLEEP / GLUERUN_MAX_HOURS bound the current nap and the loop's wall
 # budget, so a change only takes effect once autonomate loops back around; every
 # other knob is consumed at the top of the next cycle.
-_LOOP_RESTART_KEYS = {"GLUERUN_SLEEP", "GLUERUN_MAX_HOURS"}
+#
+# GLUERUN_SUPERVISOR_INTERVAL_MIN belongs here too: engine/autonomate.sh sources
+# lib.sh once at startup and then reads the knob from its own shell env inside
+# the loop, so a write does NOT take effect next cycle. Reporting it as
+# next-cycle would promise an effect that never arrives.
+_LOOP_RESTART_KEYS = {"GLUERUN_SLEEP", "GLUERUN_MAX_HOURS",
+                      "GLUERUN_SUPERVISOR_INTERVAL_MIN"}
 
 # 0.9.0 providers: writable keys not covered by SETTINGS_SPEC or the _CONFIG_*
 # structures. The four *_MODEL keys are already whitelisted via _CONFIG_MODEL_FALLBACK;
@@ -4646,6 +5045,8 @@ def _overlay_config_env(repo: Path, groups: list[dict[str, Any]]) -> list[dict[s
                 item["value"] = str(env[key])
                 item["source"] = "config"
                 item["overridden"] = True
+                # `value` just changed, so the derived boolValue must follow it.
+                _apply_bool_value(item)
     return groups
 
 
@@ -4842,10 +5243,19 @@ def _resolve_auth(spec: dict[str, Any], exe: str, env: dict[str, str],
 def _provider_rollup(out: dict[str, Any]) -> tuple[str, str]:
     """(status, one-line human message) for a probed provider."""
     binary = out["binary"]
+    # An explicitly configured executable that is broken is NOT "missing" — the
+    # operator pinned something and it is wrong. Reporting that as "not
+    # installed" sends them looking for an install problem that does not exist.
+    res = out.get("resolution") or {}
+    if res.get("outcome") in ("not-absolute", "not-executable", "path-not-executable"):
+        return "misconfigured", (res.get("message")
+                                 or "provider executable is misconfigured")
     if not out["installed"]:
         return "missing", f"not installed — `{binary}` not on PATH"
     auth = out["authStatus"]
     login = out.get("loginCommand")
+    pinned = " · pinned by " + res["overrideKey"] if (
+        res.get("source") == "configured" and res.get("overrideKey")) else ""
     if auth == "authenticated":
         email, plan = out.get("email"), out.get("plan")
         if email and plan:
@@ -4856,7 +5266,7 @@ def _provider_rollup(out: dict[str, Any]) -> tuple[str, str]:
             msg = f"authenticated ({out['authMethod']})"
         else:
             msg = "authenticated"
-        return "ready", msg
+        return "ready", msg + pinned
     if auth == "unauthenticated":
         return "error", (f"not authenticated — run `{login}`" if login else "not authenticated")
     return "warning", (f"installed — auth state unknown (run `{login}`)" if login
@@ -5048,9 +5458,89 @@ def _provider_quota(pid: str, installed: bool, home: Path) -> dict[str, Any]:
     return {"available": False, "reason": "not-exposed"}
 
 
-def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path) -> dict[str, Any]:
+_PROVIDER_RESOLVER_CACHE: dict[str, Any] = {}
+_PROVIDER_RESOLVER_LOCK = threading.Lock()
+
+
+def _load_provider_resolver():
+    """Import engine/provider_resolver.py in-process (never a subprocess).
+
+    The console daemon never sources lib.sh — cli/gluerun execs it with only
+    GLUERUN_ENGINE_HOME — so it used to resolve providers with a bare
+    shutil.which over its own PATH. That is how the Providers card came to
+    report an unauthenticated /opt/homebrew/bin/codex while the orchestration
+    was driving a different Codex entirely.
+
+    Returns None on a plugin-only checkout; the caller then degrades to the old
+    PATH-only behaviour and marks the result non-authoritative.
+    """
+    path = _engine_file("provider_resolver.py")
+    key = str(path) if path else ""
+    with _PROVIDER_RESOLVER_LOCK:
+        if key in _PROVIDER_RESOLVER_CACHE:
+            return _PROVIDER_RESOLVER_CACHE[key]
+        module = None
+        if path is not None:
+            name = "_gluerun_provider_resolver"
+            try:
+                spec = importlib.util.spec_from_file_location(name, path)
+                if spec is not None and spec.loader is not None:
+                    module = importlib.util.module_from_spec(spec)
+                    # Register BEFORE exec: @dataclass resolves its own module
+                    # through sys.modules[cls.__module__], which is None for a
+                    # module loaded by path alone, and the class body raises.
+                    sys.modules[name] = module
+                    try:
+                        spec.loader.exec_module(module)
+                    except Exception:
+                        sys.modules.pop(name, None)
+                        raise
+            except Exception:
+                module = None
+        _PROVIDER_RESOLVER_CACHE[key] = module
+        return module
+
+
+def _provider_resolution_env(repo: Path, env: dict[str, str]) -> dict[str, str]:
+    """The environment the ENGINE would see, not the console's own.
+
+    engine/lib.sh evals `export K=V` for every gluerun.config.json env{} key
+    AFTER the process environment exists, so config WINS. os.environ alone is
+    not sufficient — that asymmetry is the split-brain itself.
+
+    Known residual gap: gluerun.config.sh and .gluerun-state/config.local.sh are
+    shell files sourced after env{}, and the console does not eval shell. If one
+    of those sets GLUERUN_CODEX_BIN the console can still disagree, which is why
+    the payload carries `authoritative`.
+    """
+    merged = dict(env)
+    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg_env = cfg.get("env") if isinstance(cfg, dict) else None
+    if isinstance(cfg_env, dict):
+        for key, value in cfg_env.items():
+            # GLUERUN_BASH_BIN is bootstrap-only and skipped by lib.sh too.
+            if key == "GLUERUN_BASH_BIN" or not isinstance(value, (str, int, float)):
+                continue
+            merged[str(key)] = str(value)
+    return merged
+
+
+def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path,
+                    resolver=None) -> dict[str, Any]:
     binary = spec["binary"]
-    exe = shutil.which(binary, path=env.get("PATH") or "")
+    resolution = None
+    if resolver is not None:
+        try:
+            resolution = resolver.resolve_provider_bin(spec["id"], binary, env)
+        except Exception:
+            resolution = None
+    if resolution is not None:
+        # A configured-but-broken override must NOT fall back to a PATH
+        # candidate. Silently probing a different binary than the operator
+        # pinned is the defect this whole path exists to fix.
+        exe = resolution.path if resolution.ok else None
+    else:
+        exe = shutil.which(binary, path=env.get("PATH") or "")
     out: dict[str, Any] = {
         "id": spec["id"], "name": spec["name"], "binary": binary,
         "installed": exe is not None, "path": exe, "version": None,
@@ -5059,6 +5549,17 @@ def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path) -> di
         "envKeys": list(spec.get("envKeys", [])),
         "envKeyPresent": {k: bool(env.get(k)) for k in spec.get("envKeys", [])},
         "runnerScript": spec["runnerScript"],
+    }
+    # How this executable was chosen, so the card can say "pinned by
+    # GLUERUN_CODEX_BIN" vs "found on PATH" — the row that would have made the
+    # original split-brain self-evident instead of a two-hour investigation.
+    out["resolution"] = {
+        "source": resolution.source if resolution else "path",
+        "outcome": resolution.outcome if resolution else ("ok" if exe else "not-on-path"),
+        "overrideKey": resolution.override_key if resolution else None,
+        "configuredPath": resolution.configured if resolution else None,
+        "message": resolution.message if resolution else "",
+        "authoritative": resolution is not None,
     }
     # Additive quota field (gluerun.providers.v0 stays; not byte-pinned). Set on
     # both the installed and not-installed paths so the field is always present.
@@ -5141,8 +5642,15 @@ def _compute_providers(repo: Path, env: dict[str, str], home: Path) -> dict[str,
     active_provider = cfg.get("provider")
     active_roles = sorted(cfg.get("roles", {}).keys())
     session_stats = _provider_session_stats(repo)
+    # Prime the resolver import and build the engine-equivalent env BEFORE the
+    # pool, so six worker threads cannot race exec_module and every probe sees
+    # the same config-layered environment the engine would.
+    resolver = _load_provider_resolver()
+    resolve_env = _provider_resolution_env(repo, env)
     with ThreadPoolExecutor(max_workers=6) as pool:
-        probes = list(pool.map(lambda spec: _probe_provider(spec, env, home), PROVIDERS))
+        probes = list(pool.map(
+            lambda spec: _probe_provider(spec, resolve_env, home, resolver=resolver),
+            PROVIDERS))
     providers: list[dict[str, Any]] = []
     for spec, probe in zip(PROVIDERS, probes):
         pid = spec["id"]
@@ -5157,7 +5665,8 @@ def _compute_providers(repo: Path, env: dict[str, str], home: Path) -> dict[str,
         providers.append(probe)
     counts = Counter(p["status"] for p in providers)
     ready = counts.get("ready", 0)
-    attention = counts.get("warning", 0) + counts.get("error", 0) + counts.get("missing", 0)
+    attention = (counts.get("warning", 0) + counts.get("error", 0)
+                 + counts.get("missing", 0) + counts.get("misconfigured", 0))
     return {
         "schema": "gluerun.providers.v0",
         "checkedAt": checked_at,
@@ -5168,6 +5677,7 @@ def _compute_providers(repo: Path, env: dict[str, str], home: Path) -> dict[str,
         "summary": {
             "ready": ready, "warning": counts.get("warning", 0),
             "error": counts.get("error", 0), "missing": counts.get("missing", 0),
+            "misconfigured": counts.get("misconfigured", 0),
             "attention": attention,
             "message": f"{ready} ready · {attention} attention",
         },
@@ -5255,7 +5765,7 @@ def collect_prompt(repo: Path, name: str) -> dict[str, Any] | None:
     except OSError:
         return None
     return {"name": name, "path": str(path), "size": st.st_size,
-            "mtime": int(st.st_mtime), "content": content}
+            "mtime": int(st.st_mtime), "content": redact_secrets(content)}
 
 
 # --------------------------------------------------------------------------- #
@@ -5286,6 +5796,46 @@ RAW_ROOTS: dict[str, dict[str, Any]] = {
     "config": {"singleton": "gluerun.config.json"},
     "dag": {"singleton": "docs/orchestration/dag.v0.json"},
 }
+
+
+# Env-var names whose VALUE is a credential. Key-name based, not value-shape
+# based, and that is the whole point: GLUERUN_CLAUDE_MODEL="claude-opus-4-8" and
+# ANTHROPIC_API_KEY="sk-ant-..." are both long opaque strings, and only the name
+# tells them apart. Value-shape detection would either miss short credentials or
+# redact model ids and break the Providers surface.
+_CONFIG_SECRET_NAME_RE = re.compile(
+    r"(?i)(SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY"
+    r"|CREDENTIAL|AUTH_CONTENT|SESSION_ID|SESSIONID)")
+
+
+def _redact_config_env(content: str) -> tuple[str, bool]:
+    """Mask credential-valued keys inside gluerun.config.json's env{} block.
+
+    Dropping env{} outright is not an option: providers/surface.js reads
+    obj.env from this endpoint to drive the per-provider model knobs. Leaving it
+    is not an option either — the provider registry names OPENCODE_AUTH_CONTENT,
+    ANTHROPIC_API_KEY and friends, and an engine-sanctioned config may set any of
+    them. So mask the values and keep the keys, which preserves both the shipped
+    feature and the operator's ability to see WHICH keys are configured.
+    """
+    try:
+        obj = json.loads(content)
+    except (ValueError, TypeError):
+        return content, False           # caller still runs the generic pass
+    env = obj.get("env") if isinstance(obj, dict) else None
+    if not isinstance(env, dict):
+        return content, False
+    provider_keys = {key for spec in PROVIDERS for key in (spec.get("envKeys") or [])}
+    changed = False
+    for key, value in list(env.items()):
+        if not isinstance(value, str) or not value:
+            continue
+        if key in provider_keys or _CONFIG_SECRET_NAME_RE.search(key):
+            env[key] = "[redacted:config-env]"
+            changed = True
+    if not changed:
+        return content, False
+    return json.dumps(obj, indent=2) + "\n", True
 
 
 def collect_raw(repo: Path, root: str, name: str) -> dict[str, Any] | None:
@@ -5328,15 +5878,25 @@ def collect_raw(repo: Path, root: str, name: str) -> dict[str, Any] | None:
     except OSError:
         return None
     truncated = len(data) > RAW_MAX_BYTES
+    content = data[:RAW_MAX_BYTES].decode("utf-8", errors="replace")
+    redacted = False
+    if root == "config":
+        content, redacted = _redact_config_env(content)
+    content = redact_secrets(content)
     out: dict[str, Any] = {
         "schema": "gluerun.codex.raw.v0",
         "root": root,
         "name": name,
         "path": str(path),
+        # size/mtime stay FILE facts. Redaction changes the bytes, so content
+        # deliberately no longer matches size; `redacted` lets the client say so
+        # rather than silently presenting altered JSON as the file's contents.
         "size": st.st_size,
         "mtime": int(st.st_mtime),
-        "content": data[:RAW_MAX_BYTES].decode("utf-8", errors="replace"),
+        "content": content,
     }
+    if redacted:
+        out["redacted"] = True
     if truncated:
         out["truncated"] = True
     return out
@@ -5742,11 +6302,13 @@ def collect_ask(repo: Path, run_id: str, *, answer_cap: int = ASK_ANSWER_CAP) ->
         "schema": "gluerun.orchestration.ask.v0",
         "runId": run_id,
         "state": state,
-        "question": str(ask.get("question") or "")[:ASK_QUESTION_STORE_CAP],
+        # Model output is among the likeliest places for a credential the model
+        # READ to be echoed back, so both directions are redacted after capping.
+        "question": redact_secrets(str(ask.get("question") or "")[:ASK_QUESTION_STORE_CAP]),
         "createdAt": ask.get("createdAt"),
         "updatedAt": ask.get("updatedAt"),
         "answeredAt": ask.get("answeredAt"),
-        "answer": answer,
+        "answer": redact_secrets(answer) if answer else answer,
         "proposedSettings": proposed,
     }
 
@@ -6581,6 +7143,9 @@ class Handler(BaseHTTPRequestHandler):
                 "repo": str(self.repo),
                 "snapshotAgeSeconds": int(age) if age is not None else None,
                 "lastSnapshotError": SNAPSHOT_CACHE.last_error,
+                # Surfaced so a disabled security control cannot be silently
+                # off: GLUERUN_CONSOLE_REDACT=0 is answerable without a browser.
+                "redaction": REDACT_ENABLED,
             })
             return
         self.send_json({"error": "not found"}, 404)

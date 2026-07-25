@@ -78,9 +78,13 @@ function roleBadge(s) {
 }
 // dot tone: green live, blue in-progress, amber awaiting/stale, red failed/blocked
 function paneDotTone(s) {
-  if (s.live) return "success";
   const st = String(s.state || "");
-  if (st === "failed" || st === "blocked") return "error";
+  // Terminal-bad outranks liveness. The server now derives `live` from the
+  // session state so a settled planner can't claim it, but keeping this check
+  // above the short-circuit means a stale cached payload still can't paint a
+  // rejected batch green.
+  if (st === "failed" || st === "blocked" || st === "rejected") return "error";
+  if (s.live) return "success";
   if (st === "awaiting" || st === "stale") return "warn";
   if (st === "active") return "active";
   return toneOf(st);
@@ -110,7 +114,7 @@ function renderL0Header() {
   host.innerHTML =
     `<span class="co-l0-avatar">OR</span>
      <div class="co-l0-head-main">
-       <span class="co-eyebrow">L0 · SUPERVISOR</span>
+       <span class="co-eyebrow">ORIGIN EVENTS</span>
        <span class="co-l0-state"><span class="tone-dot" data-tone="${tone}"></span><span>${esc(o ? (o.state || "idle") : "idle")}</span></span>
      </div>
      <span class="co-l0-age mono">${esc(age)}</span>`;

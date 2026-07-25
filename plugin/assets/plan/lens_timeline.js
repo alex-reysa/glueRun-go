@@ -50,16 +50,18 @@ function labelWidth(text) {
 function buildAxis(data, paneW) {
   const spans = [];
   const nowMs = Date.parse(data.now);
-  for (const t of data.tasks) for (const iv of t.intervals) {
+  // `|| []` throughout: the axis is now built for payloads that carry cycles or
+  // gates but no tasks at all, and a partial payload must not throw.
+  for (const t of (data.tasks || [])) for (const iv of (t.intervals || [])) {
     const s = Date.parse(iv.startedAt); if (isNaN(s)) continue;
     let e = iv.endedAt ? Date.parse(iv.endedAt) : nowMs;
     if (isNaN(e) || e < s) e = s + M;
     spans.push([s, e]);
   }
-  for (const c of data.cycles) { const s = Date.parse(c.startedAt); if (isNaN(s)) continue; const e = c.endedAt ? Date.parse(c.endedAt) : s; spans.push([s, isNaN(e) ? s : e]); }
+  for (const c of (data.cycles || [])) { const s = Date.parse(c.startedAt); if (isNaN(s)) continue; const e = c.endedAt ? Date.parse(c.endedAt) : s; spans.push([s, isNaN(e) ? s : e]); }
   const times = [];
   for (const [s, e] of spans) times.push(s, e);
-  for (const g of data.gates) { const t = Date.parse(g.recordedAt); if (!isNaN(t)) times.push(t); }
+  for (const g of (data.gates || [])) { const t = Date.parse(g.recordedAt); if (!isNaN(t)) times.push(t); }
   if (!isNaN(nowMs)) times.push(nowMs);
   times.sort((a, b) => a - b);
   if (!times.length) return null;
@@ -114,19 +116,29 @@ function busyOverlaps(a, b) { for (const [as, ae] of a) for (const [bs, be] of b
 function build() {
   const data = getTimeline();
   if (!pane) return;
-  if (!data || !(data.tasks || []).length) { pane.innerHTML = `<div class="plan-lens-empty">no runtime activity recorded yet</div>`; sigLast = sigOf(data); return; }
+  // Bail only when there is genuinely nothing to plot. This used to bail on
+  // `!data.tasks.length`, which hid 147 L0 reconcile cycles, every gate, and a
+  // whole run of planning during the window before the first task was imported
+  // — the operator saw "no runtime activity recorded yet" while the loop was
+  // demonstrably working. buildAxis already derives its axis from cycles and
+  // gates as well as tasks, so it is the honest authority on "nothing to draw".
+  if (!data) { pane.innerHTML = `<div class="plan-lens-empty">loading timeline…</div>`; sigLast = sigOf(data); return; }
 
   const paneW = pane.clientWidth || 900;
   axis = buildAxis(data, paneW);
-  if (!axis) { pane.innerHTML = `<div class="plan-lens-empty">no runtime activity recorded yet</div>`; return; }
+  if (!axis) {
+    pane.innerHTML = `<div class="plan-lens-empty">no runtime activity recorded yet — no cycles, gates, or tasks in the events window</div>`;
+    sigLast = sigOf(data);
+    return;
+  }
   const idx = dagIndex();
   const stageOf = (nid) => (idx && idx.nodeById[nid] ? idx.nodeById[nid].stage : "");
-  const gateByNode = {}; for (const g of data.gates) gateByNode[g.node] = g;
+  const gateByNode = {}; for (const g of (data.gates || [])) gateByNode[g.node] = g;
   const totalW = axis.totalWidth;
 
   // group tasks: area -> node(or "(unattributed)") -> [tasks]
   const areas = {};
-  for (const t of data.tasks) {
+  for (const t of (data.tasks || [])) {
     const a = t.area || "(none)"; const nkey = t.node || "(unattributed)";
     (areas[a] = areas[a] || {});
     (areas[a][nkey] = areas[a][nkey] || []).push(t);
@@ -271,18 +283,23 @@ function build() {
     }
   }
 
+  // Nothing imported yet, but the axis exists — so cycles/gates ARE plotted
+  // above. Say so explicitly instead of leaving a bare axis that reads as a
+  // rendering failure.
+  if (!areaOrder.length) {
+    rowsHtml += `<div class="tl-row tl-emptyrow" style="height:34px">`
+      + `<div class="tl-gutter"></div>`
+      + `<div class="tl-track"><span class="tl-emptynote">no imported tasks yet — L0 cycles and gates shown above</span></div>`
+      + `</div>`;
+    y += 34;
+  }
+
   const contentH = y + 20;
 
   // background: hour/day gridlines, break cells, NOW line, cycles strip (labels
   // live in the sticky axis strip, built above).
+  // (the L0 cycle strip is emitted by buildAxisLabels — see the note there)
   let bg = "";
-  let cyc = "";
-  data.cycles.forEach((c, i) => {
-    const s = Date.parse(c.startedAt), e = c.endedAt ? Date.parse(c.endedAt) : s;
-    const x = axis.xOf(s), w = Math.max(2, axis.xOf(Math.max(e, s + M)) - x);
-    cyc += `<span class="tl-cycle" style="left:${x}px;width:${w}px;${i % 2 ? "opacity:0.5" : ""}"></span>`;
-  });
-  bg += `<div class="tl-cycle-strip" style="width:${totalW}px">${cyc}</div>`;
   for (const g of axis.segs) {
     let t = Math.ceil(g.rawS / 3600000) * 3600000;
     for (; t <= g.rawE; t += 3600000) {
@@ -336,6 +353,21 @@ function buildAxisLabels(data, totalW) {
     out += `<div class="tl-break-axis" style="left:${b.x}px;width:${BREAK_W}px"><span class="tl-break-l1"></span><span class="tl-break-l2"></span><span class="tl-break-lbl${horiz ? " horiz" : ""}">${esc(txt)}</span></div>`;
   }
   out += `<div class="tl-now-cap" style="left:${axis.xOf(axis.nowMs) + 2}px">NOW</div>`;
+  // L0 reconcile cycles ride along the bottom edge of the sticky axis band.
+  // They used to be emitted into .tl-bg at top:0 — underneath this band, which
+  // is z-index 7 with an opaque background — so 147 cycles rendered and none of
+  // them were ever visible. Living here they are both visible and pinned while
+  // the lanes scroll.
+  let cyc = "";
+  (data.cycles || []).forEach((c, i) => {
+    const s = Date.parse(c.startedAt);
+    const e = c.endedAt ? Date.parse(c.endedAt) : s;
+    if (!Number.isFinite(s)) return;
+    const x = axis.xOf(s);
+    const w = Math.max(2, axis.xOf(Math.max(e, s + M)) - x);
+    cyc += `<span class="tl-cycle" style="left:${x}px;width:${w}px;${i % 2 ? "opacity:0.5" : ""}"></span>`;
+  });
+  if (cyc) out += `<div class="tl-cycle-strip" style="width:${totalW}px">${cyc}</div>`;
   return out;
 }
 

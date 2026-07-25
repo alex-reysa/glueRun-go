@@ -549,8 +549,11 @@ function linksHtml(d) {
   const frChips = fr.slice(0, 8).map((n) =>
     `<button class="home-link-chip" data-node-link="${escAttr(n)}"><span class="tone-dot" data-tone="integration"></span>${esc(n)}</button>`).join("")
     || `<span class="home-empty">no frontier nodes — plan gated complete</span>`;
+  // Drive the dot from the session's own state rather than hard-coding green:
+  // the list is filtered to live sessions, so this is usually the same colour,
+  // but expressing the invariant means it stays honest if the filter changes.
   const sessChips = sessions.map((s) =>
-    `<button class="home-link-chip" data-session-link="${escAttr(s.id)}"><span class="tone-dot" data-tone="success"></span>${esc(s.taskId || s.node || s.id)}</button>`).join("")
+    `<button class="home-link-chip" data-session-link="${escAttr(s.id)}"><span class="tone-dot" data-tone="${escAttr(toneOf(s.state))}"></span>${esc(s.taskId || s.node || s.id)}</button>`).join("")
     || `<span class="home-empty">no live sessions</span>`;
   return `<section class="home-block home-links">
     <div class="hb-body home-links-body">
@@ -752,19 +755,43 @@ function requestBriefing(btn) {
 }
 
 // Turn on periodic auto-briefings (writes GLUERUN_SUPERVISOR_INTERVAL_MIN=15).
+// Follows the same shape as postSettings in agents/providers: adopt whatever the
+// server echoes back, and build the toast from appliesAt instead of asserting an
+// effect. That last part matters here — autonomate.sh sources lib.sh once at
+// startup and reads this knob from its own env inside the loop, so the change
+// lands on loop restart, not next cycle.
+const BRIEFING_INTERVAL_MIN = 15;
+
 function enableBriefings(btn) {
   if (btn) btn.disabled = true;
-  fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ changes: { GLUERUN_SUPERVISOR_INTERVAL_MIN: "15" } }) })
+  const reenable = () => { if (btn) btn.disabled = false; };
+  fetch("/api/settings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ changes: { GLUERUN_SUPERVISOR_INTERVAL_MIN: String(BRIEFING_INTERVAL_MIN) } }),
+  })
     .then(async (res) => {
       const data = await res.json().catch(() => ({}));
-      if (res.status === 404 || res.status === 405 || res.status === 501) { toast("settings are read-only on this server"); if (btn) btn.disabled = false; return; }
-      if (!res.ok) { toast(data.error ? String(data.error) : "could not enable"); if (btn) btn.disabled = false; return; }
-      toast("auto-briefing on · every 15 min");
+      if (res.status === 404 || res.status === 405 || res.status === 501) {
+        toast("settings are read-only on this server"); reenable(); return;
+      }
+      if (!res.ok) { toast(data.error ? String(data.error) : "could not enable"); reenable(); return; }
+      const at = (data.appliesAt || {}).GLUERUN_SUPERVISOR_INTERVAL_MIN || "applied";
+      toast(`auto-briefing every ${BRIEFING_INTERVAL_MIN} min → ${at}`);
+      if (data.settings) HOME.settings = data.settings;
+      if (data.config) HOME.config = data.config;
       // supervisor.enabled folds into supSig, so the mutation repaints through
       // the signature gate — no reset needed.
-      if (HOME.data && HOME.data.supervisor) { HOME.data.supervisor.enabled = true; HOME.data.supervisor.intervalMin = 15; render(); }
+      if (HOME.data && HOME.data.supervisor) {
+        HOME.data.supervisor.enabled = true;
+        HOME.data.supervisor.intervalMin = BRIEFING_INTERVAL_MIN;
+        render();
+      }
+      // Re-enable on success too: the button used to stay dead forever, so a
+      // later change of mind needed a page reload.
+      reenable();
     })
-    .catch(() => { toast("could not enable"); if (btn) btn.disabled = false; });
+    .catch(() => { toast("could not enable"); reenable(); });
 }
 
 // ------------------------------------------------------------- nav ------------

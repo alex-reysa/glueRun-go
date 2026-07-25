@@ -11,6 +11,13 @@ printf '{"schemaVersion":"v2"}\n' >"$repo/gluerun.config.json"
 printf 'release artifact\n' >"$repo/release.txt"
 printf 'review notes\n' >"$repo/review.txt"
 
+# Every human-gate CLI call below pins its clock with --now, but dag.sh's
+# frontier evaluation has no such flag and used to read the wall clock. With a
+# fixture that expires at 2026-07-25T10:00:00Z that made this a time bomb: green
+# until real time crossed the expiry, then permanently red with nothing in the
+# diff to explain it. GLUERUN_NOW injects the same instant into that path.
+FIXED_NOW="2026-07-24T12:00:00Z"
+
 common=(GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$repo/.gluerun-state")
 request_ref="docs/orchestration/human-gates/release.human-gate.json"
 approval_ref="docs/orchestration/human-gates/release.human-approval.json"
@@ -183,6 +190,7 @@ JSON
 frontier="$(env "${common[@]}" GLUERUN_DAG_FILE="$repo/docs/orchestration/dag.v0.json" \
   GLUERUN_GATES_DIR="$repo/docs/orchestration/gates" \
   GLUERUN_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
+  GLUERUN_NOW="$FIXED_NOW" \
   "$ROOT/engine/dag.sh" next-areas --explain)"
 python3 - "$frontier" <<'PY'
 import json, sys
@@ -214,6 +222,7 @@ frontier="$(env "${common[@]}" GLUERUN_DAG_FILE="$repo/docs/orchestration/dag.v0
   GLUERUN_GATES_DIR="$repo/docs/orchestration/gates" \
   GLUERUN_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
   GLUERUN_GATE_SCHEMA_V1="$ROOT/schemas/gate-result.v1.schema.json" \
+  GLUERUN_NOW="$FIXED_NOW" \
   "$ROOT/engine/dag.sh" next-areas --explain)"
 python3 - "$frontier" <<'PY'
 import json, sys
@@ -249,6 +258,7 @@ fi
 frontier="$(env "${common[@]}" GLUERUN_DAG_FILE="$repo/docs/orchestration/dag.v0.json" \
   GLUERUN_GATES_DIR="$repo/docs/orchestration/gates" \
   GLUERUN_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
+  GLUERUN_NOW="$FIXED_NOW" \
   "$ROOT/engine/dag.sh" next-areas --explain)"
 python3 - "$frontier" <<'PY'
 import json, sys

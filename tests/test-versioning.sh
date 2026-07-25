@@ -51,7 +51,8 @@ rc=$?
 [[ "$rc" -ne 0 ]] || fail "doctor should exit nonzero on schemaVersion mismatch"
 assert_contains "$out" "FAIL  schemaVersion mismatch: repo v9 vs engine v2" "doctor mismatch FAIL line"
 assert_contains "$out" "[schema.version]" "doctor identifies the schema-version check"
-assert_contains "$out" "engine resolved ($ENGINE_HOME, v0.13.0)" "doctor reports resolved engine version"
+assert_contains "$out" "engine resolved ($ENGINE_HOME, v$(tr -d '[:space:]' <"$ENGINE_HOME/VERSION"))" \
+  "doctor reports resolved engine version"
 
 # --- (b) pin disagreement: WARN, .gluerun-version stays authoritative ------------
 fake_home="$tmp/home"

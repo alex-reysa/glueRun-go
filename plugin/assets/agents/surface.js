@@ -221,10 +221,11 @@ function cardHtml(card) {
 
 function toneForState(state) {
   const st = String(state || "");
-  if (st === "failed" || st === "blocked") return "error";
+  // `rejected` is a planner-batch disposition — red, not green (see STATE_TONE).
+  if (st === "failed" || st === "blocked" || st === "rejected") return "error";
   if (st === "awaiting" || st === "stale") return "warn";
   if (st === "active") return "active";
-  if (st === "integrated") return "success";
+  if (st === "integrated" || st === "accepted") return "success";
   return "idle";
 }
 
