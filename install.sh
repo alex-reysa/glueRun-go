@@ -25,7 +25,18 @@ echo "Installing gluerun engine $VER -> $DEST"
 mkdir -p "$DEST" "$GLUERUN_HOME/bin"
 
 # Copy the engine payload, preserving exec bits. Exclude runtime/VCS cruft.
-copy() { [[ -e "$SRC/$1" ]] && cp -Rp "$SRC/$1" "$DEST/"; }
+#
+# Optional items must not abort the install. The `[[ -e ]] &&` form says these
+# are optional, but under `set -e` a missing one makes copy() return 1 and kills
+# the script — mid-loop, after some payload is already in place, leaving a
+# half-populated version dir while `current` still points at the old release.
+# An explicit `return 0` makes the stated intent actually true. (Hit for real:
+# an empty, untracked `promoters/` vanished from the checkout and took the whole
+# install down with it, silently, after copying engine/ and schemas/.)
+copy() {
+  [[ -e "$SRC/$1" ]] || return 0
+  cp -Rp "$SRC/$1" "$DEST/"
+}
 rm -rf "$DEST"/* 2>/dev/null || true
 for item in engine schemas promoters templates plugin gluerun-ext cli migrations VERSION SCHEMA_VERSION CHANGELOG.md; do
   copy "$item"
