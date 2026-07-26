@@ -194,6 +194,11 @@ gluerun human-gate request --help
 gluerun human-gate approve --help
 gluerun human-gate status --help
 
+# Report every contract violation in a gate-result at once. The frontier read
+# stops at the first breach (correctly — it must not act on an invalid gate),
+# which means a promoter under development learns about one violation per run.
+gluerun gate validate docs/orchestration/gates/<node>.gate-result.json
+
 # The old promote-gate --operator route is schema-v2 legacy compatibility only
 
 # Block until all detached workers finish (useful in CI or clean shutdown)
@@ -220,7 +225,19 @@ All per-repo variation lives in the consumer repo, never in engine files:
   `areas{}`, `areaPrefix`, `prewarm`, `worktreeCopyPaths[]`, `modules[]`,
   `identity{}`, `env{}`, `provisionFiles[]`, `envAllowlist[]`,
   `capabilityProfiles{}`, `roleProfiles{}`, `evidence{}`, `bootstrap{}`,
-  `resources{}`, `controlState{}`, and `legacyCompatibility{}`.
+  `resources{}`, `promoter`, `controlState{}`, and `legacyCompatibility{}`.
+
+**`promoter` is the one most consumers need and miss.** It names the script that
+decides when a DAG node's gate may be promoted — a bare name resolves to
+`<engine>/gluerun-ext/<name>.sh`, a path is used as-is (repo-relative);
+`GLUERUN_PROMOTER` overrides it. The shipped default promotes only nodes in its
+own built-in registry, so a repo with its own DAG matches nothing and stalls
+after layer 0, reporting only `promotion: no promotable frontier gates` — the
+same line a merely not-yet-ready frontier prints. `gluerun doctor` now names this
+directly (`graph.promotability`). `tools/promote-gate.sh` is a worked example.
+Note that evaluation nodes are governed separately, by `authority` on the node:
+absent or `operator` means manual promotion, `agent-review-allowed` lets a valid
+`gate-review.v0` record promote them.
 - **`gluerun.config.sh`** — optional shell extras (computed values, functions).
 - **`.gluerun-state/config.local.sh`** — gitignored operator overrides and secrets.
 

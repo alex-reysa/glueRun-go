@@ -72,10 +72,28 @@ planner_node_status_activity="Planning failed for $node"
 planner_node_status_next_action="Inspect the node planner evidence"
 planner_node_status_outcome="planning-failed"
 
+# run-status.sh keys its path on the run id ALONE
+# ($GLUERUN_RUNS_DIR/$run_id/run-status.json), and L0's fanout hands every
+# concurrent planner the SAME origin run id. N planners therefore raced on one
+# file, last writer wins, and `gluerun health` could never report more than
+# `phases: 1` however many were running — an operator watching `leases l1=2`
+# against `phases: 1` mid-incident learned to distrust the phase counter.
+#
+# Deepening the run-status scan would not have fixed it: the records were never
+# written separately in the first place. Give each planner its own id, exactly
+# as integrate.sh already derives one per task (ORIGIN-...-integrate-TASK-0001).
+#
+# The directory then sits as a DIRECT child of runs/, so ops.sh's
+# runs.glob("*/run-status.json") finds it and the console's
+# `lifecycle["runId"] == <dirname>` guard holds, with no scan changes anywhere.
+# The origin run id stays in use for the lease, the planning-session id and the
+# revise loop — only the status record needs a distinct identity.
+status_run_id="$run_id-l1-$(printf '%s' "$node" | tr -c 'A-Za-z0-9._-' '-')"
+
 gluerun_planner_node_status_write() {
   local activity="$1" next_action="$2"
   "$SCRIPT_DIR/run-status.sh" write \
-    --run-id "$run_id" --node "$node" --phase planning --state active \
+    --run-id "$status_run_id" --node "$node" --phase planning --state active \
     --activity "$activity" --safe-cancel true --next-action "$next_action" \
     --process-type planner --pid "$$" >/dev/null 2>&1 || true
 }
@@ -86,7 +104,7 @@ gluerun_planner_node_status_on_exit() {
   trap - EXIT
   [[ "$rc" -eq 0 ]] && state="completed"
   "$SCRIPT_DIR/run-status.sh" write \
-    --run-id "$run_id" --node "$node" --phase terminal --state "$state" \
+    --run-id "$status_run_id" --node "$node" --phase terminal --state "$state" \
     --activity "$planner_node_status_activity" --safe-cancel false \
     --next-action "$planner_node_status_next_action" --process-type planner --pid "$$" \
     --outcome "$planner_node_status_outcome" >/dev/null 2>&1 || true

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
 cmd="${1:-}"
-[[ -n "$cmd" ]] || { echo "usage: $0 validate-dag|next-area|next-areas|area-gate|node-fields [NODE]" >&2; exit 2; }
+[[ -n "$cmd" ]] || { echo "usage: $0 validate-dag|next-area|next-areas|area-gate|node-fields [NODE] | validate-gate-file PATH" >&2; exit 2; }
 shift || true
 
 dag_file="${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}"
@@ -49,9 +49,42 @@ proof_grandfather = set(filter(None, os.environ.get("GLUERUN_PROOF_GRANDFATHER",
 required_node_fields = {"id", "stage", "area", "layer", "kind", "dependsOn", "requiredCompletion"}
 
 
+class Violation(Exception):
+    """A single contract breach, raised instead of exiting while collecting."""
+
+    def __init__(self, message, code=2):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
+# Collecting mode exists for `gluerun gate validate`. fail() normally prints and
+# exits, which is right for the loop -- the frontier read must stop at the first
+# breach -- but it means a promoter learns about exactly ONE violation per run.
+# A consumer hit four in a row, each hiding the next, each costing a loop
+# restart. While collecting, fail() records the message and raises so the caller
+# can move to the next INDEPENDENT check instead of the process dying.
+#
+# Every existing subcommand leaves _collecting false and is bit-for-bit
+# unchanged.
+_collecting = False
+_violations = []
+
+
 def fail(message, code=2):
+    if _collecting:
+        _violations.append(message)
+        raise Violation(message, code)
     print(message, file=sys.stderr)
     sys.exit(code)
+
+
+def collect(step):
+    """Run one independent check; record its breach and keep going."""
+    try:
+        step()
+    except Violation:
+        pass
 
 
 def load_dag():
@@ -345,7 +378,8 @@ def task_set_sha256(evidence):
 def validate_v1_evidence_hashes(data, node_id):
     if data.get("schema") != "gluerun.orchestration.gate-result.v1":
         return
-    for idx, evidence in enumerate(data.get("evidence", [])):
+
+    def check(idx, evidence):
         label = f"gate-result.v1 for {node_id} evidence[{idx}]"
         kind = evidence.get("kind")
         if kind == "source-path":
@@ -370,6 +404,13 @@ def validate_v1_evidence_hashes(data, node_id):
                 f"{label} sha256 mismatch: expected {evidence.get('sha256')} "
                 f"actual {actual}"
             )
+
+    # Evidence items are independent of one another, so while collecting each
+    # one reports separately instead of the first hiding the rest. Outside
+    # collecting mode fail() still exits and collect() is a transparent wrapper
+    # (SystemExit passes straight through it).
+    for idx, evidence in enumerate(data.get("evidence", [])):
+        collect(lambda idx=idx, evidence=evidence: check(idx, evidence))
 
 
 def load_json_object(path, label):
@@ -414,9 +455,13 @@ def validate_strict_gate_report(data, node_id):
         report_ref, f"deterministic-proof gate for {node_id} gateReportRef"
     )
     report = load_json_object(report_path, f"gate report for {node_id}")
-    validate_object_against_schema(
+    # The report's own schema — where the ^TASK-[0-9]{4,} taskId pattern lives,
+    # one of the four violations a consumer's promoter hit in sequence. It is
+    # independent of the hash checks below, so while collecting it must not hide
+    # them (nor they it).
+    collect(lambda: validate_object_against_schema(
         report, gate_report_schema, f"gate report for {node_id}"
-    )
+    ))
 
     outcome = report.get("outcome")
     status = data.get("status")
@@ -445,35 +490,45 @@ def validate_strict_gate_report(data, node_id):
     command_sha = hashlib.sha256(command.encode("utf-8")).hexdigest()
     if command_sha != report.get("commandSha256"):
         fail(f"gate report for {node_id} commandSha256 mismatch")
-    report_log = regular_repo_file(
-        report.get("logRef"), f"gate report for {node_id} logRef"
-    )
-    actual_log_sha = sha256_file(report_log)
-    if actual_log_sha != report.get("logSha256"):
-        fail(f"gate report for {node_id} logSha256 mismatch")
-    if report_log.stat().st_size != report.get("logBytes"):
-        fail(f"gate report for {node_id} logBytes mismatch")
+    # The log ref and its hashes: independent of the baseline, the task-set
+    # binding and the command-log binding below. Collected separately so a bad
+    # path here does not conceal a bad path there — the exact sequence that made
+    # a consumer restart their loop four times.
+    def check_report_log():
+        report_log = regular_repo_file(
+            report.get("logRef"), f"gate report for {node_id} logRef"
+        )
+        if sha256_file(report_log) != report.get("logSha256"):
+            fail(f"gate report for {node_id} logSha256 mismatch")
+        if report_log.stat().st_size != report.get("logBytes"):
+            fail(f"gate report for {node_id} logBytes mismatch")
+
+    collect(check_report_log)
 
     baseline_ref = report.get("baselineRef")
     baseline_sha = report.get("baselineSha256")
-    if (baseline_ref is None) != (baseline_sha is None):
-        fail(
-            f"gate report for {node_id} must provide baselineRef and "
-            "baselineSha256 together"
-        )
-    if baseline_ref is not None:
-        baseline_path = regular_repo_file(
-            baseline_ref, f"gate report for {node_id} baselineRef"
-        )
-        if sha256_file(baseline_path) != baseline_sha:
-            fail(f"gate report for {node_id} baselineSha256 mismatch")
-        baseline = load_json_object(
-            baseline_path, f"gate baseline for {node_id}"
-        )
-        if baseline.get("schema") != "gluerun.orchestration.gate-baseline.v0":
-            fail(f"gate baseline for {node_id} has unsupported schema")
-        if baseline.get("commandSha256") != command_sha:
-            fail(f"gate baseline for {node_id} commandSha256 mismatch")
+
+    def check_baseline():
+        if (baseline_ref is None) != (baseline_sha is None):
+            fail(
+                f"gate report for {node_id} must provide baselineRef and "
+                "baselineSha256 together"
+            )
+        if baseline_ref is not None:
+            baseline_path = regular_repo_file(
+                baseline_ref, f"gate report for {node_id} baselineRef"
+            )
+            if sha256_file(baseline_path) != baseline_sha:
+                fail(f"gate report for {node_id} baselineSha256 mismatch")
+            baseline = load_json_object(
+                baseline_path, f"gate baseline for {node_id}"
+            )
+            if baseline.get("schema") != "gluerun.orchestration.gate-baseline.v0":
+                fail(f"gate baseline for {node_id} has unsupported schema")
+            if baseline.get("commandSha256") != command_sha:
+                fail(f"gate baseline for {node_id} commandSha256 mismatch")
+
+    collect(check_baseline)
     if outcome == "passed-with-acknowledged-baseline":
         if baseline_ref is None or not report.get("expectedFailures"):
             fail(
@@ -506,36 +561,42 @@ def validate_strict_gate_report(data, node_id):
     if actual_binding != report.get("evidenceBindingSha256"):
         fail(f"gate report for {node_id} evidenceBindingSha256 mismatch")
 
-    command_logs = [
-        item
-        for item in data.get("evidence", [])
-        if item.get("kind") == "command-log"
-    ]
-    matching_logs = [
-        item
-        for item in command_logs
-        if item.get("command") == command
-        and item.get("exitCode") == report.get("rawExitCode")
-        and item.get("logRef") == report.get("logRef")
-        and item.get("sha256") == report.get("logSha256")
-        and item.get("headSha") == report.get("headSha")
-    ]
-    if len(matching_logs) != 1:
-        fail(
-            f"gate report for {node_id} must bind exactly one matching "
-            "command-log evidence item"
-        )
-    task_ids = {
-        task_id
-        for item in data.get("evidence", [])
-        if item.get("kind") == "task-set"
-        for task_id in item.get("taskIds", [])
-    }
-    if report.get("taskId") not in task_ids:
-        fail(
-            f"gate report for {node_id} taskId is not present in its "
-            "hash-bound task-set evidence"
-        )
+    def check_command_log_binding():
+        command_logs = [
+            item
+            for item in data.get("evidence", [])
+            if item.get("kind") == "command-log"
+        ]
+        matching_logs = [
+            item
+            for item in command_logs
+            if item.get("command") == command
+            and item.get("exitCode") == report.get("rawExitCode")
+            and item.get("logRef") == report.get("logRef")
+            and item.get("sha256") == report.get("logSha256")
+            and item.get("headSha") == report.get("headSha")
+        ]
+        if len(matching_logs) != 1:
+            fail(
+                f"gate report for {node_id} must bind exactly one matching "
+                "command-log evidence item"
+            )
+
+    collect(check_command_log_binding)
+    def check_task_set_binding():
+        task_ids = {
+            task_id
+            for item in data.get("evidence", [])
+            if item.get("kind") == "task-set"
+            for task_id in item.get("taskIds", [])
+        }
+        if report.get("taskId") not in task_ids:
+            fail(
+                f"gate report for {node_id} taskId is not present in its "
+                "hash-bound task-set evidence"
+            )
+
+    collect(check_task_set_binding)
 
 
 def validate_v1_verification(data, node_id):
@@ -821,6 +882,48 @@ elif cmd == "node-fields":
         out_key = "node" if key == "id" else key
         print(f"{out_key}={node[key]}")
     print(f"authority={node.get('authority', 'operator')}")
+elif cmd == "validate-gate-file":
+    # Report EVERY contract breach in one pass, not just the first.
+    #
+    # fail() exits, which is right for the loop but means a promoter learns one
+    # violation per run. A consumer's promoter hit four in sequence — absolute
+    # evidence[].ref, absolute gateReportRef, a task-set hashed by their own
+    # convention, and a taskId that did not match ^TASK-[0-9]{4,} — each hidden
+    # by the one before it, each costing a loop restart and hours of wall clock.
+    #
+    # Coverage is honest rather than total: the independent units (each evidence
+    # item, the report schema, the log refs and hashes, the baseline, the
+    # command-log binding, the task-set binding) all report together. Checks
+    # that genuinely cannot proceed — an unreadable gate file, a missing
+    # gateReportRef — still stop that branch, because everything after them
+    # would be noise.
+    if len(args) != 1:
+        fail("usage: dag.sh validate-gate-file PATH", 2)
+    gate_file = Path(args[0])
+    if not gate_file.is_file():
+        fail(f"gate file not found: {gate_file}", 2)
+    try:
+        with open(gate_file, "r", encoding="utf-8") as f:
+            gate_doc = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"gate file is not readable JSON: {gate_file} ({exc})", 2)
+    if not isinstance(gate_doc, dict):
+        fail(f"gate file must contain an object: {gate_file}", 2)
+    validated_node = gate_doc.get("node") or "(unnamed node)"
+
+    _collecting = True
+    collect(lambda: validate_gate(gate_doc, str(gate_file), validated_node))
+    _collecting = False
+
+    if _violations:
+        print(
+            f"{len(_violations)} contract violation(s) in {gate_file}:",
+            file=sys.stderr,
+        )
+        for violation in _violations:
+            print(f"  - {violation}", file=sys.stderr)
+        sys.exit(2)
+    print(f"gate-valid node={validated_node} file={gate_file}")
 elif cmd == "area-gate":
     if len(args) != 1:
         fail("usage: dag.sh area-gate NODE", 2)
@@ -831,5 +934,5 @@ elif cmd == "area-gate":
         fail(f"gate result not passed for {node_id}")
     print(f"gate-passed node={node_id}")
 else:
-    fail("usage: dag.sh validate-dag|next-area|next-areas|area-gate|node-fields [NODE]", 2)
+    fail("usage: dag.sh validate-dag|next-area|next-areas|area-gate|node-fields [NODE] | validate-gate-file PATH", 2)
 PY

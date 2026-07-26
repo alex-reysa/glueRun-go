@@ -22,6 +22,7 @@ from_reconcile="no"
 frontier_mode="no"
 if_ready_mode="no"
 operator_mode="no"
+registers_query=""
 declare -a operator_evidence=()
 declare -a requested_nodes=()
 while [[ $# -gt 0 ]]; do
@@ -42,8 +43,16 @@ while [[ $# -gt 0 ]]; do
       operator_mode="yes"; shift ;;
     --evidence)
       operator_evidence+=("$2"); shift 2 ;;
+    --registers)
+      # Registry query (0.16.0): exit 0 iff this promoter would act on NODE.
+      # `gluerun doctor` asks the CONFIGURED promoter rather than reimplementing
+      # its registry, so a project promoter answers for itself and the check can
+      # never drift from the thing it describes. Answered after the registry
+      # functions are defined, below; side-effect free.
+      registers_query="${2:-}"; shift 2
+      [[ -n "$registers_query" ]] || { echo "--registers requires a node" >&2; exit 2; } ;;
     --help|-h)
-      echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier [legacy: --operator --evidence REF]" >&2
+      echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier | --registers NODE [legacy: --operator --evidence REF]" >&2
       exit 0 ;;
     -*)
       echo "unknown option: $1" >&2; exit 2 ;;
@@ -52,29 +61,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$frontier_mode" != "yes" && "${#requested_nodes[@]}" -eq 0 ]]; then
-  echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier [legacy: --operator --evidence REF]" >&2
+if [[ "$frontier_mode" != "yes" && -z "$registers_query" && "${#requested_nodes[@]}" -eq 0 ]]; then
+  echo "usage: $0 [--from-reconcile] [--if-ready] NODE... | [--from-reconcile] --frontier | --registers NODE [legacy: --operator --evidence REF]" >&2
   exit 2
 fi
 
 gluerun_ensure_state_dirs
-gluerun_require_target_branch
-
-if [[ "$(gluerun_current_branch)" != "$GLUERUN_TARGET_BRANCH" ]]; then
-  echo "refuse: current branch must be target branch $GLUERUN_TARGET_BRANCH" >&2
-  exit 2
-fi
-
-run_id="$(gluerun_run_id)"
-if [[ "$from_reconcile" != "yes" ]]; then
-  gluerun_acquire_lock "$run_id"
-  trap 'gluerun_release_lock "$run_id"' EXIT
-fi
-
 gates_dir="${GLUERUN_GATES_DIR:-$GLUERUN_ORCH_DIR/gates}"
 evidence_dir="$gates_dir/evidence"
-mkdir -p "$gates_dir" "$evidence_dir"
 dag_file="${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}"
+
+# --registers is a pure lookup: no target branch, no branch check, no origin
+# lock, no directories created. `gluerun doctor` runs it against a live repo and
+# must not contend with a running loop for the origin lock, nor refuse to answer
+# because the operator happens to be on a feature branch.
+if [[ -z "$registers_query" ]]; then
+  gluerun_require_target_branch
+
+  if [[ "$(gluerun_current_branch)" != "$GLUERUN_TARGET_BRANCH" ]]; then
+    echo "refuse: current branch must be target branch $GLUERUN_TARGET_BRANCH" >&2
+    exit 2
+  fi
+
+  run_id="$(gluerun_run_id)"
+  if [[ "$from_reconcile" != "yes" ]]; then
+    gluerun_acquire_lock "$run_id"
+    trap 'gluerun_release_lock "$run_id"' EXIT
+  fi
+
+  mkdir -p "$gates_dir" "$evidence_dir"
+fi
 
 # Schema-v2 consumers write only the hash-bound gate-result.v1 contract.
 # Pre-v2 consumers continue to write v0 so existing projects remain compatible.
@@ -2296,8 +2312,25 @@ process_node() {
     unsupported_node_help "$node"
     return 2
   fi
+  # Frontier mode is deliberately non-strict -- ordinary build-loop nodes must
+  # not be treated as promotion failures. But it was also SILENT: a consumer
+  # whose nodes are in no promoter registry saw only "no promotable frontier
+  # gates", every iteration, with nothing naming the nodes or the remedy. That
+  # is a full day of a field run spent on a graph that could not advance.
+  #
+  # Still non-fatal; just no longer invisible. One line per node per cycle would
+  # be noise, so the caller aggregates and reports once.
+  unregistered_nodes+=("$node")
   return 0
 }
+
+if [[ -n "$registers_query" ]]; then
+  if gate_promoter_config "$registers_query" >/dev/null 2>&1 \
+    || gate_block_config "$registers_query" >/dev/null 2>&1; then
+    exit 0
+  fi
+  exit 1
+fi
 
 if [[ "$frontier_mode" == "yes" ]]; then
   # Adjudicate the WHOLE read-only frontier: each node is routed to promote,
@@ -2330,6 +2363,7 @@ fi
 
 strict_arg="$([[ "$frontier_mode" == "yes" || "$if_ready_mode" == "yes" ]] && echo no || echo yes)"
 overall_rc=0
+unregistered_nodes=()
 for node in "${requested_nodes[@]}"; do
   if process_node "$node" "$strict_arg"; then
     :
@@ -2340,5 +2374,22 @@ for node in "${requested_nodes[@]}"; do
 done
 if [[ "$frontier_mode" == "yes" && $((promoted_total + blocked_total)) -eq 0 ]]; then
   echo "no promotable frontier gates"
+  # ...and say WHY, when the reason is that this promoter recognises none of
+  # them. Without this the message is identical whether the frontier is simply
+  # not ready or the graph can never advance unattended.
+  if [[ "${#unregistered_nodes[@]}" -gt 0 ]]; then
+    echo "  ${#unregistered_nodes[@]} frontier node(s) are in no promoter registry: ${unregistered_nodes[*]}"
+    echo "  this graph cannot advance unattended; point \"promoter\" in gluerun.config.json at a promoter that registers them (see gluerun doctor)"
+    gluerun_append_event "gate_promotion.unregistered_frontier" \
+      "frontier nodes have no registered promoter; the graph cannot advance unattended" \
+      "$(python3 - "${unregistered_nodes[@]}" <<'PY'
+import json
+import sys
+
+print(json.dumps({"nodes": sys.argv[1:], "count": len(sys.argv) - 1},
+                 separators=(",", ":")))
+PY
+)" 2>/dev/null || true
+  fi
 fi
 exit "$overall_rc"

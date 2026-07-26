@@ -79,4 +79,17 @@ run_case "11-provider-overload-class" "test-provider-failure-contract.sh"
 run_case "12-strict-gate-evidence-path" "test-gate-strict-evidence-path.sh"
 run_case "13-dag-evaluation-diagnostics" "test-dag-evaluation-diagnostics.sh"
 
-echo "FIELD-REPORT CANARY PASS: captured events/artifacts + equivalent 26-node run + 13 regression scenarios"
+# 0.16.0 — the same field report's remaining findings.
+#
+# 14: concurrent L1 planners shared one origin run id, so run-status.sh (which
+#     keys its path on the id alone) let them race on a single record and
+#     `health` could never report more than one of them.
+# 15: the shipped promoter registers only its own project's node ids and
+#     silently skipped everything else in frontier mode, so a consumer's graph
+#     stalled with `no promotable frontier gates` as the only symptom.
+# 16: dag.sh reported one contract violation per run, each hiding the next.
+run_case "14-parallel-planner-visibility" "test-l1-parallel.sh"
+run_case "15-graph-promotability" "test-graph-promotability.sh"
+run_case "16-gate-validate-all-violations" "test-gate-validate-verb.sh"
+
+echo "FIELD-REPORT CANARY PASS: captured events/artifacts + equivalent 26-node run + 16 regression scenarios"

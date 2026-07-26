@@ -116,10 +116,19 @@ planner_status_activity="Planning failed for $active_node"
 planner_status_next_action="Inspect the planner evidence"
 planner_status_outcome="planning-failed"
 
+# Status-record identity only; $run_id keeps its meaning everywhere else (events,
+# backoff, staging, session correlation). Under L1 fanout every concurrent
+# planner inherits the SAME origin id via GLUERUN_PLANNING_RUN_ID, and
+# run-status.sh keys its path on the id alone -- so without this the planners
+# race on one record and `health` cannot report more than one of them. Matches
+# l1-plan-node.sh's derivation, so both layers of a single planner write to one
+# record rather than two.
+status_run_id="$run_id-l1-$(printf '%s' "$active_node" | tr -c 'A-Za-z0-9._-' '-')"
+
 gluerun_planner_status_write() {
   local phase="$1" state="$2" activity="$3" safe_cancel="$4" next_action="$5"
   "$SCRIPT_DIR/run-status.sh" write \
-    --run-id "$run_id" --node "$active_node" --phase "$phase" --state "$state" \
+    --run-id "$status_run_id" --node "$active_node" --phase "$phase" --state "$state" \
     --activity "$activity" --safe-cancel "$safe_cancel" --next-action "$next_action" \
     --process-type planner --pid "$$" >/dev/null 2>&1 || true
 }
@@ -130,7 +139,7 @@ gluerun_planner_status_on_exit() {
   trap - EXIT
   [[ "$rc" -eq 0 ]] && state="completed"
   "$SCRIPT_DIR/run-status.sh" write \
-    --run-id "$run_id" --node "$active_node" --phase terminal --state "$state" \
+    --run-id "$status_run_id" --node "$active_node" --phase terminal --state "$state" \
     --activity "$planner_status_activity" --safe-cancel false \
     --next-action "$planner_status_next_action" --process-type planner --pid "$$" \
     --outcome "$planner_status_outcome" >/dev/null 2>&1 || true

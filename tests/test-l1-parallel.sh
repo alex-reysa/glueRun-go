@@ -523,6 +523,71 @@ test_fanout_full_chain_two_nodes_unique_ids() {
   assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "released" "planned node lease is released after import"
 }
 
+# Concurrent planners must be individually visible. run-status.sh keys its path
+# on the run id alone, and the fanout hands every planner the SAME origin id, so
+# N planners raced on one file and `health` could never report more than
+# `phases: 1` -- an operator watching `leases l1=2` against `phases: 1` learned
+# to distrust the counter. Each planner now derives its own id.
+test_fanout_planners_write_distinct_run_status_records() {
+  with_fixture
+  local stub="$GLUERUN_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
+  GLUERUN_CODEX_RUNNER="$stub" gluerun_l1_fanout RUN-chain \
+    "$(git -C "$GLUERUN_ROOT" rev-parse target)" >/dev/null 2>&1
+  python3 - "$GLUERUN_RUNS_DIR" <<'PY' || fail "concurrent planners did not get distinct run-status records"
+import json
+import os
+import sys
+
+runs = sys.argv[1]
+planners = []
+for name in sorted(os.listdir(runs)):
+    path = os.path.join(runs, name, "run-status.json")
+    if not os.path.isfile(path):
+        continue
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+    if (data.get("process") or {}).get("type") != "planner":
+        continue
+    # The console drops any record whose runId does not match its directory
+    # name (_classify_run_dir), so a derived id MUST agree with its directory
+    # -- which is also what keeps ops.sh's direct-child glob working.
+    assert data.get("runId") == name, f"runId {data.get('runId')!r} != dir {name!r}"
+    planners.append((name, data.get("node")))
+
+assert len(planners) == 2, f"expected 2 planner run-status records, got {planners}"
+dirs = {name for name, _ in planners}
+nodes = {node for _, node in planners}
+assert len(dirs) == 2, f"planners shared a run-status directory: {planners}"
+assert nodes == {"D1.contract", "S0.storage_substrate_base"}, nodes
+PY
+}
+
+# ...and the health lifecycle scan must actually see both. This is the surface
+# that misled the operator, so it is asserted against the same writer the
+# planners use rather than against hand-placed files.
+test_health_counts_every_active_planner() {
+  with_fixture
+  local origin="RUN-visible"
+  local node
+  for node in D1.contract S0.storage_substrate_base; do
+    "$SCRIPT_DIR/run-status.sh" write \
+      --run-id "$origin-l1-$node" --node "$node" --phase planning --state active \
+      --activity "Planning $node" --safe-cancel true --next-action "Wait" \
+      --process-type planner --pid "$$" >/dev/null
+  done
+  local health
+  health="$("$SCRIPT_DIR/ops.sh" health --json 2>/dev/null)"
+  python3 - "$health" <<'PY' || fail "health did not count both active planners"
+import json
+import sys
+
+doc = json.loads(sys.argv[1])
+counts = doc["lifecycle"]["phaseCounts"]
+assert counts.get("planning") == 2, f"expected planning=2, got {counts}"
+assert doc["lifecycle"]["activeCount"] == 2, doc["lifecycle"]["activeCount"]
+PY
+}
+
 # --- fanout edge cases via the l1-plan-node stub ---
 
 test_fanout_default_cap_two() {
@@ -1204,6 +1269,8 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_reconcile_defers_parallel_planning_before_leases
 	test_generate_tasks_honors_blocked_gate_without_calling_codex
 	test_fanout_full_chain_two_nodes_unique_ids
+	test_fanout_planners_write_distinct_run_status_records
+	test_health_counts_every_active_planner
 	test_fanout_default_cap_two
 	test_fanout_unique_ids_from_same_temp_id
 		test_fanout_cap_override_one

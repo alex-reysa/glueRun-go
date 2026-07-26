@@ -122,6 +122,7 @@ required = {
     "governance.unbound-waivers",
     "deployment.credentials",
     "dag.evaluation",
+    "graph.promotability",
     "model-cache.compatibility",
 }
 assert required <= set(by_id), sorted(required - set(by_id))

@@ -845,6 +845,9 @@ Run anywhere (operate on the current repo):
   status                                              orchestration status
   recover [--scan|--prune]                            stale leases / orphans
   validate-dag | next-area | next-areas | area-gate NODE
+  gate validate FILE                                  report EVERY contract violation in a
+                                                      gate-result at once (the frontier read
+                                                      stops at the first)
   promote-gate NODE [legacy: --operator --evidence REF]
                                                       gate promotion (schema v2 evaluation
                                                       nodes use hash-bound human gates)
@@ -911,6 +914,15 @@ main() {
     next-area)     run_engine dag.sh next-area "$@" ;;
     next-areas)    run_engine dag.sh next-areas "$@" ;;
     area-gate)     run_engine dag.sh area-gate "$@" ;;
+    gate)
+      # `gluerun gate validate FILE` — report EVERY contract violation in a
+      # gate-result at once. dag.sh's validator exits on the first breach, which
+      # is right for the loop but made a consumer's promoter surface one
+      # violation per run, each hiding the next.
+      case "${1:-}" in
+        validate) shift; run_engine dag.sh validate-gate-file "$@" ;;
+        *) die "unknown gate subcommand: ${1:-} (try: gluerun gate validate FILE)" ;;
+      esac ;;
     promote-gate)  run_engine promote-gate.sh "$@" ;;   # sources lib.sh -> honors config "promoter"
     human-gate)    run_engine human-gate.sh "$@" ;;
     supersede)     run_engine ops.sh supersede "$@" ;;

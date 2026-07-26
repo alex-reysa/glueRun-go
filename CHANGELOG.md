@@ -7,6 +7,80 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.16.0] — 2026-07-26 — Say what is wrong
+
+The remaining findings from the same 26-node program. 0.15.1 fixed things the
+engine knew and discarded; these are things the engine could see and never said.
+Each cost an operator hours not because the state was unrecoverable but because
+the report was indistinguishable from a healthy one.
+
+`schemaVersion` stays **v2**.
+
+### Parallel L1 planners were invisible
+
+`run-status.sh` keys its record on the run id alone
+(`$GLUERUN_RUNS_DIR/$run_id/run-status.json`), and L0's fanout hands every
+concurrent planner the **same** origin run id. N planners therefore raced on one
+file, last writer wins, and `gluerun health` could never report more than
+`phases: 1` however many were running. An operator watching `phases: 1` against
+`leases l1=2` mid-incident learned to distrust the phase counter.
+
+The 0.15.1 handoff attributed this to a shallow scan (`runs.glob("*/…")` finding
+only direct children). It is not: the records were never written separately in
+the first place, and deepening the glob would have fixed nothing while breaking
+the console's `runId == <dirname>` guard. Each planner now derives its own status
+id, exactly as `integrate.sh` already does per task, so the record lands as a
+direct child of `runs/` and **no scan changes anywhere**. Both layers that write
+planner status — `l1-plan-node.sh` and `generate-tasks.sh`, which inherits the
+origin id through `GLUERUN_PLANNING_RUN_ID` — derive the same id, so one planner
+still means one record.
+
+### A fresh consumer graph could not promote anything, and did not say so
+
+Two defensible defaults combine into a dead graph: the shipped promoter promotes
+only nodes in its own registry — ids from one specific consumer project — and
+`authority` defaults to `operator` for evaluation nodes. Worse, the frontier-mode
+skip was **silent**: `unsupported gate promotion node:` is guarded by strict
+mode, which frontier mode disables, so the only symptom was `promotion: no
+promotable frontier gates` every iteration — the same line a merely not-yet-ready
+frontier prints. That cost a consumer a full day before they wrote their own
+promoter.
+
+Both remedies already existed and neither was discoverable. The `promoter` config
+key is now in the starter config and the README; a `graph.promotability` doctor
+check names the unregistered nodes and the operator-only evaluation nodes
+separately, with both remedies; and the frontier skip now reports which nodes it
+skipped and why.
+
+The check asks the promoter whether it registers a node (`--registers`, a pure
+query that takes no origin lock and creates nothing) rather than reimplementing
+its registry — but **only for the promoter we ship**. A consumer promoter takes a
+bare NODE argument, so probing an unknown one could be read as a node id and make
+it *act*; a diagnostic must never promote anything, so an unrecognised promoter
+is reported as unintrospectable instead.
+
+### One contract violation per run, each hiding the next
+
+`dag.sh`'s `fail()` prints and exits. That is right for the loop — a frontier
+read must not act on an invalid gate — but it means a promoter under development
+learns about exactly one violation per run. A consumer hit four in sequence
+(absolute `evidence[].ref`, absolute `gateReportRef`, a task-set hashed by their
+own convention, a `taskId` that did not match `^TASK-[0-9]{4,}$`), each hidden by
+the one before, each costing a loop restart.
+
+`gluerun gate validate FILE` reports them together. `fail()` gained a collecting
+mode that records and raises instead of exiting, and the independent units —
+each evidence item, the report schema, the log refs and hashes, the baseline, the
+command-log binding, the task-set binding — now report side by side. Collecting
+is opt-in and every existing subcommand is unchanged: `next-areas` still stops at
+the first breach, which is pinned by its own test.
+
+Coverage is deliberately honest rather than total: checks that genuinely cannot
+proceed (an unreadable gate file, a missing `gateReportRef`) still stop that
+branch, because everything after them would be noise.
+
+---
+
 ## [0.15.1] — 2026-07-25 — What the engine already knew
 
 Three defects from the same 26-node localization program, all one shape: **the

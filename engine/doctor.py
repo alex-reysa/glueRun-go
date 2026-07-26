@@ -1898,6 +1898,132 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             return
         self.add("dag.evaluation", "pass", "the DAG frontier evaluates cleanly")
 
+    def graph_promotability(self) -> None:
+        """Can this graph advance without a human promoting every node?
+
+        Two individually defensible defaults combine into a dead graph. The
+        shipped promoter promotes only nodes in its own built-in registry, whose
+        ids come from one specific consumer project; and `authority` defaults to
+        `operator`, i.e. manual promotion, for evaluation nodes. So a consumer
+        who writes their own DAG gets a graph that stalls after layer 0 with
+        `promotion: no promotable frontier gates` as the only symptom -- which is
+        also what a merely not-yet-ready frontier prints. That cost a field
+        operator a full day before they wrote their own promoter.
+
+        Both remedies already exist and neither is discoverable: the `promoter`
+        config key, and `authority: agent-review-allowed`. This check names them.
+        """
+        if not self.repo:
+            return
+        dag_path = self.repo / "docs/orchestration/dag.v0.json"
+        if not dag_path.is_file():
+            self.add("graph.promotability", "skip", "no DAG to check for promotability")
+            return
+        try:
+            nodes = json.loads(dag_path.read_text(encoding="utf-8")).get("nodes", [])
+        except (OSError, json.JSONDecodeError, AttributeError) as exc:
+            self.add(
+                "graph.promotability",
+                "warn",
+                f"could not read the DAG to check promotability: {exc}",
+                remediation="Fix docs/orchestration/dag.v0.json, then re-run doctor.",
+            )
+            return
+        if not isinstance(nodes, list) or not nodes:
+            self.add("graph.promotability", "skip", "the DAG declares no nodes")
+            return
+
+        promoter = self._resolve_promoter()
+        shipped = self.engine / "gluerun-ext/promote-gate.sh"
+        if promoter is not None and promoter.resolve() != shipped.resolve():
+            # NEVER probe a promoter we did not ship. A consumer promoter takes a
+            # bare NODE argument (tools/promote-gate.sh does), so `--registers X`
+            # could be read as a node id and make it ACT -- a diagnostic must not
+            # promote anything. An unintrospectable promoter is reported as such.
+            self.add(
+                "graph.promotability",
+                "skip",
+                f"a project promoter is configured ({promoter}); its registry is not "
+                "introspectable, so promotability is not checked",
+                details={"promoter": str(promoter)},
+            )
+            return
+        unregistered = []
+        operator_only = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "")
+            if not node_id:
+                continue
+            if node.get("kind") == "evaluation":
+                # Evaluation nodes are an authority decision, not a regression
+                # run: the registry never applies to them.
+                if node.get("authority", "operator") != "agent-review-allowed":
+                    operator_only.append(node_id)
+                continue
+            if promoter is None or not self._promoter_registers(promoter, node_id):
+                unregistered.append(node_id)
+
+        if not unregistered and not operator_only:
+            self.add(
+                "graph.promotability",
+                "pass",
+                "every DAG node has a promoter or agent-review authority",
+            )
+            return
+
+        parts = []
+        if unregistered:
+            parts.append(f"{len(unregistered)} node(s) have no registered promoter")
+        if operator_only:
+            parts.append(
+                f"{len(operator_only)} evaluation node(s) default to operator authority"
+            )
+        self.add(
+            "graph.promotability",
+            "warn",
+            "; ".join(parts) + " — this graph cannot advance unattended",
+            remediation=(
+                'Point "promoter" in gluerun.config.json at a promoter that registers '
+                "these nodes (a bare name resolves to <engine>/gluerun-ext/<name>.sh; "
+                "tools/promote-gate.sh is a worked example), and/or set "
+                '"authority": "agent-review-allowed" on evaluation nodes you want '
+                "promoted from a gate-review.v0 record instead of by hand."
+            ),
+            details={
+                "promoter": str(promoter) if promoter else None,
+                "unregisteredNodes": unregistered[:20],
+                "operatorOnlyEvaluationNodes": operator_only[:20],
+            },
+        )
+
+    def _resolve_promoter(self):
+        """The promoter the loop would actually use, env over config over default."""
+        configured = os.environ.get("GLUERUN_PROMOTER") or self.config.get("promoter")
+        if not configured:
+            return self.engine / "gluerun-ext/promote-gate.sh"
+        candidate = Path(str(configured))
+        if "/" not in str(configured):
+            candidate = self.engine / "gluerun-ext" / f"{configured}.sh"
+        elif not candidate.is_absolute() and self.repo:
+            candidate = self.repo / candidate
+        return candidate if candidate.is_file() else None
+
+    def _promoter_registers(self, promoter: Path, node_id: str) -> bool:
+        """Ask the promoter itself, rather than reimplementing its registry.
+
+        A promoter that does not support the query is treated as registering
+        nothing, which is the honest reading: the loop would skip the node.
+        """
+        result = command(
+            [str(self.bash), str(promoter), "--registers", node_id],
+            cwd=self.repo,
+            env=self.runtime_env,
+            timeout=20,
+        )
+        return result.returncode == 0
+
     def deployment_credentials(self) -> None:
         if not self.repo:
             return
@@ -2031,6 +2157,7 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         self.resource_check()
         self.governance_checks()
         self.dag_evaluation()
+        self.graph_promotability()
         self.deployment_credentials()
         failed = sum(item["status"] == "fail" for item in self.checks)
         warned = sum(item["status"] == "warn" for item in self.checks)
