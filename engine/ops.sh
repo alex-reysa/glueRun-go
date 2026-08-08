@@ -385,6 +385,59 @@ else:
 PY
 }
 
+# A failed `kill -0` is not synonymous with a dead process: POSIX permits an
+# EPERM result when the process exists but the caller may not signal it. Keep
+# that distinction at the operator surface so an inconclusive probe cannot
+# encourage a second autonomate loop.
+ops_pid_probe_state() {
+  local pid="${1:-}"
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s\n' "dead"
+    return 0
+  fi
+
+  # Permission failures are difficult to reproduce portably in a test process
+  # owned by the current user. This validated, test-namespaced seam exercises
+  # the same downstream contract without changing the production probe. Both
+  # variables are required so a stray inherited state value cannot alter an
+  # ordinary operator health check.
+  if [[ "${GLUERUN_TEST_PID_PROBE:-0}" == "1" ]]; then
+    case "${GLUERUN_TEST_PID_PROBE_STATE:-}" in
+      alive|dead|unknown)
+        printf '%s\n' "$GLUERUN_TEST_PID_PROBE_STATE"
+        return 0
+        ;;
+    esac
+  fi
+
+  python3 - "$pid" <<'PY'
+import errno
+import os
+import sys
+
+pid = int(sys.argv[1])
+try:
+    os.kill(pid, 0)
+except ProcessLookupError:
+    print("dead")
+except PermissionError:
+    print("unknown")
+except (OverflowError, ValueError):
+    # A syntactically numeric pid that cannot fit the platform pid_t is a
+    # stale/invalid pidfile value, not an inconclusive live-process probe.
+    print("dead")
+except OSError as exc:
+    if exc.errno == errno.ESRCH:
+        print("dead")
+    elif exc.errno in (errno.EPERM, errno.EACCES):
+        print("unknown")
+    else:
+        print("unknown")
+else:
+    print("alive")
+PY
+}
+
 # --- health ----------------------------------------------------------------------
 ops_health() {
   local json="no"
@@ -411,14 +464,17 @@ except Exception:
   active_count="$(gluerun_active_lease_count 2>/dev/null || echo 0)"
   l1_active="$(gluerun_l1_list_active 2>/dev/null | grep -c . || true)"
   l1_stale="$(gluerun_l1_list_stale 2>/dev/null | grep -c . || true)"
-  local backoff_json breaker_n stop_present lock_present auto_pid auto_alive
+  local backoff_json breaker_n stop_present lock_present auto_pid auto_state
   backoff_json="$(gluerun_planner_backoff_active_json 2>/dev/null || echo null)"
   breaker_n="$(gluerun_breaker_count)"
   stop_present="$([[ -f "$GLUERUN_STOP_FILE" ]] && echo true || echo false)"
   lock_present="$([[ -f "$GLUERUN_LOCK_FILE" ]] && echo true || echo false)"
   auto_pid="$(cat "$GLUERUN_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
-  auto_alive="false"
-  [[ -n "$auto_pid" ]] && kill -0 "$auto_pid" 2>/dev/null && auto_alive="true"
+  auto_state="$(ops_pid_probe_state "$auto_pid" 2>/dev/null || echo unknown)"
+  case "$auto_state" in
+    alive|dead|unknown) ;;
+    *) auto_state="unknown" ;;
+  esac
   local disk_free wt_count console_url lifecycle_json resource_json health_details_json
   disk_free="$(gluerun_free_disk_gb 2>/dev/null || echo null)"
   wt_count="$(find "$GLUERUN_WORKTREES_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | grep -c . || true)"
@@ -462,7 +518,7 @@ PY
 
   python3 - "$gates_json" "$frontier_json" "$ready_count" "$active_count" "$l1_active" "$l1_stale" \
     "$backoff_json" "$breaker_n" "${GLUERUN_MAX_CONSEC_FAILS:-5}" "$stop_present" "$lock_present" \
-    "$auto_pid" "$auto_alive" "$disk_free" "${GLUERUN_MIN_DISK_GB:-2}" "$wt_count" "$console_url" \
+    "$auto_pid" "$auto_state" "$disk_free" "${GLUERUN_MIN_DISK_GB:-2}" "$wt_count" "$console_url" \
     "${GLUERUN_TARGET_BRANCH:-}" "$head_sha" "$lifecycle_json" "$resource_json" \
     "$health_details_json" "$json" <<'PY'
 import hashlib
@@ -471,7 +527,7 @@ import sys
 from datetime import datetime, timezone
 
 (gates_raw, frontier, ready, active, l1a, l1s, backoff_raw, breaker, breaker_max,
- stop, lock, auto_pid, auto_alive, disk, min_disk, wt, console_url,
+ stop, lock, auto_pid, auto_state, disk, min_disk, wt, console_url,
  target, head, lifecycle_raw, resource_raw, health_details_raw, as_json) = sys.argv[1:24]
 
 
@@ -522,10 +578,22 @@ if num(l1s):
     attention.append(f"{l1s} stale L1 lease(s) (gluerun recover --scan)")
 if num(disk) is not None and num(min_disk) is not None and num(disk) < num(min_disk):
     attention.append(f"disk below floor ({disk}GiB < {min_disk}GiB)")
-if auto_alive != "true":
+if auto_state == "dead":
     attention.append("autonomate not running")
+elif auto_state == "unknown":
+    attention.append(
+        "autonomate liveness unknown (permission denied or inconclusive); "
+        "verify process ownership before starting another loop"
+    )
 if resources and resources.get("effectiveSlots") == 0:
     attention.append("adaptive scheduler has zero affordable worktree slots")
+pressure = resources.get("providerPressure") if isinstance(resources, dict) else None
+if isinstance(pressure, dict) and pressure.get("applied"):
+    attention.append(
+        "provider pressure is limiting concurrency "
+        f"({pressure.get('provider')} cap={pressure.get('cap')}); "
+        "capacity restores after quiet successful iterations"
+    )
 
 doc = {
     "ok": not attention,
@@ -548,7 +616,17 @@ doc = {
                 "open": bool(num(breaker) and num(breaker) >= num(breaker_max))},
     "stop": stop == "true",
     "lock": lock == "true",
-    "autonomate": {"pid": num(auto_pid), "alive": auto_alive == "true"},
+    "autonomate": {
+        "pid": num(auto_pid),
+        "state": auto_state,
+        # Preserve the existing boolean for compatible consumers, but never
+        # represent an inconclusive probe as false.
+        "alive": (
+            True if auto_state == "alive" else
+            False if auto_state == "dead" else
+            None
+        ),
+    },
     "diskFreeGb": num(disk),
     "worktrees": num(wt),
     "consoleUrl": console_url or None,
@@ -584,10 +662,23 @@ else:
           + (" OPEN" if doc["breaker"]["open"] else ""))
     print(f"backoff:    {'ACTIVE ' + str((doc['backoff'] or {}).get('failureClass')) if doc['backoff'] else 'none'}")
     print(f"stop:       {doc['stop']}   lock: {doc['lock']}")
-    print(f"autonomate: pid={doc['autonomate']['pid']} alive={doc['autonomate']['alive']}")
+    auto = doc["autonomate"]
+    alive_display = (
+        str(auto["alive"]) if auto["alive"] is not None else "unknown"
+    )
+    print(f"autonomate: pid={auto['pid']} state={auto['state']} alive={alive_display}")
     print(f"disk:       {doc['diskFreeGb']}GiB free; worktrees: {doc['worktrees']}")
     if doc["resources"]:
         print(f"capacity:   {doc['resources']['effectiveSlots']}/{doc['resources']['configuredSlots']} slots ({doc['resources']['reason']})")
+        pressure = doc["resources"].get("providerPressure")
+        if isinstance(pressure, dict):
+            cap_display = pressure.get("cap") if pressure.get("cap") is not None else "none"
+            print(
+                f"pressure:   {pressure.get('provider') or 'provider-unknown'} "
+                f"cap={cap_display} applied={bool(pressure.get('applied'))} "
+                f"events={pressure.get('events')} "
+                f"recovery={pressure.get('quietSuccesses')}/{pressure.get('recoverQuiet')}"
+            )
     if doc["lifecycle"]["phaseCounts"]:
         print(f"phases:     {doc['lifecycle']['phaseCounts']}")
     diagnostics = doc["diagnostics"]

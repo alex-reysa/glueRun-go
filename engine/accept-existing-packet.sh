@@ -82,7 +82,10 @@ trap cleanup EXIT
 
 gluerun_ensure_state_dirs
 gluerun_require_target_branch
-gluerun_validate_packet_basic "$packet" >/dev/null
+if ! gluerun_validate_packet_basic "$packet" >/dev/null; then
+  echo "packet command contract validation failed before deterministic execution" >&2
+  exit 2
+fi
 
 task_id="$(gluerun_json_field "$packet" taskId)"
 run_id="$(gluerun_json_field "$packet" runId)"

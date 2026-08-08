@@ -74,7 +74,70 @@ exit 7
 SH
 chmod +x "$tmp/bin/codex"
 rc=0
-run_codex env GLUERUN_CODEX_TIMEOUT_SEC=0 GLUERUN_CODEX_IDLE_SEC=0 || rc=$?
+run_codex env GLUERUN_CODEX_TIMEOUT_SEC=0 GLUERUN_CODEX_IDLE_SEC=0 \
+  GLUERUN_CODEX_COMPLETION_GRACE_SEC=0 || rc=$?
 assert_eq "7" "$rc" "disabled guards propagate the codex exit code"
+
+# 4. A parsed terminal completion event starts a grace period. If Codex remains
+# alive, its whole process tree is cleaned up while the completed run stays
+# successful and its already-written last-message artifact remains intact.
+cat >"$tmp/bin/codex" <<'SH'
+#!/usr/bin/env bash
+out_file=""
+prev=""
+for arg in "$@"; do
+  [[ "$prev" == "-o" ]] && out_file="$arg"
+  prev="$arg"
+done
+[[ -n "$out_file" ]] && printf '%s\n' '{"status":"accepted"}' >"$out_file"
+echo '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+sleep 60 &
+child=$!
+echo "$child" >"${CODEX_CHILD_FILE:-/dev/null}"
+wait "$child"
+SH
+chmod +x "$tmp/bin/codex"
+rc=0
+started="$SECONDS"
+CODEX_CHILD_FILE="$tmp/completed-child.pid" run_codex env \
+  GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=60 \
+  GLUERUN_CODEX_COMPLETION_GRACE_SEC=1 \
+  CODEX_CHILD_FILE="$tmp/completed-child.pid" || rc=$?
+elapsed=$(( SECONDS - started ))
+assert_eq "0" "$rc" "semantically completed hung codex exits successfully"
+(( elapsed < 10 )) || fail "semantic completion cleanup took too long (${elapsed}s)"
+grep -q "semantic completion observed" "$tmp/err.log" \
+  || fail "semantic completion was not reported"
+grep -q "completion grace expired" "$tmp/err.log" \
+  || fail "completion grace cleanup was not reported"
+grep -q '"status":"accepted"' "$tmp/state/runs/RUN-T/last-message.json" \
+  || fail "last-message artifact was not preserved after completion cleanup"
+if [[ -s "$tmp/completed-child.pid" ]]; then
+  child="$(cat "$tmp/completed-child.pid")"
+  sleep 0.3
+  kill -0 "$child" 2>/dev/null && fail "completed provider grandchild survived cleanup"
+fi
+
+# 5. Prose and non-terminal/malformed JSON that merely mention the event name
+# must not bypass ordinary timeout behavior.
+cat >"$tmp/bin/codex" <<'SH'
+#!/usr/bin/env bash
+echo 'provider log mentions {"type":"turn.completed"} but is not JSON'
+echo 'provider log mentions {"type":"turn.failed","error":{"message":"no"}} but is not JSON'
+echo '{"type":"item.completed","message":"turn.completed"}'
+echo '{"type":"item.completed","item":{"type":"turn.failed","error":{"message":"nested"}}}'
+echo '{"type":["turn.completed"]}'
+echo '{"type":"turn.completed"'
+sleep 60
+SH
+chmod +x "$tmp/bin/codex"
+rc=0
+run_codex env GLUERUN_CODEX_TIMEOUT_SEC=3 GLUERUN_CODEX_IDLE_SEC=0 \
+  GLUERUN_CODEX_COMPLETION_GRACE_SEC=1 || rc=$?
+assert_eq "124" "$rc" "completion mentions do not bypass wall timeout"
+grep -q "TIMED OUT" "$tmp/err.log" || fail "ordinary timeout was not reported"
+if grep -q "semantic completion observed" "$tmp/err.log"; then
+  fail "malformed/prose completion mention triggered semantic completion"
+fi
 
 echo "PASS: test-codex-run-timeout"

@@ -215,6 +215,12 @@ status "needs-review", baseRef "{base_ref}", branch "{t['workerBranch']}",
 headSha "uncommitted", workspace (abs worktree path), ownedFiles {json.dumps(owned)},
 changedFiles, commands[{{cmd,exitCode,logRef}}], tests[{{name,phase,status,logRef}}]
 with red+green phases, evidence[{{kind,ref}}], blockers[], nextAction, createdAt.
+Every commands[].cmd value MUST contain only the exact executable shell text
+that was run. The host re-executes successful commands verbatim. Put attempt
+labels, pass/fail counts, result summaries, and explanations in the command's
+optional rationale or in evidence[], never append them to cmd. For example,
+cmd may be "bun test path/to/test.ts"; it must not be
+"bun test path/to/test.ts (attempt-2 green: 40 pass, 0 fail)".
 No additional top-level fields are permitted. Do not emit `risks`; put any
 unresolved blocking condition in blockers[] and any non-blocking note in
 nextAction. Emit ONLY that JSON object.
@@ -240,11 +246,16 @@ if audit_contract == "v1":
 "gluerun.orchestration.audit-verdict.v1", taskId "{t['taskId']}", runId
 "{run_id}", branch "{t['workerBranch']}", verdict
 (accepted|needs-fix|blocked|needs-human), evidenceReviewed[],
-verificationResults[], commandsRun[], findings[], requiredFixes[], rationale.
-Classify each verification as passed, failed-product,
-inconclusive-infrastructure, or not-rerun-evidence-verified. Reproduce the host
-gate classification and never turn an infrastructure limitation into a
-product finding. Emit ONLY that JSON object."""
+verificationResults[{{status, command, evidenceRefs, rationale}}], commandsRun[],
+findings[], requiredFixes[], rationale. Every verificationResults[] object MUST
+contain all four required members: status (passed|failed-product|
+inconclusive-infrastructure|not-rerun-evidence-verified), command (non-empty
+string), evidenceRefs (array of non-empty strings), and rationale (non-empty
+string). It MAY also contain integer exitCode. No other verification-result
+members are permitted. Reproduce the host gate classification and never turn
+an infrastructure limitation into a product finding. No additional top-level
+fields are permitted except optional findingsStatus. Emit ONLY that JSON
+object."""
 else:
     verdict_contract = f"""Your FINAL message MUST be a single JSON object matching
 `schemas/orchestration/audit-verdict.v0.schema.json`: schema
@@ -1033,6 +1044,82 @@ validate_audit_record() {
   fi
 }
 
+# Render a fresh auditor repair prompt after a structurally parseable response
+# fails schema validation or host binding. The retry count remains owned by the
+# existing GLUERUN_AUDIT_INFRA_MAX loop; this helper only makes the next retry
+# actionable instead of replaying an unchanged prompt.
+render_audit_repair_prompt() {
+  local base_prompt="$1" output_prompt="$2" error_file="$3"
+  local invalid_response_file="$4" contract="$5"
+  python3 - "$base_prompt" "$output_prompt" "$error_file" \
+    "$invalid_response_file" "$contract" <<'PY'
+import json
+import sys
+
+base_path, output_path, error_path, invalid_path, contract = sys.argv[1:6]
+
+def read_bounded(path, limit):
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        value = handle.read(limit + 1)
+    if len(value) > limit:
+        value = value[:limit] + "\n[truncated by host]"
+    return value
+
+with open(base_path, "r", encoding="utf-8") as handle:
+    base = handle.read()
+error = read_bounded(error_path, 8192)
+invalid = read_bounded(invalid_path, 65536)
+
+if contract == "v1":
+    required_contract = """Return exactly one audit-verdict.v1 JSON object.
+Required top-level members: schema, taskId, runId, branch, verdict,
+evidenceReviewed, verificationResults, commandsRun, findings, requiredFixes,
+and rationale. No other top-level members are allowed except optional
+findingsStatus. Each verificationResults[] object requires exactly status,
+command, evidenceRefs, and rationale; optional integer exitCode is also
+allowed. status must be one of passed, failed-product,
+inconclusive-infrastructure, or not-rerun-evidence-verified. command and
+rationale must be non-empty strings. evidenceRefs must be an array of
+non-empty strings."""
+else:
+    required_contract = """Return exactly one audit-verdict.v0 JSON object.
+Required top-level members: schema, taskId, runId, branch, verdict,
+evidenceReviewed, commandsRun, findings, requiredFixes, and rationale. No
+other top-level members are allowed except optional findingsStatus."""
+
+repair_input = json.dumps(
+    {
+        "validatorOrBinderError": error,
+        "invalidResponse": invalid,
+    },
+    ensure_ascii=False,
+    indent=2,
+)
+repair = f"""
+
+---
+
+## Audit Verdict Repair (authoritative)
+
+Your previous response was rejected before its verdict could influence
+acceptance. Produce a corrected response from a fresh evaluation. Do not repeat
+the invalid shape.
+
+{required_contract}
+
+The host-supplied prior error and invalid response are:
+
+<audit-repair-input>
+{repair_input}
+</audit-repair-input>
+
+Emit ONLY the corrected JSON object.
+"""
+with open(output_path, "w", encoding="utf-8") as handle:
+    handle.write(base + repair)
+PY
+}
+
 append_audit_evidence() {
   python3 - "$packet" "$run_id" <<'PY'
 import json
@@ -1336,6 +1423,8 @@ PY
   local audit_capability_profile
   local audit_pid="" audit_child_pgid=""
   local audit_schema audit_validation_rc
+  local audit_repair_error_file="" audit_repair_response_file=""
+  local audit_prompt_for_try repair_prompt
   # Auditor runner output is durable (0.6.0): the console streams it as a
   # labeled session pane; previously it went to /dev/null.
   local auditor_log="$run_dir/auditor-codex.log"
@@ -1345,9 +1434,29 @@ PY
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try,\"reason\":\"$infra_reason\"}"
       echo "  auditor infra retry $audit_try/$audit_infra_max ($infra_reason)..."
     fi
+    audit_prompt_for_try="$active_audit_prompt"
+    if [[ "$audit_try" -gt 0 && -n "$audit_repair_error_file" \
+        && -n "$audit_repair_response_file" ]]; then
+      repair_prompt="$run_dir/auditor-repair-prompt-attempt-${n}-try-${audit_try}.md"
+      if ! render_audit_repair_prompt "$active_audit_prompt" "$repair_prompt" \
+          "$audit_repair_error_file" "$audit_repair_response_file" \
+          "$audit_write_contract"; then
+        infra_reason="repair-prompt-failed"
+        gluerun_append_event "l1.audit_repair_prompt_failed" \
+          "auditor validation-feedback repair prompt could not be rendered" \
+          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try}" \
+          || true
+        break
+      fi
+      audit_prompt_for_try="$repair_prompt"
+      gluerun_append_event "l1.audit_repair_retry" \
+        "auditor validation-feedback repair retry prepared" \
+        "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try,\"reason\":\"$infra_reason\"}" \
+        || true
+    fi
     # Resume only on the FIRST try; wave-4 audit-infra retries stay FRESH.
     local audit_run_args=(--level readonly -C "$worktree" --run-id "$run_id" \
-      --prompt-file "$active_audit_prompt" --output-last-message "$audit_record" \
+      --prompt-file "$audit_prompt_for_try" --output-last-message "$audit_record" \
       --session-meta "$session_meta_reviewer")
     if [[ "$audit_try" -eq 0 && -n "$reviewer_resume_id" && "$reviewer_resume_failed" == "no" ]]; then
       echo "  running auditor via $audit_runner_basename (read-only, resume $reviewer_resume_id)..."
@@ -1447,6 +1556,10 @@ PY
         # richer than provider strict-output subsets. Host validation is always
         # fail-closed before any v1 verdict can influence acceptance.
         infra_reason="invalid-verdict"
+        audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
+        audit_repair_error_file="$run_dir/audit-attempt-${n}-try-${audit_try}.validate.err"
+        cp "$audit_record" "$audit_repair_response_file"
+        cp "$run_dir/audit-validate.err" "$audit_repair_error_file"
         cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
         gluerun_append_event "l1.audit_invalid_verdict" "auditor v1 verdict failed host schema validation" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}"
@@ -1455,11 +1568,25 @@ PY
           && "$audit_schema" != "gluerun.orchestration.audit-verdict.v0" \
           && "$audit_schema" != "pmgo.orchestration.audit-verdict.v0" ]]; then
         infra_reason="unsupported-verdict-schema"
+        audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
+        audit_repair_error_file="$run_dir/audit-attempt-${n}-try-${audit_try}.validate.err"
+        cp "$audit_record" "$audit_repair_response_file"
+        printf 'unsupported audit verdict schema %q; expected %s\n' \
+          "$audit_schema" "$audit_write_schema" >"$audit_repair_error_file"
       elif [[ -z "$audit_schema" && "$audit_write_contract" == "v1" ]]; then
         infra_reason="unsupported-verdict-schema"
+        audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
+        audit_repair_error_file="$run_dir/audit-attempt-${n}-try-${audit_try}.validate.err"
+        cp "$audit_record" "$audit_repair_response_file"
+        printf 'audit verdict schema is missing; expected %s\n' \
+          "$audit_write_schema" >"$audit_repair_error_file"
       elif [[ "${GLUERUN_AUDIT_VERDICT_VALIDATE:-warn}" == "strict" \
           && "$audit_validation_rc" -ne 0 ]]; then
         infra_reason="invalid-verdict"
+        audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
+        audit_repair_error_file="$run_dir/audit-attempt-${n}-try-${audit_try}.validate.err"
+        cp "$audit_record" "$audit_repair_response_file"
+        cp "$run_dir/audit-validate.err" "$audit_repair_error_file"
         cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
         gluerun_append_event "l1.audit_invalid_verdict" "legacy auditor verdict failed schema validation" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}"
@@ -1477,6 +1604,10 @@ PY
         else
           model_verification_status=""
           infra_reason="verification-classification-mismatch"
+          audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
+          audit_repair_error_file="$run_dir/audit-attempt-${n}-try-${audit_try}.bind.err"
+          cp "$audit_record" "$audit_repair_response_file"
+          cp "$run_dir/audit-verification-bind.err" "$audit_repair_error_file"
           cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
           gluerun_append_event "l1.audit_verification_mismatch" \
             "auditor verification classification did not match the host report" \

@@ -310,12 +310,16 @@ fi
 # stream stops growing — codex --json emits an event per action, so byte
 # growth is a faithful liveness signal. Both kill the whole process tree and
 # surface exit 124, which every consumer already classifies as timeout/infra.
-# With BOTH guards off the invocation is byte-identical to 0.4.0 (no tee
-# unless --session-meta asked for one).
+# GLUERUN_CODEX_COMPLETION_GRACE_SEC (default 10; 0 disables) recognizes only
+# parsed, top-level Codex success events. It lets a semantically complete run
+# exit normally, then cleans up a provider process tree that remains alive
+# without converting the completed turn into a timeout.
 codex_timeout="${GLUERUN_CODEX_TIMEOUT_SEC:-2400}"
 codex_idle="${GLUERUN_CODEX_IDLE_SEC:-0}"
+codex_completion_grace="${GLUERUN_CODEX_COMPLETION_GRACE_SEC:-10}"
 [[ "$codex_timeout" =~ ^[0-9]+$ ]] || codex_timeout=2400
 [[ "$codex_idle" =~ ^[0-9]+$ ]] || codex_idle=0
+[[ "$codex_completion_grace" =~ ^[0-9]+$ ]] || codex_completion_grace=10
 
 exit_code=0
 # Always retain the provider JSONL until the normalized runner result is
@@ -323,12 +327,74 @@ exit_code=0
 # command output are never scanned for quota prose.
 jsonl_tmp="$(mktemp "${TMPDIR:-/tmp}/gluerun-codex-jsonl.XXXXXX")"
 
+gluerun_codex_completion_scan() {
+  # Incrementally inspect only complete JSONL records appended since the last
+  # scan. A final newline-free record is also parsed, but its offset is retained
+  # so a later append cannot hide a previously incomplete record.
+  python3 - "$jsonl_tmp" "$1" <<'PY'
+import json
+import sys
+
+path, raw_offset = sys.argv[1], sys.argv[2]
+try:
+    offset = max(0, int(raw_offset))
+except ValueError:
+    offset = 0
+
+terminal_success_types = {
+    "turn.completed",
+    "response.completed",
+    "session.completed",
+    "thread.completed",
+}
+terminal_failure_types = {
+    "turn.failed",
+    "response.failed",
+    "request.failed",
+    "session.failed",
+    "thread.failed",
+}
+consumed = offset
+outcome = "none"
+try:
+    with open(path, "rb") as stream:
+        stream.seek(offset)
+        chunk = stream.read()
+    for raw_line in chunk.splitlines(keepends=True):
+        line = raw_line.rstrip(b"\r\n")
+        if line:
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                event = None
+            if isinstance(event, dict) and isinstance(event.get("type"), str):
+                event_type = event["type"]
+                if event_type == "error" or (
+                    event_type in terminal_failure_types
+                    and event.get("error") is not None
+                ):
+                    outcome = "failed"
+                elif event_type in terminal_success_types and outcome != "failed":
+                    outcome = "completed"
+        if raw_line.endswith((b"\n", b"\r")):
+            consumed += len(raw_line)
+        else:
+            break
+except OSError:
+    pass
+
+print(consumed, outcome)
+PY
+}
+
 run_codex_guarded() {
-  # Background + poll: overall deadline and idle-output detection. The tee is
-  # unconditional here so the JSONL file doubles as the liveness signal.
-  local deadline=0 idle_deadline=0 size prev_size now
+  # Background + poll: overall deadline, idle-output detection, and semantic
+  # completion grace. The tee is unconditional here so the JSONL file doubles
+  # as the liveness signal and remains available after process-tree cleanup.
+  local deadline=0 idle_deadline=0 completion_deadline=0
+  local size=0 prev_size=0 completion_scan_size=0 completion_scan_offset=0
+  local completion_outcome="none" now
   (( codex_timeout > 0 )) && deadline=$(( SECONDS + codex_timeout ))
-  prev_size=0
   (( codex_idle > 0 )) && idle_deadline=$(( SECONDS + codex_idle ))
   if [[ -n "$prompt_file" ]]; then
     ( "${cmd[@]}" <"$prompt_file" | tee "$jsonl_tmp" ; exit "${PIPESTATUS[0]}" ) &
@@ -337,8 +403,38 @@ run_codex_guarded() {
   fi
   local child=$!
   while kill -0 "$child" 2>/dev/null; do
-    sleep 2
+    sleep 1
     now=$SECONDS
+
+    if (( codex_idle > 0 || codex_completion_grace > 0 )); then
+      size="$(stat -f %z "$jsonl_tmp" 2>/dev/null || stat -c %s "$jsonl_tmp" 2>/dev/null || echo 0)"
+    fi
+    if (( codex_completion_grace > 0 )) \
+      && [[ "$size" != "$completion_scan_size" ]]; then
+      read -r completion_scan_offset completion_outcome \
+        < <(gluerun_codex_completion_scan "$completion_scan_offset")
+      completion_scan_size="$size"
+      if [[ "$completion_outcome" == "failed" ]]; then
+        echo "codex-run: terminal provider failure observed; terminating process tree" >&2
+        gluerun_kill_tree "$child"
+        wait "$child" 2>/dev/null || true
+        return 1
+      fi
+      if [[ "$completion_outcome" == "completed" && "$completion_deadline" -eq 0 ]]; then
+        completion_deadline=$(( now + codex_completion_grace ))
+        echo "codex-run: semantic completion observed; allowing ${codex_completion_grace}s for provider shutdown" >&2
+      fi
+    fi
+    if (( completion_deadline > 0 )); then
+      if (( now >= completion_deadline )) && kill -0 "$child" 2>/dev/null; then
+        echo "codex-run: completion grace expired after ${codex_completion_grace}s; terminating process tree" >&2
+        gluerun_kill_tree "$child"
+        wait "$child" 2>/dev/null || true
+        return 0
+      fi
+      continue
+    fi
+
     if (( deadline > 0 && now >= deadline )); then
       echo "codex-run: TIMED OUT after ${codex_timeout}s; killing process tree" >&2
       gluerun_kill_tree "$child"
@@ -346,7 +442,6 @@ run_codex_guarded() {
       return 124
     fi
     if (( codex_idle > 0 )); then
-      size="$(stat -f %z "$jsonl_tmp" 2>/dev/null || stat -c %s "$jsonl_tmp" 2>/dev/null || echo 0)"
       if [[ "$size" != "$prev_size" ]]; then
         prev_size="$size"
         idle_deadline=$(( now + codex_idle ))
@@ -361,7 +456,7 @@ run_codex_guarded() {
   wait "$child"
 }
 
-if [[ "$codex_timeout" -gt 0 || "$codex_idle" -gt 0 ]]; then
+if [[ "$codex_timeout" -gt 0 || "$codex_idle" -gt 0 || "$codex_completion_grace" -gt 0 ]]; then
   run_codex_guarded || exit_code=$?
 else
   if [[ -n "$prompt_file" ]]; then

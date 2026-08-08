@@ -4,6 +4,38 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+
+# Keep the consumer prompt mirrors aligned and make the v1 output contract
+# explicit enough that verificationResults cannot be emitted as an
+# underspecified array.
+python3 - "$ROOT/templates/prompts/auditor.md" \
+  "$ROOT/docs/orchestration/prompts/auditor.md" <<'PY'
+import sys
+
+required_top_level = (
+    "schema",
+    "taskId",
+    "runId",
+    "branch",
+    "verdict",
+    "evidenceReviewed",
+    "verificationResults",
+    "commandsRun",
+    "findings",
+    "requiredFixes",
+    "rationale",
+)
+required_verification = ("status", "command", "evidenceRefs", "rationale")
+prompts = [open(path, encoding="utf-8").read() for path in sys.argv[1:]]
+assert prompts[0] == prompts[1], "auditor prompt mirrors diverged"
+prompt = prompts[0]
+for field in required_top_level:
+    assert f"`{field}`" in prompt, f"auditor prompt omits top-level {field}"
+for field in required_verification:
+    assert f"`{field}`" in prompt, f"auditor prompt omits verificationResults.{field}"
+assert "Every `verificationResults[]` object contains all four required members" in prompt
+PY
+
 repo="$tmp/repo"
 run_dir="$tmp/runs/RUN-AUDIT"
 mkdir -p "$repo" "$run_dir" "$tmp/worktrees" "$tmp/state"

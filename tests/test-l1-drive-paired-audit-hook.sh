@@ -98,13 +98,15 @@ mock_runner="$workroot/mock-runner.sh"
 cat >"$mock_runner" <<MOCK
 #!/usr/bin/env bash
 set -uo pipefail
-level=""; worktree=""; out=""
+level=""; worktree=""; out=""; prompt=""; run_id=""
 args=("\$@")
 i=0
 while [[ \$i -lt \${#args[@]} ]]; do
   case "\${args[\$i]}" in
     --level) level="\${args[\$((i+1))]}"; i=\$((i+2)) ;;
     -C|--worktree) worktree="\${args[\$((i+1))]}"; i=\$((i+2)) ;;
+    --prompt-file) prompt="\${args[\$((i+1))]}"; i=\$((i+2)) ;;
+    --run-id) run_id="\${args[\$((i+1))]}"; i=\$((i+2)) ;;
     --output-last-message) out="\${args[\$((i+1))]}"; i=\$((i+2)) ;;
     *) i=\$((i+1)) ;;
   esac
@@ -122,6 +124,41 @@ if [[ "\$out" == *paired-audit-raw.json ]]; then
   # The paired-audit pass. Optionally fail it to prove acceptance invariance.
   if [[ "\${FAIL_PAIRED:-0}" == "1" ]]; then exit 1; fi
   [[ -n "\$out" ]] && printf '{"verdict":"accepted","findings":[]}\n' > "\$out"
+  exit 0
+fi
+if [[ "\${GLUERUN_RUNNER_ROLE:-}" == "auditor" \
+    && "\${MOCK_AUDIT_REPAIR:-0}" == "1" ]]; then
+  repair_count_file="$workroot/audit-repair-count"
+  repair_count=0
+  [[ -f "\$repair_count_file" ]] && repair_count="\$(cat "\$repair_count_file")"
+  repair_count=\$((repair_count + 1))
+  printf '%s\n' "\$repair_count" >"\$repair_count_file"
+  if [[ "\$repair_count" -eq 1 || "\${MOCK_AUDIT_ALWAYS_INVALID:-0}" == "1" ]]; then
+    [[ -n "\$out" ]] && cat >"\$out" <<JSON
+{"schema":"gluerun.orchestration.audit-verdict.v1","taskId":"TASK-0001","runId":"\$run_id","branch":"agent/widget/TASK-0001-generic","verdict":"accepted","evidenceReviewed":["audit-verification.json"],"verificationResults":[{"status":"passed"}],"commandsRun":["bash strict-gate.sh"],"findings":[],"requiredFixes":[],"rationale":"malformed fixture"}
+JSON
+    exit 0
+  fi
+  python3 - "\$prompt" <<'PY'
+import sys
+
+prompt = open(sys.argv[1], encoding="utf-8").read()
+required = [
+    "## Audit Verdict Repair (authoritative)",
+    "validatorOrBinderError",
+    "invalidResponse",
+    "audit verdict.verificationResults[0] missing required field: command",
+    "Required top-level members: schema, taskId, runId, branch, verdict,",
+    "Each verificationResults[] object requires exactly status,",
+]
+for value in required:
+    assert value in prompt, f"repair prompt omitted {value!r}"
+PY
+  repair_status="\$(sed -n 's/.*classification is \`\\([^\`]*\\)\`.*/\\1/p' "\$prompt" | tail -1)"
+  [[ -n "\$repair_status" ]] || repair_status="passed"
+  [[ -n "\$out" ]] && cat >"\$out" <<JSON
+{"schema":"gluerun.orchestration.audit-verdict.v1","taskId":"TASK-0001","runId":"\$run_id","branch":"agent/widget/TASK-0001-generic","verdict":"accepted","evidenceReviewed":["audit-verification.json"],"verificationResults":[{"status":"\$repair_status","command":"bash strict-gate.sh","exitCode":0,"evidenceRefs":["audit-verification.json"],"rationale":"matches host verification"}],"commandsRun":["bash strict-gate.sh"],"findings":[],"requiredFixes":[],"rationale":"repaired fixture"}
+JSON
   exit 0
 fi
 [[ -n "\$out" ]] && printf '{"verdict":"%s","findings":[]}\n' "\${MOCK_AUDIT_VERDICT:-accepted}" > "\$out"
@@ -245,5 +282,74 @@ run_dir="$(run_dir_of)"
 assert_eq "$(pa_event_count)" "0" "(d) needs-fix: no ctx.paired_audit event on non-accepted path"
 [[ -z "$run_dir" || ! -e "$run_dir/paired-audit.json" ]] || fail "(d) needs-fix: paired-audit.json written on non-accepted path"
 pass "(d) non-accepted path: no paired audit invoked, no paired record"
+
+# ---------------------------------------------------------------------------
+# (e) v1 schema-invalid output gets one bounded, fresh validation-feedback
+#     repair retry. The repair prompt contains the exact contract, validator
+#     error, and rejected response; a corrected verdict follows normal
+#     acceptance.
+# ---------------------------------------------------------------------------
+reset_state
+cat >"$drv_root/gluerun.config.json" <<'JSON'
+{"schemaVersion":"v2","targetBranch":"target","gateCommand":"bash strict-gate.sh"}
+JSON
+cat >"$drv_root/strict-gate.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' \
+  '{"schema":"gluerun.orchestration.gate-observation.v0","failures":[]}' \
+  >"$GLUERUN_GATE_REPORT_FILE"
+SH
+chmod +x "$drv_root/strict-gate.sh"
+python3 - "$TASK_MD" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = re.sub(r"Gate command: `[^`]*`", "Gate command: `bash strict-gate.sh`", text, count=1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+git -C "$drv_root" add gluerun.config.json strict-gate.sh "$TASK_MD"
+git -C "$drv_root" commit -qm "add v2 repair fixture"
+rm -f "$workroot/audit-repair-count"
+out="$(run_drive MOCK_AUDIT_REPAIR=1 GLUERUN_AUDIT_INFRA_MAX=1 2>&1)" \
+  || { echo "$out" | tail -40; fail "(e) repairable v1 verdict did not accept"; }
+run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "(e): no run dir"
+assert_accepted "$run_dir"
+assert_eq "$(cat "$workroot/audit-repair-count")" "2" \
+  "(e) schema repair uses exactly one retry"
+grep -q '"type":"l1.audit_invalid_verdict"' "$EVENTS" \
+  || fail "(e): invalid v1 verdict event missing"
+grep -q '"type":"l1.audit_repair_retry"' "$EVENTS" \
+  || fail "(e): validation-feedback retry event missing"
+repair_prompt="$run_dir/auditor-repair-prompt-attempt-1-try-1.md"
+[[ -f "$repair_prompt" ]] || fail "(e): repair prompt artifact missing"
+grep -Fq 'audit verdict.verificationResults[0] missing required field: command' \
+  "$repair_prompt" || fail "(e): repair prompt omitted validator error"
+grep -q '"invalidResponse"' "$repair_prompt" \
+  || fail "(e): repair prompt omitted invalid response"
+assert_eq "$(json_field "$run_dir/audit.json" schema)" \
+  "gluerun.orchestration.audit-verdict.v1" "(e) repaired verdict schema"
+pass "(e) v1 schema failure repaired once with validator feedback and accepted"
+
+# ---------------------------------------------------------------------------
+# (f) The same validation repair remains bounded by the existing retry budget.
+#     If every fresh response is invalid, the verdict cannot influence
+#     acceptance and the drive fails closed.
+# ---------------------------------------------------------------------------
+reset_state
+rm -f "$workroot/audit-repair-count"
+ec=0
+out="$(run_drive MOCK_AUDIT_REPAIR=1 MOCK_AUDIT_ALWAYS_INVALID=1 \
+  GLUERUN_AUDIT_INFRA_MAX=1 GLUERUN_DECIDER_FAST=1 2>&1)" || ec=$?
+[[ "$ec" -ne 0 ]] || fail "(f): unrepaired invalid verdict must fail closed"
+assert_eq "$(cat "$workroot/audit-repair-count")" "2" \
+  "(f) invalid verdict retries remain bounded"
+grep -q '"type":"l1.task_accepted"' "$EVENTS" \
+  && fail "(f): unrepaired invalid verdict influenced acceptance"
+run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "(f): no run dir"
+[[ -f "$run_dir/auditor-repair-prompt-attempt-1-try-1.md" ]] \
+  || fail "(f): bounded repair prompt artifact missing"
+pass "(f) unrepaired invalid verdict exhausted the bound and failed closed"
 
 echo "ALL L1-DRIVE PAIRED-AUDIT-HOOK TESTS PASSED"

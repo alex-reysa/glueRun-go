@@ -341,6 +341,15 @@ packet["commands"].append({
     "exitCode": 0,
     "logRef": ".gluerun-evidence/regression.log",
 })
+packet["commands"].append({
+    "cmd": (
+        "test -f internal/artifact/a.go"
+        " && (test -f internal/artifact/a_test.go)"
+        " # (attempt-2 green: shell comments remain executable syntax)"
+    ),
+    "exitCode": 0,
+    "logRef": ".gluerun-evidence/regression.log",
+})
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(packet, handle, indent=2)
     handle.write("\n")
@@ -470,6 +479,120 @@ PY
     || fail "failed rerun must not emit an accepted audit"
 }
 
+test_rejects_annotated_command_before_execution() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  local packet workspace before_fingerprint before_worktrees out rc=0
+  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  workspace="$(json_field "$packet" workspace)"
+  before_fingerprint="$(workspace_fingerprint "$workspace")"
+  before_worktrees="$(worktree_count)"
+  python3 - "$packet" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    packet = json.load(handle)
+packet["commands"] = [{
+    "cmd": (
+        "test -f internal/artifact/a.go"
+        " (attempt-2 green: 40 pass, 0 fail)"
+    ),
+    "exitCode": 0,
+    "logRef": ".gluerun-evidence/green.log",
+}]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(packet, handle, indent=2)
+    handle.write("\n")
+PY
+  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "annotated packet command must be rejected"
+  assert_contains "$out" "commands[0].cmd contains a trailing human annotation" \
+    "annotated command contract rejection"
+  assert_contains "$out" "rationale or evidence" \
+    "annotated command remediation"
+  [[ ! -e "$GLUERUN_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-0.log" ]] \
+    || fail "annotated command reached deterministic bash execution"
+  assert_eq "needs-review" "$(json_field "$packet" status)" \
+    "annotated command packet remains unaccepted"
+  assert_eq "$before_fingerprint" "$(workspace_fingerprint "$workspace")" \
+    "annotated command rejection leaves original workspace immutable"
+  assert_eq "$before_worktrees" "$(worktree_count)" \
+    "annotated command rejection occurs before disposable worktree setup"
+}
+
+test_hash_inside_shell_word_does_not_bypass_annotation_rejection() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  local packet workspace before_fingerprint before_worktrees out prefix
+  local -a prefixes=("printf x#" "printf '#'" 'printf \#')
+  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  workspace="$(json_field "$packet" workspace)"
+  before_fingerprint="$(workspace_fingerprint "$workspace")"
+  before_worktrees="$(worktree_count)"
+  for prefix in "${prefixes[@]}"; do
+    python3 - "$packet" "$prefix" <<'PY'
+import json
+import sys
+
+path, prefix = sys.argv[1:3]
+with open(path, encoding="utf-8") as handle:
+    packet = json.load(handle)
+packet["commands"] = [{
+    "cmd": prefix + " (attempt-2 green: 40 pass, 0 fail)",
+    "exitCode": 0,
+    "logRef": ".gluerun-evidence/green.log",
+}]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(packet, handle, indent=2)
+    handle.write("\n")
+PY
+    local rc=0
+    out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$packet" 2>&1)" || rc=$?
+    [[ "$rc" -ne 0 ]] \
+      || fail "non-comment hash form must not bypass annotation rejection: $prefix"
+    assert_contains "$out" "commands[0].cmd contains a trailing human annotation" \
+      "non-comment hash annotation rejection: $prefix"
+    [[ ! -e "$GLUERUN_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-0.log" ]] \
+      || fail "non-comment hash command reached deterministic bash execution: $prefix"
+  done
+  assert_eq "needs-review" "$(json_field "$packet" status)" \
+    "non-comment hash packet remains unaccepted"
+  assert_eq "$before_fingerprint" "$(workspace_fingerprint "$workspace")" \
+    "non-comment hash rejection leaves original workspace immutable"
+  assert_eq "$before_worktrees" "$(worktree_count)" \
+    "non-comment hash rejection occurs before disposable worktree setup"
+}
+
+test_rejects_whitespace_only_packet_command() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  local packet out rc=0
+  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  python3 - "$packet" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    packet = json.load(handle)
+packet["commands"][1]["cmd"] = " \t "
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(packet, handle, indent=2)
+    handle.write("\n")
+PY
+  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "whitespace-only packet command must be rejected"
+  assert_contains "$out" "commands[1].cmd must be non-empty executable shell text" \
+    "empty command contract rejection"
+  [[ ! -e "$GLUERUN_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-1.log" ]] \
+    || fail "empty command reached deterministic bash execution"
+}
+
 test_required_bootstrap_failure_blocks_acceptance() {
   with_fixture
   write_task
@@ -593,6 +716,9 @@ test_import_rejects_storage_proof_without_marked_red_guard() {
 test_accepts_existing_packet_and_imports_afterward
 test_rejects_source_mutation_and_preserves_original_workspace
 test_rejects_failed_rerun_in_disposable_worktree
+test_rejects_annotated_command_before_execution
+test_hash_inside_shell_word_does_not_bypass_annotation_rejection
+test_rejects_whitespace_only_packet_command
 test_required_bootstrap_failure_blocks_acceptance
 test_imports_accept_waiver_packet_and_integrates_eligibly
 test_rejects_already_imported_task

@@ -320,6 +320,17 @@ PY
 
   if [[ "$progress" == "yes" ]]; then
     gluerun_breaker_reset
+    # Additive-increase half of the provider-pressure controller (opt-in). A
+    # cycle that made progress counts as one quiet interval; after
+    # GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET of them the ceiling rises by
+    # exactly one slot. "Quiet" is approximate on purpose: recording a FRESH
+    # observation resets the counter to zero, but generate-tasks.sh observes
+    # mid-cycle while this ticks at end-of-cycle, so a cycle that both hit a 429
+    # and still integrated work banks one tick anyway. That errs toward
+    # recovering capacity, which the cluster threshold then re-takes if the
+    # congestion is real. No-op unless the selected provider is actually
+    # throttled, so a healthy loop writes no state.
+    gluerun_provider_pressure_success >/dev/null 2>&1 || true
   elif [[ "$faild" -gt 0 || "$faili" -gt 0 || "$planner_failures" -gt 0 || "$l1_import_rejections" -gt 0 || ( "${GLUERUN_DETACHED_DISPATCH:-0}" == "1" && "$reaped_failures" -gt 0 ) ]]; then
     # C2 (0.5.0): a usage-limit / 403 / overload window can poison the decider,
     # auditor, L1 fanout, or dispatch paths, producing cycle failures with NO
@@ -357,8 +368,19 @@ kinds = {"usage-limit": "quota", "entitlement": "quota", "overloaded": "provider
 print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
 ' 2>/dev/null || true)
     fi
+    # Suppressing the breaker is only safe if the backoff we just armed will
+    # actually be honoured on the next iteration. Backoffs became
+    # provider-scoped, but this cycle scanner is not: it will happily arm a
+    # window from provider X's evidence while the loop is running provider Y,
+    # and the honour path then discards it. That combination has no terminating
+    # condition — the loop never sleeps, so the wait budget never accumulates
+    # and never escalates to STOP, while the breaker sits pinned at zero. The
+    # record is still written (evidence preserved, and it reactivates if the
+    # runner reverts); what we decline to do is buy breaker immunity with a
+    # window that cannot stop us.
     if [[ -n "$ev_resultref" && -n "$ev_class" ]] \
-      && gluerun_planner_backoff_set "$ev_class" "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_resultref"; then
+      && gluerun_planner_backoff_set "$ev_class" "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_resultref" \
+      && gluerun_planner_backoff_active_json >/dev/null 2>&1; then
       echo "  [autonomate] no progress + structured provider limit evidence ($ev_resultref); armed $ev_class backoff, NO breaker increment (breaker stays $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
       gluerun_append_event "autonomate.limit_window_detected" "provider window at breaker chokepoint; armed $ev_class backoff instead of tripping" "{\"iteration\":$iteration,\"failureClass\":\"$ev_class\",\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections,\"evidence\":$limit_evidence}"
     else

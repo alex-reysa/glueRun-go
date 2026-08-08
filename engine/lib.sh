@@ -265,6 +265,31 @@ GLUERUN_STOP_FILE="${GLUERUN_STOP_FILE:-$GLUERUN_STATE_DIR/STOP}"
 GLUERUN_STATUS_FILE="${GLUERUN_STATUS_FILE:-$GLUERUN_STATE_DIR/STATUS.md}"
 GLUERUN_BREAKER_FILE="${GLUERUN_BREAKER_FILE:-$GLUERUN_STATE_DIR/circuit.json}"
 GLUERUN_PLANNER_BACKOFF_FILE="${GLUERUN_PLANNER_BACKOFF_FILE:-$GLUERUN_STATE_DIR/planner-backoff.json}"
+# Provider-pressure concurrency adaptation (OPT-IN: default OFF). A planner
+# backoff answers "should the loop plan right now"; it says nothing about how
+# many workers to run once the window closes. The field run kept re-entering the
+# same 429 because concurrency only ever adapted to disk. When enabled, an
+# AIMD-style controller halves the dispatch ceiling for ONE provider after a
+# cluster of distinct, schema-validated, hash-bound overload/429 evidence, then
+# restores it a slot at a time after quiet successful iterations.
+#
+# With ADAPT=0 nothing observes, nothing is written, and resource-plan output is
+# byte-identical to 0.16.0 — the state file is never created.
+GLUERUN_PROVIDER_PRESSURE_ADAPT="${GLUERUN_PROVIDER_PRESSURE_ADAPT:-0}"
+GLUERUN_PROVIDER_PRESSURE_FILE="${GLUERUN_PROVIDER_PRESSURE_FILE:-$GLUERUN_STATE_DIR/provider-pressure.json}"
+# Distinct in-window evidence events before the multiplicative decrease. One 429
+# is a data point, not pressure; the default of 2 is the smallest value that can
+# still tell a cluster from a single event.
+GLUERUN_PROVIDER_PRESSURE_CLUSTER="${GLUERUN_PROVIDER_PRESSURE_CLUSTER:-2}"
+GLUERUN_PROVIDER_PRESSURE_WINDOW_SEC="${GLUERUN_PROVIDER_PRESSURE_WINDOW_SEC:-900}" # evidence older than this cannot cluster
+GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET="${GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET:-3}" # quiet successful iterations per +1 slot
+GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS="${GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS:-1}"     # pressure never starves runnable work
+GLUERUN_PROVIDER_PRESSURE_MAX_EVENTS="${GLUERUN_PROVIDER_PRESSURE_MAX_EVENTS:-32}"  # per-provider digest ring bound
+# Single source of truth for shipped-adapter -> provider identity. Both the
+# provider-scoped backoff check and the provider-pressure controller resolve
+# identity through gluerun_runner_provider_identity, which reads this map;
+# nothing else may turn a runner path into a provider name.
+GLUERUN_ADAPTER_PROVIDERS_JSON='{"codex-run.sh":"codex","claude-run.sh":"claude","gemini-run.sh":"gemini","opencode-run.sh":"opencode","cursor-run.sh":"cursor","grok-run.sh":"grok"}'
 # Supervisor briefing + ask (0.10.0). All INERT by default: the autonomate loop
 # only spawns a periodic briefing when the interval knob is >0, and `gluerun ask`
 # / `gluerun report` are explicit operator verbs. With INTERVAL_MIN=0 (default) a
@@ -859,6 +884,7 @@ gluerun_validate_packet_basic() {
   local schema="$GLUERUN_PACKET_SCHEMA"
   python3 - "$packet" "$schema" <<'PY'
 import json
+import re
 import sys
 
 path, schema_path = sys.argv[1], sys.argv[2]
@@ -883,6 +909,75 @@ for key in ["ownedFiles", "changedFiles", "commands", "tests", "evidence", "bloc
     if not isinstance(data[key], list):
         print(f"{key} must be an array", file=sys.stderr)
         sys.exit(2)
+
+# commands[].cmd is executable input, not a display label. Reject the concrete
+# annotation grammar observed in stranded packets without attempting to parse or
+# constrain general shell syntax. In particular, grouping parentheses, quoted
+# parentheses, and shell comments remain valid.
+trailing_result_annotation = re.compile(
+    r"[ \t]+\("
+    r"(?:attempt(?:-|[ \t]+)[0-9]+[ \t]+)?"
+    r"(?:red|green|regression)[ \t]*:"
+    r"[^()\r\n]+"
+    r"\)[ \t]*$",
+    re.IGNORECASE,
+)
+
+def has_shell_comment_start(prefix):
+    """Return whether prefix contains an unquoted # that starts a shell word."""
+    state = "unquoted"
+    escaped = False
+    for index, char in enumerate(prefix):
+        if state == "single":
+            if char == "'":
+                state = "unquoted"
+            continue
+        if state == "double":
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                state = "unquoted"
+            continue
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "'":
+            state = "single"
+        elif char == '"':
+            state = "double"
+        elif char == "#":
+            previous = prefix[index - 1] if index else ""
+            if index == 0 or previous.isspace() or previous in ";|&()<>":
+                return True
+    return False
+
+for index, command in enumerate(data["commands"]):
+    if not isinstance(command, dict):
+        print(f"commands[{index}] must be an object", file=sys.stderr)
+        sys.exit(2)
+    cmd = command.get("cmd")
+    if not isinstance(cmd, str) or not cmd.strip():
+        print(
+            f"commands[{index}].cmd must be non-empty executable shell text",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    annotation = trailing_result_annotation.search(cmd)
+    if annotation:
+        prefix = cmd[:annotation.start()]
+        # A parenthetical inside an actual shell comment is executable shell
+        # text and cannot trigger the historical syntax error.
+        if not has_shell_comment_start(prefix):
+            print(
+                f"commands[{index}].cmd contains a trailing human annotation; "
+                "record the exact executable command only and move attempt, "
+                "result, and count commentary to packet rationale or evidence",
+                file=sys.stderr,
+            )
+            sys.exit(2)
 print("ok")
 PY
 }
@@ -2691,14 +2786,62 @@ gluerun_planner_failure_class() {
   fi
 }
 
+# Canonical shipped-adapter identity. A provider name is printed ONLY when the
+# given runner path resolves to the matching adapter under GLUERUN_ENGINE_DIR.
+# Everything else — a custom wrapper, a basename collision such as
+# /tmp/custom/codex-run.sh, an unreadable or dangling path — prints nothing and
+# returns 1, so every caller treats it as "provider unknown" instead of guessing
+# a built-in. This is the only path->provider mapping in the engine.
+gluerun_runner_provider_identity() {
+  local runner="${1:-}"
+  [[ -n "$runner" ]] || return 1
+  python3 - "$runner" "$GLUERUN_ENGINE_DIR" "$GLUERUN_ADAPTER_PROVIDERS_JSON" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+selected_runner, engine_dir, adapters_raw = sys.argv[1:4]
+try:
+    adapter_providers = json.loads(adapters_raw)
+except Exception:
+    sys.exit(1)
+selected_path = Path(selected_runner)
+adapter_name = selected_path.name
+if adapter_name not in adapter_providers:
+    sys.exit(1)
+try:
+    if selected_path.resolve(strict=True) != Path(engine_dir, adapter_name).resolve(strict=True):
+        sys.exit(1)
+except (OSError, RuntimeError):
+    sys.exit(1)
+print(adapter_providers[adapter_name])
+PY
+}
+
+# The runner the next planner/worker turn will actually use. Mirrors
+# generate-tasks.sh's planner-runner precedence.
+gluerun_selected_runner_path() {
+  printf '%s\n' "${GLUERUN_RUNNER:-${GLUERUN_CODEX_RUNNER:-$GLUERUN_ENGINE_DIR/codex-run.sh}}"
+}
+
+# Provider identity of the currently selected runner, or empty + rc 1.
+gluerun_selected_provider_identity() {
+  gluerun_runner_provider_identity "$(gluerun_selected_runner_path)"
+}
+
 gluerun_planner_backoff_active_json() {
   [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || return 1
-  python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" <<'PY'
+  # Provider identity is trusted only for a canonically resolved shipped
+  # adapter; a basename-colliding custom runner remains unknown and therefore
+  # keeps the conservative global-backoff behavior.
+  local selected_provider
+  selected_provider="$(gluerun_selected_provider_identity 2>/dev/null || true)"
+  python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" "$selected_provider" "$GLUERUN_ADAPTER_PROVIDERS_JSON" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 
-path = sys.argv[1]
+path, selected_provider, adapters_raw = sys.argv[1:4]
 try:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -2708,6 +2851,18 @@ except Exception:
     sys.exit(1)
 now = datetime.now(timezone.utc)
 if until <= now:
+    sys.exit(1)
+# Provider-less v0 records and unknown/custom current runners remain global
+# backoffs for compatibility. A known built-in provider switch is the only case
+# where an unexpired record becomes non-blocking; the record stays untouched so
+# its evidence is still available and becomes active again if the runner reverts.
+known_providers = set(json.loads(adapters_raw).values())
+record_provider = data.get("provider")
+if (
+    record_provider in known_providers
+    and selected_provider in known_providers
+    and record_provider != selected_provider
+):
     sys.exit(1)
 print(json.dumps(data, separators=(",", ":")))
 PY
@@ -2740,6 +2895,11 @@ PY
       echo "$failure_class backoff refused: structured provider evidence missing or invalid (runId=$run_id node=$node)" >&2
       return 1
     fi
+    # The one observation choke point for provider pressure: past this line the
+    # evidence is schema-valid and hash-bound to a normalized provider envelope,
+    # and every arming caller (planner and the breaker chokepoint alike) funnels
+    # through here. Off by default, and never able to fail the backoff itself.
+    gluerun_provider_pressure_observe "$evidence_ref" >/dev/null 2>&1 || true
   fi
   local seconds
   # A usage limit is a window measured in tens of minutes; provider overload
@@ -2801,6 +2961,429 @@ gluerun_planner_backoff_clear() {
   rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
   gluerun_append_event "backoff.cleared" "planner backoff cleared by operator" "{\"previous\":$prior}"
   echo "backoff cleared (was: $prior)"
+}
+
+# --- provider-pressure controller -------------------------------------------
+#
+# Evidence in, slots out. The ONLY accepted input is a runner result that has
+# already passed gluerun_runner_quota_evidence_json: schema-validated,
+# cross-checked against a hash-bound provider-error sidecar, and carrying a
+# normalized provider/kind/httpStatus. Raw logs, prompt prose, packet text and
+# self-declared failure classes cannot reach this path by construction.
+#
+# Multiplicative decrease on a cluster of DISTINCT evidence; additive increase
+# of one slot per quiet-success interval; hard floor of
+# GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS so pressure can never starve runnable
+# work. The cap is only a ceiling — resource-plan.sh still takes the min with
+# configured and disk-affordable slots, so recovery cannot outrun either.
+
+gluerun_provider_pressure_enabled() {
+  [[ "${GLUERUN_PROVIDER_PRESSURE_ADAPT:-0}" == "1" ]]
+}
+
+# The same configured baseline resource-plan.sh starts from, so a decrease
+# halves the real ceiling rather than an invented one.
+gluerun_provider_pressure_configured_slots() {
+  local configured="${GLUERUN_MAX_CONCURRENT:-${GLUERUN_MAX_L1_CONCURRENT:-3}}"
+  [[ "$configured" =~ ^[0-9]+$ && "$configured" -ge 1 ]] || configured=3
+  printf '%s\n' "$configured"
+}
+
+# mode: observe | success | status. Never called directly; see the three
+# wrappers below, which own the enablement and evidence-validation gates.
+_gluerun_provider_pressure_run() {
+  local mode="$1" provider="${2:-}" evidence="${3:-}"
+  python3 - "$mode" "$GLUERUN_PROVIDER_PRESSURE_FILE" "$provider" "$evidence" \
+    "$GLUERUN_ADAPTER_PROVIDERS_JSON" "$(gluerun_provider_pressure_configured_slots)" \
+    "${GLUERUN_PROVIDER_PRESSURE_CLUSTER:-2}" "${GLUERUN_PROVIDER_PRESSURE_WINDOW_SEC:-900}" \
+    "${GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET:-3}" "${GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS:-1}" \
+    "${GLUERUN_PROVIDER_PRESSURE_MAX_EVENTS:-32}" <<'PY'
+import hashlib
+import json
+import os
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+(mode, path, provider_arg, evidence_raw, adapters_raw, configured_raw,
+ cluster_raw, window_raw, quiet_raw, min_slots_raw, max_events_raw) = sys.argv[1:12]
+
+SCHEMA = "gluerun.orchestration.provider-pressure.v0"
+KNOWN = set(json.loads(adapters_raw).values())
+MAX_PROVIDERS = 16
+PRESSURE_KINDS = ("usage-limit", "overloaded")
+
+
+def bounded_int(raw, default, minimum):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= minimum else default
+
+
+configured = bounded_int(configured_raw, 3, 1)
+cluster = bounded_int(cluster_raw, 2, 1)
+window = bounded_int(window_raw, 900, 0)
+quiet_target = bounded_int(quiet_raw, 3, 1)
+min_slots = bounded_int(min_slots_raw, 1, 1)
+# A floor above the configured ceiling would persist a cap that load() then
+# discards as out of range, leaving the controller to re-reduce and re-discard
+# forever while emitting a reduction event each time. Clamp instead.
+min_slots = min(min_slots, configured)
+max_events = bounded_int(max_events_raw, 32, 1)
+
+now = datetime.now(timezone.utc).replace(microsecond=0)
+now_iso = now.isoformat().replace("+00:00", "Z")
+HEX = set("0123456789abcdef")
+
+
+def is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def parse_ts(raw):
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+
+
+def in_window(event):
+    if window == 0:
+        return True
+    stamp = parse_ts(event.get("observedAt"))
+    return stamp is not None and stamp > now - timedelta(seconds=window)
+
+
+def load():
+    """Corruption-safe load. Anything unparseable, unknown or out of range is
+    dropped rather than trusted: the controller must fail OPEN to the ordinary
+    resource plan, never to zero slots and never by crashing health."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
+        return {}
+    providers_raw = raw.get("providers")
+    if not isinstance(providers_raw, dict):
+        return {}
+    clean = {}
+    for name, entry in list(providers_raw.items())[:MAX_PROVIDERS]:
+        if name not in KNOWN or not isinstance(entry, dict):
+            continue
+        cap = entry.get("cap")
+        if not is_int(cap) or cap < min_slots or cap > configured:
+            cap = None
+        quiet = entry.get("quietSuccesses")
+        if not is_int(quiet) or quiet < 0:
+            quiet = 0
+        events = []
+        raw_events = entry.get("events")
+        if isinstance(raw_events, list):
+            for event in raw_events[-max_events:]:
+                if not isinstance(event, dict):
+                    continue
+                digest = event.get("digest")
+                if not isinstance(digest, str) or len(digest) != 64:
+                    continue
+                if not set(digest).issubset(HEX):
+                    continue
+                observed = event.get("observedAt")
+                if parse_ts(observed) is None:
+                    continue
+                status = event.get("httpStatus")
+                events.append({
+                    "digest": digest,
+                    "kind": str(event.get("kind", ""))[:32],
+                    "httpStatus": status if is_int(status) else None,
+                    "observedAt": str(observed),
+                    "consumed": bool(event.get("consumed")),
+                })
+        clean[name] = {
+            "cap": cap,
+            "events": events,
+            "quietSuccesses": min(quiet, quiet_target),
+            "lastReducedAt": entry.get("lastReducedAt") if isinstance(entry.get("lastReducedAt"), str) else None,
+            "lastRecoveredAt": entry.get("lastRecoveredAt") if isinstance(entry.get("lastRecoveredAt"), str) else None,
+        }
+    return clean
+
+
+def acquire_lock():
+    """mkdir is the atomic primitive the rest of the engine already uses. A lock
+    we cannot take within the spin is abandoned rather than allowed to wedge the
+    loop; os.replace still keeps the file itself intact, so the worst case is a
+    single lost observation, not corruption."""
+    lock = path + ".lock"
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    except OSError:
+        return None
+    for _ in range(100):
+        try:
+            os.mkdir(lock)
+            return lock
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(lock) > 60:
+                    os.rmdir(lock)
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.05)
+        except OSError:
+            return None
+    return None
+
+
+def release_lock(lock):
+    if lock:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+
+
+def store(state):
+    doc = {
+        "schema": SCHEMA,
+        "updatedAt": now_iso,
+        "providers": {name: state[name] for name in sorted(state)},
+    }
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(doc, handle, indent=2)
+            handle.write("\n")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def entry_for(state, name):
+    return state.get(name) or {
+        "cap": None, "events": [], "quietSuccesses": 0,
+        "lastReducedAt": None, "lastRecoveredAt": None,
+    }
+
+
+def report(state, name, changed, action):
+    entry = entry_for(state, name)
+    print(json.dumps({
+        "enabled": True,
+        "provider": name or None,
+        "cap": entry["cap"],
+        "events": sum(1 for event in entry["events"] if in_window(event)),
+        "pendingEvents": sum(1 for event in entry["events"]
+                             if in_window(event) and not event["consumed"]),
+        "quietSuccesses": entry["quietSuccesses"],
+        "clusterThreshold": cluster,
+        "recoverQuiet": quiet_target,
+        "minSlots": min_slots,
+        "lastReducedAt": entry["lastReducedAt"],
+        "lastRecoveredAt": entry["lastRecoveredAt"],
+        "changed": changed,
+        "action": action,
+    }, separators=(",", ":")))
+
+
+if mode == "status":
+    # Read-only: no lock (os.replace makes a torn read impossible) and no write,
+    # so inspecting an untouched deployment never creates state.
+    name = provider_arg if provider_arg in KNOWN else ""
+    report(load(), name, False, "none")
+    sys.exit(0)
+
+if mode == "observe":
+    try:
+        evidence = json.loads(evidence_raw)
+    except ValueError:
+        sys.exit(1)
+    if not isinstance(evidence, dict):
+        sys.exit(1)
+    # Provider comes from the validated, hash-bound evidence, never from the
+    # runner path: an event is attributed to whoever actually emitted it.
+    name = evidence.get("provider")
+    kind = evidence.get("kind")
+    status = evidence.get("httpStatus")
+    if name not in KNOWN or kind not in PRESSURE_KINDS or not is_int(status):
+        # 403 entitlement is a hard denial, not congestion. Fewer workers will
+        # not make an unentitled account entitled, and throttling on it would
+        # bury the real problem under a shrinking pool.
+        sys.exit(1)
+    # Identity is the EVENT, never where it happens to sit on disk. Hashing
+    # providerErrorRef in would make two copies of one provider event — the
+    # relative-ref form the validator accepts, then a copied run directory —
+    # look like a cluster. Under-counting genuinely identical events is the safe
+    # direction; over-counting buys a reduction nothing justified.
+    digest = hashlib.sha256("\0".join([
+        str(evidence.get("rawEventSha256", "")),
+        str(evidence.get("runId", "")),
+        str(evidence.get("role", "")),
+        str(kind),
+        str(status),
+    ]).encode("utf-8")).hexdigest()
+
+    lock = acquire_lock()
+    try:
+        state = load()
+        entry = entry_for(state, name)
+        if any(event["digest"] == digest for event in entry["events"]):
+            # Replaying the same provider event is not a second event. Without
+            # this, one 429 re-read on each cycle would look like a cluster.
+            state[name] = entry
+            report(state, name, False, "duplicate")
+            sys.exit(0)
+        entry["events"] = (entry["events"] + [{
+            "digest": digest,
+            "kind": kind,
+            "httpStatus": status,
+            "observedAt": now_iso,
+            "consumed": False,
+        }])[-max_events:]
+        # New pressure ends any recovery run in progress.
+        entry["quietSuccesses"] = 0
+        pending = [event for event in entry["events"]
+                   if in_window(event) and not event["consumed"]]
+        action = "recorded"
+        if len(pending) >= cluster:
+            base = entry["cap"] if entry["cap"] is not None else configured
+            previous = entry["cap"]
+            entry["cap"] = max(min_slots, base // 2)
+            # Consumed, not discarded: the digests stay for dedup, but they can
+            # never fund a second reduction.
+            for event in entry["events"]:
+                event["consumed"] = True
+            if entry["cap"] != previous:
+                entry["lastReducedAt"] = now_iso
+                action = "reduced"
+            else:
+                # Already at the floor. The cluster is still consumed, but
+                # announcing another "reduced" would report a cut that did not
+                # happen — sustained pressure would spam one per cluster.
+                action = "held"
+        state[name] = entry
+        # A write that did not land is not a reduction. Reporting the in-memory
+        # entry here would tell the operator (and the event log) that capacity
+        # was cut when the on-disk ceiling never moved.
+        if store(state):
+            report(state, name, True, action)
+        else:
+            report(load(), name, False, "write-failed")
+    finally:
+        release_lock(lock)
+    sys.exit(0)
+
+if mode == "success":
+    name = provider_arg if provider_arg in KNOWN else ""
+    if not name:
+        sys.exit(0)
+    lock = acquire_lock()
+    try:
+        state = load()
+        entry = state.get(name)
+        if not entry or entry["cap"] is None:
+            # Nothing is throttled: a healthy loop must not write state.
+            report(state, name, False, "none")
+            sys.exit(0)
+        entry["quietSuccesses"] += 1
+        action = "quiet"
+        if entry["quietSuccesses"] >= quiet_target:
+            entry["quietSuccesses"] = 0
+            entry["lastRecoveredAt"] = now_iso
+            restored = entry["cap"] + 1
+            if restored >= configured:
+                # Back to the configured ceiling: drop the cap entirely rather
+                # than tracking a ceiling that no longer constrains anything.
+                entry["cap"] = None
+                action = "cleared"
+            else:
+                entry["cap"] = restored
+                action = "recovered"
+        state[name] = entry
+        if store(state):
+            report(state, name, True, action)
+        else:
+            report(load(), name, False, "write-failed")
+    finally:
+        release_lock(lock)
+    sys.exit(0)
+
+sys.exit(2)
+PY
+}
+
+# Record one validated provider-pressure event. Takes a runner RESULT PATH, not
+# text: the evidence is re-validated here so no caller can inject a pressure
+# event from an unvalidated source. Returns 1 when the file is not valid
+# congestion evidence, which every caller treats as "nothing to record".
+gluerun_provider_pressure_observe() {
+  local result_file="${1:-}"
+  gluerun_provider_pressure_enabled || return 1
+  [[ -n "$result_file" && -f "$result_file" ]] || return 1
+  local evidence
+  evidence="$(gluerun_runner_quota_evidence_json "$result_file" any 2>/dev/null || true)"
+  [[ -n "$evidence" ]] || return 1
+  local report
+  report="$(_gluerun_provider_pressure_run observe "" "$evidence" 2>/dev/null || true)"
+  [[ -n "$report" ]] || return 1
+  printf '%s\n' "$report"
+  case "$report" in
+    *'"action":"reduced"'*)
+      gluerun_append_event "provider_pressure.reduced" \
+        "clustered provider congestion evidence reduced the dispatch ceiling" "$report" 2>/dev/null || true
+      ;;
+    *'"action":"write-failed"'*)
+      # Otherwise a permanently unwritable state directory leaves the controller
+      # inert with no operator signal at all.
+      gluerun_append_event "provider_pressure.write_failed" \
+        "provider-pressure state could not be written; the dispatch ceiling is unchanged" "$report" 2>/dev/null || true
+      ;;
+  esac
+  return 0
+}
+
+# One quiet successful iteration for the currently selected provider. A no-op
+# unless that provider actually has a reduced cap.
+gluerun_provider_pressure_success() {
+  gluerun_provider_pressure_enabled || return 1
+  local provider
+  provider="$(gluerun_selected_provider_identity 2>/dev/null || true)"
+  [[ -n "$provider" ]] || return 1
+  local report
+  report="$(_gluerun_provider_pressure_run success "$provider" "" 2>/dev/null || true)"
+  [[ -n "$report" ]] || return 1
+  printf '%s\n' "$report"
+  case "$report" in
+    *'"action":"recovered"'*|*'"action":"cleared"'*)
+      gluerun_append_event "provider_pressure.recovered" \
+        "quiet successful interval restored dispatch capacity" "$report" 2>/dev/null || true
+      ;;
+    *'"action":"write-failed"'*)
+      gluerun_append_event "provider_pressure.write_failed" \
+        "provider-pressure state could not be written; the dispatch ceiling is unchanged" "$report" 2>/dev/null || true
+      ;;
+  esac
+  return 0
+}
+
+# Pressure ceiling for the currently selected provider, for resource-plan.sh and
+# health. Read-only and side-effect free; prints nothing when adaptation is off.
+gluerun_provider_pressure_status_json() {
+  gluerun_provider_pressure_enabled || return 1
+  local provider
+  provider="$(gluerun_selected_provider_identity 2>/dev/null || true)"
+  _gluerun_provider_pressure_run status "$provider" "" 2>/dev/null || return 1
 }
 
 # Compatibility name retained for extensions. A "marker scan" now means strict

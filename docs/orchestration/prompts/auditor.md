@@ -21,10 +21,13 @@ Do not approve without evidence.
 
 Output:
 
-- verdict: `accepted | needs-fix | blocked | needs-human`;
-- evidence reviewed;
-- commands run;
-- findings;
-- required fixes;
-- acceptance rationale or rejection rationale;
-- state packet.
+- For audit-verdict.v1, emit exactly one JSON object with every required
+  top-level member: `schema`, `taskId`, `runId`, `branch`, `verdict`,
+  `evidenceReviewed`, `verificationResults`, `commandsRun`, `findings`,
+  `requiredFixes`, and `rationale`.
+- `verdict` is `accepted | needs-fix | blocked | needs-human`.
+- Every `verificationResults[]` object contains all four required members:
+  `status`, `command`, `evidenceRefs`, and `rationale`. `exitCode` is optional.
+- `status` is `passed | failed-product | inconclusive-infrastructure |
+  not-rerun-evidence-verified`.
+- Do not add fields outside the selected audit-verdict schema.

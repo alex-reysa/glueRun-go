@@ -277,6 +277,36 @@ gluerun_planner_backoff_set quota RUN-codex planner "$valid" \
   || fail "backoff not bound to runner result"
 [[ "$(json_field "$GLUERUN_PLANNER_BACKOFF_FILE" httpStatus)" == "429" ]] \
   || fail "backoff missing normalized status"
+backoff_snapshot="$tmp/codex-planner-backoff.json"
+cp "$GLUERUN_PLANNER_BACKOFF_FILE" "$backoff_snapshot"
+GLUERUN_RUNNER="$ENGINE_HOME/engine/codex-run.sh" \
+  gluerun_planner_backoff_active_json >/dev/null \
+  || fail "matching built-in provider did not retain active backoff"
+if GLUERUN_RUNNER="$ENGINE_HOME/engine/claude-run.sh" \
+  gluerun_planner_backoff_active_json >/dev/null 2>&1; then
+  fail "switching built-in provider did not bypass old provider backoff"
+fi
+cmp -s "$GLUERUN_PLANNER_BACKOFF_FILE" "$backoff_snapshot" \
+  || fail "provider mismatch changed or corrupted backoff evidence"
+GLUERUN_RUNNER="$ENGINE_HOME/engine/codex-run.sh" \
+  gluerun_planner_backoff_active_json >/dev/null \
+  || fail "preserved backoff did not reactivate when provider reverted"
+
+# Pre-provider planner-backoff.v0 records remain global until expiry. This is
+# the explicit compatibility behavior for legacy evidence whose provider cannot
+# be attributed safely.
+python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" <<'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+data.pop("provider", None)
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+PY
+GLUERUN_RUNNER="$ENGINE_HOME/engine/claude-run.sh" \
+  gluerun_planner_backoff_active_json >/dev/null \
+  || fail "provider-less legacy backoff did not retain global compatibility behavior"
 rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
 mkdir -p "$GLUERUN_RUNS_DIR/RUN-noise"
 printf 'quota exceeded rate limit overloaded api_error_status":429\n' \
@@ -284,6 +314,7 @@ printf 'quota exceeded rate limit overloaded api_error_status":429\n' \
 cycle="$(gluerun_cycle_limit_window_evidence_json)" \
   || fail "cycle did not find validated runner result"
 [[ "$cycle" == *"\"resultRef\""* ]] || fail "cycle evidence is not a runner result"
+pass "backoff is provider-scoped, preserves evidence, and keeps legacy records global"
 pass "backoff and cycle detection consume structured evidence only"
 
 # An overload window is a different class with a different window length. The
@@ -302,6 +333,19 @@ gluerun_planner_backoff_set provider-overloaded RUN-overload planner "$overloade
   || fail "overload backoff recorded the wrong class"
 [[ "$(json_field "$GLUERUN_PLANNER_BACKOFF_FILE" httpStatus)" == "529" ]] \
   || fail "overload backoff missing normalized status"
+collision_dir="$tmp/custom-runner"
+collision_runner="$collision_dir/codex-run.sh"
+mkdir -p "$collision_dir"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$collision_runner"
+chmod +x "$collision_runner"
+collision_snapshot="$tmp/claude-planner-backoff.json"
+cp "$GLUERUN_PLANNER_BACKOFF_FILE" "$collision_snapshot"
+GLUERUN_RUNNER="$collision_runner" \
+  gluerun_planner_backoff_active_json >/dev/null \
+  || fail "basename-colliding custom runner bypassed existing provider backoff"
+cmp -s "$GLUERUN_PLANNER_BACKOFF_FILE" "$collision_snapshot" \
+  || fail "custom-runner lookup changed or corrupted backoff evidence"
+pass "basename-colliding custom runner remains provider-unknown"
 backoff_window="$(python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" <<'PY'
 import json, sys
 from datetime import datetime
@@ -358,5 +402,345 @@ PY
 gluerun_runner_quota_evidence_json "$valid" >/dev/null 2>&1 \
   && fail "tampered runner result passed validation"
 pass "schema mirrors match and strict validation rejects tampering"
+
+# --- provider-pressure concurrency adaptation --------------------------------
+#
+# The controller's only input is evidence that already survived
+# gluerun_runner_quota_evidence_json. These cases pin what may and may not move
+# the dispatch ceiling.
+
+# write_result keys its run directory by provider alone, so two fixtures for the
+# same provider overwrite each other. Distinct provider EVENTS are the whole
+# subject here, so they need distinct run directories and run ids.
+write_tagged_result() {
+  local provider="$1" tag="$2" envelope_json="$3" exit_code="${4:-4}"
+  local dir="$GLUERUN_RUNS_DIR/RUN-$tag"
+  mkdir -p "$dir"
+  printf '%s\n' "$envelope_json" >"$dir/envelope.json"
+  gluerun_runner_result_write "$provider" "RUN-$tag" planner planner-core \
+    "$dir/runner-result.json" "$exit_code" "$dir/envelope.json" "" "$dir/out.json"
+  printf '%s\n' "$dir/runner-result.json"
+}
+pressure_field() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+value = json.loads(sys.argv[1])
+for key in sys.argv[2].split("."):
+    value = value[key]
+print("null" if value is None else value)
+PY
+}
+pressure_cap() {
+  # Cap for a given provider straight out of the durable state document.
+  python3 - "$GLUERUN_PROVIDER_PRESSURE_FILE" "$1" <<'PY'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    print("absent")
+    sys.exit(0)
+entry = doc.get("providers", {}).get(sys.argv[2])
+print("absent" if not entry else ("null" if entry.get("cap") is None else entry["cap"]))
+PY
+}
+
+export GLUERUN_PROVIDER_PRESSURE_FILE="$GLUERUN_STATE_DIR/provider-pressure.json"
+rm -f "$GLUERUN_PLANNER_BACKOFF_FILE" "$GLUERUN_PROVIDER_PRESSURE_FILE"
+
+# Disabled (the default) is inert: the arming path runs, and nothing observes.
+quota_a="$(write_tagged_result codex pressure-a \
+  '{"type":"turn.failed","error":{"status":429,"code":"rate_limit_exceeded","message":"first"}}')"
+gluerun_planner_backoff_set quota RUN-pressure-off planner "$quota_a" >/dev/null \
+  || fail "valid evidence did not arm backoff with adaptation disabled"
+[[ ! -e "$GLUERUN_PROVIDER_PRESSURE_FILE" ]] \
+  || fail "adaptation disabled still created provider-pressure state"
+gluerun_provider_pressure_observe "$quota_a" >/dev/null 2>&1 \
+  && fail "observe ran while adaptation was disabled"
+gluerun_provider_pressure_status_json >/dev/null 2>&1 \
+  && fail "status reported while adaptation was disabled"
+pass "provider-pressure adaptation is inert when disabled"
+
+export GLUERUN_PROVIDER_PRESSURE_ADAPT=1
+export GLUERUN_MAX_CONCURRENT=4
+export GLUERUN_PROVIDER_PRESSURE_CLUSTER=2
+export GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET=2
+export GLUERUN_RUNNER="$ENGINE_HOME/engine/codex-run.sh"
+rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
+
+# One validated event is a data point, not pressure.
+first="$(gluerun_provider_pressure_observe "$quota_a")" \
+  || fail "validated congestion evidence was not observed"
+[[ "$(pressure_field "$first" action)" == "recorded" ]] \
+  || fail "first event action was not 'recorded'"
+[[ "$(pressure_field "$first" cap)" == "null" ]] \
+  || fail "a single event reduced capacity below the cluster threshold"
+
+# Replay is not a second event: the same provider event re-read on a later cycle
+# must never fund half the cluster.
+replay="$(gluerun_provider_pressure_observe "$quota_a")" \
+  || fail "replayed evidence was rejected outright instead of deduplicated"
+[[ "$(pressure_field "$replay" action)" == "duplicate" ]] \
+  || fail "replayed evidence was not recognized as a duplicate"
+[[ "$(pressure_field "$replay" events)" == "1" ]] \
+  || fail "replayed evidence was counted twice"
+[[ "$(pressure_field "$replay" cap)" == "null" ]] \
+  || fail "replayed evidence reduced capacity"
+pass "one validated event does not reduce capacity and replay cannot cluster it"
+
+# Raw prose and tampered/unbound evidence cannot reach the controller at all.
+prose_log="$tmp/pressure-prose.log"
+printf 'HTTP 429 rate_limit_exceeded overloaded 529 quota exceeded\n' >"$prose_log"
+gluerun_provider_pressure_observe "$prose_log" >/dev/null 2>&1 \
+  && fail "raw prose became provider-pressure evidence"
+tampered="$tmp/pressure-tampered-result.json"
+cp "$quota_a" "$tampered"
+python3 - "$tampered" <<'PY'
+import json, sys
+path = sys.argv[1]
+doc = json.load(open(path, encoding="utf-8"))
+doc["runId"] = "RUN-tampered"
+json.dump(doc, open(path, "w", encoding="utf-8"), indent=2)
+PY
+gluerun_provider_pressure_observe "$tampered" >/dev/null 2>&1 \
+  && fail "runId-tampered result became provider-pressure evidence"
+# A 403 entitlement denial is a hard refusal, not congestion; shrinking the pool
+# cannot make an unentitled account entitled.
+entitlement="$(write_tagged_result claude pressure-entitlement \
+  '{"type":"result","subtype":"error","is_error":true,"api_error_status":403,"result":"Organization has disabled subscription access for Claude Code."}')"
+gluerun_runner_quota_evidence_json "$entitlement" any >/dev/null \
+  || fail "entitlement fixture is not valid evidence"
+gluerun_provider_pressure_observe "$entitlement" >/dev/null 2>&1 \
+  && fail "403 entitlement was treated as congestion pressure"
+[[ "$(pressure_cap claude)" == "absent" ]] \
+  || fail "entitlement evidence created claude pressure state"
+[[ "$(pressure_cap codex)" == "null" ]] \
+  || fail "rejected evidence disturbed the codex cap"
+pass "prose, tampered evidence and entitlement denials cannot apply pressure"
+
+# A distinct second event completes the cluster: multiplicative decrease.
+quota_b="$(write_tagged_result codex pressure-b \
+  '{"type":"turn.failed","error":{"status":429,"code":"rate_limit_exceeded","message":"second"}}' 5)"
+second="$(gluerun_provider_pressure_observe "$quota_b")" \
+  || fail "second distinct event was not observed"
+[[ "$(pressure_field "$second" action)" == "reduced" ]] \
+  || fail "clustered distinct evidence did not reduce capacity"
+[[ "$(pressure_field "$second" cap)" == "2" ]] \
+  || fail "multiplicative decrease from 4 configured slots should cap at 2"
+grep -q '"type":"provider_pressure.reduced"' "$GLUERUN_EVENTS_FILE" \
+  || fail "capacity reduction emitted no event"
+# The digests remain for dedup but are consumed, so a third replay of either one
+# cannot fund a second halving.
+gluerun_provider_pressure_observe "$quota_a" >/dev/null \
+  || fail "post-reduction replay was rejected"
+[[ "$(pressure_cap codex)" == "2" ]] \
+  || fail "consumed evidence funded a second reduction"
+pass "clustered distinct validated evidence reduces capacity exactly once"
+
+# Pressure is provider-scoped: switching runners must not inherit codex's cap,
+# and codex's state must survive the switch intact.
+switch_status="$(GLUERUN_RUNNER="$ENGINE_HOME/engine/claude-run.sh" \
+  gluerun_provider_pressure_status_json)" \
+  || fail "status failed after provider switch"
+[[ "$(pressure_field "$switch_status" provider)" == "claude" ]] \
+  || fail "status did not follow the selected provider"
+[[ "$(pressure_field "$switch_status" cap)" == "null" ]] \
+  || fail "switched provider inherited another provider's reduced cap"
+# A basename-colliding custom wrapper must not impersonate the built-in and
+# collect codex's cap either.
+collision_status="$(GLUERUN_RUNNER="$collision_runner" \
+  gluerun_provider_pressure_status_json)" \
+  || fail "status failed for a custom runner"
+[[ "$(pressure_field "$collision_status" provider)" == "null" ]] \
+  || fail "basename-colliding custom runner was attributed a built-in provider"
+[[ "$(pressure_field "$collision_status" cap)" == "null" ]] \
+  || fail "basename-colliding custom runner inherited the codex cap"
+GLUERUN_RUNNER="$collision_runner" gluerun_provider_pressure_success >/dev/null 2>&1 \
+  && fail "custom runner recovered another provider's capacity"
+[[ "$(pressure_cap codex)" == "2" ]] \
+  || fail "provider switch mutated the codex cap"
+pass "provider pressure is scoped to a canonically resolved shipped adapter"
+
+# Additive increase: one slot per quiet-success interval, and only for the
+# selected provider. Sub-interval successes change nothing visible.
+[[ "$(pressure_field "$(gluerun_provider_pressure_success)" action)" == "quiet" ]] \
+  || fail "first quiet success should not restore a slot yet"
+[[ "$(pressure_cap codex)" == "2" ]] || fail "sub-interval success restored capacity early"
+recovered="$(gluerun_provider_pressure_success)" || fail "quiet-interval success failed"
+[[ "$(pressure_field "$recovered" action)" == "recovered" ]] \
+  || fail "completed quiet interval did not restore a slot"
+[[ "$(pressure_field "$recovered" cap)" == "3" ]] \
+  || fail "recovery restored more than one slot at a time"
+gluerun_provider_pressure_success >/dev/null || fail "quiet success failed"
+cleared="$(gluerun_provider_pressure_success)" || fail "quiet success failed"
+[[ "$(pressure_field "$cleared" action)" == "cleared" ]] \
+  || fail "recovery to the configured ceiling did not clear the cap"
+[[ "$(pressure_cap codex)" == "null" ]] \
+  || fail "cleared pressure left a stale cap"
+gluerun_provider_pressure_success >/dev/null 2>&1
+[[ "$(pressure_cap codex)" == "null" ]] \
+  || fail "recovery continued past the configured ceiling"
+pass "quiet successful intervals restore one slot at a time and stop at capacity"
+
+# The floor. With a single configured slot, a cluster must still leave one slot
+# for runnable work rather than halving to zero.
+floor_state="$tmp/pressure-floor.json"
+rm -f "$floor_state"
+floor_a="$(write_tagged_result grok pressure-floor-a '{"type":"error","error":{"http_status":429,"code":"rate_limit_exceeded","message":"floor-a"}}')"
+floor_b="$(write_tagged_result grok pressure-floor-b '{"type":"error","error":{"http_status":429,"code":"rate_limit_exceeded","message":"floor-b"}}' 5)"
+GLUERUN_PROVIDER_PRESSURE_FILE="$floor_state" GLUERUN_MAX_CONCURRENT=1 \
+  gluerun_provider_pressure_observe "$floor_a" >/dev/null || fail "floor observe a failed"
+floor_result="$(GLUERUN_PROVIDER_PRESSURE_FILE="$floor_state" GLUERUN_MAX_CONCURRENT=1 \
+  gluerun_provider_pressure_observe "$floor_b")" || fail "floor observe b failed"
+[[ "$(pressure_field "$floor_result" cap)" == "1" ]] \
+  || fail "pressure reduction produced a cap below one slot"
+# ...and repeated clusters cannot grind it below the floor either.
+for suffix in c d; do
+  extra="$(write_tagged_result grok "pressure-floor-$suffix" "{\"type\":\"error\",\"error\":{\"http_status\":429,\"code\":\"rate_limit_exceeded\",\"message\":\"floor-$suffix\"}}" 5)"
+  GLUERUN_PROVIDER_PRESSURE_FILE="$floor_state" GLUERUN_MAX_CONCURRENT=1 \
+    gluerun_provider_pressure_observe "$extra" >/dev/null || fail "floor observe $suffix failed"
+done
+[[ "$(GLUERUN_PROVIDER_PRESSURE_FILE="$floor_state" pressure_cap grok)" == "1" ]] \
+  || fail "sustained pressure drove the cap below one slot"
+# Sitting at the floor is not a fresh cut. Announcing one per cluster would tell
+# the operator capacity kept falling while the ceiling never moved.
+floor_reduced="$(grep -c '"type":"provider_pressure.reduced"' "$GLUERUN_EVENTS_FILE" || true)"
+floor_e="$(write_tagged_result grok pressure-floor-e '{"type":"error","error":{"http_status":429,"code":"rate_limit_exceeded","message":"floor-e"}}' 5)"
+floor_f="$(write_tagged_result grok pressure-floor-f '{"type":"error","error":{"http_status":429,"code":"rate_limit_exceeded","message":"floor-f"}}' 5)"
+GLUERUN_PROVIDER_PRESSURE_FILE="$floor_state" GLUERUN_MAX_CONCURRENT=1 \
+  gluerun_provider_pressure_observe "$floor_e" >/dev/null || fail "floor observe e failed"
+# floor_f completes a fresh cluster against a cap that is already at the floor.
+held="$(GLUERUN_PROVIDER_PRESSURE_FILE="$floor_state" GLUERUN_MAX_CONCURRENT=1 \
+  gluerun_provider_pressure_observe "$floor_f")" || fail "floor observe f failed"
+[[ "$(pressure_field "$held" action)" == "held" ]] \
+  || fail "a cluster that cannot lower the cap reported '$(pressure_field "$held" action)'"
+[[ "$(grep -c '"type":"provider_pressure.reduced"' "$GLUERUN_EVENTS_FILE" || true)" == "$floor_reduced" ]] \
+  || fail "sustained pressure at the floor kept emitting reduction events"
+pass "provider-pressure cap never falls below one slot"
+
+# Corrupt state fails OPEN to the ordinary plan; it never crashes and never
+# reduces to zero.
+corrupt_state="$tmp/pressure-corrupt.json"
+printf '{"schema":"gluerun.orchestration.provider-pressure.v0","providers":' >"$corrupt_state"
+corrupt_status="$(GLUERUN_PROVIDER_PRESSURE_FILE="$corrupt_state" \
+  gluerun_provider_pressure_status_json)" || fail "corrupt pressure state broke status"
+[[ "$(pressure_field "$corrupt_status" cap)" == "null" ]] \
+  || fail "corrupt pressure state produced a cap"
+printf '%s' '{"schema":"gluerun.orchestration.provider-pressure.v0","providers":{"codex":{"cap":0,"events":"nope","quietSuccesses":-4}}}' >"$corrupt_state"
+hostile_status="$(GLUERUN_PROVIDER_PRESSURE_FILE="$corrupt_state" \
+  gluerun_provider_pressure_status_json)" || fail "out-of-range pressure state broke status"
+[[ "$(pressure_field "$hostile_status" cap)" == "null" ]] \
+  || fail "a zero cap in state was honored instead of discarded"
+pass "malformed provider-pressure state fails open"
+
+# Dedup identity is the EVENT, not its path on disk. The validator accepts
+# relative refs, so the same provider event can legitimately appear at two
+# paths; hashing the path in would let one event fund a whole cluster.
+rm -f "$GLUERUN_PROVIDER_PRESSURE_FILE"
+relative_src="$GLUERUN_RUNS_DIR/RUN-pressure-rel"
+mkdir -p "$relative_src"
+rel_result="$(write_tagged_result opencode pressure-rel \
+  '{"type":"error","error":{"name":"RateLimitError","data":{"statusCode":429,"code":"rate_limit_exceeded","message":"rel"}}}')"
+python3 - "$rel_result" <<'PY'
+import json, os, pathlib, sys
+# Rewrite the engine's absolute refs to the relative form the validator also
+# accepts, so the copy below is a byte-faithful second home for one event.
+result_path = pathlib.Path(sys.argv[1])
+result = json.loads(result_path.read_text(encoding="utf-8"))
+error_path = pathlib.Path(result["providerErrorRef"])
+error = json.loads(error_path.read_text(encoding="utf-8"))
+if error.get("rawEventRef"):
+    error["rawEventRef"] = os.path.basename(error["rawEventRef"])
+error_path.write_text(json.dumps(error), encoding="utf-8")
+result["providerErrorRef"] = error_path.name
+if result.get("providerEnvelopeRef"):
+    result["providerEnvelopeRef"] = os.path.basename(result["providerEnvelopeRef"])
+result_path.write_text(json.dumps(result), encoding="utf-8")
+PY
+gluerun_runner_quota_evidence_json "$rel_result" any >/dev/null \
+  || fail "relative-ref evidence fixture is not valid evidence"
+cp -R "$relative_src" "$GLUERUN_RUNS_DIR/RUN-pressure-rel-copy"
+gluerun_provider_pressure_observe "$rel_result" >/dev/null \
+  || fail "relative-ref evidence was not observed"
+gluerun_provider_pressure_observe \
+  "$GLUERUN_RUNS_DIR/RUN-pressure-rel-copy/runner-result.json" >/dev/null \
+  || fail "the copied event was rejected outright"
+[[ "$(pressure_cap opencode)" == "null" ]] \
+  || fail "one provider event at two paths was counted as a cluster"
+pass "dedup identity is the provider event, not its path on disk"
+
+# A floor above the configured ceiling must not persist a cap that the plan can
+# never honour; the controller would otherwise reduce and re-reduce forever.
+rm -f "$GLUERUN_PROVIDER_PRESSURE_FILE"
+floor_high_a="$(write_tagged_result gemini pressure-highfloor-a \
+  '{"error":{"status":503,"code":"service_unavailable","message":"a"}}')"
+floor_high_b="$(write_tagged_result gemini pressure-highfloor-b \
+  '{"error":{"status":503,"code":"service_unavailable","message":"b"}}' 5)"
+for ev in "$floor_high_a" "$floor_high_b"; do
+  GLUERUN_MAX_CONCURRENT=2 GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS=6 \
+    gluerun_provider_pressure_observe "$ev" >/dev/null \
+    || fail "high-floor observe failed"
+done
+high_floor_cap="$(GLUERUN_MAX_CONCURRENT=2 pressure_cap gemini)"
+[[ "$high_floor_cap" == "2" ]] \
+  || fail "a floor above the configured ceiling persisted an unusable cap ($high_floor_cap)"
+GLUERUN_MAX_CONCURRENT=2 GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS=6 \
+  gluerun_provider_pressure_observe "$floor_high_a" >/dev/null \
+  || fail "high-floor replay failed"
+[[ "$(GLUERUN_MAX_CONCURRENT=2 pressure_cap gemini)" == "2" ]] \
+  || fail "the high-floor cap oscillated instead of holding"
+pass "a min-slots floor above configured capacity is clamped, not oscillated"
+
+# A write that never landed is not a reduction. Reporting one would tell the
+# operator capacity was cut while the on-disk ceiling never moved.
+readonly_dir="$tmp/pressure-readonly"
+mkdir -p "$readonly_dir"
+readonly_state="$readonly_dir/provider-pressure.json"
+ro_a="$(write_tagged_result grok pressure-ro-a \
+  '{"type":"error","error":{"http_status":429,"code":"rate_limit_exceeded","message":"ro-a"}}')"
+ro_b="$(write_tagged_result grok pressure-ro-b \
+  '{"type":"error","error":{"http_status":429,"code":"rate_limit_exceeded","message":"ro-b"}}' 5)"
+GLUERUN_PROVIDER_PRESSURE_FILE="$readonly_state" GLUERUN_MAX_CONCURRENT=4 \
+  gluerun_provider_pressure_observe "$ro_a" >/dev/null || fail "readonly observe a failed"
+reduced_before="$(grep -c '"type":"provider_pressure.reduced"' "$GLUERUN_EVENTS_FILE" || true)"
+chmod 500 "$readonly_dir"
+ro_report="$(GLUERUN_PROVIDER_PRESSURE_FILE="$readonly_state" GLUERUN_MAX_CONCURRENT=4 \
+  gluerun_provider_pressure_observe "$ro_b")" || true
+chmod 700 "$readonly_dir"
+if [[ -n "$ro_report" ]]; then
+  [[ "$(pressure_field "$ro_report" action)" == "write-failed" ]] \
+    || fail "an unwritable state file still reported action '$(pressure_field "$ro_report" action)'"
+  [[ "$(pressure_field "$ro_report" cap)" == "null" ]] \
+    || fail "a failed write reported a cap that was never persisted"
+fi
+[[ "$(GLUERUN_PROVIDER_PRESSURE_FILE="$readonly_state" pressure_cap grok)" == "null" ]] \
+  || fail "a failed write left a phantom cap on disk"
+reduced_after="$(grep -c '"type":"provider_pressure.reduced"' "$GLUERUN_EVENTS_FILE" || true)"
+[[ "$reduced_after" == "$reduced_before" ]] \
+  || fail "a failed write emitted a reduction event ($reduced_before -> $reduced_after)"
+# Silence would be its own defect: an unwritable state dir leaves the controller
+# inert, and the operator needs to be told rather than left guessing.
+grep -q '"type":"provider_pressure.write_failed"' "$GLUERUN_EVENTS_FILE" \
+  || fail "a failed state write produced no operator-visible diagnostic"
+pass "a failed state write reports no reduction and emits no event"
+
+# The arming path is the real choke point: pressure is observed there, not by a
+# caller that happens to remember to call it.
+rm -f "$GLUERUN_PROVIDER_PRESSURE_FILE" "$GLUERUN_PLANNER_BACKOFF_FILE"
+chokepoint_a="$(write_tagged_result cursor pressure-choke-a '{"type":"result","is_error":true,"status":429,"code":"rate_limit_exceeded","result":"choke-a"}')"
+chokepoint_b="$(write_tagged_result cursor pressure-choke-b '{"type":"result","is_error":true,"status":429,"code":"rate_limit_exceeded","result":"choke-b"}' 5)"
+GLUERUN_MAX_CONCURRENT=4 gluerun_planner_backoff_set quota RUN-choke-a planner "$chokepoint_a" \
+  || fail "chokepoint arming a failed"
+GLUERUN_MAX_CONCURRENT=4 gluerun_planner_backoff_set quota RUN-choke-b planner "$chokepoint_b" \
+  || fail "chokepoint arming b failed"
+[[ "$(pressure_cap cursor)" == "2" ]] \
+  || fail "arming a backoff did not observe provider pressure"
+# Refused evidence arms nothing and must record nothing.
+rm -f "$GLUERUN_PROVIDER_PRESSURE_FILE"
+if gluerun_planner_backoff_set quota RUN-choke-legacy planner "$legacy" 2>/dev/null; then
+  fail "legacy log armed a backoff under adaptation"
+fi
+[[ ! -e "$GLUERUN_PROVIDER_PRESSURE_FILE" ]] \
+  || fail "refused backoff evidence still recorded provider pressure"
+pass "pressure is observed at the validated backoff-arming choke point"
 
 echo "ALL PROVIDER FAILURE CONTRACT TESTS PASSED"

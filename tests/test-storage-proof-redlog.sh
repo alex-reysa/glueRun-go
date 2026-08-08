@@ -185,6 +185,12 @@ status "needs-review", baseRef "{base_ref}", branch "{t['workerBranch']}",
 headSha "uncommitted", workspace (abs worktree path), ownedFiles {json.dumps(owned)},
 changedFiles, commands[{{cmd,exitCode,logRef}}], tests[{{name,phase,status,logRef}}]
 with red+green phases, evidence[{{kind,ref}}], blockers[], nextAction, createdAt.
+Every commands[].cmd value MUST contain only the exact executable shell text
+that was run. The host re-executes successful commands verbatim. Put attempt
+labels, pass/fail counts, result summaries, and explanations in the command's
+optional rationale or in evidence[], never append them to cmd. For example,
+cmd may be "bun test path/to/test.ts"; it must not be
+"bun test path/to/test.ts (attempt-2 green: 40 pass, 0 fail)".
 No additional top-level fields are permitted. Do not emit `risks`; put any
 unresolved blocking condition in blockers[] and any non-blocking note in
 nextAction. Emit ONLY that JSON object.

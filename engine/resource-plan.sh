@@ -64,7 +64,18 @@ fi
   exit 2
 }
 
-python3 - "$configured" "$reserve" "$estimate" "$free_bytes" "$json" <<'PY'
+# Provider-pressure ceiling (opt-in, default off). Read-only: with adaptation
+# disabled this prints nothing, no state is created, and the record below is
+# byte-identical to the pre-0.17.0 plan.
+pressure_json=""
+if gluerun_provider_pressure_enabled; then
+  # Hand the controller the very baseline this plan is using, so its stored cap
+  # is bounded by the same configured ceiling the min() below applies.
+  pressure_json="$(GLUERUN_MAX_CONCURRENT="$configured" \
+    gluerun_provider_pressure_status_json 2>/dev/null || true)"
+fi
+
+python3 - "$configured" "$reserve" "$estimate" "$free_bytes" "$json" "$pressure_json" <<'PY'
 import json
 import sys
 
@@ -87,6 +98,36 @@ record = {
     "affordableSlots": affordable,
     "reason": reason,
 }
+
+# Disk decides first, then provider pressure lowers the result further — never
+# raises it. Taking the min here is what makes recovery structurally unable to
+# exceed configured or disk-affordable capacity, whatever the stored cap says.
+pressure_raw = sys.argv[6] if len(sys.argv) > 6 else ""
+if pressure_raw:
+    try:
+        pressure = json.loads(pressure_raw)
+    except ValueError:
+        pressure = None
+    if isinstance(pressure, dict):
+        cap = pressure.get("cap")
+        applied = (
+            isinstance(cap, int) and not isinstance(cap, bool) and cap < effective
+        )
+        if applied:
+            effective = cap
+            record["effectiveSlots"] = effective
+            record["reason"] = "provider-pressure-limited"
+        record["providerPressure"] = {
+            "enabled": True,
+            "provider": pressure.get("provider"),
+            "cap": cap if isinstance(cap, int) and not isinstance(cap, bool) else None,
+            "events": pressure.get("events"),
+            "pendingEvents": pressure.get("pendingEvents"),
+            "quietSuccesses": pressure.get("quietSuccesses"),
+            "recoverQuiet": pressure.get("recoverQuiet"),
+            "clusterThreshold": pressure.get("clusterThreshold"),
+            "applied": applied,
+        }
 if sys.argv[5] == "yes":
     print(json.dumps(record, separators=(",", ":")))
 else:

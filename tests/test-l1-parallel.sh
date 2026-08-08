@@ -85,6 +85,7 @@ with_fixture() {
 	  export GLUERUN_LEASES_DIR="$GLUERUN_STATE_DIR/leases"
 	  export GLUERUN_EVENTS_FILE="$GLUERUN_STATE_DIR/events.ndjson"
 	  export GLUERUN_PLANNER_BACKOFF_FILE="$GLUERUN_STATE_DIR/planner-backoff.json"
+	  export GLUERUN_PROVIDER_PRESSURE_FILE="$GLUERUN_STATE_DIR/provider-pressure.json"
 	  export GLUERUN_BREAKER_FILE="$GLUERUN_STATE_DIR/circuit.json"
 	  export GLUERUN_STATUS_FILE="$GLUERUN_STATE_DIR/STATUS.md"
   # Re-point STOP at the fixture: lib.sh was sourced once (with the real repo),
@@ -101,6 +102,7 @@ with_fixture() {
   export GLUERUN_L1_TASKS_PER_NODE=1
   export GLUERUN_MIN_DISK_GB=0
 	  unset GLUERUN_TEST_FAIL_NODE GLUERUN_TEST_BADAREA_NODE GLUERUN_L1_PLAN_NODE GLUERUN_CODEX_RUNNER GLUERUN_L1_PLANNER GLUERUN_ENABLE_L1_PARALLEL GLUERUN_AUTO_INTEGRATE GLUERUN_PUSH GLUERUN_AUTO_PROMOTE_GATES GLUERUN_MAX_CONSEC_FAILS 2>/dev/null || true
+	  unset GLUERUN_PROVIDER_PRESSURE_ADAPT GLUERUN_PROVIDER_PRESSURE_CLUSTER GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET GLUERUN_RUNNER GLUERUN_MAX_CONCURRENT 2>/dev/null || true
 	}
 
 make_structured_quota_evidence() {
@@ -820,7 +822,13 @@ PY
   local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
   write_reconcile_should_not_run_stub "$stub"
   local out
-  out="$(GLUERUN_QUOTA_SLEEP_CAP=1 GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  # The loop must be running the SAME provider the window belongs to. A backoff
+  # is provider-scoped, so a claude 529 is deliberately non-blocking for a codex
+  # loop; leaving the runner at its codex default here would silently test
+  # provider scoping instead of overload-window handling. In the field the
+  # evidence always comes from the selected runner, which is what this pins.
+  out="$(GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" GLUERUN_QUOTA_SLEEP_CAP=1 \
+    GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "provider overload window open" "autonomate detects the open overload window"
   assert_not_contains "$out" "quota window open" "an overload window is not reported as a quota window"
   assert_eq "$(gluerun_breaker_count)" "0" "sleeping through an overload window does not trip the breaker"
@@ -836,13 +844,16 @@ test_autonomate_overload_wait_budget_is_separate_from_quota() {
   local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
   write_reconcile_should_not_run_stub "$stub"
   local out
+  # As above: the loop runs the provider whose window this is, so the wait
+  # budgets are what is under test rather than provider scoping.
   # A zero QUOTA budget must not stop an OVERLOAD wait.
-  out="$(GLUERUN_QUOTA_WAIT_BUDGET=0 GLUERUN_QUOTA_SLEEP_CAP=1 \
+  out="$(GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" GLUERUN_QUOTA_WAIT_BUDGET=0 \
+    GLUERUN_QUOTA_SLEEP_CAP=1 \
     GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_not_contains "$out" "wait budget exhausted" "the quota budget does not govern an overload wait"
   [[ ! -f "$GLUERUN_STOP_FILE" ]] || fail "an exhausted quota budget must not STOP an overload wait"
-  out="$(GLUERUN_OVERLOAD_WAIT_BUDGET=0 GLUERUN_RECONCILE_SCRIPT="$stub" \
-    "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" GLUERUN_OVERLOAD_WAIT_BUDGET=0 \
+    GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "provider overload wait budget exhausted" "the overload budget governs an overload wait"
   [[ -f "$GLUERUN_STOP_FILE" ]] || fail "overload budget exhaustion should set the STOP sentinel"
 }
@@ -948,7 +959,11 @@ echo "l1_import_rejections_this_run=0"
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  # Run the provider the evidence names: breaker immunity is now conditional on
+  # the armed window actually being honourable, so a codex loop here would be
+  # testing the cross-provider guard below instead of class selection.
+  out="$(GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" GLUERUN_RECONCILE_SCRIPT="$stub" \
+    "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "structured provider limit evidence" "an overload-induced cycle is recognized at the chokepoint"
   assert_eq "$(gluerun_breaker_count)" "0" "an overload window leaves the breaker at zero"
   [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "the chokepoint arms a backoff from overload evidence"
@@ -1006,6 +1021,199 @@ STUB
   assert_contains "$out" "breaker -> 1" "a real failure with no limit markers still trips the breaker"
   assert_eq "$(gluerun_breaker_count)" "1" "a real failure increments the breaker even with C2 detection active"
   assert_not_contains "$out" "LIMIT/403-induced" "a real failure is not misclassified as a limit window"
+}
+
+# A window armed for a provider the loop is NOT running will be discarded by the
+# provider-scoped honour path, so it can never make the loop sleep. Buying
+# breaker immunity with it leaves the cycle with no terminating condition at
+# all: no sleep means the wait budget never accumulates and never escalates to
+# STOP, while the breaker stays pinned at zero. Fail closed instead.
+test_autonomate_unhonourable_window_still_trips_the_breaker() {
+  with_fixture
+  make_structured_quota_evidence RUN-crossprov claude 529 >/dev/null
+  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "dispatched_this_run=0"
+echo "failed_dispatches=1"
+echo "integrated_this_run=0"
+echo "failed_integrations=0"
+echo "planner_failures_this_run=0"
+echo "l1_import_rejections_this_run=0"
+STUB
+  chmod +x "$stub"
+  local out
+  # Loop runs the codex default; the only evidence is a claude 529.
+  out="$(GLUERUN_QUOTA_SLEEP_CAP=1 GLUERUN_RECONCILE_SCRIPT="$stub" \
+    "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_not_contains "$out" "window open" "a cross-provider window cannot make the loop sleep"
+  assert_contains "$out" "breaker -> 1" "an unhonourable window must not buy breaker immunity"
+  assert_eq "$(gluerun_breaker_count)" "1" "the breaker tripped on the cross-provider window"
+  # The evidence is still preserved: reverting the runner reactivates it.
+  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] \
+    || fail "the backoff record must still be written for the provider it belongs to"
+  GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" gluerun_planner_backoff_active_json >/dev/null \
+    || fail "the preserved record must be honourable by the provider it names"
+}
+
+# The matching-provider case is unchanged: a window the loop will actually sleep
+# through still suppresses the breaker increment.
+test_autonomate_honourable_window_still_suppresses_the_breaker() {
+  with_fixture
+  make_structured_quota_evidence RUN-sameprov codex 429 >/dev/null
+  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "dispatched_this_run=0"
+echo "failed_dispatches=1"
+echo "integrated_this_run=0"
+echo "failed_integrations=0"
+echo "planner_failures_this_run=0"
+echo "l1_import_rejections_this_run=0"
+STUB
+  chmod +x "$stub"
+  local out
+  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_contains "$out" "NO breaker increment" "a honourable window still suppresses the breaker"
+  assert_eq "$(gluerun_breaker_count)" "0" "a honourable window leaves the breaker at zero"
+}
+
+# --- provider-pressure adaptation at the loop level ------------------------------
+# The controller's evidence rules live in test-provider-failure-contract.sh and
+# its effect on the plan in test-resource-bootstrap.sh. What is proved here is
+# the wiring: that the loop's own chokepoint feeds it, that a progressing cycle
+# feeds recovery, and that with the knob off the loop is byte-inert.
+
+# A reconcile stub whose cycle fails with no progress (the chokepoint shape).
+write_limit_fail_stub() {
+  cat >"$1" <<'STUB'
+#!/usr/bin/env bash
+echo "dispatched_this_run=0"
+echo "failed_dispatches=1"
+echo "integrated_this_run=0"
+echo "failed_integrations=0"
+echo "planner_failures_this_run=0"
+echo "l1_import_rejections_this_run=0"
+STUB
+  chmod +x "$1"
+}
+
+pressure_cap_for() {
+  python3 - "$GLUERUN_PROVIDER_PRESSURE_FILE" "$1" <<'PY'
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    print("absent")
+    sys.exit(0)
+entry = doc.get("providers", {}).get(sys.argv[2])
+print("absent" if not entry else ("null" if entry.get("cap") is None else entry["cap"]))
+PY
+}
+
+# Default OFF: the loop still arms its backoff and never creates pressure state.
+test_autonomate_provider_pressure_inert_by_default() {
+  with_fixture
+  make_structured_quota_evidence RUN-cycle >/dev/null
+  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  write_limit_fail_stub "$stub"
+  local out
+  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  assert_contains "$out" "structured provider limit evidence" "the chokepoint still recognizes the window"
+  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "the default loop still arms a backoff"
+  [[ -e "$GLUERUN_PROVIDER_PRESSURE_FILE" ]] \
+    && fail "adaptation is off by default and must create no pressure state"
+  true
+}
+
+# Enabled: one chokepoint window is a data point, a second distinct one is a
+# cluster. The backoff is cleared between iterations to stand in for the window
+# expiring -- otherwise the loop would (correctly) sleep instead of cycling.
+test_autonomate_clustered_windows_reduce_dispatch_ceiling() {
+  with_fixture
+  export GLUERUN_PROVIDER_PRESSURE_ADAPT=1
+  export GLUERUN_PROVIDER_PRESSURE_CLUSTER=2
+  export GLUERUN_MAX_CONCURRENT=4
+  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  write_limit_fail_stub "$stub"
+
+  make_structured_quota_evidence RUN-window-1 >/dev/null
+  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  assert_eq "$(pressure_cap_for codex)" "null" "one window must not reduce the ceiling"
+
+  # Window expired; the next cycle meets a fresh, distinct 429.
+  rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
+  rm -rf "$GLUERUN_RUNS_DIR/RUN-window-1"
+  make_structured_quota_evidence RUN-window-2 >/dev/null
+  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  assert_eq "$(pressure_cap_for codex)" "2" "a clustered second window halves the ceiling"
+  assert_eq "$(gluerun_breaker_count)" "0" "adapting concurrency does not trip the breaker"
+
+  local plan
+  plan="$(GLUERUN_MAX_CONCURRENT=4 "$SCRIPT_DIR/resource-plan.sh" --configured-slots 4 \
+    --reserve-bytes 0 --estimated-worktree-bytes 1 --free-bytes 1000000 --json)"
+  assert_contains "$plan" '"effectiveSlots":2' "the reduced ceiling reaches the dispatch plan"
+  assert_contains "$plan" '"reason":"provider-pressure-limited"' "the plan names provider pressure"
+}
+
+# A progressing cycle is a quiet success; enough of them hand a slot back.
+test_autonomate_quiet_progress_restores_capacity() {
+  with_fixture
+  export GLUERUN_PROVIDER_PRESSURE_ADAPT=1
+  export GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET=1
+  export GLUERUN_MAX_CONCURRENT=4
+  python3 - "$GLUERUN_PROVIDER_PRESSURE_FILE" <<'PY'
+import json, sys
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump({
+        "schema": "gluerun.orchestration.provider-pressure.v0",
+        "updatedAt": "2026-01-01T00:00:00Z",
+        "providers": {"codex": {"cap": 1, "events": [], "quietSuccesses": 0,
+                                "lastReducedAt": None, "lastRecoveredAt": None}},
+    }, handle)
+PY
+  local stub="$GLUERUN_ROOT/reconcile-progress.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+echo "dispatched_this_run=0"
+echo "failed_dispatches=0"
+echo "integrated_this_run=1"
+echo "failed_integrations=0"
+echo "planner_failures_this_run=0"
+echo "l1_import_rejections_this_run=0"
+STUB
+  chmod +x "$stub"
+  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  assert_eq "$(pressure_cap_for codex)" "2" "a quiet successful iteration restores exactly one slot"
+  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  assert_eq "$(pressure_cap_for codex)" "3" "recovery continues one slot at a time"
+  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  assert_eq "$(pressure_cap_for codex)" "null" "reaching the configured ceiling clears the cap"
+  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  assert_eq "$(pressure_cap_for codex)" "null" "recovery never climbs past the configured ceiling"
+}
+
+# The floor, end to end: sustained windows against a single configured slot must
+# still leave that slot, or runnable work could never drain.
+test_autonomate_pressure_never_starves_runnable_work() {
+  with_fixture
+  export GLUERUN_PROVIDER_PRESSURE_ADAPT=1
+  export GLUERUN_PROVIDER_PRESSURE_CLUSTER=1
+  export GLUERUN_MAX_CONCURRENT=1
+  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  write_limit_fail_stub "$stub"
+  local i
+  for i in 1 2 3; do
+    rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
+    rm -rf "$GLUERUN_RUNS_DIR/RUN-floor-$((i - 1))"
+    make_structured_quota_evidence "RUN-floor-$i" >/dev/null
+    GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  done
+  assert_eq "$(pressure_cap_for codex)" "1" "sustained pressure never drives the ceiling below one slot"
+  local plan
+  plan="$(GLUERUN_MAX_CONCURRENT=1 "$SCRIPT_DIR/resource-plan.sh" --configured-slots 1 \
+    --reserve-bytes 0 --estimated-worktree-bytes 1 --free-bytes 1000000 --json)"
+  assert_contains "$plan" '"effectiveSlots":1' "the plan keeps one slot for runnable work"
 }
 
 test_fanout_invalid_staged_imports_nothing_for_that_node() {
@@ -1294,6 +1502,12 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_autonomate_chokepoint_arms_the_class_the_evidence_names
 	test_autonomate_import_rejections_never_arm_backoff
 	test_autonomate_real_failure_still_trips_with_detection_active
+	test_autonomate_unhonourable_window_still_trips_the_breaker
+	test_autonomate_honourable_window_still_suppresses_the_breaker
+	test_autonomate_provider_pressure_inert_by_default
+	test_autonomate_clustered_windows_reduce_dispatch_ceiling
+	test_autonomate_quiet_progress_restores_capacity
+	test_autonomate_pressure_never_starves_runnable_work
 	test_fanout_invalid_staged_imports_nothing_for_that_node
 test_frontier_scope_guard_excludes_conflict_via_configured_area_map
 test_frontier_scope_guard_batch_overlap_via_configured_area_map

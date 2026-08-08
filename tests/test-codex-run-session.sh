@@ -62,12 +62,25 @@ else
     printf '{"type":"session.created","msg":{"session_id":"%s"}}\n' "$sid"
   fi
 fi
-printf '%s\n' '{"type":"item.completed"}'
-
 result="${MOCK_RESULT:-}"
 [[ -z "$result" ]] && result='{"verdict":"accepted"}'
 if [[ -n "$out_file" ]]; then
   printf '%s\n' "$result" > "$out_file"
+fi
+if [[ "${MOCK_TERMINAL_COMPLETE:-no}" == "yes" ]]; then
+  printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":1}}'
+  if [[ "${MOCK_FAILURE_AFTER_COMPLETE:-no}" == "yes" ]]; then
+    sleep "${MOCK_FAILURE_DELAY_SEC:-2}"
+    printf '%s\n' '{"type":"turn.failed","error":{"code":"transport_error","message":"provider terminal failure"}}'
+  fi
+  if [[ "${MOCK_HANG_AFTER_COMPLETE:-no}" == "yes" ]]; then
+    sleep 60 &
+    child=$!
+    [[ -n "${MOCK_CHILD_OUT:-}" ]] && printf '%s\n' "$child" >"$MOCK_CHILD_OUT"
+    wait "$child"
+  fi
+else
+  printf '%s\n' '{"type":"item.completed"}'
 fi
 exit "${MOCK_EXIT:-0}"
 MOCK
@@ -139,6 +152,76 @@ MOCK_RESULT='{"status":"x"}' MOCK_SHAPE="thread" MOCK_SESSION_ID="019eae91-2e20-
 [[ "$(field "$meta" sessionId)" == "019eae91-2e20-71c1-9f8a-c30d1f7e851e" ]] \
   || fail "b4: thread_id from thread.started not parsed (got: $(field "$meta" sessionId))"
 pass "b4 real codex thread.started/thread_id is captured as the session id"
+
+# --- Case b5: terminal completion cleanup preserves session/output artifacts ---
+r="$workroot/b5"; new_repo "$r"; o="$(out)"; meta="$workroot/b5-meta.json"
+child_out="$workroot/b5-child.pid"; ec=0
+MOCK_RESULT='{"status":"accepted"}' MOCK_SHAPE="thread" \
+  MOCK_SESSION_ID="completed-session-123" MOCK_TERMINAL_COMPLETE=yes \
+  MOCK_HANG_AFTER_COMPLETE=yes MOCK_CHILD_OUT="$child_out" \
+  GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=60 \
+  GLUERUN_CODEX_COMPLETION_GRACE_SEC=1 \
+  run_codex_run "$r" --level l2 -C "$r" --output-last-message "$o" \
+  --session-meta "$meta" >/dev/null 2>&1 || ec=$?
+[[ "$ec" -eq 0 ]] || fail "b5: semantically completed hung run should succeed (got $ec)"
+[[ "$(field "$o" status)" == "accepted" ]] \
+  || fail "b5: last-message artifact was not preserved"
+[[ "$(field "$meta" sessionId)" == "completed-session-123" ]] \
+  || fail "b5: session metadata was not preserved"
+[[ "$(field "$meta" exitCode)" == "0" ]] \
+  || fail "b5: completion cleanup should record exitCode 0"
+if [[ -s "$child_out" ]]; then
+  child="$(cat "$child_out")"
+  sleep 0.3
+  kill -0 "$child" 2>/dev/null && fail "b5: provider grandchild survived cleanup"
+fi
+pass "b5 terminal completion cleanup preserves last-message and session metadata"
+
+# --- Case b6: a terminal failure after completion remains authoritative --------
+# The failure is delayed long enough for the runner to enter completion grace,
+# then Codex hangs. Cleanup must be nonzero and retain all structured evidence.
+r="$workroot/b6"; new_repo "$r"; o="$(out)"; meta="$workroot/b6-meta.json"
+child_out="$workroot/b6-child.pid"; result="$workroot/b6-runner-result.json"; ec=0
+MOCK_RESULT='{"status":"accepted-before-provider-failure"}' MOCK_SHAPE="thread" \
+  MOCK_SESSION_ID="failed-session-123" MOCK_TERMINAL_COMPLETE=yes \
+  MOCK_FAILURE_AFTER_COMPLETE=yes MOCK_FAILURE_DELAY_SEC=2 \
+  MOCK_HANG_AFTER_COMPLETE=yes MOCK_CHILD_OUT="$child_out" \
+  GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=60 \
+  GLUERUN_CODEX_COMPLETION_GRACE_SEC=6 \
+  run_codex_run "$r" --level l2 -C "$r" --output-last-message "$o" \
+  --session-meta "$meta" --result-file "$result" >/dev/null 2>&1 || ec=$?
+[[ "$ec" -ne 0 ]] || fail "b6: terminal provider failure was converted to success"
+[[ "$ec" -eq 1 ]] || fail "b6: terminal provider failure should exit 1 (got $ec)"
+[[ "$(field "$o" status)" == "accepted-before-provider-failure" ]] \
+  || fail "b6: last-message artifact was not preserved"
+[[ "$(field "$meta" sessionId)" == "failed-session-123" ]] \
+  || fail "b6: session metadata was not preserved"
+[[ "$(field "$meta" exitCode)" == "1" ]] \
+  || fail "b6: session metadata did not record the provider failure"
+[[ "$(field "$result" exitCode)" == "1" ]] \
+  || fail "b6: runner result exit code mismatch"
+[[ "$(field "$result" outcome)" == "provider-error" ]] \
+  || fail "b6: runner result did not classify the terminal envelope"
+[[ "$(field "$result" failureClass)" == "provider-exit" ]] \
+  || fail "b6: terminal failure should classify as provider-exit"
+provider_error="$(field "$result" providerErrorRef)"
+[[ -f "$provider_error" ]] || fail "b6: provider-error sidecar missing"
+[[ "$(field "$provider_error" eventType)" == "turn.failed" ]] \
+  || fail "b6: provider-error sidecar event type mismatch"
+[[ "$(field "$provider_error" kind)" == "provider-error" ]] \
+  || fail "b6: provider-error sidecar kind mismatch"
+provider_envelope="$(field "$result" providerEnvelopeRef)"
+[[ -f "$provider_envelope" ]] || fail "b6: raw provider JSONL artifact missing"
+grep -q '"type":"turn.completed"' "$provider_envelope" \
+  || fail "b6: completion event missing from preserved JSONL"
+grep -q '"type":"turn.failed"' "$provider_envelope" \
+  || fail "b6: failure event missing from preserved JSONL"
+if [[ -s "$child_out" ]]; then
+  child="$(cat "$child_out")"
+  sleep 0.3
+  kill -0 "$child" 2>/dev/null && fail "b6: provider grandchild survived failure cleanup"
+fi
+pass "b6 post-completion failure stays nonzero with structured evidence preserved"
 
 # --- Case c: --resume-session puts `exec resume <id>` in the codex argv ---------
 r="$workroot/c"; new_repo "$r"; o="$(out)"; args="$workroot/c.args"; meta="$workroot/c-meta.json"
