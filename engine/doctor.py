@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Iterable
 
 from capability_policy import strict_provider_arg_violation
@@ -68,6 +69,15 @@ MODEL_PATTERNS = {
     "cursor": re.compile(r"^(?:auto$|gpt-|cursor-|claude-|sonnet|opus|o[0-9])"),
     "grok": re.compile(r"^grok-"),
 }
+# Verdict a validated GLUERUN_TEST_PID_PROBE_STATE stands in for. The state
+# names match engine/ops.sh's ops_pid_probe_state so one seam vocabulary covers
+# both PID-probe surfaces; the verdicts are doctor's own.
+PID_PROBE_SEAM_VERDICTS = {
+    "alive": "alive",
+    "dead": "stale",
+    "unknown": "unknown-permission",
+}
+PROCESS_CONTROL_SEAM_STATES = {"ok", "no-group-kill", "no-ps"}
 BUILTIN_CAPABILITIES = {
     "filesystem",
     "git",
@@ -316,6 +326,174 @@ class Doctor:
                 f"repo: {self.repo}",
                 required_for=("all-runs",),
                 details={"path": str(self.repo)},
+            )
+
+    def process_control_checks(self) -> None:
+        """Can this host create a process session and terminate it as a group?
+
+        Timeout cleanup rests on that primitive: a runner is spawned as a
+        session leader so a single killpg reaches every descendant without
+        enumerating anything. Where the primitive is missing, a timed-out
+        agent's provider and shell children outlive the kill and keep writing
+        to a worktree — and the restricted sandboxes that break it are the same
+        ones that deny `ps`, so the fallback is gone too and the failure is
+        silent (PMGO-004). So: probe both, run the real thing rather than
+        infer from uname, and let the group-kill failure BLOCK rather than warn.
+        An operator who cannot prove cleanup must not actuate unattended.
+        """
+        seam = ""
+        if os.environ.get("GLUERUN_TEST_PROCESS_CONTROL") == "1":
+            state = os.environ.get("GLUERUN_TEST_PROCESS_CONTROL_STATE", "")
+            if state in PROCESS_CONTROL_SEAM_STATES:
+                seam = state
+        self.process_group_kill_check(seam)
+        self.process_enumeration_check(seam)
+
+    def process_group_kill_check(self, seam: str) -> None:
+        details: dict[str, Any] = {"probe": "spawn-setsid-killpg-verify"}
+        if seam:
+            details["seam"] = seam
+            error = (
+                "simulated: process sessions cannot be created or terminated here"
+                if seam == "no-group-kill"
+                else ""
+            )
+        else:
+            error = self.probe_process_group_kill(details)
+        if error:
+            self.add(
+                "runtime.process-group-kill",
+                "fail",
+                f"process-group termination is unavailable: {error}",
+                required_for=("all-runs", "unattended-runs"),
+                remediation=(
+                    "This environment cannot create or terminate process sessions; "
+                    "timed-out agents cannot be cleaned up safely. Do not run "
+                    "unattended actuation here."
+                ),
+                details=details,
+            )
+        else:
+            self.add(
+                "runtime.process-group-kill",
+                "pass",
+                "process-group termination works (new session created, signalled "
+                "as a group, and verified gone)",
+                required_for=("all-runs", "unattended-runs"),
+                details=details,
+            )
+
+    def probe_process_group_kill(self, details: dict[str, Any]) -> str:
+        """Run the real primitive. Empty string on success, else the reason.
+
+        Cleanup-safe by construction: the finally block kills anything the
+        probe still owns, and a process group is only ever signalled once the
+        kernel has confirmed it is the child's own — killpg(0, ...) would hit
+        the operator's own shell.
+        """
+        child: subprocess.Popen[bytes] | None = None
+        pgid = 0
+        try:
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            details["childPid"] = child.pid
+            pgid = os.getpgid(child.pid)
+            details["pgid"] = pgid
+            if pgid != child.pid:
+                return (
+                    f"child {child.pid} did not become its own session leader "
+                    f"(pgid {pgid})"
+                )
+            os.killpg(pgid, signal.SIGTERM)
+            child.wait(timeout=5)
+            # The child is reaped, so an empty group should answer ESRCH at
+            # once; poll briefly anyway rather than race the process table.
+            deadline = time.monotonic() + 2.0
+            while True:
+                try:
+                    os.killpg(pgid, 0)
+                except ProcessLookupError:
+                    return ""
+                except OSError as exc:
+                    return f"process group {pgid} could not be verified gone: {exc}"
+                if time.monotonic() >= deadline:
+                    return f"process group {pgid} still exists after SIGTERM"
+                time.sleep(0.05)
+        except subprocess.TimeoutExpired:
+            return "child survived SIGTERM sent to its own process group"
+        except (OSError, ValueError) as exc:
+            return f"{type(exc).__name__}: {exc}"
+        finally:
+            if child is not None and child.poll() is None:
+                if pgid > 1 and pgid == child.pid:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                try:
+                    child.kill()
+                except OSError:
+                    pass
+                try:
+                    child.wait(timeout=2)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+
+    def process_enumeration_check(self, seam: str) -> None:
+        """`ps` is now only the fallback, so its absence warns rather than fails.
+
+        It still matters: the group kill covers descendants that stayed in the
+        session, and enumeration is what finds the one that called setsid for
+        itself. Losing it is a real reduction in containment, just not one that
+        should stop a run on its own.
+        """
+        details: dict[str, Any] = {}
+        stderr_line = ""
+        if seam:
+            details["seam"] = seam
+            visible = seam != "no-ps"
+            returncode = 0 if visible else 1
+            if not visible:
+                stderr_line = "simulated: ps is denied in this environment"
+        else:
+            result = command(["ps", "-A", "-o", "pid=", "-o", "ppid="])
+            returncode = result.returncode
+            stderr_line = first_line(result.stderr)
+            visible = False
+            if returncode == 0:
+                own = str(os.getpid())
+                for line in result.stdout.splitlines():
+                    fields = line.split()
+                    if fields and fields[0] == own:
+                        visible = True
+                        break
+        details["returncode"] = returncode
+        details["selfVisible"] = visible
+        if stderr_line:
+            details["stderr"] = stderr_line
+        if returncode == 0 and visible:
+            self.add(
+                "runtime.process-enumeration",
+                "pass",
+                "process enumeration (ps) is available",
+                details=details,
+            )
+        else:
+            self.add(
+                "runtime.process-enumeration",
+                "warn",
+                "process enumeration (ps) is unavailable; descendant-tree fallback "
+                "cleanup is degraded",
+                remediation=(
+                    "Session-spawned runners are still killed as a group; restore "
+                    "`ps` to recover the fallback that catches escaped descendants."
+                ),
+                details=details,
             )
 
     def effective_environment(self) -> None:
@@ -654,21 +832,104 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 "no legacy pmgo.* schema ids in prompts/schemas",
                 required_for=("all-runs",),
             )
+        # A pidfile probe has FOUR outcomes, and they are not interchangeable.
+        # This loop used to catch `(OSError, ValueError)` as one case and call
+        # all of it "stale", so a sandbox that denies process inspection made
+        # doctor report the live console server as a leftover (PMGO-005).
+        # `kill(pid, 0)` answering EPERM means "the process may well be there,
+        # I am not permitted to look" — the opposite of proof of death. Only
+        # ESRCH is that proof, and only that verdict may suggest deleting the
+        # file. Doctor itself never removes one in any verdict.
         for name in ("autonomate.pid", "console.pid"):
             path = self.repo / ".gluerun-state" / name
             if not path.is_file():
                 continue
+            check_id = f"state.pidfile.{safe_slug(name)}"
+            dedupe_key = f"pidfile:{path}"
             try:
-                pid = int(path.read_text(encoding="utf-8").strip())
-                os.kill(pid, 0)
-            except (OSError, ValueError):
+                pid: int | None = int(path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError, OverflowError):
+                pid = None
+            if pid is not None and pid <= 0:
+                # kill(2) reads 0 and negatives as process-GROUP selectors
+                # rather than pids. Probing one asks about our own group, or
+                # about every process we are allowed to signal, and would
+                # report a garbage pidfile as naming something alive.
+                pid = None
+            verdict = "malformed" if pid is None else self.pidfile_probe_verdict(pid)
+            details: dict[str, Any] = {"verdict": verdict}
+            if pid is not None:
+                details["pid"] = pid
+            if verdict == "alive":
                 self.add(
-                    f"state.pidfile.{safe_slug(name)}",
+                    check_id,
+                    "pass",
+                    f"pidfile {path} names live PID {pid}",
+                    dedupe_key=dedupe_key,
+                    details=details,
+                )
+            elif verdict == "stale":
+                self.add(
+                    check_id,
                     "warn",
                     f"stale pidfile {path}",
                     remediation="Restart the process or remove this stale pidfile.",
-                    dedupe_key=f"pidfile:{path}",
+                    dedupe_key=dedupe_key,
+                    details=details,
                 )
+            elif verdict == "unknown-permission":
+                self.add(
+                    check_id,
+                    "warn",
+                    f"PID {pid} exists or is inaccessible; liveness unknown because "
+                    "the environment denied process inspection. Do not delete the "
+                    "pidfile automatically.",
+                    remediation=(
+                        "Verify process ownership manually from a process-capable "
+                        "shell before acting."
+                    ),
+                    dedupe_key=dedupe_key,
+                    details=details,
+                )
+            else:
+                self.add(
+                    check_id,
+                    "warn",
+                    f"malformed pidfile {path} (contents are not a PID)",
+                    remediation="Regenerate or remove it; it cannot identify a process.",
+                    dedupe_key=dedupe_key,
+                    details=details,
+                )
+
+    def pidfile_probe_verdict(self, pid: int) -> str:
+        """alive | stale | unknown-permission | malformed, for the loop above.
+
+        The seam exists because EPERM cannot be provoked portably from a test
+        process that owns everything it spawns, and EPERM is the exact case
+        PMGO-005 was about. Both variables are required and the state must be
+        one this map knows: a lone or misspelled variable falls through to the
+        real syscall, so a value inherited from some other run can never
+        quietly rewrite an operator's diagnosis. Same discipline, and the same
+        state names, as ops_pid_probe_state in engine/ops.sh.
+        """
+        if os.environ.get("GLUERUN_TEST_PID_PROBE") == "1":
+            seam = PID_PROBE_SEAM_VERDICTS.get(
+                os.environ.get("GLUERUN_TEST_PID_PROBE_STATE", "")
+            )
+            if seam:
+                return seam
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return "stale"
+        except (OverflowError, ValueError):
+            # Numeric, but no such thing as that pid on this platform.
+            return "malformed"
+        except OSError:
+            # PermissionError and anything else the kernel refuses to answer.
+            # Inconclusive is not dead.
+            return "unknown-permission"
+        return "alive"
 
     def resolve_runner(self) -> None:
         raw = self.runtime_env.get(
@@ -2139,6 +2400,7 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
 
     def run(self) -> int:
         self.basic_checks()
+        self.process_control_checks()
         self.load_config()
         self.effective_environment()
         self.schema_checks()

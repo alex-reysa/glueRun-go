@@ -100,9 +100,21 @@ if [[ -z "$result_file" ]]; then
   result_file="$(gluerun_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
+# Pid of the backgrounded provider pipeline while it is un-reaped. It is a
+# SESSION LEADER (see gluerun_codex_spawn_pipeline), which is what licenses the
+# `session` argument to gluerun_kill_tree below; it is cleared the instant it is
+# waited on, because a reaped pid is no longer a safe kill target.
+child=""
 gluerun_codex_result_on_exit() {
   local rc=$?
   trap - EXIT
+  # An interrupted run leaves codex and its descendants alive, still writing to
+  # the worktree. Kill the whole provider session first, then write the result.
+  if [[ -n "${child:-}" ]]; then
+    gluerun_kill_tree "$child" 0 session 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
+    child=""
+  fi
   if [[ "$runner_result_written" != "yes" ]]; then
     gluerun_runner_result_write codex "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${jsonl_tmp:-}" "" "$output_last_message" || true
@@ -111,6 +123,15 @@ gluerun_codex_result_on_exit() {
   exit "$rc"
 }
 trap gluerun_codex_result_on_exit EXIT
+# The provider now runs in its OWN session, so it no longer receives the
+# terminal's SIGINT along with this script, and ask/supervise/decide SIGTERM
+# this script on their way to a kill. Exiting from a signal handler runs the
+# EXIT trap above — which is the only thing that still kills the provider
+# session. Without these, the default disposition would tear this script down
+# and leave the session running. Mirrors claude-run.sh.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -326,6 +347,10 @@ exit_code=0
 # written. This is the sole status input; the final assistant message and
 # command output are never scanned for quota prose.
 jsonl_tmp="$(mktemp "${TMPDIR:-/tmp}/gluerun-codex-jsonl.XXXXXX")"
+# Exported because the tee now lives inside a separate `bash -c` (the session
+# leader): the path cannot be interpolated into that script without quoting the
+# whole provider argv through it.
+export GLUERUN_CODEX_JSONL_TMP="$jsonl_tmp"
 
 gluerun_codex_completion_scan() {
   # Incrementally inspect only complete JSONL records appended since the last
@@ -387,6 +412,22 @@ print(consumed, outcome)
 PY
 }
 
+# The provider pipeline as a SESSION LEADER. gluerun_setsid_exec is the last
+# command, so the `&` below makes $! the leader itself (pid == pgid) and
+# gluerun_kill_tree can group-kill codex plus everything it spawned with one
+# negative pid — no `ps`, which is the whole point (PMGO-004: in a sandbox that
+# denies process enumeration, only the direct child was being signalled and the
+# provider's descendants survived every timeout, invisibly).
+#
+# The tee stays INSIDE the session so the JSONL liveness signal is unchanged,
+# and the inner shell reproduces the previous subshell's exit contract exactly:
+# `exit "${PIPESTATUS[0]}"` — codex's status wins over tee's.
+gluerun_codex_spawn_pipeline() {
+  gluerun_setsid_exec "$(gluerun_bash_bin)" -c \
+    '"$@" | tee "$GLUERUN_CODEX_JSONL_TMP"; exit "${PIPESTATUS[0]}"' \
+    gluerun-codex-pipeline "${cmd[@]}"
+}
+
 run_codex_guarded() {
   # Background + poll: overall deadline, idle-output detection, and semantic
   # completion grace. The tee is unconditional here so the JSONL file doubles
@@ -396,12 +437,18 @@ run_codex_guarded() {
   local completion_outcome="none" now
   (( codex_timeout > 0 )) && deadline=$(( SECONDS + codex_timeout ))
   (( codex_idle > 0 )) && idle_deadline=$(( SECONDS + codex_idle ))
+  # The stdin redirect binds to the background job, so it survives the exec.
   if [[ -n "$prompt_file" ]]; then
-    ( "${cmd[@]}" <"$prompt_file" | tee "$jsonl_tmp" ; exit "${PIPESTATUS[0]}" ) &
+    gluerun_codex_spawn_pipeline <"$prompt_file" &
   else
-    ( "${cmd[@]}" | tee "$jsonl_tmp" ; exit "${PIPESTATUS[0]}" ) &
+    gluerun_codex_spawn_pipeline &
   fi
-  local child=$!
+  child=$!
+  # What this spawner knows about the session, recorded ps-free so a crashed
+  # runner leaves behind a signalable group instead of an orphan tree.
+  if [[ -n "${run_dir:-}" && -d "${run_dir:-}" ]]; then
+    gluerun_session_record_write "$run_dir/runner-session.json" "$child" 2>/dev/null || true
+  fi
   while kill -0 "$child" 2>/dev/null; do
     sleep 1
     now=$SECONDS
@@ -416,8 +463,9 @@ run_codex_guarded() {
       completion_scan_size="$size"
       if [[ "$completion_outcome" == "failed" ]]; then
         echo "codex-run: terminal provider failure observed; terminating process tree" >&2
-        gluerun_kill_tree "$child"
+        gluerun_kill_tree "$child" "$(gluerun_provider_kill_grace_sec)" session
         wait "$child" 2>/dev/null || true
+        child=""
         return 1
       fi
       if [[ "$completion_outcome" == "completed" && "$completion_deadline" -eq 0 ]]; then
@@ -428,8 +476,9 @@ run_codex_guarded() {
     if (( completion_deadline > 0 )); then
       if (( now >= completion_deadline )) && kill -0 "$child" 2>/dev/null; then
         echo "codex-run: completion grace expired after ${codex_completion_grace}s; terminating process tree" >&2
-        gluerun_kill_tree "$child"
+        gluerun_kill_tree "$child" "$(gluerun_provider_kill_grace_sec)" session
         wait "$child" 2>/dev/null || true
+        child=""
         return 0
       fi
       continue
@@ -437,8 +486,9 @@ run_codex_guarded() {
 
     if (( deadline > 0 && now >= deadline )); then
       echo "codex-run: TIMED OUT after ${codex_timeout}s; killing process tree" >&2
-      gluerun_kill_tree "$child"
+      gluerun_kill_tree "$child" "$(gluerun_provider_kill_grace_sec)" session
       wait "$child" 2>/dev/null || true
+      child=""
       return 124
     fi
     if (( codex_idle > 0 )); then
@@ -447,13 +497,17 @@ run_codex_guarded() {
         idle_deadline=$(( now + codex_idle ))
       elif (( now >= idle_deadline )); then
         echo "codex-run: IDLE (no output for ${codex_idle}s); killing process tree" >&2
-        gluerun_kill_tree "$child"
+        gluerun_kill_tree "$child" "$(gluerun_provider_kill_grace_sec)" session
         wait "$child" 2>/dev/null || true
+        child=""
         return 124
       fi
     fi
   done
-  wait "$child"
+  local rc=0
+  wait "$child" || rc=$?
+  child=""
+  return "$rc"
 }
 
 if [[ "$codex_timeout" -gt 0 || "$codex_idle" -gt 0 || "$codex_completion_grace" -gt 0 ]]; then

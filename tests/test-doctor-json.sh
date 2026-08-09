@@ -124,6 +124,8 @@ required = {
     "dag.evaluation",
     "graph.promotability",
     "model-cache.compatibility",
+    "runtime.process-group-kill",
+    "runtime.process-enumeration",
 }
 assert required <= set(by_id), sorted(required - set(by_id))
 assert by_id["provider.executable"]["details"]["path"] == sys.argv[2]
@@ -131,6 +133,18 @@ assert "--stage-dir" not in by_id["runner.contract-v1"]["details"]["arguments"]
 assert by_id["bootstrap.dry-run"]["status"] == "pass"
 assert by_id["resources.adaptive-disk"]["details"]["configuredSlots"] == 2
 assert by_id["governance.unbound-waivers"]["status"] == "pass"
+# The real probe, on a process-capable host: gluerun's timeout cleanup depends
+# on session creation + group termination, and the machine-readable preflight is
+# where an unattended launcher looks before it starts.
+group_kill = by_id["runtime.process-group-kill"]
+assert group_kill["status"] == "pass", group_kill
+assert "unattended-runs" in group_kill["requiredFor"], group_kill["requiredFor"]
+assert group_kill["details"]["pgid"] == group_kill["details"]["childPid"]
+# Enumeration is the fallback, so its status depends on the host; what must
+# always be readable is the evidence behind whichever verdict it reached.
+enumeration = by_id["runtime.process-enumeration"]
+assert enumeration["status"] in {"pass", "warn"}, enumeration
+assert {"returncode", "selfVisible"} <= set(enumeration["details"]), enumeration
 assert by_id["deployment.credentials"]["status"] == "skip"
 assert by_id["model-cache.compatibility"]["status"] == "warn"
 optional = [
@@ -144,6 +158,42 @@ assert "capabilityArgs.mcp:missing-optional" in optional[0]["message"]
 PY
 [[ -f "$doctor_home/.codex/models_cache.json" ]] \
   || { echo "ordinary doctor must never mutate model cache" >&2; exit 1; }
+
+# PMGO-004 in the machine surface. An environment that cannot terminate a
+# process group cannot clean up a timed-out agent, so this is a blocking check,
+# not a note: whatever launches unattended runs reads this report to decide.
+rc=0
+report="$(GLUERUN_TEST_PROCESS_CONTROL=1 GLUERUN_TEST_PROCESS_CONTROL_STATE=no-group-kill \
+  doctor_json)" || rc=$?
+[[ "$rc" -ne 0 ]] \
+  || { echo "an environment without group termination must fail doctor" >&2; exit 1; }
+python3 - "$report" <<'PY'
+import json, sys
+by_id = {item["id"]: item for item in json.loads(sys.argv[1])["checks"]}
+check = by_id["runtime.process-group-kill"]
+assert check["status"] == "fail", check
+assert "unattended-runs" in check["requiredFor"], check["requiredFor"]
+assert "Do not run unattended actuation here." in check["remediation"], check
+PY
+
+# PMGO-005 in the machine surface: the verdict is a field, so a supervisor
+# reading this report can tell "the process is gone" from "I was not allowed to
+# look" — which is the distinction that made doctor call a live server stale.
+mkdir -p "$repo/.gluerun-state"
+printf '4242\n' >"$repo/.gluerun-state/console.pid"
+report="$(GLUERUN_TEST_PID_PROBE=1 GLUERUN_TEST_PID_PROBE_STATE=unknown doctor_json)"
+python3 - "$report" <<'PY'
+import json, sys
+check = next(
+    item for item in json.loads(sys.argv[1])["checks"]
+    if item["id"] == "state.pidfile.console.pid"
+)
+assert check["status"] == "warn", check
+assert check["details"]["verdict"] == "unknown-permission", check["details"]
+assert check["details"]["pid"] == 4242, check["details"]
+assert "Do not delete the pidfile automatically." in check["message"], check["message"]
+PY
+rm -f "$repo/.gluerun-state/console.pid"
 
 # Consumer-only repository schema extensions survive migrations and are valid
 # inputs to doctor. They do not weaken authoritative copy checks below.

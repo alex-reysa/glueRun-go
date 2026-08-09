@@ -177,12 +177,18 @@ rm -f "$decider_result"
 decider_capability_profile="${GLUERUN_DECIDER_CAPABILITY_PROFILE:-decider-core}"
 gluerun_runner_contract_prepare \
   "$GLUERUN_RUNNER_BIN" decider "$decider_capability_profile" "$decider_result"
+# `exec` so $! IS the runner script, not a subshell wrapping it. The runner is a
+# cooperative citizen — it traps TERM and group-kills its own provider session —
+# but only if the TERM actually reaches it; with an intermediate subshell the
+# signal landed on a bash that was merely waiting, and the runner's EXIT trap
+# (which holds the read-only restore guard) never ran. Deliberately NOT a new
+# session: the runner stays in this shell's group so Ctrl-C still reaches it.
 (
-  GLUERUN_RUNNER_ROLE=decider \
-  GLUERUN_RUNNER_CAPABILITY_PROFILE="$decider_capability_profile" \
-  GLUERUN_RUNNER_RESULT_FILE="$decider_result" \
-  GLUERUN_RUNNER_RUN_ID="$run_id" \
-  "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+  export GLUERUN_RUNNER_ROLE=decider
+  export GLUERUN_RUNNER_CAPABILITY_PROFILE="$decider_capability_profile"
+  export GLUERUN_RUNNER_RESULT_FILE="$decider_result"
+  export GLUERUN_RUNNER_RUN_ID="$run_id"
+  exec "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
     --level readonly -C "$worktree" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \

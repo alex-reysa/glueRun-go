@@ -61,8 +61,9 @@ gluerun_grok_result_on_exit() {
   # would keep writing to the worktree while the guard restores it, and the
   # restore would lose the race. Kill first, then restore.
   if [[ -n "${grok_pid:-}" ]]; then
-    gluerun_kill_tree "$grok_pid" 2>/dev/null || true
+    gluerun_kill_tree "$grok_pid" 0 session 2>/dev/null || true
     wait "$grok_pid" 2>/dev/null || true
+    grok_pid=""
   fi
   # Before the result write, because a containment failure that outlives the
   # process is the worse outcome. ask/supervise/decide background this runner
@@ -223,7 +224,15 @@ grok_timeout="${GLUERUN_GROK_TIMEOUT_SEC:-1200}"
 # foreground run would swallow the SIGTERM that ask/supervise/decide send on
 # their way to a kill -- and with it the read-only guard's only chance to run.
 # `wait` is interruptible by a trapped signal; a foreground child is not.
-"${cmd[@]}" >"$envelope" 2>"$envelope_err" & grok_pid=$!
+# The provider as a SESSION LEADER: gluerun_setsid_exec is the LAST command of
+# run_grok, so `&` makes $! the leader itself (pid == pgid) and gluerun_kill_tree
+# group-kills the whole tree with one negative pid, without `ps` (PMGO-004).
+# grok gets its working directory from --cwd, so there is no `cd` here.
+# Redirections live on the call site so they bind to the job.
+run_grok() {
+  gluerun_setsid_exec "${cmd[@]}"
+}
+run_grok >"$envelope" 2>"$envelope_err" & grok_pid=$!
 if [[ "$grok_timeout" =~ ^[0-9]+$ && "$grok_timeout" -gt 0 ]]; then
   grok_deadline=$((SECONDS + grok_timeout)); grok_timed_out="no"
   while kill -0 "$grok_pid" 2>/dev/null; do
@@ -231,8 +240,8 @@ if [[ "$grok_timeout" =~ ^[0-9]+$ && "$grok_timeout" -gt 0 ]]; then
       grok_timed_out="yes"
       # kill -9 on the direct child only left grok's descendants running, which
       # is exactly what gluerun_kill_tree exists to prevent; the other runners
-      # already used it.
-      gluerun_kill_tree "$grok_pid"
+      # already used it. TERM the session first, then KILL what is left.
+      gluerun_kill_tree "$grok_pid" "$(gluerun_provider_kill_grace_sec)" session
       wait "$grok_pid" 2>/dev/null || true
       exit_code=124
       break

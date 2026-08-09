@@ -101,7 +101,7 @@ rc=0
 started="$SECONDS"
 CODEX_CHILD_FILE="$tmp/completed-child.pid" run_codex env \
   GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=60 \
-  GLUERUN_CODEX_COMPLETION_GRACE_SEC=1 \
+  GLUERUN_CODEX_COMPLETION_GRACE_SEC=1 GLUERUN_PROVIDER_KILL_GRACE_SEC=1 \
   CODEX_CHILD_FILE="$tmp/completed-child.pid" || rc=$?
 elapsed=$(( SECONDS - started ))
 assert_eq "0" "$rc" "semantically completed hung codex exits successfully"
@@ -139,5 +139,42 @@ grep -q "TIMED OUT" "$tmp/err.log" || fail "ordinary timeout was not reported"
 if grep -q "semantic completion observed" "$tmp/err.log"; then
   fail "malformed/prose completion mention triggered semantic completion"
 fi
+
+# 6. ps-denied sandbox (PMGO-004). The old cleanup built its target list from
+# `ps -A` and ignored its exit status: where process enumeration is denied the
+# list came back empty, only the direct child was signalled, the provider's
+# descendants survived the timeout — and nothing said so. The provider pipeline
+# now runs as its own session leader, so one negative pid reaches the whole tree
+# with no `ps` involved, and the cleanup proves it rather than assuming it.
+mkdir -p "$tmp/psdeny"
+cat >"$tmp/psdeny/ps" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+chmod +x "$tmp/psdeny/ps"
+cat >"$tmp/bin/codex" <<'SH'
+#!/usr/bin/env bash
+echo '{"type":"thread.started","thread_id":"t6"}'
+sleep 60 &
+child=$!
+echo "$child" >"${CODEX_CHILD_FILE:-/dev/null}"
+wait "$child"
+SH
+chmod +x "$tmp/bin/codex"
+: >"$tmp/psdenied-child.pid"
+rc=0
+env PATH="$tmp/psdeny:$tmp/bin:$PATH" GLUERUN_ROOT="$tmp/wt" GLUERUN_STATE_DIR="$tmp/state" \
+  GLUERUN_TARGET_BRANCH="$target_branch" \
+  GLUERUN_CODEX_TIMEOUT_SEC=3 GLUERUN_CODEX_IDLE_SEC=0 \
+  GLUERUN_PROVIDER_KILL_GRACE_SEC=1 CODEX_CHILD_FILE="$tmp/psdenied-child.pid" \
+  bash "$SCRIPT_DIR/codex-run.sh" --worktree "$tmp/wt" --level l2 --run-id RUN-PSDENY \
+    --prompt-file "$tmp/prompt.md" >/dev/null 2>"$tmp/err.log" || rc=$?
+assert_eq "124" "$rc" "ps-denied hung codex still times out with rc 124"
+grep -q "TIMED OUT" "$tmp/err.log" || fail "ps-denied timeout was not reported on stderr"
+[[ -s "$tmp/psdenied-child.pid" ]] || fail "ps-denied case: fake codex never spawned its grandchild"
+child="$(cat "$tmp/psdenied-child.pid")"
+sleep 0.3
+kill -0 "$child" 2>/dev/null && fail "grandchild survived the kill with ps denied"
+grep -q "UNVERIFIED" "$tmp/err.log" && fail "session kill reported UNVERIFIED although the group was proven"
 
 echo "PASS: test-codex-run-timeout"

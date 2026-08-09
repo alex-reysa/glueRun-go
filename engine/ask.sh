@@ -157,12 +157,18 @@ rm -f "$runner_result"
 assistant_capability_profile="${GLUERUN_ASSISTANT_CAPABILITY_PROFILE:-supervisor-core}"
 gluerun_runner_contract_prepare \
   "$GLUERUN_RUNNER_BIN" assistant "$assistant_capability_profile" "$runner_result"
+# `exec` so $! IS the runner script, not a subshell wrapping it. The runner is a
+# cooperative citizen — it traps TERM and group-kills its own provider session —
+# but only if the TERM actually reaches it; with an intermediate subshell the
+# signal landed on a bash that was merely waiting. Deliberately NOT a new
+# session: `ask` is the attended path and Ctrl-C in the operator's terminal must
+# still reach the runner.
 (
-  GLUERUN_RUNNER_ROLE=assistant \
-  GLUERUN_RUNNER_CAPABILITY_PROFILE="$assistant_capability_profile" \
-  GLUERUN_RUNNER_RESULT_FILE="$runner_result" \
-  GLUERUN_RUNNER_RUN_ID="$run_id" \
-  "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+  export GLUERUN_RUNNER_ROLE=assistant
+  export GLUERUN_RUNNER_CAPABILITY_PROFILE="$assistant_capability_profile"
+  export GLUERUN_RUNNER_RESULT_FILE="$runner_result"
+  export GLUERUN_RUNNER_RUN_ID="$run_id"
+  exec "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
     --level readonly -C "$GLUERUN_ROOT" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \

@@ -60,9 +60,21 @@ git -C "$PWD" status --porcelain=v1 --untracked-files=all 2>/dev/null \
 # Set GLUERUN_GATE_TIMEOUT_SEC=0 to disable.
 gate_timeout="${GLUERUN_GATE_TIMEOUT_SEC:-3600}"
 [[ "$gate_timeout" =~ ^[0-9]+$ ]] || gate_timeout=3600
+
+# The gate as a SESSION LEADER. A gate is an arbitrary, uncooperative tree — a
+# shell wrapping a test runner wrapping workers — so containment cannot depend
+# on `ps`: where enumeration is denied the old walk found no children and killed
+# only the top shell (PMGO-004). gluerun_setsid_exec is the LAST command here,
+# so $! below is the leader itself (pid == pgid) and one negative pid reaches
+# everything. The gate keeps its argv form; it is never re-parsed by a shell.
+gluerun_gate_spawn() {
+  export GLUERUN_GATE_REPORT_FILE="$observation"
+  gluerun_setsid_exec "$@"
+}
+
 set +e
 if [[ "$gate_timeout" -gt 0 ]]; then
-  GLUERUN_GATE_REPORT_FILE="$observation" "$@" >"$log" 2>&1 &
+  gluerun_gate_spawn "$@" >"$log" 2>&1 &
   gate_pid=$!
   gate_deadline=$((SECONDS + gate_timeout)); gate_timed_out="no"
   while kill -0 "$gate_pid" 2>/dev/null; do
@@ -70,7 +82,9 @@ if [[ "$gate_timeout" -gt 0 ]]; then
       gate_timed_out="yes"
       # The whole tree: a gate is usually a shell wrapping a test runner
       # wrapping workers, and killing only the shell leaves all of it running.
-      gluerun_kill_tree "$gate_pid" "$(gluerun_kill_grace_sec)"
+      # `session` is the spawner's assertion that $gate_pid came from
+      # gluerun_setsid_exec above and has not been waited on yet.
+      gluerun_kill_tree "$gate_pid" "$(gluerun_kill_grace_sec)" session
       wait "$gate_pid" 2>/dev/null
       exit_code=124
       break

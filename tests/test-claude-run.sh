@@ -39,7 +39,19 @@ cat >/dev/null 2>&1 || true   # consume the piped prompt
 if [[ -n "${MOCK_WRITE:-}" ]]; then printf 'MUTATED\n' > "$MOCK_WRITE"; fi
 # MOCK_SLEEP simulates a slow/runaway agentic run; MOCK_MARKER is touched only if
 # the sleep completes (i.e. the timeout guard did NOT kill it).
-if [[ -n "${MOCK_SLEEP:-}" ]]; then sleep "$MOCK_SLEEP"; [[ -n "${MOCK_MARKER:-}" ]] && touch "$MOCK_MARKER"; fi
+# MOCK_CHILD_OUT runs that sleep as a background DESCENDANT and records its pid,
+# so a test can prove a kill reached past the direct child.
+if [[ -n "${MOCK_SLEEP:-}" ]]; then
+  if [[ -n "${MOCK_CHILD_OUT:-}" ]]; then
+    sleep "$MOCK_SLEEP" &
+    mock_child=$!
+    printf '%s\n' "$mock_child" >"$MOCK_CHILD_OUT"
+    wait "$mock_child"
+  else
+    sleep "$MOCK_SLEEP"
+  fi
+  [[ -n "${MOCK_MARKER:-}" ]] && touch "$MOCK_MARKER"
+fi
 python3 - <<PY
 import json, os
 env = {
@@ -175,6 +187,7 @@ pass "c9 L1 scope-check accepts in-prefix write"
 r="$workroot/c10"; new_repo "$r"; o="$(out)"; marker="$r/completed.marker"; ec=0
 start=$SECONDS
 MOCK_SLEEP=6 MOCK_MARKER="$marker" GLUERUN_CLAUDE_TIMEOUT_SEC=2 \
+  GLUERUN_PROVIDER_KILL_GRACE_SEC=1 \
   run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" >/dev/null 2>&1 || ec=$?
 elapsed=$((SECONDS - start))
 [[ "$ec" -eq 124 ]] || fail "c10: timeout should exit 124 (got $ec)"
@@ -313,5 +326,33 @@ MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args2" \
   run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" >/dev/null 2>&1
 grep -qF -- "Bash(git commit:*)" "$args2" && fail "c20: l2 must not inherit the readonly denials"
 pass "c20 readonly denies state-mutating git via Bash; l2 unaffected"
+
+# --- Case 21: ps-denied sandbox — the timeout kill still reaches descendants ---
+# PMGO-004. The old cleanup built its target list from `ps -A` and ignored that
+# command's exit status, so in a sandbox that denies process enumeration it
+# SIGKILLed only the direct child; every descendant survived the timeout, and
+# nothing anywhere said so. The provider now runs as its own session leader, so
+# one negative pid reaches the whole tree with no `ps` at all — and the cleanup
+# proves the tree is gone instead of assuming it (no UNVERIFIED line).
+r="$workroot/c21"; new_repo "$r"; o="$(out)"; ec=0
+psdeny="$workroot/psdeny"; mkdir -p "$psdeny"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$psdeny/ps"; chmod +x "$psdeny/ps"
+childf="$workroot/c21-child.pid"; : >"$childf"
+errlog="$workroot/c21.err"
+# Invoked directly (not via run_claude_run) so the ps stub is on PATH for this
+# case alone and never leaks into the rest of the suite.
+( cd "$r" && PATH="$psdeny:$PATH" MOCK_RESULT='{"ok":true}' MOCK_SLEEP=30 \
+    MOCK_CHILD_OUT="$childf" GLUERUN_CLAUDE_TIMEOUT_SEC=2 \
+    GLUERUN_PROVIDER_KILL_GRACE_SEC=1 \
+    GLUERUN_ROOT="$r" GLUERUN_STATE_DIR="$r/.gluerun-state" \
+    exec "$CLAUDE_RUN" --level l2 -C "$r" --output-last-message "$o" ) \
+  >/dev/null 2>"$errlog" || ec=$?
+[[ "$ec" -eq 124 ]] || fail "c21: ps-denied timeout should still exit 124 (got $ec)"
+[[ -s "$childf" ]] || fail "c21: the mock never recorded a descendant pid"
+descendant="$(cat "$childf")"
+sleep 0.5
+kill -0 "$descendant" 2>/dev/null && fail "c21: descendant survived the ps-denied timeout kill"
+grep -q "UNVERIFIED" "$errlog" && fail "c21: cleanup reported UNVERIFIED although the group was proven"
+pass "c21 ps-denied timeout kills the provider's descendants, verified without ps"
 
 echo "ALL CLAUDE-RUN CONTRACT TESTS PASSED"

@@ -246,4 +246,27 @@ MOCK_RESULT='{"status":"x"}' MOCK_ARGS_OUT="$args" \
 [[ ! -f "$args" ]] || fail "d: codex should not have been invoked on refusal"
 pass "d model mismatch -> exit 86 (resume-refused, model not invoked)"
 
+# --- Case e: the spawner records the provider session, ps-free ----------------
+# runner-session.json is what a crashed runner leaves behind for recovery: the
+# provider pid, its process-group id, and the KERNEL's confirmation that the two
+# are equal — i.e. that the whole tree can be reached with one negative pid,
+# which is the only containment proof available where `ps` is denied.
+r="$workroot/e"; new_repo "$r"; o="$(out)"
+MOCK_RESULT='{"status":"x"}' \
+  run_codex_run "$r" --level l2 -C "$r" --run-id RUN-SESSION-E \
+  --output-last-message "$o" >/dev/null 2>&1
+record="$r/.gluerun-state/runs/RUN-SESSION-E/runner-session.json"
+[[ -f "$record" ]] || fail "e: runner-session.json not written to the run dir"
+python3 - "$record" <<'PY' || fail "e: session record did not prove a session leader ($(cat "$record"))"
+import json
+import sys
+
+rec = json.load(open(sys.argv[1], encoding="utf-8"))
+assert rec.get("sessionSpawn") is True, rec
+assert isinstance(rec.get("pid"), int) and rec["pid"] > 1, rec
+assert rec.get("pgid") == rec.get("pid"), rec
+assert rec.get("verified") is True, rec
+PY
+pass "e run dir records a verified provider session (pid == pgid)"
+
 echo "ALL CODEX-RUN SESSION CONTRACT TESTS PASSED"

@@ -307,6 +307,12 @@ GLUERUN_ASK_TIMEOUT_SEC="${GLUERUN_ASK_TIMEOUT_SEC:-600}"                  # rea
 # the dispatch-record write path so other commands stay dormant.
 GLUERUN_DETACHED_DISPATCH="${GLUERUN_DETACHED_DISPATCH:-1}"
 GLUERUN_DISPATCH_DIR="${GLUERUN_DISPATCH_DIR:-$GLUERUN_STATE_DIR/dispatch}"
+# Spawn long-lived children as SESSION LEADERS (gluerun_setsid_exec). A session
+# leader's pid IS its process-group id, which is the only descendant-containment
+# proof that does not need `ps`: a sandbox that denies process enumeration can
+# still be handed one negative pid. Set 0 to restore the pre-0.17 topology
+# (children share the spawner's group; cleanup falls back to a ps tree walk).
+GLUERUN_SESSION_SPAWN="${GLUERUN_SESSION_SPAWN:-1}"
 
 # L1 node leases + parallel-area planning.
 GLUERUN_L1_LEASES_DIR="${GLUERUN_L1_LEASES_DIR:-$GLUERUN_STATE_DIR/l1-leases}"
@@ -713,86 +719,396 @@ gluerun_pid_alive() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
-# Kill a pid and every transitive descendant. Snapshots the full ps tree
-# (intact at kill time, before anything exits) so reparenting can't let a child
-# escape — more reliable than recursive pgrep -P or a process-group kill.
-# Shared by claude-run.sh / codex-run.sh / decide.sh guards.
+# Replace the CURRENT process with "$@" as the leader of a NEW session.
 #
-# The optional second argument is a grace period in seconds. With a grace, the
-# tree gets SIGTERM first and SIGKILL only for whatever is still alive when it
-# expires. That matters because the runners hold a read-only restore guard in
-# their EXIT trap: a bare SIGKILL runs no handler, so the mutations of a run
-# that timed out used to persist and the guard's own journal was left for
-# `sweep` to find later. Default 0 keeps the old immediate-SIGKILL behaviour for
-# every caller that has nothing to clean up.
-gluerun_kill_tree() {
-  python3 - "$1" "${2:-0}" <<'PY' 2>/dev/null || true
-import os, signal, subprocess, sys, time
-root = int(sys.argv[1])
-grace = float(sys.argv[2]) if len(sys.argv) > 2 else 0.0
-out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
-                     capture_output=True, text=True).stdout
-children = {}
-for line in out.splitlines():
-    f = line.split()
-    if len(f) != 2:
-        continue
-    try:
-        pid, ppid = int(f[0]), int(f[1])
-    except ValueError:
-        continue
-    children.setdefault(ppid, []).append(pid)
-order, stack = [], [root]
-while stack:
-    p = stack.pop()
-    for c in children.get(p, []):
-        order.append(c)
-        stack.append(c)
-# Leaves first so a parent cannot spawn a replacement for a child it just lost.
-targets = list(reversed(order)) + [root]
+# Meant to be the last command of a background job (`spawn_something args &`):
+# `exec` preserves the pid, so `$!` in the spawner IS the session leader, and
+# setsid makes that pid equal to its own process-group id. The spawner keeps the
+# child un-reaped, which is what makes the pid (and therefore the pgid) safe to
+# signal later: neither can be recycled while the entry is still in the table.
+#
+# That equality — pgid == pid — is the whole point. It is a containment proof
+# that costs one integer and no process enumeration, which is what
+# gluerun_kill_tree needs in a sandbox that denies `ps`.
+#
+# GLUERUN_SESSION_SPAWN=0 restores the old topology (plain exec, child stays in
+# the spawner's group). Same idiom as engine/reconcile.sh's detached dispatch.
+gluerun_setsid_exec() {
+  if [[ "${GLUERUN_SESSION_SPAWN:-1}" == "0" ]]; then
+    exec "$@"
+  fi
+  exec python3 -c 'import os, sys
+try:
+    os.setsid()
+except OSError:
+    pass
+os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+}
 
+# Durably record what a spawner knows about a session it just created:
+#   {"pid":N,"pgid":N|0,"sessionSpawn":bool,"verified":bool,"startedAt":"..."}
+# `verified` is true only when the kernel confirms pgid == pid, i.e. the child
+# really is a session/group leader and the negative-pid kill is safe. A denied
+# or failed lookup records pgid 0 + verified false rather than guessing: an
+# unproven group is exactly the thing that must NOT be signalled.
+#
+# The lookup is os.getpgid, never `ps` — this record has to be writable in the
+# same restricted sandboxes the group kill exists for. Three 50ms attempts
+# absorb the race where the record is written before the child reaches setsid.
+# args: path pid
+gluerun_session_record_write() {
+  local path="$1" pid="${2:-}"
+  local dir
+  dir="$(dirname "$path")"
+  mkdir -p "$dir" 2>/dev/null || true
+  local spawn=1
+  [[ "${GLUERUN_SESSION_SPAWN:-1}" == "0" ]] && spawn=0
+  python3 - "$path" "$pid" "$spawn" <<'PY'
+import json
+import os
+import sys
+import time
+from datetime import datetime, timezone
 
-def signal_all(sig):
-    for pid in targets:
+path, pid_raw, spawn_raw = sys.argv[1:4]
+try:
+    pid = int(pid_raw)
+except ValueError:
+    pid = 0
+pgid = 0
+verified = False
+if pid > 0:
+    for attempt in range(3):
         try:
-            os.kill(pid, sig)
-        except OSError:
-            pass
-
-
-def alive():
-    for pid in targets:
-        try:
-            os.kill(pid, 0)
+            pgid = os.getpgid(pid)
         except ProcessLookupError:
-            continue
+            pgid, verified = 0, False
+            break
         except OSError:
-            return True
+            pgid, verified = 0, False
         else:
-            return True
-    return False
+            verified = pgid == pid
+        if verified:
+            break
+        if attempt < 2:
+            time.sleep(0.05)
+record = {
+    "pid": pid,
+    "pgid": pgid,
+    "sessionSpawn": spawn_raw != "0",
+    "verified": verified,
+    "startedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+}
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(record, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+}
+
+# Process-group id of a pid, via os.getpgid (no `ps`). Empty when unknowable.
+gluerun_pgid_of() {
+  python3 - "${1:-}" <<'PY' 2>/dev/null || true
+import os
+import sys
+
+try:
+    sys.stdout.write("%d\n" % os.getpgid(int(sys.argv[1])))
+except Exception:
+    pass
+PY
+}
+
+# rc 0 if any process remains in <pgid>. EPERM counts as ALIVE: "I am not
+# allowed to signal it" is not "it is gone", and every caller here is deciding
+# whether cleanup finished.
+gluerun_pgroup_alive() {
+  local pgid="${1:-}"
+  [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || return 1
+  python3 - "$pgid" <<'PY' 2>/dev/null
+import os
+import sys
+
+try:
+    os.kill(-int(sys.argv[1]), 0)
+except ProcessLookupError:
+    sys.exit(1)
+except Exception:
+    sys.exit(0)
+sys.exit(0)
+PY
+}
+
+# Kill a pid and everything it spawned. Args 1-2 are unchanged from 0.16:
+#   gluerun_kill_tree <pid> [grace_sec] [session]
+# The optional third argument is the literal word `session`: the caller's
+# assertion that it spawned <pid> through gluerun_setsid_exec and has not
+# waited on it yet. Shared by the provider runners / decide.sh / gate guards.
+#
+# ALWAYS returns 0 — callers run under `set -euo pipefail` and a cleanup trap
+# must not become the failure. The outcome is reported instead through the
+# global GLUERUN_KILL_TREE_RESULT (verified|degraded), plus
+# GLUERUN_KILL_TREE_REASON / GLUERUN_KILL_TREE_MODE.
+#
+# THREE MODES, in decreasing order of proof:
+#   group-proven    os.getpgid(pid) == pid (a session leader), and not our own
+#                   group. One os.kill(-pgid, sig) reaches every descendant.
+#   group-asserted  os.getpgid was DENIED but the caller passed `session` and
+#                   the group still answers os.kill(-pid, 0). Safe because the
+#                   spawner still holds the un-reaped child, so pid/pgid cannot
+#                   have been recycled under us.
+#   tree            neither proof holds: fall back to the 0.16 behaviour, a
+#                   `ps` snapshot walk killed leaves-first. A negative pid is
+#                   NEVER signalled without one of the two proofs above.
+# Both group modes still attempt enumeration, and individually signal any
+# descendant that has left the group (a child that called setsid itself).
+#
+# WHY: 0.16 built the target list solely from `ps -A`, ignored its return code,
+# and wrapped the lot in `2>/dev/null || true`. In a sandbox that denies `ps`
+# the child map came back empty, only the root was signalled, descendants
+# survived a timeout — and the failure was invisible (field finding PMGO-004).
+# So the kill now ends with a bounded VERIFY poll and, when it cannot prove the
+# tree is gone, says so on stderr and in a `kill.unverified` event.
+#
+# DELIBERATE DEVIATION: in a group mode with a verified group death, a failed
+# `ps` enumeration does NOT degrade the result — the group is proof enough, and
+# the enumeration was only looking for escapees. That case emits an
+# informational `kill.enumeration_unavailable` event instead. Tree mode keeps
+# the strict rule, because there enumeration IS the containment.
+#
+# grace_sec (default 0) keeps its 0.16 meaning: >0 sends SIGTERM first and
+# SIGKILLs only what is still alive when it expires, so a runner can run the
+# EXIT trap that holds its read-only restore guard; 0 is an immediate SIGKILL
+# with no handler. An empty pid is a verified no-op: the runner guards that call
+# this from an EXIT trap may have nothing to kill, and nothing cannot survive.
+gluerun_kill_tree() {
+  local pid="${1:-}" grace="${2:-0}" claim="${3:-}"
+  GLUERUN_KILL_TREE_RESULT="verified"
+  GLUERUN_KILL_TREE_REASON=""
+  GLUERUN_KILL_TREE_MODE="none"
+  [[ -n "$pid" ]] || return 0
+  local out="" rc=0
+  out="$(python3 - "$pid" "$grace" "$claim" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+VERIFY_SEC = 5.0
+STEP = 0.2
 
 
-if grace > 0:
-    # The root goes LAST here: it is the bash runner holding the EXIT trap, and
-    # signalling it before its children would have it restore the worktree while
-    # the provider is still writing to it.
-    for pid in list(reversed(order)):
+def emit(status, reason, mode, note=""):
+    """Single machine-readable line for bash; stderr stays for real errors."""
+    if note:
+        sys.stdout.write("KILLTREE_NOTE %s %s\n" % (note, mode))
+    sys.stdout.write("KILLTREE_RESULT %s %s %s\n" % (status, reason or "-", mode))
+    sys.stdout.flush()
+    raise SystemExit(0 if status == "verified" else 3)
+
+
+def enumerate_descendants(root):
+    """(enumeration_ok, dfs order). ok is False when ps was denied/failed."""
+    try:
+        proc = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
+                              capture_output=True, text=True)
+    except OSError:
+        return False, []
+    if proc.returncode != 0:
+        return False, []
+    children = {}
+    for line in (proc.stdout or "").splitlines():
+        f = line.split()
+        if len(f) != 2:
+            continue
         try:
-            os.kill(pid, signal.SIGTERM)
+            pid, ppid = int(f[0]), int(f[1])
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+    order, stack, seen = [], [root], set([root])
+    while stack:
+        p = stack.pop()
+        for c in children.get(p, []):
+            if c in seen:
+                continue
+            seen.add(c)
+            order.append(c)
+            stack.append(c)
+    return True, order
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True   # EPERM: it is there, we just may not signal it
+    return True
+
+
+def group_alive(pgid):
+    try:
+        os.kill(-pgid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def main():
+    try:
+        root = int(sys.argv[1])
+    except ValueError:
+        emit("degraded", "invalid-pid", "none")
+    try:
+        grace = float(sys.argv[2] or 0)
+    except ValueError:
+        grace = 0.0
+    asserted = len(sys.argv) > 3 and sys.argv[3] == "session"
+    if root <= 1:
+        emit("degraded", "invalid-pid", "none")
+
+    try:
+        own_pgid = os.getpgid(0)
+    except OSError:
+        own_pgid = -1
+
+    mode, pgid = "tree", 0
+    try:
+        found = os.getpgid(root)
+    except PermissionError:
+        # The sandbox case. Only an explicit session claim (third argument)
+        # from the caller can stand in for the lookup, and only while the
+        # group still answers. (No apostrophes, backticks, or unbalanced
+        # quotes in this heredoc: bash 3.2 scans $( ) without understanding
+        # embedded heredocs, and one stray quote breaks the parse of this
+        # whole file for pre-4 shells that only need to fail cleanly.)
+        if asserted and root != own_pgid and group_alive(root):
+            mode, pgid = "group-asserted", root
+    except OSError:
+        pass          # gone, or unknowable -> tree mode handles both
+    else:
+        if found == root and found != own_pgid and found > 1:
+            mode, pgid = "group-proven", found
+
+    enum_ok, order = enumerate_descendants(root)
+    escapees = []
+    if mode != "tree":
+        for pid in order:
+            try:
+                if os.getpgid(pid) == pgid:
+                    continue
+            except OSError:
+                pass  # cannot prove membership -> signal it directly too
+            escapees.append(pid)
+    # Leaves first so a parent cannot spawn a replacement for a child it lost.
+    targets = list(reversed(order)) + [root]
+
+    def send(sig):
+        if mode == "tree":
+            # The root goes LAST: it is the bash runner holding the EXIT trap,
+            # and signalling it before its children would have it restore the
+            # worktree while the provider is still writing to it.
+            for pid in list(reversed(order)):
+                try:
+                    os.kill(pid, sig)
+                except OSError:
+                    pass
+            try:
+                os.kill(root, sig)
+            except OSError:
+                pass
+            return
+        try:
+            os.kill(-pgid, sig)
         except OSError:
             pass
-    try:
-        os.kill(root, signal.SIGTERM)
-    except OSError:
-        pass
-    deadline = time.monotonic() + grace
-    while time.monotonic() < deadline:
-        if not alive():
-            raise SystemExit(0)
-        time.sleep(0.2)
-signal_all(signal.SIGKILL)
+        for pid in escapees:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+
+    def alive():
+        if mode == "tree":
+            return any(pid_alive(p) for p in targets)
+        if group_alive(pgid):
+            return True
+        return any(pid_alive(p) for p in escapees)
+
+    died_on_term = False
+    if grace > 0:
+        send(signal.SIGTERM)
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            if not alive():
+                died_on_term = True
+                break
+            time.sleep(STEP)
+    if not died_on_term:
+        send(signal.SIGKILL)
+
+    deadline = time.monotonic() + VERIFY_SEC
+    gone = not alive()
+    while not gone and time.monotonic() < deadline:
+        time.sleep(STEP)
+        gone = not alive()
+
+    if not gone:
+        emit("degraded", "survivors-or-unsignalable", mode)
+    if mode == "tree" and not enum_ok:
+        emit("degraded", "enumeration-unavailable", mode)
+    emit("verified", "", mode, note="" if enum_ok else "enumeration-unavailable")
+
+
+try:
+    main()
+except SystemExit:
+    raise
+except Exception as exc:
+    sys.stderr.write("gluerun_kill_tree: internal error: %s: %s\n"
+                     % (type(exc).__name__, exc))
+    raise SystemExit(3)
 PY
+  )" || rc=$?
+
+  local key a b c status="" reason="" mode="" note=""
+  while IFS=' ' read -r key a b c; do
+    case "$key" in
+      KILLTREE_RESULT) status="$a"; reason="$b"; mode="$c" ;;
+      KILLTREE_NOTE)   note="$a"; [[ -n "$mode" ]] || mode="$b" ;;
+    esac
+  done <<<"$out"
+
+  local pid_json="$pid"
+  [[ "$pid" =~ ^[0-9]+$ ]] || pid_json="\"$pid\""
+  [[ -n "$mode" ]] || mode="unknown"
+  GLUERUN_KILL_TREE_MODE="$mode"
+
+  if (( rc == 0 )) && [[ "$status" == "verified" ]]; then
+    if [[ -n "$note" && -n "${GLUERUN_STATE_DIR:-}" ]]; then
+      gluerun_append_event "kill.enumeration_unavailable" \
+        "process enumeration unavailable; group kill verified for pid $pid" \
+        "{\"pid\":$pid_json,\"mode\":\"$mode\"}" 2>/dev/null || true
+    fi
+    return 0
+  fi
+
+  [[ -n "$reason" && "$reason" != "-" ]] || reason="internal-error"
+  GLUERUN_KILL_TREE_RESULT="degraded"
+  GLUERUN_KILL_TREE_REASON="$reason"
+  printf 'gluerun_kill_tree: UNVERIFIED cleanup for pid %s (%s); descendants may survive\n' \
+    "$pid" "$reason" >&2
+  if [[ -n "${GLUERUN_STATE_DIR:-}" ]]; then
+    gluerun_append_event "kill.unverified" "unverified kill for pid $pid" \
+      "{\"pid\":$pid_json,\"mode\":\"$mode\",\"reason\":\"$reason\"}" 2>/dev/null || true
+  fi
+  return 0
 }
 
 # Seconds a timed-out runner gets to run its EXIT trap — which is where the
@@ -801,6 +1117,115 @@ gluerun_kill_grace_sec() {
   local grace="${GLUERUN_KILL_GRACE_SEC:-10}"
   [[ "$grace" =~ ^[0-9]+$ ]] || grace=10
   printf '%s\n' "$grace"
+}
+
+# Same idea for a provider CLI killed mid-stream: it has no restore guard of
+# its own, so it gets a short courtesy TERM to flush and close, not the runner's
+# full trap budget.
+gluerun_provider_kill_grace_sec() {
+  local grace="${GLUERUN_PROVIDER_KILL_GRACE_SEC:-2}"
+  [[ "$grace" =~ ^[0-9]+$ ]] || grace=2
+  printf '%s\n' "$grace"
+}
+
+# Does this host actually support the containment gluerun_kill_tree depends on?
+#
+# Prints exactly one line — `ok` or `degraded:<reason>` — and ALWAYS returns 0,
+# so a caller under `set -e` reads the verdict instead of dying on it. The probe
+# is the real primitive end to end (spawn a child in a NEW session, confirm the
+# kernel made it its own group leader, kill the group, confirm the group is
+# gone), because the question is whether the syscalls work here, and no amount
+# of `uname` answers that. One short-lived child, well under a second.
+#
+# Nothing but a kernel-confirmed leader group is ever signalled: killpg(0) would
+# hit the caller's own shell, and this runs from autonomate's startup.
+#
+# Same test seam as doctor's runtime.process-group-kill — both variables
+# required, unknown states ignored — so a CI job can exercise the refusal path
+# without a sandbox that denies setsid.
+gluerun_process_control_preflight() {
+  if [[ "${GLUERUN_TEST_PROCESS_CONTROL:-0}" == "1" ]]; then
+    case "${GLUERUN_TEST_PROCESS_CONTROL_STATE:-}" in
+      ok|no-ps)
+        # no-ps degrades enumeration only; the group kill still contains a
+        # session-spawned tree, which is what this gate is about.
+        printf '%s\n' "ok"
+        return 0
+        ;;
+      no-group-kill)
+        printf '%s\n' "degraded:simulated-no-group-kill"
+        return 0
+        ;;
+    esac
+  fi
+  local out=""
+  out="$(python3 - <<'PY' 2>/dev/null || true
+import os
+import signal
+import subprocess
+import sys
+import time
+
+
+def probe():
+    child = None
+    pgid = 0
+    try:
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        pgid = os.getpgid(child.pid)
+        if pgid != child.pid:
+            return "degraded:no-session-leader"
+        os.killpg(pgid, signal.SIGTERM)
+        child.wait(timeout=5)
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                os.killpg(pgid, 0)
+            except ProcessLookupError:
+                return "ok"
+            except OSError:
+                return "degraded:group-unverifiable"
+            if time.monotonic() >= deadline:
+                return "degraded:group-survived"
+            time.sleep(0.05)
+    except subprocess.TimeoutExpired:
+        return "degraded:group-survived"
+    except (OSError, ValueError) as exc:
+        return "degraded:%s" % type(exc).__name__
+    finally:
+        if child is not None and child.poll() is None:
+            if pgid > 1 and pgid == child.pid:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except OSError:
+                    pass
+            try:
+                child.kill()
+            except OSError:
+                pass
+            try:
+                child.wait(timeout=2)
+            except Exception:
+                pass
+
+
+sys.stdout.write(probe() + "\n")
+PY
+  )"
+  out="$(printf '%s' "$out" | sed -n '1p' | tr -d '[:space:]')"
+  case "$out" in
+    ok|degraded:*) printf '%s\n' "$out" ;;
+    # No line at all means the probe process itself could not run — which is
+    # not evidence that cleanup works.
+    *) printf '%s\n' "degraded:probe-unavailable" ;;
+  esac
+  return 0
 }
 
 gluerun_acquire_lock() {
@@ -4081,10 +4506,16 @@ gluerun_dispatch_record_write() {
   local task_id="$1" run_id="$2" pid="$3" pid_start="$4" log="$5" base_sha="$6" batch_id="$7"
   mkdir -p "$GLUERUN_DISPATCH_DIR"
   # pgid: recorded for whole-tree liveness checks and (when the dispatch was
-  # setsid'd, i.e. pgid == pid) safe orphan process-group cleanup.
+  # setsid'd, i.e. pgid == pid) safe orphan process-group cleanup. os.getpgid
+  # first: it is a syscall, so the record still carries a real pgid in a sandbox
+  # that denies `ps` — which is exactly where the group kill is the only
+  # containment left. `ps` stays as the fallback, never the source of truth.
   local pgid=""
   if [[ -n "$pid" ]]; then
-    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    pgid="$(gluerun_pgid_of "$pid" | tr -d '[:space:]' || true)"
+    if [[ -z "$pgid" ]]; then
+      pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    fi
   fi
   python3 - "$(gluerun_dispatch_record_path "$task_id")" "$task_id" "$run_id" "$pid" "$pid_start" "$log" "$base_sha" "$batch_id" "$pgid" <<'PY'
 import json
@@ -4275,15 +4706,19 @@ gluerun_kill_dispatch_pgroup() {
   pid="$(gluerun_json_field "$record" pid 2>/dev/null || true)"
   [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || return 1
   [[ "$pgid" == "$pid" ]] || return 1                      # setsid leader proven
+  # os.getpgid/os.kill rather than ps/pgrep: the four guards above are what make
+  # a negative-pid signal safe, and they must still be answerable where process
+  # enumeration is denied. An empty own-pgid keeps 0.16's behaviour (the guard
+  # compares unequal and the kill proceeds).
   local own_pgid
-  own_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d '[:space:]' || true)"
+  own_pgid="$(gluerun_pgid_of "$$" | tr -d '[:space:]' || true)"
   [[ "$pgid" != "$own_pgid" ]] || return 1
   kill -TERM -- "-$pgid" 2>/dev/null || true
   local waited=0
-  while pgrep -g "$pgid" >/dev/null 2>&1 && (( waited < 5 )); do
+  while gluerun_pgroup_alive "$pgid" && (( waited < 5 )); do
     sleep 1; waited=$((waited + 1))
   done
-  if pgrep -g "$pgid" >/dev/null 2>&1; then
+  if gluerun_pgroup_alive "$pgid"; then
     kill -KILL -- "-$pgid" 2>/dev/null || true
   fi
   gluerun_append_event "dispatch.pgroup_killed" "dispatch process group terminated" \

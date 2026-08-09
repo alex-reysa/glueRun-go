@@ -116,4 +116,51 @@ kill -0 "$pid" 2>/dev/null && { kill "$pid"; fail "STOP did not end the detached
 [[ -f "$root/.gluerun-state/autonomate.pid" ]] && fail "pidfile must be removed on exit"
 grep -q "STOP sentinel" "$root/.gluerun-state/autonomate.log" || fail "loop logged the STOP halt"
 
+# --- 3. Unattended actuation is gated on provable process-group cleanup -----
+#
+# This loop dispatches agents nobody is watching and kills them on timeout. On a
+# host where the group kill does not contain the tree, that cleanup silently
+# leaves descendants writing to a worktree — the field case behind PMGO-004. The
+# refusal has to release the claim it just took, or one degraded start would
+# lock every later `gluerun auto` out of the pidfile.
+rm -f "$root/.gluerun-state/STOP" "$root/.gluerun-state/autonomate.pid" \
+  "$root/.gluerun-state/autonomate.pid.identity"
+: >"$root/.gluerun-state/events.ndjson"
+
+rc=0
+out="$(env_common GLUERUN_TEST_PROCESS_CONTROL=1 GLUERUN_TEST_PROCESS_CONTROL_STATE=no-group-kill \
+  GLUERUN_RECONCILE_SCRIPT="$stub" GLUERUN_SLEEP=1 \
+  bash "$SCRIPT_DIR/autonomate.sh" --once 2>&1)" || rc=$?
+[[ "$rc" -eq 2 ]] || fail "unprovable group cleanup must refuse to actuate (rc=$rc): $out"
+assert_contains "$out" "gluerun doctor" "the refusal points at the diagnostic"
+assert_contains "$out" "GLUERUN_ALLOW_DEGRADED_KILL=1" "the refusal names the override"
+grep -q '"type":"autonomate.preflight_unsafe"' "$root/.gluerun-state/events.ndjson" \
+  || fail "the refusal must be on the event stream, not only on stderr"
+[[ -f "$root/.gluerun-state/autonomate.pid" ]] \
+  && fail "a refused start must not leave its pidfile claim behind"
+[[ "$out" != *"iteration 1"* ]] || fail "the refusal must happen before any actuation"
+
+# The documented override is an operator accepting the risk, not a bypass that
+# hides it: the loop runs, and the warning is on the record.
+rc=0
+out="$(env_common GLUERUN_TEST_PROCESS_CONTROL=1 GLUERUN_TEST_PROCESS_CONTROL_STATE=no-group-kill \
+  GLUERUN_ALLOW_DEGRADED_KILL=1 GLUERUN_RECONCILE_SCRIPT="$stub" GLUERUN_SLEEP=1 \
+  bash "$SCRIPT_DIR/autonomate.sh" --once 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "the documented override must let the loop start (rc=$rc): $out"
+assert_contains "$out" "iteration 1" "the override reaches the actuation cycle"
+assert_contains "$out" "GLUERUN_ALLOW_DEGRADED_KILL=1" "the override is warned about"
+grep -q '"type":"autonomate.preflight_degraded_override"' "$root/.gluerun-state/events.ndjson" \
+  || fail "the accepted risk must be on the event stream"
+
+# No seam: this host is process-capable, the real probe says so, and the gate is
+# invisible to every case above.
+state="$(env_common bash -c "source '$SCRIPT_DIR/lib.sh'; gluerun_process_control_preflight")"
+[[ "$state" == "ok" ]] || fail "the real preflight probe must pass here (got '$state')"
+rc=0
+out="$(env_common GLUERUN_RECONCILE_SCRIPT="$stub" GLUERUN_SLEEP=1 \
+  bash "$SCRIPT_DIR/autonomate.sh" --once 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "an ungated host must actuate normally (rc=$rc): $out"
+assert_contains "$out" "iteration 1" "the ungated loop runs its iteration"
+[[ "$out" != *"REFUSING to start"* ]] || fail "a process-capable host must not be gated"
+
 echo "PASS: test-autonomate-lifecycle"

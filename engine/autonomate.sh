@@ -174,6 +174,44 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Unattended actuation gate (PMGO-004).
+#
+# This loop dispatches agents nobody is watching and kills them when they time
+# out. If the host cannot terminate a process group, that kill does not contain
+# the tree: the provider and shell descendants survive, keep writing to a
+# worktree, and the cleanup still LOOKS successful. A restricted sandbox reached
+# exactly that state in the field. Refusing to start is the only honest answer —
+# the alternative is hours of unsupervised runs whose failure mode is silent
+# corruption. Ordering matters: the claim already succeeded, so the EXIT trap
+# above releases the pidfile on the way out and a later `gluerun auto` is not
+# locked out by this refusal.
+#
+# Attended paths (ask/supervise/one-shot runners) are deliberately NOT gated: an
+# operator watching a single run can see and clean up a survivor.
+#
+# GLUERUN_ALLOW_DEGRADED_KILL=1 is the documented override for operators who
+# accept the risk; it downgrades the refusal to a logged warning.
+preflight_state="$(gluerun_process_control_preflight)"
+if [[ "$preflight_state" == degraded:* ]]; then
+  preflight_reason="${preflight_state#degraded:}"
+  if [[ "${GLUERUN_ALLOW_DEGRADED_KILL:-0}" == "1" ]]; then
+    echo "[autonomate] WARNING: process-group cleanup is unverified ($preflight_reason); continuing because GLUERUN_ALLOW_DEGRADED_KILL=1. Timed-out agents may leave surviving descendants." >&2
+    gluerun_append_event "autonomate.preflight_degraded_override" \
+      "process-group cleanup unverified; continuing under GLUERUN_ALLOW_DEGRADED_KILL" \
+      "{\"reason\":\"$preflight_reason\"}"
+  else
+    gluerun_append_event "autonomate.preflight_unsafe" \
+      "process-group cleanup unverified; refusing unattended actuation" \
+      "{\"reason\":\"$preflight_reason\"}"
+    {
+      echo "[autonomate] REFUSING to start: this environment cannot prove it can terminate a process group ($preflight_reason)."
+      echo "[autonomate] A timed-out agent's descendants could survive the kill and keep writing to a worktree."
+      echo "[autonomate] Run 'gluerun doctor' and read the runtime.process-group-kill check, or set GLUERUN_ALLOW_DEGRADED_KILL=1 to accept the risk."
+    } >&2
+    exit 2
+  fi
+fi
+
 start_ts="$(date +%s)"
 max_hours_int="${GLUERUN_MAX_HOURS%%.*}"; [[ "$max_hours_int" =~ ^[0-9]+$ ]] || max_hours_int=20
 deadline=$(( start_ts + max_hours_int * 3600 ))

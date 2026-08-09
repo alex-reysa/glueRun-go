@@ -84,9 +84,10 @@ gluerun_claude_result_on_exit() {
   # An interrupted run leaves claude and its descendants alive; they would keep
   # writing to the worktree while the guard restores it, and the restore would
   # lose the race. Kill first, then restore.
-  if [[ -n "${cl_pid:-}" ]] && declare -f gluerun_claude_kill_tree >/dev/null 2>&1; then
-    gluerun_claude_kill_tree "$cl_pid" 2>/dev/null || true
+  if [[ -n "${cl_pid:-}" ]] && declare -f gluerun_kill_tree >/dev/null 2>&1; then
+    gluerun_kill_tree "$cl_pid" 0 session 2>/dev/null || true
     wait "$cl_pid" 2>/dev/null || true
+    cl_pid=""
   fi
   # First, because a containment failure that outlives the process is the worse
   # outcome. This is the path that matters: ask/supervise/decide background this
@@ -318,46 +319,22 @@ fi
 envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-claude-env.XXXXXX")"
 envelope_err="$envelope.err"
 
-# SIGKILL a pid and every transitive descendant. Snapshots the full ps tree
-# (which is intact at timeout, before anything exits) so reparenting can't let a
-# child escape — more reliable than recursive pgrep -P or a process-group kill,
-# which both let the mock's grandchild survive in testing.
-gluerun_claude_kill_tree() {
-  python3 - "$1" <<'PY' 2>/dev/null || true
-import os, signal, subprocess, sys
-root = int(sys.argv[1])
-out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
-                     capture_output=True, text=True).stdout
-children = {}
-for line in out.splitlines():
-    f = line.split()
-    if len(f) != 2:
-        continue
-    try:
-        pid, ppid = int(f[0]), int(f[1])
-    except ValueError:
-        continue
-    children.setdefault(ppid, []).append(pid)
-order, stack = [], [root]
-while stack:
-    p = stack.pop()
-    for c in children.get(p, []):
-        order.append(c)
-        stack.append(c)
-for pid in list(reversed(order)) + [root]:
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except OSError:
-        pass
-PY
-}
-
+# The provider as a SESSION LEADER. This function is only ever invoked as a
+# background job, so `cd` is contained to that job's subshell and
+# gluerun_setsid_exec — the LAST command — replaces it: $! in the caller is the
+# leader itself (pid == pgid), which is what lets gluerun_kill_tree group-kill
+# claude and everything it spawned with one negative pid, no `ps` involved.
+#
+# This replaced a local ps-tree walk that built its target list from `ps -A` and
+# ignored its exit status: where process enumeration is denied the list came
+# back empty, only the direct child was SIGKILLed, and every descendant survived
+# the timeout unnoticed (PMGO-004).
+#
+# Redirections live on the CALL SITE, not here, so they bind to the job (and
+# therefore to the exec'd provider) rather than to a nested subshell.
 run_claude() {
-  if [[ -n "$prompt_file" ]]; then
-    ( cd "$worktree" && "${cmd[@]}" <"$prompt_file" ) >"$envelope" 2>"$envelope_err"
-  else
-    ( cd "$worktree" && "${cmd[@]}" ) >"$envelope" 2>"$envelope_err"
-  fi
+  cd "$worktree" || exit 1
+  gluerun_setsid_exec "${cmd[@]}"
 }
 
 exit_code=0
@@ -371,14 +348,28 @@ claude_timeout="${GLUERUN_CLAUDE_TIMEOUT_SEC:-1200}"
 # `run_claude` would swallow the SIGTERM that ask/supervise/decide send on their
 # way to a kill — and with it the read-only guard's only chance to run. `wait`
 # is interruptible by a trapped signal; a foreground child is not.
-run_claude & cl_pid=$!
+if [[ -n "$prompt_file" ]]; then
+  run_claude <"$prompt_file" >"$envelope" 2>"$envelope_err" & cl_pid=$!
+else
+  run_claude >"$envelope" 2>"$envelope_err" & cl_pid=$!
+fi
+if [[ -n "$run_dir" && -d "$run_dir" ]]; then
+  gluerun_session_record_write "$run_dir/runner-session.json" "$cl_pid" 2>/dev/null || true
+fi
 if [[ "$claude_timeout" =~ ^[0-9]+$ && "$claude_timeout" -gt 0 ]]; then
   cl_deadline=$((SECONDS + claude_timeout)); cl_timed_out="no"
   while kill -0 "$cl_pid" 2>/dev/null; do
     if [[ "$SECONDS" -ge "$cl_deadline" ]]; then
       cl_timed_out="yes"
-      gluerun_claude_kill_tree "$cl_pid"   # SIGKILL claude + every descendant
+      # TERM the whole session, then KILL what is left: a provider CLI has no
+      # restore guard of its own, so it gets a short courtesy grace, not the
+      # runner's full trap budget.
+      gluerun_kill_tree "$cl_pid" "$(gluerun_provider_kill_grace_sec)" session
       wait "$cl_pid" 2>/dev/null || true
+      # Clear immediately after the wait (not just at the join below) so a
+      # signal landing in the gap cannot have the EXIT trap re-kill a reaped
+      # pid that the kernel may already have recycled.
+      cl_pid=""
       exit_code=124
       break
     fi

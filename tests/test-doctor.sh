@@ -51,7 +51,7 @@ doctor() {
     [[ -n "${DOCTOR_CODEX_BIN:-}" ]] && extra_env+=("GLUERUN_CODEX_BIN=$DOCTOR_CODEX_BIN")
     env HOME="$fakehome" GLUERUN_ENGINE_HOME="$ENGINE_HOME" GLUERUN_MIN_DISK_GB=0 \
       PATH="${DOCTOR_PATH:-$fakebin:$PATH}" "${extra_env[@]}" \
-      bash "$ENGINE_HOME/cli/gluerun" doctor 2>&1
+      bash "$ENGINE_HOME/cli/gluerun" doctor "$@" 2>&1
   )
 }
 
@@ -178,5 +178,84 @@ assert_contains "$out" "were never applied" "orphaned guard journal must warn"
 rm -rf "$root/.gluerun-state/readonly-guard"
 out="$(doctor)" || true
 [[ "$out" != *"were never applied"* ]] || fail "no journals must not warn"
+
+# 11. Pidfile verdicts (PMGO-005). A PID probe has four outcomes and doctor used
+# to print one of them. The field cost was a live console server reported as a
+# leftover in a sandbox that denies process inspection, which is an invitation
+# to delete the pidfile of a running process.
+#
+# (a) alive: previously emitted NOTHING at all, so a healthy pidfile and a
+# pidfile doctor had not looked at were indistinguishable.
+printf '%s\n' "$$" >"$root/.gluerun-state/autonomate.pid"
+rc=0; out="$(doctor)" || rc=$?
+assert_contains "$out" "names live PID $$" "a live pidfile is reported as live"
+[[ "$rc" -eq 0 ]] || fail "a live pidfile must not fail doctor"
+[[ "$out" != *"stale pidfile"* ]] || fail "a live pid must never be called stale"
+
+# (b) malformed: not a pid at all. Distinct from staleness — there is no process
+# to restart, and "remove this stale pidfile" is the wrong instruction.
+printf 'not-a-pid\n' >"$root/.gluerun-state/autonomate.pid"
+out="$(doctor)" || true
+assert_contains "$out" "malformed pidfile" "unparseable contents are reported as malformed"
+[[ "$out" != *"stale pidfile"* ]] || fail "malformed contents are not staleness"
+
+# A negative number parses as an int but is a process-GROUP selector to kill(2),
+# not a pid: probing it asks about every process this user may signal, which
+# answers "alive" for a garbage file.
+printf -- '-1\n' >"$root/.gluerun-state/autonomate.pid"
+out="$(doctor)" || true
+assert_contains "$out" "malformed pidfile" "a group selector is not a live pid"
+[[ "$out" != *"names live PID"* ]] || fail "a negative pid must never read as alive"
+
+# (c) unknown-permission: the PMGO-005 case itself, driven by a REAL EPERM.
+# PID 1 is root-owned, and POSIX applies the permission check to signal 0 too,
+# so an unprivileged `kill -0 1` is the same inconclusive answer a restricted
+# sandbox gives for every pid. Skipped under root, where the probe legitimately
+# succeeds; the seam below covers that case.
+if [[ "$(id -u)" -ne 0 ]]; then
+  printf '1\n' >"$root/.gluerun-state/autonomate.pid"
+  out="$(doctor)" || true
+  assert_contains "$out" "Do not delete the pidfile automatically." \
+    "a real EPERM warns without inviting deletion"
+  [[ "$out" != *"stale pidfile"* ]] || fail "EPERM must never be reported as stale"
+fi
+
+# The same verdict through the seam, which is how a CI job on a permissive host
+# exercises the branch at all.
+printf '99999999\n' >"$root/.gluerun-state/autonomate.pid"
+out="$(GLUERUN_TEST_PID_PROBE=1 GLUERUN_TEST_PID_PROBE_STATE=unknown doctor)" || true
+assert_contains "$out" "Do not delete the pidfile automatically." \
+  "the seam reports an uninspectable pid the same way"
+[[ "$out" != *"stale pidfile"* ]] || fail "the seam must not report EPERM as stale"
+
+# (d) A lone seam variable is not a seam: an inherited GLUERUN_TEST_PID_PROBE_STATE
+# must not be able to rewrite a real operator's diagnosis.
+out="$(GLUERUN_TEST_PID_PROBE_STATE=unknown doctor)" || true
+assert_contains "$out" "stale pidfile" "a lone seam variable falls through to the real probe"
+
+# (e) Doctor is read-only about pidfiles in every verdict, including under the
+# one flag that does mutate state. An inconclusive probe must not lose the file.
+out="$(GLUERUN_TEST_PID_PROBE=1 GLUERUN_TEST_PID_PROBE_STATE=unknown doctor --repair-model-cache)" || true
+[[ -f "$root/.gluerun-state/autonomate.pid" ]] \
+  || fail "doctor must never delete a pidfile, least of all an uninspectable one"
+printf '99999999\n' >"$root/.gluerun-state/autonomate.pid"
+
+# 12. Process-control capability (PMGO-004). Timeout cleanup depends on session
+# creation + group termination; `ps` is now only the fallback.
+rc=0
+out="$(GLUERUN_TEST_PROCESS_CONTROL=1 GLUERUN_TEST_PROCESS_CONTROL_STATE=no-ps doctor)" || rc=$?
+assert_contains "$out" "descendant-tree fallback cleanup is degraded" \
+  "missing ps is surfaced as a degraded fallback"
+[[ "$rc" -eq 0 ]] || fail "missing ps must warn, not block (rc=$rc)"
+
+rc=0
+out="$(GLUERUN_TEST_PROCESS_CONTROL=1 GLUERUN_TEST_PROCESS_CONTROL_STATE=no-group-kill doctor)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "an environment that cannot kill a process group must fail doctor"
+assert_contains "$out" "Do not run unattended actuation here." \
+  "the group-kill failure tells the operator not to actuate unattended"
+
+# Unseamed, on a process-capable host, the real probe passes.
+out="$(doctor)" || true
+assert_contains "$out" "ok    process-group termination works" "the real group-kill probe passes here"
 
 echo "PASS: test-doctor"

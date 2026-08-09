@@ -84,8 +84,9 @@ gluerun_gemini_result_on_exit() {
   # would keep writing to the worktree while the guard restores it, and the
   # restore would lose the race. Kill first, then restore.
   if [[ -n "${gem_pid:-}" ]]; then
-    gluerun_kill_tree "$gem_pid" 2>/dev/null || true
+    gluerun_kill_tree "$gem_pid" 0 session 2>/dev/null || true
     wait "$gem_pid" 2>/dev/null || true
+    gem_pid=""
   fi
   # Before the result write, because a containment failure that outlives the
   # process is the worse outcome. ask/supervise/decide background this runner
@@ -219,8 +220,14 @@ fi
 envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-gemini-env.XXXXXX")"
 envelope_err="$envelope.err"
 
+# The provider as a SESSION LEADER: gluerun_setsid_exec is the LAST command, so
+# the `&` at the call site makes $! the leader itself (pid == pgid) and
+# gluerun_kill_tree group-kills the whole tree with one negative pid, without
+# `ps` (PMGO-004). Only ever invoked as a background job, so the `cd` is
+# contained; redirections live on the call site so they bind to the job.
 run_gemini() {
-  ( cd "$worktree" && "${cmd[@]}" <"$prompt_file" ) >"$envelope" 2>"$envelope_err"
+  cd "$worktree" || exit 1
+  gluerun_setsid_exec "${cmd[@]}"
 }
 
 exit_code=0
@@ -233,13 +240,14 @@ gem_timeout="${GLUERUN_GEMINI_TIMEOUT_SEC:-1200}"
 # foreground run would swallow the SIGTERM that ask/supervise/decide send on
 # their way to a kill -- and with it the read-only guard's only chance to run.
 # `wait` is interruptible by a trapped signal; a foreground child is not.
-run_gemini & gem_pid=$!
+run_gemini <"$prompt_file" >"$envelope" 2>"$envelope_err" & gem_pid=$!
 if [[ "$gem_timeout" =~ ^[0-9]+$ && "$gem_timeout" -gt 0 ]]; then
   gem_deadline=$((SECONDS + gem_timeout)); gem_timed_out="no"
   while kill -0 "$gem_pid" 2>/dev/null; do
     if [[ "$SECONDS" -ge "$gem_deadline" ]]; then
       gem_timed_out="yes"
-      gluerun_kill_tree "$gem_pid"   # SIGKILL gemini + every descendant
+      # TERM the provider session, then KILL what is left.
+      gluerun_kill_tree "$gem_pid" "$(gluerun_provider_kill_grace_sec)" session
       wait "$gem_pid" 2>/dev/null || true
       exit_code=124
       break

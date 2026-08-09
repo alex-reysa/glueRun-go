@@ -242,40 +242,75 @@ rm -f "$observation"
 gate_timeout="${GLUERUN_AUDIT_GATE_TIMEOUT_SEC:-1200}"
 [[ "$gate_timeout" =~ ^[0-9]+$ ]] || gate_timeout=1200
 
+# Cache + report variables supplied only to the disposable command; they stay
+# outside the source checkout. Declared ONCE and shared by both spawn paths
+# below so the guarded and unguarded gates cannot drift apart.
+gate_env=(
+  GLUERUN_GATE_REPORT_FILE="$observation"
+  TMPDIR="$cache_root/tmp/"
+  TMP="$cache_root/tmp"
+  TEMP="$cache_root/tmp"
+  XDG_CACHE_HOME="$cache_root/xdg"
+  TURBO_CACHE_DIR="$cache_root/turbo"
+  VITE_CACHE_DIR="$cache_root/vite"
+  BUN_INSTALL_CACHE_DIR="$cache_root/bun"
+  BUN_TMPDIR="$cache_root/tmp"
+  npm_config_cache="$cache_root/npm"
+  YARN_CACHE_FOLDER="$cache_root/yarn"
+  COREPACK_HOME="$cache_root/corepack"
+  NODE_COMPILE_CACHE="$cache_root/node"
+  CARGO_TARGET_DIR="$cache_root/cargo"
+  GOCACHE="$cache_root/go"
+)
+
 run_gate_command() {
   # Reuse the worker gate's allowlisted environment boundary so a denied host
-  # variable cannot leak into verification. Cache variables are supplied only
-  # to the disposable command and remain outside the source checkout.
-  gluerun_run_in_worktree_env "$verify_worktree" env \
-    GLUERUN_GATE_REPORT_FILE="$observation" \
-    TMPDIR="$cache_root/tmp/" \
-    TMP="$cache_root/tmp" \
-    TEMP="$cache_root/tmp" \
-    XDG_CACHE_HOME="$cache_root/xdg" \
-    TURBO_CACHE_DIR="$cache_root/turbo" \
-    VITE_CACHE_DIR="$cache_root/vite" \
-    BUN_INSTALL_CACHE_DIR="$cache_root/bun" \
-    BUN_TMPDIR="$cache_root/tmp" \
-    npm_config_cache="$cache_root/npm" \
-    YARN_CACHE_FOLDER="$cache_root/yarn" \
-    COREPACK_HOME="$cache_root/corepack" \
-    NODE_COMPILE_CACHE="$cache_root/node" \
-    CARGO_TARGET_DIR="$cache_root/cargo" \
-    GOCACHE="$cache_root/go" \
+  # variable cannot leak into verification.
+  gluerun_run_in_worktree_env "$verify_worktree" env "${gate_env[@]}" \
     "$(gluerun_bash_bin)" -c "$gate_command"
+}
+
+# The same gate, spawned as a SESSION LEADER. An audited gate is an arbitrary,
+# uncooperative tree, so containment cannot depend on `ps`: where enumeration is
+# denied the old walk found no children and killed only the top shell, leaving
+# the gate running in a disposable worktree nobody would ever look at again
+# (PMGO-004). gluerun_setsid_exec is the LAST command here, so $! at the call
+# site is the leader itself (pid == pgid) and one negative pid reaches the tree.
+#
+# ONLY valid as a background job — it replaces the calling process.
+#
+# gluerun_run_in_worktree_env is a shell function that runs its command in a
+# SUBSHELL, so it cannot be exec'd; the new session therefore re-enters it after
+# sourcing lib.sh, exactly the way every other engine child process obtains it.
+# Inlining the boundary here instead would fork it into two copies that drift.
+run_gate_command_session() {
+  export GLUERUN_ROOT GLUERUN_STATE_DIR GLUERUN_ENGINE_HOME
+  export GLUERUN_AUDIT_GATE_LIB="$SCRIPT_DIR/lib.sh"
+  export GLUERUN_AUDIT_GATE_WORKTREE="$verify_worktree"
+  export GLUERUN_AUDIT_GATE_COMMAND="$gate_command"
+  gluerun_setsid_exec "$(gluerun_bash_bin)" -c '
+set -euo pipefail
+gate_env=("$@")
+set --
+source "$GLUERUN_AUDIT_GATE_LIB"
+gluerun_run_in_worktree_env "$GLUERUN_AUDIT_GATE_WORKTREE" env "${gate_env[@]}" \
+  "$(gluerun_bash_bin)" -c "$GLUERUN_AUDIT_GATE_COMMAND"
+' gluerun-audit-gate "${gate_env[@]}"
 }
 
 started_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
 gate_exit=0
 gate_timed_out="no"
 if [[ "$gate_timeout" -gt 0 ]]; then
-  run_gate_command >"$log" 2>&1 &
+  run_gate_command_session >"$log" 2>&1 &
   gate_pid=$!
   gate_deadline=$((SECONDS + gate_timeout))
   while kill -0 "$gate_pid" 2>/dev/null; do
     if [[ "$SECONDS" -ge "$gate_deadline" ]]; then
       gate_timed_out="yes"
-      gluerun_kill_tree "$gate_pid"
+      # `session`: the spawner's assertion that $gate_pid came from
+      # gluerun_setsid_exec above and has not been waited on yet.
+      gluerun_kill_tree "$gate_pid" 0 session
       kill -KILL "$gate_pid" 2>/dev/null || true
       wait "$gate_pid" 2>/dev/null || true
       gate_exit=124
