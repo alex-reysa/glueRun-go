@@ -118,6 +118,11 @@
         <span class="crumb crumb-repo" id="crumb-repo">—</span>
         <span class="crumb-sep" aria-hidden="true">›</span>
         <span class="crumb crumb-thread" id="crumb-plan">Current plan</span>
+        <!-- execution state beside the plan title (PMGO-003) — painted by
+             core/plans.js from core/api.js's exec store. Carries the STOP reason
+             only; the dock's loop cell owns the "running" word, so this chip is
+             hidden whenever execution is not stopped. -->
+        <span class="crumb crumb-exec" id="crumb-exec" hidden></span>
         <span class="crumb-sep" aria-hidden="true">›</span>
         <strong class="crumb-cur" id="crumb-surface">Home</strong>
       </div>
@@ -226,6 +231,12 @@
         </button>
         <button class="dock-cell" id="dock-tasks" type="button" data-dock-nav="#plan/tasks" title="Open tasks">
           <span id="dock-tasks-text">— active · — ready</span>
+        </button>
+        <!-- frontier (AXON-002) — ready-by-dependency vs runnable-now vs the
+             concurrency cap, with the per-node serialization reasons in the
+             title. Hidden until /api/overview reports l1Selection. -->
+        <button class="dock-cell" id="dock-frontier" type="button" data-dock-nav="#plan/dag" title="L1 frontier selection" hidden>
+          <span id="dock-frontier-text"></span>
         </button>
         <button class="dock-cell" id="dock-gates" type="button" data-dock-nav="#plan/timeline" title="Gate progress">
           <span id="dock-gates-text">gates —/—</span>

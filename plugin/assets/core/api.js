@@ -11,7 +11,10 @@
    historical vs live is a single immutable decision for the life of the page.
 
    Imports NOTHING (dependency-free) so any module — core, surface, or app.js —
-   may import it without forming a cycle. */
+   may import it without forming a cycle. Since 0.17.0 it also hosts the tiny
+   execution-state store (setExecState/getExecState/onExecState, see the bottom
+   of the file), for the same reason: every surface needs it and nothing may
+   import a surface to get it. */
 
 // A plan id as minted by `gluerun plan archive` (plan-<UTCstamp>[-<slug>]). This
 // is also the sole gate on a value that becomes a server-side filesystem root, so
@@ -59,4 +62,39 @@ export function switchPlan(idOrNull) {
   } catch (e) {
     location.href = idOrNull ? ("?plan=" + encodeURIComponent(idOrNull) + "#home") : "?#home";
   }
+}
+
+// ------------------------------------------------------------ exec state -----
+// PMGO-003: the console had exactly one liveness vocabulary, so "Current plan ·
+// live" (a DATA-SOURCE fact — we are attached to the live tree, not an archive)
+// read as "the orchestration loop is running". They are different facts and now
+// have different stores: connection/plan-source stays where it was, EXECUTION
+// state lives here as { loopAlive, stopPresent, stopReason }.
+//
+// app.js is the SOLE writer (setExecState after each /api/state snapshot and
+// each /api/overview land) and never writes in historical mode — an archived
+// plan's payload describes a finished run and can never be evidence that a loop
+// is alive. Subscribe-with-replay mirrors plan/data.js's onDag so a subscriber
+// registered before the first poll paints as soon as the state exists.
+let execState = null;
+let execSig = "";
+const execSubs = new Set();
+
+export function getExecState() { return execState; }
+
+// Deduped on the composed value: a quiet 10s poll notifies nobody.
+export function setExecState(next) {
+  const s = next && typeof next === "object" ? next : null;
+  const sig = s ? JSON.stringify([s.loopAlive, s.stopPresent, s.stopReason]) : "";
+  if (sig === execSig) return;
+  execSig = sig;
+  execState = s;
+  execSubs.forEach((fn) => { try { fn(execState); } catch (e) {} });
+}
+
+// Returns an unsubscribe. Replays the current state immediately when one exists.
+export function onExecState(fn) {
+  execSubs.add(fn);
+  if (execState) { try { fn(execState); } catch (e) {} }
+  return () => execSubs.delete(fn);
 }

@@ -91,6 +91,38 @@ async function enrichNode(id) {
 // ------------------------------------------------------------- aside -------
 function chip(text, cls) { return `<span class="plan-chip${cls ? " " + cls : ""}">${esc(text)}</span>`; }
 
+// One plain sentence under the gate chip saying why this node is not moving —
+// the gate status alone cannot distinguish "waiting for an operator" from
+// "waiting for a prerequisite" from "already done, in an earlier campaign", and
+// an unexplained stall reads as a broken engine (PMGO-001 / AXON-002). Every
+// field is optional: the server grows humanGate / runnable / exclusion / cohort
+// in a separate change and this must stay silent, not wrong, without them.
+function asideStatusNote(node) {
+  const g = node.gate || {};
+  const hg = node.humanGate || null;
+  const ok = g.status === "passed" || g.status === "passed-with-acknowledged-baseline";
+  const historical = g.cohort === "historical" || g.evidenceClass === "grandfathered";
+  // The gate is projected onto the node that carries it (humanGate) and named on
+  // every node it holds up (humanGateBlockedBy, a list of carrier ids).
+  const blockedBy = node.humanGateBlockedBy;
+  const blockedList = Array.isArray(blockedBy) ? blockedBy.join(", ") : (blockedBy || "");
+  if (hg && hg.state && hg.state !== "approved") {
+    const id = hg.gateId || hg.id || blockedList;
+    const why = hg.reason || hg.detail || (hg.state === "pending" ? "operator approval pending" : String(hg.state));
+    return `blocked by human gate${id ? " " + id : ""} — ${why}`;
+  }
+  if (blockedList) return `blocked by human gate ${blockedList} — operator approval pending`;
+  if (node.runnable === false) {
+    const ex = node.exclusion || {};
+    return `serialized — ${ex.detail || ex.reason || "another node in this area holds a lease"}`;
+  }
+  if (ok && historical) {
+    const when = g.recordedAt ? String(g.recordedAt).slice(0, 10) : "";
+    return `historically complete (grandfathered${when ? " " + when : ""})`;
+  }
+  return "";
+}
+
 function renderAside() {
   const aside = document.getElementById("plan-aside");
   if (!aside) return;
@@ -107,6 +139,7 @@ function renderAside() {
 
   const g = node.gate || {};
   const gtone = gateTone(g.status);
+  const statusNote = asideStatusNote(node);
   const deps = node.dependsOn || [];
   const dependents = (idx.dependents[node.id]) || [];
   const depChip = (nid) => `<button class="plan-depchip" data-plan-node="${escAttr(nid)}"><span class="dep-chip-id">${esc(nid)}</span></button>`;
@@ -134,6 +167,7 @@ function renderAside() {
          <button class="insp-raw-btn" data-raw-root="dag" data-raw-name="dag.v0.json" data-raw-title="dag.v0.json" title="view source · dag">{ }<span class="irb-label">dag</span></button>
        </span>
      </div>
+     ${statusNote ? `<div class="plan-aside-note">${esc(statusNote)}</div>` : ""}
      ${node.requiredCompletion ? `<div class="plan-aside-block"><span class="meta-label">required completion</span><p class="plan-aside-text">${esc(node.requiredCompletion)}</p></div>` : ""}
      ${node.description ? `<div class="plan-aside-block"><span class="meta-label">description</span><p class="plan-aside-text">${esc(node.description)}</p></div>` : ""}
      <div class="plan-aside-block"><span class="meta-label">depends on · ${deps.length}</span><div class="chips-row">${deps.map(depChip).join("") || '<span class="section-empty">none</span>'}</div></div>

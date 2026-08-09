@@ -296,6 +296,15 @@ body.side-rail { --side-col: var(--side-w-rail); }
   overflow: hidden; text-overflow: ellipsis; max-width: 28ch;
 }
 .crumb-sep { color: var(--faint); font-size: 12px; flex: 0 0 auto; }
+/* execution state beside the plan title (PMGO-003) — quiet by construction: this
+   is a HOLD, not a fault, and it must never out-shout the surface segment. */
+.crumb-exec {
+  color: var(--muted); font-size: 11px; flex: 0 1 auto;
+  padding: 0 7px; height: 18px; display: inline-flex; align-items: center;
+  border-radius: var(--r-chip); border: 1px solid var(--hair);
+  background: rgba(0, 0, 0, 0.025);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 44ch;
+}
 .crumb-cur {
   color: var(--ink); font-size: 12px; font-weight: 600; letter-spacing: -0.005em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 34ch; flex: 0 1 auto;
@@ -937,6 +946,9 @@ select.filter:hover { border-color: var(--rule-strong); }
 .ov-progress-head { display: flex; align-items: baseline; gap: 10px; }
 .ov-pct { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; color: color-mix(in srgb, var(--tone-violet) 82%, #000 18%); }
 .ov-progress-sub { font-size: 12px; color: var(--muted); }
+/* execution chip + the historical/combined secondary line (PMGO-002) */
+.ov-exec-chip { margin-left: auto; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; }
+.ov-progress-cohort { margin-top: 7px; font-size: 11px; color: var(--faint); }
 .ov-progress-bar { margin-top: 8px; height: 8px; border-radius: 999px; background: rgba(0, 0, 0, 0.06); overflow: hidden; }
 .ov-progress-fill { display: block; height: 100%; border-radius: 999px; background: var(--tone-violet); transition: width var(--d-struct) var(--ease); }
 .ph-ladder { display: flex; flex-direction: column; gap: 5px; }
@@ -1261,6 +1273,6 @@ button.dock-cell:hover { background: rgba(0, 0, 0, 0.04); }
   #top-bar { padding: 0 10px; gap: 8px; }
   /* narrow: keep only the current surface segment of the breadcrumb */
   .crumb-repo, .crumb-thread, .crumb-sep { display: none; }
-  #dock-gates, #dock-tasks { display: none; }
+  #dock-gates, #dock-tasks, #dock-frontier { display: none; }
   #inspector { height: 92vh; }
 }

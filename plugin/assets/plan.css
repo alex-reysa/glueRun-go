@@ -187,6 +187,12 @@
 .plan-chip.kind { color: var(--tone-coral-fg); background: var(--tone-coral-bg); }
 .plan-aside-gate { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .plan-aside-meta { font-size: 10.5px; color: var(--text-faint); font-family: var(--font-mono); }
+/* one-sentence "why isn't this moving" line under the gate chip — a quiet rule
+   on the left, never a coloured banner */
+.plan-aside-note {
+  font-size: 11.5px; line-height: 1.45; color: var(--text-secondary);
+  padding-left: 9px; border-left: 2px solid var(--border-subtle);
+}
 .plan-aside-block { display: flex; flex-direction: column; gap: 6px; }
 .plan-aside-text { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
 .plan-depchip {
@@ -273,17 +279,16 @@
 .plan-dag-stage { position: relative; margin: 0 auto; }
 .plan-dag-tint { position: absolute; background: var(--surface-sunken); opacity: 0.5; border-radius: var(--radius-lg); z-index: 0; }
 
-/* slim collapsible stage ribbon */
-.plan-dag-ribbon {
-  position: absolute; height: 24px; display: flex; align-items: center; gap: 7px;
-  padding: 0 10px; border-radius: var(--radius-sm); background: transparent;
-  border: 0; cursor: pointer; z-index: 2; text-align: left;
+/* slim wave ruler — one header cell per rank column. Replaces the collapsible
+   stage ribbon: columns are dependency waves now, so there is no stage band to
+   fold and nothing here is interactive. */
+.plan-dag-wave {
+  position: absolute; height: 24px; display: flex; align-items: baseline; gap: 7px;
+  padding: 0 10px; border-radius: var(--radius-sm); z-index: 2;
+  text-align: left; pointer-events: none; overflow: hidden; white-space: nowrap;
 }
-.plan-dag-ribbon:hover { background: var(--surface-sunken); }
-.plan-dag-ribbon .pdr-chev { width: 10px; height: 10px; color: var(--n-500); display: inline-flex; transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease-out); flex: none; }
-.plan-dag-ribbon[aria-expanded="false"] .pdr-chev { transform: rotate(0deg); }
-.plan-dag-ribbon .pdr-id { font: 700 10px var(--font-sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-meta); }
-.plan-dag-ribbon .pdr-count { font-size: 10px; color: var(--text-faint); }
+.plan-dag-wave .pdw-id { font: 700 10px var(--font-sans); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-meta); }
+.plan-dag-wave .pdw-count { font-size: 10px; color: var(--text-faint); }
 
 .plan-dag-edges { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
 
@@ -305,7 +310,17 @@
    waiting a zinc wash (hover / trace / selection override transiently). */
 .plan-dag-card[data-status="active"] { box-shadow: 0 0 0 2px #3b82f680; }
 .plan-dag-card[data-status="done"] { background: #f4faf4; border-color: #cde0d2; }
-.plan-dag-card[data-status="queued"] { background: var(--surface-subtle); border-color: var(--line-soft); }
+.plan-dag-card[data-status="blocked"] { background: var(--surface-subtle); border-color: var(--line-soft); }
+/* complete, but in an earlier campaign — recedes further than a live pass so it
+   never reads as progress on this run */
+.plan-dag-card[data-status="done-hist"] { background: var(--surface-subtle); border-color: var(--line-soft); }
+.plan-dag-card[data-status="done-hist"] .pdc-name { color: var(--text-secondary); }
+/* held behind an unapproved human gate: sand wash + the pause glyph, so the
+   state is never carried by colour alone */
+.plan-dag-card[data-status="gated"] { background: var(--tone-amber-bg); border-color: var(--tone-amber-border); }
+/* ready by dependency, but the scheduler will not start it yet (same-area lease
+   or overlapping write scope). Dashed edge = deliberately serialized. */
+.plan-dag-card[data-runnable="false"] { border-style: dashed; border-color: var(--n-400); }
 .plan-dag-card .pdc-name {
   flex: 1 1 auto; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.01em;
@@ -325,23 +340,22 @@
 .pdc-glyph.g-frontier i { border: 1.5px solid var(--tone-coral-dot); }
 .pdc-glyph.g-eval i { background: var(--tone-coral-dot); }
 .pdc-glyph.g-failed { border: 1.5px solid var(--tone-red-dot); border-radius: var(--radius-pill); color: var(--tone-red-dot); font: 700 12px var(--font-sans); line-height: 1; }
-.pdc-glyph.g-queued i { display: block; width: 12px; height: 12px; border: 1.5px solid var(--n-400); border-radius: var(--radius-pill); }
+/* blocked by a prerequisite — the quiet hollow ring (was: g-queued) */
+.pdc-glyph.g-blocked i { display: block; width: 12px; height: 12px; border: 1.5px solid var(--n-400); border-radius: var(--radius-pill); }
+/* complete in an earlier campaign — the same check, outlined and drained */
+.pdc-glyph.g-done-hist { border: 1.5px solid var(--n-300); border-radius: var(--radius-pill); }
+.pdc-glyph.g-done-hist .icon { width: 10px; height: 10px; color: var(--text-faint); }
+/* awaiting operator approval — two pause bars, distinct in shape from every
+   other glyph so the amber is confirmation, not the message */
+.pdc-glyph.g-gated { gap: 2px; }
+.pdc-glyph.g-gated i { display: block; width: 3px; height: 11px; border-radius: 1px; background: var(--tone-amber-dot); }
 
 .plan-dag-attr { display: flex; align-items: center; gap: 6px; height: 18px; padding-left: 4px; pointer-events: none; transition: opacity var(--dur-fast) var(--ease-out); }
 .plan-dag-attr .pdc-avatar { width: 8px; height: 8px; border-radius: var(--radius-pill); flex: none; background: var(--n-400); }
 .plan-dag-attr .pdc-avatar[data-tone="coral"] { background: var(--tone-coral-dot); }
 .plan-dag-attr .pdc-owner { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* collapsed stage summary — matches the card look */
-.plan-dag-summary {
-  position: absolute; height: 52px; background: var(--surface-panel); border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); display: flex; flex-direction: column;
-  justify-content: center; padding: 0 14px; cursor: pointer; z-index: 4; text-align: left; gap: 1px;
-}
-.plan-dag-summary:hover { box-shadow: var(--shadow-md); }
-.plan-dag-summary .pds-eyebrow { font: 700 9px var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-meta); }
-.plan-dag-summary .pds-name { font: 600 12.5px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.plan-dag-summary .pds-meta { font-size: 10px; color: var(--text-faint); }
+/* stage is metadata now, not geometry: it rides the attribution line */
+.plan-dag-attr .pdc-stage { flex: none; max-width: 44%; font-size: 10px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* floating fit-to-width button (bottom-left) */
 .plan-dag-fit {
@@ -368,7 +382,25 @@
 .plan-dag-progress .pdf-dot.pass { background: var(--tone-green-dot); }
 .plan-dag-progress .pdf-dot.active { background: var(--tone-blue-dot); }
 .plan-dag-progress .pdf-dot.hollow { border: 1px solid var(--n-400); }
+/* carried over from an earlier campaign: filled, but grey — present without
+   claiming credit for this run */
+.plan-dag-progress .pdf-dot.hist { background: var(--n-200); border: 1px solid var(--n-300); }
 .plan-dag-progress .pdf-count { font-size: 11px; color: var(--text-secondary); margin-left: 2px; }
+
+/* glyph legend — its own line above the fit / progress row, so a narrow pane
+   truncates it instead of colliding with either control. Reading matter, not a
+   control: it never takes pointer events. */
+.plan-dag-legend {
+  position: absolute; left: 14px; bottom: 56px; z-index: 7; pointer-events: none;
+  display: flex; align-items: center; gap: 11px; max-width: calc(100% - 28px);
+  padding: 5px 11px; background: var(--surface-panel); border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill); box-shadow: var(--shadow-xs);
+  overflow: hidden; white-space: nowrap;
+}
+.plan-dag-legend .lg-item { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+.plan-dag-legend .lg-text { font-size: 10px; color: var(--text-faint); }
+.plan-dag-legend .lg-dash { width: 14px; height: 10px; border: 1px dashed var(--n-400); border-radius: var(--radius-sm); }
+.plan-dag-legend .pdc-glyph { width: 14px; height: 14px; }
 
 /* ---- Matrix lens (ported PlanDependencyMatrix) ---- */
 /* DAG-lens host pattern: an unscaled .plan-scroll-host owns the scroll container

@@ -13,10 +13,12 @@
    modules) + core/api.js + core/plans.js (for the archived-plan name). No import
    cycle (app.js never imports the dock).
 
-   Cells (left→right): loop · tasks · gates · attention(needs-you) · breaker(only
-   when tripped) · spacer · repo·branch · conn+age. Every value is snapshot-derived;
-   nothing is fabricated. A codex-quota cell is intentionally OMITTED in Phase 1
-   (the /api/providers quota payload isn't cached off the Home surface yet). */
+   Cells (left→right): loop · tasks · frontier(only when the server reports
+   l1Selection) · gates · attention(needs-you) · breaker(only when tripped) ·
+   spacer · repo·branch · conn+age. Every value is snapshot-derived; nothing is
+   fabricated — a cell whose payload is absent is hidden rather than zero-filled.
+   A codex-quota cell is intentionally OMITTED in Phase 1 (the /api/providers
+   quota payload isn't cached off the Home surface yet). */
 
 import { S } from "../app.js";
 import { isHistorical, activePlan, switchPlan } from "./api.js";
@@ -138,10 +140,52 @@ function renderCells() {
   const ready = tc ? tc.ready : readyCount(snap, ov);
   setText("dock-tasks-text", tasksActive + " active · " + (ready != null ? ready : "—") + " ready");
 
-  // gates — passed/total; ochre when blocked/failed tasks stall gate progress.
+  // gates — the CURRENT campaign's passed/total when the server splits the
+  // cohorts (PMGO-002); historical accepted-as-done evidence and the combined
+  // figure ride in the tooltip instead of being blended into one number. Older
+  // server (no cohorts) → the combined "gates P/T" exactly as before. Ochre when
+  // blocked/failed tasks stall gate progress.
   const g = (snap.orchestration && snap.orchestration.gates) || {};
-  setText("dock-gates-text", "gates " + (g.passed != null ? g.passed : "?") + "/" + (g.total != null ? g.total : "?"));
+  const gCur = g.cohorts && g.cohorts.current;
+  const gHist = (g.cohorts && g.cohorts.historical) || {};
+  const gCombined = (g.passed != null ? g.passed : "?") + "/" + (g.total != null ? g.total : "?");
+  const gatesEl = el("dock-gates");
+  if (gCur) {
+    setText("dock-gates-text", "campaign " + (gCur.passed != null ? gCur.passed : "?")
+      + "/" + (gCur.total != null ? gCur.total : "?"));
+    if (gatesEl) {
+      gatesEl.title = "Gate progress — current campaign · historical accepted "
+        + (gHist.passed || 0) + "/" + (gHist.total || 0) + " · combined " + gCombined;
+    }
+  } else {
+    setText("dock-gates-text", "gates " + gCombined);
+    if (gatesEl) gatesEl.title = "Gate progress";
+  }
   toggleClass("dock-gates", "attention-cell", blockedFailed > 0);
+
+  // frontier (AXON-002) — ready-by-dependency vs runnable-now and the concurrency
+  // cap, with the named per-node reason for the gap in the tooltip. Same-area
+  // serialization and scope-overlap holds are a SAFETY policy, and without this
+  // cell a deliberately narrowed wave looks like a broken parallel engine. The
+  // whole cell is hidden when /api/overview carries no l1Selection (older
+  // server): an omitted cell is honest, a fabricated "ready 0 · runnable 0" is not.
+  const sel = ov && ov.l1Selection;
+  const frEl = el("dock-frontier");
+  if (frEl) {
+    if (!sel) {
+      frEl.hidden = true;
+    } else {
+      frEl.hidden = false;
+      const num = (v) => (v != null ? v : "—");
+      setText("dock-frontier-text", "ready " + num(sel.readyByDependency)
+        + " · runnable " + num(sel.runnableNow) + " · cap " + num(sel.cap));
+      const held = (sel.serialized || []).map((s) =>
+        (s.node || "?") + " — " + (s.detail || s.rule || "held back"));
+      frEl.title = held.length
+        ? "held back this cycle:\n" + held.join("\n")
+        : "every dependency-ready node is runnable now";
+    }
+  }
 
   // attention — the operator's action queue: blocked + failed tasks (the loop
   // cannot self-heal past retries). Ochre + amber dot when > 0, quiet at 0.

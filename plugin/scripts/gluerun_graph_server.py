@@ -1542,15 +1542,19 @@ def collect_status_native(repo: Path, origin_state: Any) -> dict[str, Any]:
 def collect_gates_summary(repo: Path) -> dict[str, Any]:
     """Plan-wide gate progress from the gate files + registry (replaces the
     hardwired gateD0/gateD1 subprocess probes): passed/total across every
-    registry node plus the per-node gate status ("absent" when no file)."""
+    registry node plus the per-node gate status ("absent" when no file), plus
+    `cohorts` splitting that passed set into historical accepted-as-done
+    evidence and what the current campaign earned (PMGO-002)."""
     registry_ids = list(load_dag_registry(repo).get("by_id") or {})
-    statuses = _all_gate_statuses(repo)
-    by_node = {node_id: statuses.get(node_id, "absent") for node_id in registry_ids}
-    successful = {"passed", "passed-with-acknowledged-baseline"}
+    records = _all_gate_records(repo)
+    by_node = {node_id: str((records.get(node_id) or {}).get("status") or "absent")
+               for node_id in registry_ids}
     return {
-        "passed": sum(1 for s in by_node.values() if s in successful),
+        "passed": sum(1 for s in by_node.values() if s in SUCCESSFUL_GATE_STATUSES),
         "total": len(registry_ids),
         "byNode": by_node,
+        "cohorts": _cohort_progress((_gate_cohort(records.get(n)) for n in registry_ids),
+                                    len(registry_ids)),
     }
 
 
@@ -3994,35 +3998,172 @@ def collect_settings(repo: Path) -> list[dict[str, Any]]:
     return groups
 
 
-def _all_gate_statuses(repo: Path) -> dict[str, str]:
-    out: dict[str, str] = {}
+# The gate statuses that mean "this node is done". Cohort membership is decided
+# by evidenceClass, never by status: a grandfathered gate is exactly as passed as
+# a freshly proven one, it simply belongs to an earlier campaign.
+SUCCESSFUL_GATE_STATUSES = {"passed", "passed-with-acknowledged-baseline"}
+
+
+def _all_gate_records(repo: Path) -> dict[str, dict[str, Any]]:
+    """{node: {"status", "evidenceClass"}} for every gate-result file. Read-only.
+
+    The provenance-carrying generalization of _all_gate_statuses. Progress has to
+    tell an accepted-as-done historical gate (evidenceClass "grandfathered") from
+    one the current campaign actually earned, and status alone cannot: both say
+    "passed"."""
+    out: dict[str, dict[str, Any]] = {}
     root = repo / GATES_REL
     if not root.exists():
         return out
     for path in root.glob("*.gate-result.json"):
         data = read_json(path, None)
         if isinstance(data, dict) and data.get("node"):
-            out[str(data["node"])] = str(data.get("status") or "absent")
+            evidence = data.get("evidenceClass")
+            out[str(data["node"])] = {
+                "status": str(data.get("status") or "absent"),
+                "evidenceClass": str(evidence) if isinstance(evidence, str) and evidence else None,
+            }
     return out
 
 
+def _all_gate_statuses(repo: Path) -> dict[str, str]:
+    """{node: status} — the status-only projection of _all_gate_records."""
+    return {node: record["status"] for node, record in _all_gate_records(repo).items()}
+
+
+def _gate_cohort(record: Any) -> str | None:
+    """"historical" | "current" | None for one gate record (or raw gate file dict).
+
+    None for anything not successful: an absent, failed or blocked gate belongs
+    to no completion cohort. Successful + evidenceClass "grandfathered" is
+    historical — authoritative evidence the CURRENT campaign did not produce.
+    Every other successful gate is current-campaign work."""
+    if not isinstance(record, dict):
+        return None
+    if str(record.get("status") or "") not in SUCCESSFUL_GATE_STATUSES:
+        return None
+    return "historical" if str(record.get("evidenceClass") or "") == "grandfathered" else "current"
+
+
+def _cohort_progress(cohorts: Any, total: int) -> dict[str, Any]:
+    """The `cohorts` block from an iterable of per-node cohort values. Pure.
+
+    PMGO-002: one combined percentage let "30% — 13/44 gated complete" stand
+    beside a loop that had never actuated, and every reading of that was wrong.
+    historical.total == historical.passed by construction — the historical cohort
+    IS the accepted-as-done set, green by definition, and can never serve as a
+    denominator the current campaign is measured against. Everything else in the
+    plan, including nodes with no gate at all, is current-campaign work."""
+    values = list(cohorts)
+    historical = sum(1 for c in values if c == "historical")
+    current = sum(1 for c in values if c == "current")
+    current_total = max(0, total - historical)
+    return {
+        "historical": {"passed": historical, "total": historical},
+        "current": {"passed": current, "total": current_total,
+                    "pct": round(100 * current / current_total) if current_total else 0},
+    }
+
+
+def compute_node_ranks(by_id: dict[str, Any]) -> dict[str, int]:
+    """Longest-path depth over ALL dependsOn edges: {node: rank}. Pure.
+
+    rank(root) = 0, rank(n) = 1 + max(rank(dep)) — the earliest wave a node could
+    run in. Kahn's algorithm, so every dependency is ranked before its dependent.
+    Edges to ids outside the registry are ignored: a dangling dependency is a
+    validation error, not a reason to sink the node's rank. Cycle tolerance —
+    nodes that never dequeue are ranked from whatever deps DID rank; nothing
+    raises, and every node in by_id gets a rank so callers never handle a missing
+    key."""
+    deps: dict[str, list[str]] = {}
+    dependents: dict[str, list[str]] = {}
+    indegree: dict[str, int] = {}
+    for nid, node in by_id.items():
+        raw = node.get("dependsOn") if isinstance(node, dict) else None
+        seen: set[str] = set()
+        clean: list[str] = []
+        for dep in (raw if isinstance(raw, list) else []):
+            dep = str(dep)
+            if dep == nid or dep in seen or dep not in by_id:
+                continue
+            seen.add(dep)
+            clean.append(dep)
+        deps[nid] = clean
+        indegree[nid] = len(clean)
+        for dep in clean:
+            dependents.setdefault(dep, []).append(nid)
+
+    ranks: dict[str, int] = {}
+    queue = [nid for nid, degree in indegree.items() if degree == 0]
+    cursor = 0
+    while cursor < len(queue):
+        nid = queue[cursor]
+        cursor += 1
+        ranks[nid] = 1 + max([ranks[d] for d in deps[nid] if d in ranks], default=-1)
+        for child in dependents.get(nid, []):
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
+    for nid in by_id:  # cycle members never dequeue; rank them from what is known
+        if nid not in ranks:
+            ranks[nid] = 1 + max([ranks[d] for d in deps.get(nid, []) if d in ranks], default=0)
+    return ranks
+
+
 def _stage_sort_key(stage: str) -> tuple[int, int]:
+    """Legacy lexical stage order: D-stages first, then numeric suffix.
+
+    Kept as the TIE-BREAK inside _stage_order_key (and as the fallback for any
+    call path with no rank data), so stage order is byte-identical wherever
+    dependency ranks agree."""
     return (0 if stage[:1] == "D" else 1, int(re.sub(r"\D", "", stage) or 0))
 
 
-def compute_plan_progress(registry: dict[str, Any], gate_status: dict[str, str]) -> tuple:
-    """Per-stage + overall plan completion from the DAG + gate statuses. Pure."""
+def _stage_rank_map(by_stage: Any, ranks: dict[str, int]) -> dict[str, int]:
+    """{stage: min rank over its member nodes}. Pure.
+
+    min, not max: a stage's position is the earliest wave in which any of its
+    work becomes reachable."""
+    out: dict[str, int] = {}
+    for stage, nodes in (by_stage or {}).items():
+        member_ranks = [ranks[str(n.get("id"))] for n in (nodes or [])
+                        if isinstance(n, dict) and str(n.get("id")) in ranks]
+        out[str(stage)] = min(member_ranks) if member_ranks else 0
+    return out
+
+
+def _stage_order_key(stage: str, stage_ranks: dict[str, int]) -> tuple:
+    """Topology-first stage order: dependency rank, then the legacy lexical key,
+    then the id. PMGO-001: with only the lexical key, a stage could be ordered
+    (and drawn) ahead of a stage holding its own prerequisites."""
+    return (stage_ranks.get(str(stage), 0),) + _stage_sort_key(stage) + (str(stage),)
+
+
+def compute_plan_progress(registry: dict[str, Any], gate_status: dict[str, str],
+                          gate_records: dict[str, Any] | None = None) -> tuple:
+    """Per-stage + overall plan completion from the DAG + gate statuses. Pure.
+
+    Stages come out in dependency order (see _stage_order_key). `progress` keeps
+    the combined passedNodes/totalNodes/pct exactly as before and adds `cohorts`,
+    which separates the historical accepted-as-done set from the current campaign
+    (PMGO-002). `gate_records` carries the provenance; without it every
+    successful gate counts as current — the honest reading when no evidenceClass
+    is known."""
     by_stage = registry.get("by_stage") or {}
-    successful = {"passed", "passed-with-acknowledged-baseline"}
+    stage_ranks = _stage_rank_map(by_stage, compute_node_ranks(registry.get("by_id") or {}))
+    records = gate_records if isinstance(gate_records, dict) else {}
     stages = []
     total = passed = 0
-    for s in sorted(by_stage, key=_stage_sort_key):
+    cohorts: list[str | None] = []
+    for s in sorted(by_stage, key=lambda stage: _stage_order_key(stage, stage_ranks)):
         nodes = []
         p = 0
         for n in sorted(by_stage[s], key=lambda x: str(x.get("id"))):
-            st = gate_status.get(str(n.get("id")), "absent")
-            if st in successful:
+            nid = str(n.get("id"))
+            st = gate_status.get(nid, "absent")
+            if st in SUCCESSFUL_GATE_STATUSES:
                 p += 1
+            cohorts.append(_gate_cohort(records.get(nid) or {"status": st}))
             nodes.append({"id": n.get("id"), "status": st, "layer": n.get("layer")})
         t = len(by_stage[s])
         total += t
@@ -4038,7 +4179,9 @@ def compute_plan_progress(registry: dict[str, Any], gate_status: dict[str, str])
         for n in stg["nodes"]:
             if n["status"] in ("absent", "blocked", "stale"):
                 frontier.append({"nodeId": n["id"], "stage": stg["stage"], "status": n["status"]})
-    return {"passedNodes": passed, "totalNodes": total, "pct": pct}, stages, frontier[:10]
+    progress = {"passedNodes": passed, "totalNodes": total, "pct": pct,
+                "cohorts": _cohort_progress(cohorts, total)}
+    return progress, stages, frontier[:10]
 
 
 def parse_status_md(text: str) -> dict[str, Any]:
@@ -4163,16 +4306,316 @@ def compute_loop_pulse(index: dict[str, Any], registry: dict[str, Any],
     return pulse, activity
 
 
+# --------------------------------------------------------------------------- #
+# L1 selection replica (AXON-002) + stop reason (PMGO-003)                     #
+# --------------------------------------------------------------------------- #
+#
+# "Ready by dependency" and "runnable now" are different numbers and only the
+# first one was ever observable. engine/lib.sh `gluerun_select_l1_frontier`
+# computes the second — one node per area, no write-scope overlap, capped — and
+# then throws the reasons away with the loop's stdout. Safe serialization
+# therefore looks exactly like a broken parallel engine. What follows is a
+# read-only replica of that selection so the console can name the constraint per
+# node instead of leaving the operator to infer one.
+
+# What the replica models, declared in the payload as `policy` so the UI never
+# implies more coverage than exists. The engine's pending-promotion pre-filter
+# (gluerun_l1_fanout -> gluerun_node_pending_promotion) is deliberately NOT
+# replicated: it asks whether a node's tasks are all complete-but-unpromoted,
+# which depends on supersession chains across superseded/archived task files
+# that the console's task projection does not reconstruct. Guessing it could
+# report a node as excluded that the engine would happily plan; omitting it can
+# only report a node as runnable that the engine then skips — fail-open, and the
+# loop's own log says so when it happens.
+_L1_SELECTION_POLICY = ("node-lease", "area-lease", "scope-overlap", "cap")
+
+# engine/lib.sh: GLUERUN_AREA_PREFIX="${GLUERUN_AREA_PREFIX:-internal/}".
+_DEFAULT_AREA_PREFIX = "internal/"
+
+def _cfg_area_paths(cfg: dict[str, Any]) -> str | None:
+    """config `areas` {area: path | [paths]} -> the GLUERUN_AREA_PATHS text."""
+    areas = cfg.get("areas")
+    if not isinstance(areas, dict):
+        return None
+    lines = []
+    for key, value in areas.items():
+        if isinstance(value, list):
+            value = ":".join(str(v) for v in value)
+        lines.append(f"{key}={value}")
+    return "\n".join(lines)
+
+
+# Structured gluerun.config.json fields that engine/lib.sh's
+# gluerun_json_config_to_env turns into these env vars. env{} still wins: the
+# loader emits the env map last, so it overrides on every source.
+_CONFIG_DERIVED_ENV = {
+    "GLUERUN_AREA_PATHS": _cfg_area_paths,
+    "GLUERUN_AREA_PREFIX": lambda cfg: cfg.get("areaPrefix"),
+}
+
+
+def _engine_env_value(repo: Path, key: str) -> str | None:
+    """One engine env knob, resolved from the repo's files. Read-only.
+
+    Precedence mirrors collect_config: `.gluerun-state/.env` (whitelisted to this
+    key, so secrets are never parsed) > gluerun.config.json env{} > the
+    structured config field engine/lib.sh derives the same variable from. The
+    console's OWN process environment is deliberately not consulted: the console
+    observes the repo's configuration, it is not a participant in the loop's
+    shell, and inheriting a stray export would make it report a cap the engine
+    would never use."""
+    override = parse_env_overrides(repo, {key}).get(key)
+    if override not in (None, ""):
+        return override
+    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = cfg if isinstance(cfg, dict) else {}
+    env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+    value = env.get(key)
+    if isinstance(value, (str, int, float)) and not isinstance(value, bool) and str(value) != "":
+        return str(value)
+    derive = _CONFIG_DERIVED_ENV.get(key)
+    if derive is not None:
+        derived = derive(cfg)
+        if derived not in (None, ""):
+            return str(derived)
+    return None
+
+
+def _l1_area_scopes(repo: Path, areas: Any) -> dict[str, list[str]]:
+    """{area: [write-scope path...]}, mirroring engine/lib.sh
+    `gluerun_l1_area_write_scopes`: the GLUERUN_AREA_PATHS map (one
+    "area=path1[:path2]" per line) when the area is mapped, else
+    GLUERUN_AREA_PREFIX (default internal/) + area + "/". Read-only."""
+    mapped: dict[str, list[str]] = {}
+    raw = _engine_env_value(repo, "GLUERUN_AREA_PATHS") or ""
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        mapped[key] = [part for part in value.split(":") if part]
+    prefix = _engine_env_value(repo, "GLUERUN_AREA_PREFIX") or _DEFAULT_AREA_PREFIX
+    out: dict[str, list[str]] = {}
+    for area in (areas or []):
+        area = str(area)
+        if not area:
+            continue
+        out[area] = list(mapped[area]) if area in mapped else [f"{prefix}{area}/"]
+    return out
+
+
+def _l1_selection_limits(repo: Path) -> tuple[bool, int]:
+    """(enabled, cap) exactly as the engine resolves them. Read-only.
+
+    GLUERUN_ENABLE_L1_PARALLEL != "1" means there is no fanout at all — the loop
+    advances one node per cycle — so the honest cap is 1, not whatever
+    GLUERUN_MAX_L1_CONCURRENT happens to say. When enabled, gluerun_l1_fanout's
+    own rule applies: default 3, and any non-numeric or zero value floors to 1."""
+    enabled = str(_engine_env_value(repo, "GLUERUN_ENABLE_L1_PARALLEL") or "").strip() == "1"
+    if not enabled:
+        return False, 1
+    raw = _engine_env_value(repo, "GLUERUN_MAX_L1_CONCURRENT")
+    raw = "3" if raw in (None, "") else str(raw).strip()
+    return True, (int(raw) if raw.isdigit() and int(raw) >= 1 else 1)
+
+
+def compute_l1_selection_native(frontier_entries: Any, l1_leases: Any,
+                                area_scopes: Any, cap: Any,
+                                enabled: bool = True) -> dict[str, Any]:
+    """Replica of engine/lib.sh `gluerun_select_l1_frontier`. Pure.
+
+    Returns {"selected": [node...], "exclusions": {node: {"rule", "detail"}}}.
+    `selected` is the same node list the engine would plan for the same frontier,
+    leases and scope map — frontier order preserved, one node per area, no
+    write-scope overlap, capped. `exclusions` is the part the engine computes and
+    discards.
+
+    Rules, in the engine's order: `node-lease` (the node itself already holds an
+    active L1 lease), `area-lease` (its area does), `batch-area` (one node per
+    area within a batch), `scope-overlap-active` / `scope-overlap-batch` (a
+    path-prefix conflict between write scopes), `cap` (the selection is full).
+    An intrinsic rule is reported ahead of `cap` so a node blocked by both is
+    named by the constraint that would still block it if the cap were raised;
+    the engine breaks out of its loop when full, which is why reporting a
+    different label there cannot change `selected`."""
+    try:
+        limit = int(cap)
+    except (TypeError, ValueError):
+        limit = 1
+    limit = max(0, limit)
+    if not enabled:
+        limit = min(limit, 1)
+
+    def useful_scope(value: Any) -> str:
+        value = str(value or "").strip()
+        if not value or "/" not in value or " " in value:
+            return ""
+        return value.rstrip("/")
+
+    def path_conflict(a: str, b: str) -> bool:
+        if not a or not b:
+            return False
+        return a == b or a.startswith(b.rstrip("/") + "/") or b.startswith(a.rstrip("/") + "/")
+
+    def first_conflict(left: list[str], right: list[str]) -> tuple[str, str] | None:
+        for a in left:
+            for b in right:
+                if path_conflict(a, b):
+                    return a, b
+        return None
+
+    def scopes_of(raw: Any) -> list[str]:
+        items = raw if isinstance(raw, list) else []
+        return [s for s in (useful_scope(v) for v in items) if s]
+
+    active_nodes: set[str] = set()
+    active_area_holder: dict[str, str] = {}
+    active_scopes: list[tuple[str, list[str]]] = []
+    for lease in (l1_leases or []):
+        if not isinstance(lease, dict) or lease.get("status") not in L1_ACTIVE_STATUSES:
+            continue
+        holder = str(lease.get("node") or "")
+        area = str(lease.get("area") or "")
+        if holder:
+            active_nodes.add(holder)
+        if area and area not in active_area_holder:
+            active_area_holder[area] = holder
+        active_scopes.append((holder, scopes_of(lease.get("allowedWriteScopes"))))
+
+    selected: list[str] = []
+    exclusions: dict[str, dict[str, str]] = {}
+    selected_area_holder: dict[str, str] = {}
+    selected_scopes: list[tuple[str, list[str]]] = []
+    for entry in (frontier_entries or []):
+        if not isinstance(entry, dict):
+            continue
+        node = str(entry.get("node") or "")
+        if not node:
+            continue
+        area = str(entry.get("area") or "")
+        label = f"{area} area" if area else "an area-less node"
+        if node in active_nodes:
+            exclusions[node] = {"rule": "node-lease",
+                                "detail": f"{node} already holds an active L1 lease"}
+            continue
+        if area in active_area_holder:
+            holder = active_area_holder[area]
+            exclusions[node] = {"rule": "area-lease",
+                                "detail": f"{label} has an active L1 lease"
+                                          + (f" ({holder})" if holder else "")}
+            continue
+        if area in selected_area_holder:
+            holder = selected_area_holder[area]
+            exclusions[node] = {"rule": "batch-area",
+                                "detail": f"{label} already selected ({holder})"}
+            continue
+        if area:
+            scope_list = area_scopes.get(area) if isinstance(area_scopes, dict) else None
+            if scope_list is None:
+                # Unmapped area: the same fallback the engine's loader applies.
+                scope_list = [f"{_DEFAULT_AREA_PREFIX}{area}/"]
+            scopes = scopes_of(list(scope_list))
+        else:
+            scopes = []
+
+        excluded: dict[str, str] | None = None
+        for holder, other in active_scopes:
+            clash = first_conflict(scopes, other)
+            if clash:
+                excluded = {"rule": "scope-overlap-active",
+                            "detail": f"write scope {clash[0]} overlaps {clash[1]} held by "
+                                      + (f"active lease {holder}" if holder else "an active lease")}
+                break
+        if excluded is None:
+            for holder, other in selected_scopes:
+                clash = first_conflict(scopes, other)
+                if clash:
+                    excluded = {"rule": "scope-overlap-batch",
+                                "detail": f"write scope {clash[0]} overlaps {clash[1]} already "
+                                          f"selected by {holder}"}
+                    break
+        if excluded is None and len(selected) >= limit:
+            excluded = {"rule": "cap", "detail": f"concurrency cap {limit} reached"}
+        if excluded is not None:
+            exclusions[node] = excluded
+            continue
+        selected.append(node)
+        selected_area_holder.setdefault(area, node)
+        selected_scopes.append((node, scopes))
+    return {"selected": selected, "exclusions": exclusions}
+
+
+def compute_l1_selection(repo: Path, frontier_entries: Any = None) -> dict[str, Any]:
+    """The `l1Selection` payload block plus the per-node decisions behind it.
+
+    Read-only. Returns {"block", "selected", "exclusions"}. /api/dag and
+    /api/overview emit the same `block`, so the DAG lens and the plan header
+    can never disagree about why a ready node is not running."""
+    if frontier_entries is None:
+        frontier_entries = compute_frontier_native(repo).get("frontier") or []
+    entries = [e for e in frontier_entries if isinstance(e, dict)]
+    enabled, cap = _l1_selection_limits(repo)
+    areas: list[str] = []
+    for entry in entries:
+        area = str(entry.get("area") or "")
+        if area and area not in areas:
+            areas.append(area)
+    result = compute_l1_selection_native(entries, collect_l1_leases(repo),
+                                         _l1_area_scopes(repo, areas), cap, enabled)
+    area_by_node = {str(e.get("node")): e.get("area") for e in entries if e.get("node")}
+    block = {
+        "enabled": enabled,
+        "cap": cap,
+        "readyByDependency": len(entries),
+        "runnableNow": len(result["selected"]),
+        "serialized": [{"node": node, "area": area_by_node.get(node),
+                        "rule": excl["rule"], "detail": excl["detail"]}
+                       for node, excl in result["exclusions"].items()],
+        "policy": list(_L1_SELECTION_POLICY),
+    }
+    return {"block": block, "selected": result["selected"], "exclusions": result["exclusions"]}
+
+
+def derive_stop_reason(repo: Path, loop_info: dict[str, Any]) -> str | None:
+    """Why the loop is stopped, in one operator sentence, or None when it isn't.
+
+    PMGO-003: the console could prove the loop was stopped and could not say why,
+    so "stopped" read as "broken". Order is by actionability — an unapproved
+    human gate on a node that is otherwise dependency-ready is a decision waiting
+    on a person, and naming the node turns the status into a next action. Failing
+    that, the loop's own STATUS.md note when it explains a stop or halt, and
+    finally the bare sentinel."""
+    if not loop_info.get("stopPresent"):
+        return None
+    try:
+        ready = {str(e.get("node")) for e in (compute_frontier_native(repo).get("frontier") or [])
+                 if isinstance(e, dict)}
+        for gate in collect_human_gates(repo):
+            if str(gate.get("state") or "") == "approved":
+                continue
+            node = str(gate.get("node") or "")
+            if node and node in ready:
+                return f"operator approval required for {node}"
+    except Exception:  # an observer never fails the page over a stop reason
+        pass
+    note = str(loop_info.get("note") or "").strip()
+    if note and re.search(r"stop|halt", note, re.I):
+        return note
+    return "STOP sentinel present"
+
+
 def collect_overview(repo: Path) -> dict[str, Any]:
     repo = repo.resolve()
     registry = load_dag_registry(repo)
-    gate_status = _all_gate_statuses(repo)
-    progress, stages, frontier = compute_plan_progress(registry, gate_status)
+    gate_records = _all_gate_records(repo)
+    gate_status = {node: record["status"] for node, record in gate_records.items()}
+    progress, stages, frontier = compute_plan_progress(registry, gate_status, gate_records)
     status_path = repo / STATUS_REL
     loop = parse_status_md(status_path.read_text(errors="replace") if status_path.exists() else "")
     loop["stopPresent"] = (repo / STOP_REL).exists()
     circuit = read_json(repo / CIRCUIT_REL, {}) or {}
     loop["consecFails"] = circuit.get("consecFails")
+    loop["stopReason"] = derive_stop_reason(repo, loop)
     pulse, frontier_activity = compute_loop_pulse(
         load_events_index(repo), registry, gate_status, _iso_to_epoch(utc_now()))
     pulse["running"] = (not loop.get("stopPresent")) and not re.search(
@@ -4209,6 +4652,10 @@ def collect_overview(repo: Path) -> dict[str, Any]:
         "progress": progress,
         "stages": stages,
         "frontier": frontier,
+        # Same block /api/dag emits: ready-by-dependency vs runnable-now and the
+        # named reason for the difference, so the plan header and the DAG lens
+        # cannot tell two different stories about the same cycle.
+        "l1Selection": compute_l1_selection(repo)["block"],
         "pulse": pulse,
         "frontierActivity": frontier_activity,
         "inputs": inputs,
@@ -4324,7 +4771,32 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
         return counts
 
     l1_by_node = {str(l.get("node")): l for l in collect_l1_leases(repo)}
-    frontier_ids = {str(e.get("node")) for e in (compute_frontier_native(repo).get("frontier") or [])}
+    frontier_entries = compute_frontier_native(repo).get("frontier") or []
+    frontier_ids = {str(e.get("node")) for e in frontier_entries}
+    # AXON-002: dependency-ready is not runnable. Replicate the engine's own L1
+    # selection so each ready node carries the constraint that holds it back.
+    selection = compute_l1_selection(repo, frontier_entries)
+    runnable_ids = set(selection["selected"])
+    exclusions = selection["exclusions"]
+
+    ranks = compute_node_ranks(by_id)
+
+    # Human gates: the node carrying the gate, and every node the gate blocks
+    # while it is unapproved (collect_human_gates already empties blockedNodes
+    # once approved).
+    human_gate_by_node: dict[str, dict[str, Any]] = {}
+    human_gate_blocked: dict[str, list[str]] = {}
+    for gate in collect_human_gates(repo):
+        gate_node = str(gate.get("node") or "")
+        if not gate_node:
+            continue
+        projection: dict[str, Any] = {"state": gate.get("state"), "gateId": gate.get("gateId")}
+        if gate.get("reason"):
+            projection["reason"] = gate.get("reason")
+        human_gate_by_node[gate_node] = projection
+        if str(gate.get("state") or "") != "approved":
+            for blocked in (gate.get("blockedNodes") or []):
+                human_gate_blocked.setdefault(str(blocked), []).append(gate_node)
 
     nodes_out: list[dict[str, Any]] = []
     node_out_by_id: dict[str, dict[str, Any]] = {}
@@ -4341,6 +4813,9 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
                                         "recordedAt": gate.get("recordedAt"),
                                         "evidenceClass": gate.get("evidenceClass"),
                                         "authoritative": gate.get("authoritative")}
+            cohort = _gate_cohort(gate)
+            if cohort:  # only a successful gate belongs to a completion cohort
+                gate_out["cohort"] = cohort
         else:
             gate_out = {"status": "absent"}
         tids = sorted(node_tasks.get(nid, []))
@@ -4351,14 +4826,30 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
             "dependsOn": [str(d) for d in (node.get("dependsOn") or []) if str(d)],
             "requiredCompletion": node.get("requiredCompletion"),
             "description": node.get("description"),
+            # Longest-path depth over all dependsOn edges: equal ranks are nodes
+            # that can genuinely run in the same wave.
+            "rank": ranks.get(nid, 0),
             "gate": gate_out,
             "tasks": {"taskIds": tids, "counts": counts_of(tids)},
             "frontier": nid in frontier_ids,
         }
+        if nid in frontier_ids:
+            entry["runnable"] = nid in runnable_ids
+            excluded = exclusions.get(nid)
+            if excluded:
+                entry["exclusion"] = dict(excluded)
+        if nid in human_gate_by_node:
+            entry["humanGate"] = human_gate_by_node[nid]
+        if nid in human_gate_blocked:
+            entry["humanGateBlockedBy"] = sorted(human_gate_blocked[nid])
         lease = l1_by_node.get(nid)
         if isinstance(lease, dict):
+            scopes = lease.get("allowedWriteScopes")
             entry["l1Lease"] = {"status": lease.get("status"),
                                 "active": bool(lease.get("active")),
+                                "area": lease.get("area"),
+                                "allowedWriteScopes": ([str(s) for s in scopes]
+                                                       if isinstance(scopes, list) else []),
                                 "updatedAt": lease.get("updatedAt")}
         nodes_out.append(entry)
         node_out_by_id[nid] = entry
@@ -4370,7 +4861,10 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
             area_nodes.setdefault(str(entry["area"]), []).append(nid)
 
     stages = []
-    for sid in sorted(stage_nodes, key=_stage_sort_key):
+    # Dependency order first (PMGO-001), lexical order only as the tie-break.
+    stage_ranks = {sid: min([ranks.get(i, 0) for i in ids] or [0])
+                   for sid, ids in stage_nodes.items()}
+    for sid in sorted(stage_nodes, key=lambda s: _stage_order_key(s, stage_ranks)):
         ids = sorted(stage_nodes[sid])
         passed = sum(
             1 for i in ids
@@ -4401,6 +4895,7 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
         "areas": areas,
         "nodes": nodes_out,
         "edges": edges,
+        "l1Selection": selection["block"],
     }
 
 
@@ -6050,7 +6545,10 @@ def collect_home(repo: Path) -> dict[str, Any]:
 
     # --- plan / gate / frontier rollups ---------------------------------------
     gates = collect_gates_summary(repo)
-    gates_out = {"passed": gates.get("passed", 0), "total": gates.get("total", 0)}
+    # byNode is dropped (the digest never renders it); cohorts rides along so the
+    # landing page can separate historical evidence from this campaign's work.
+    gates_out = {"passed": gates.get("passed", 0), "total": gates.get("total", 0),
+                 "cohorts": gates.get("cohorts")}
     frontier_nodes = [str(e.get("node")) for e in (compute_frontier_native(repo).get("frontier") or [])]
     frontier = {"count": len(frontier_nodes), "nodes": frontier_nodes}
 

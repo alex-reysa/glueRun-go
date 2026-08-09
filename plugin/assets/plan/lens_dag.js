@@ -1,39 +1,49 @@
 /* plan/lens_dag.js — the DAG lens as a card-based pipeline. White rounded pill
    cards on a dotted-grid canvas, each with a leading status glyph, the node id
    in confident mono, an optional ×N task-count badge, and an attribution line
-   (owner-area dot + name) underneath. Stage columns keep the intra-stage
-   longest-path layout; soft edge-to-edge bezier edges carry no arrowheads at
-   rest and grow directional markers only under hover tracing (blue upstream ·
-   green downstream). A sticky progress footer summarises gate coverage and a
+   (owner-area dot + name, then the stage) underneath.
+
+   Columns are DEPENDENCY WAVES: every node of equal longest-path rank over the
+   whole dependsOn graph, computed by the pure dag_layout.js module. Stages no
+   longer place anything — they used to own the columns, with depth computed
+   from same-stage edges only, which drew a plan that names one stage per node
+   (AXON) as a single sequential rail and could even put a node left of its own
+   prerequisite (PMGO-001). Stages now survive as text on the card and in the
+   detail card, nothing more.
+
+   Soft edge-to-edge bezier edges carry no arrowheads at rest and grow
+   directional markers only under hover tracing (blue upstream · green
+   downstream). A sticky progress footer separates campaign gates from
+   historical ones, a glyph legend spells out the status vocabulary, and a
    floating fit button scales the whole pipeline to the pane width. Layout is
-   rebuilt only when the DAG or a stage-collapse changes (signature-gated);
-   hover, selection and fit are attribute/style passes over the prebuilt DOM. */
+   rebuilt only when the DAG changes (signature-gated); hover, selection and fit
+   are attribute/style passes over the prebuilt DOM. */
 
 import { esc, escAttr, icon, select } from "../app.js";
 import { bus } from "../core/bus.js";
 import { getDag } from "./data.js";
+import { computeGrid } from "./dag_layout.js";
 
 // card geometry — fixed-width cards, ellipsized ids
 const NODE_W = 190;      // card width
 const NODE_H = 40;       // card height (pill)
 const ATTR_H = 18;       // attribution line under the card
-const ROW_H = 84;        // vertical stride between rows in a column
-const COLUMN_W = 260;    // horizontal stride between depth columns
+const ROW_H = 84;        // vertical stride between rows in a wave
+const COLUMN_W = 260;    // horizontal stride between rank columns
 const MARGIN_X = 40;     // left/right canvas pad
-const CARD_TOP = 56;     // first card top (below the ribbon)
-const RIBBON_TOP = 12;
-const SUM_W = 210;       // collapsed-stage summary card width
+const CARD_TOP = 56;     // first card top (below the wave ruler)
+const RULER_TOP = 12;    // wave-ruler row
 const FIT_KEY = "gluerun.plan.dag.fit";
 
 let pane = null;
 let sigLast = null;
 let selectedId = null;
-let collapsed = new Set();     // collapsed stage ids
 let fitOn = (() => { try { return localStorage.getItem(FIT_KEY) === "1"; } catch (e) { return false; } })();
 
 // build artifacts
-let nodesById = {}, positions = {}, zones = {}, ancestors = {}, descendants = {};
-let stageOrder = [], nodeEls = {}, attrEls = {}, edgeEls = [], detailEl = null;
+let nodesById = {}, positions = {}, ancestors = {}, descendants = {};
+let waves = [];          // col -> [node ids], already in row order
+let nodeEls = {}, attrEls = {}, edgeEls = [], detailEl = null;
 let scrollEl = null, stageEl = null, wrapEl = null, fitBtn = null;
 let stageNatW = 0, stageNatH = 0, ro = null;
 
@@ -48,111 +58,111 @@ function computeAncestry(dag) {
     return out;
   };
   ancestors = {}; descendants = {};
+  // byId[id] is guarded: dependsOn may name an id outside the node set, and an
+  // unguarded lookup threw here — blanking the whole lens over one stale edge.
   for (const n of dag.nodes) {
-    ancestors[n.id] = walk(n.id, (id) => byId[id].dependsOn || []);
+    ancestors[n.id] = walk(n.id, (id) => (byId[id] || {}).dependsOn || []);
     descendants[n.id] = walk(n.id, (id) => children[id] || []);
   }
   nodesById = byId;
 }
 
 function computeLayout(dag) {
-  stageOrder = (dag.stages || []).map((s) => s.id);
-  const nodesByStage = {};
-  for (const id of stageOrder) nodesByStage[id] = dag.nodes.filter((n) => n.stage === id);
+  const nodes = dag.nodes || [];
+  // The server may precompute a topological `rank` per node; older servers emit
+  // none, so this is a guarded opt-in. Only a complete map is passed on —
+  // dag_layout re-checks and falls back rather than mixing two rank spaces.
+  const serverRanked = nodes.length > 0 && nodes.every((n) => Number.isFinite(n.rank));
+  let override;
+  if (serverRanked) { override = {}; for (const n of nodes) override[n.id] = n.rank; }
+  const grid = computeGrid(nodes, override);
 
-  // intra-stage longest-path depth (same-stage deps only)
-  const depth = {};
-  const visit = (id) => {
-    if (depth[id] != null) return depth[id];
-    const n = nodesById[id];
-    const same = (n.dependsOn || []).filter((d) => nodesById[d] && nodesById[d].stage === n.stage);
-    depth[id] = same.length ? 1 + Math.max(...same.map(visit)) : 0;
-    return depth[id];
-  };
-  for (const n of dag.nodes) visit(n.id);
-
-  // per-stage column geometry
-  const geom = {}; let col = 0;
-  for (const id of stageOrder) {
-    const ids = nodesByStage[id];
-    const width = (ids.length ? Math.max(...ids.map((n) => depth[n.id])) : 0) + 1;
-    geom[id] = { startCol: col, width };
-    col += width;                                  // columns abut; stage bands read as groups
+  waves = [];
+  for (const n of nodes) {
+    const cell = grid.cells[n.id];
+    if (!cell) continue;
+    (waves[cell.col] = waves[cell.col] || [])[cell.row] = n.id;
   }
+  // A server override can leave a column empty; normalise the holes away so the
+  // ruler, tints and footer can all just iterate.
+  for (let i = 0; i < waves.length; i++) waves[i] = (waves[i] || []).filter((id) => id != null);
 
-  // group by (stage, depth) and find the tallest column to centre against
-  const groups = {}; let maxRows = 1;
-  for (const id of stageOrder) {
-    for (const n of nodesByStage[id]) {
-      const key = id + "|" + depth[n.id];
-      (groups[key] = groups[key] || []).push(n.id);
-    }
-  }
-  for (const ids of Object.values(groups)) maxRows = Math.max(maxRows, ids.length);
-  const CY0 = CARD_TOP + NODE_H / 2 + ((maxRows - 1) * ROW_H) / 2;
-
+  // Recentre every wave against the tallest one, so the pipeline reads as a band
+  // with a stable spine rather than a ragged top edge.
+  const rows = Math.max(1, grid.maxRows);
+  const CY0 = CARD_TOP + NODE_H / 2 + ((rows - 1) * ROW_H) / 2;
   positions = {};
-  for (const [key, ids] of Object.entries(groups)) {
-    const [sid, dRaw] = key.split("|");
-    ids.sort((a, b) => a.localeCompare(b));
+  waves.forEach((ids, col) => {
     const k = ids.length;
     ids.forEach((nid, i) => {
-      positions[nid] = {
-        x: MARGIN_X + (geom[sid].startCol + Number(dRaw)) * COLUMN_W,
-        cy: CY0 - ((k - 1) * ROW_H) / 2 + i * ROW_H,
-      };
+      positions[nid] = { x: MARGIN_X + col * COLUMN_W, cy: CY0 - ((k - 1) * ROW_H) / 2 + i * ROW_H };
     });
-  }
-
-  zones = {};
-  for (const id of stageOrder) {
-    const ids = nodesByStage[id].map((n) => n.id);
-    const lefts = ids.map((nid) => positions[nid].x);
-    const passed = ids.filter((nid) => (nodesById[nid].gate || {}).status === "passed").length;
-    if (ids.length) {
-      const x0 = Math.min(...lefts), x1 = Math.max(...lefts) + NODE_W;
-      zones[id] = { ids, x0, x1, cx: (x0 + x1) / 2, cy: CY0, passed, total: ids.length };
-    } else {
-      zones[id] = { ids: [], x0: MARGIN_X, x1: MARGIN_X + NODE_W, cx: MARGIN_X, cy: CY0, passed: 0, total: 0 };
-    }
-  }
+  });
 
   const maxLeft = Math.max(MARGIN_X, ...Object.values(positions).map((p) => p.x));
   stageNatW = maxLeft + NODE_W + MARGIN_X;
-  stageNatH = CARD_TOP + (maxRows - 1) * ROW_H + NODE_H + ATTR_H + 28;
-  return { stages: dag.stages || [] };
+  stageNatH = CARD_TOP + (rows - 1) * ROW_H + NODE_H + ATTR_H + 28;
+  return grid;
 }
 
-// classification of a node's resting status glyph per the shared vocabulary.
-// passed wins (calm reference look), then hard failures, live work, frontier,
-// evaluation kind, and finally the quiet queued ring.
+// Ordered predicates over the node's resting status. The distinction the audit
+// asked for is *why* a node is not moving: ready now, blocked by a dependency,
+// blocked by a human gate, running, or complete in an earlier campaign.
+//
+//   done       gate passed (or passed-with-acknowledged-baseline) in the current
+//              cohort — or with no cohort information at all, the pre-cohort
+//              server's shape.
+//   done-hist  the same, but grandfathered / cohort "historical". Historical
+//              completion must never read as campaign progress (PMGO-002), so
+//              it wins over `done` when both descriptions fit.
+//   failed     a hard gate verdict.
+//   active     live work: an in-flight task OR an active L1 lease. The lease arm
+//              is the fix for a node that is being planned right now rendering
+//              as a quiet queued ring.
+//   gated      on the frontier but held behind an unapproved human gate — either
+//              the gate this node carries (humanGate) or one naming it in its
+//              blocked set (humanGateBlockedBy, which the server only populates
+//              while the gate is unapproved).
+//   ready      on the frontier, nothing holding it. (The old code tested
+//              `!status && frontier`, which never fired: the server always emits
+//              a status string — "absent" — so the frontier glyph was dead.)
+//   eval       an evaluation node not otherwise classified.
+//   blocked    the default: waiting on a prerequisite.
+//
+// Every field beyond gate/tasks/frontier is optional — the server grows them in
+// a parallel change and this must render identically without them.
 function statusOf(n) {
   const g = n.gate || {};
   const c = (n.tasks && n.tasks.counts) || {};
   const status = g.status;
-  const active = (c.active || 0) > 0;
-  const isEval = n.kind === "evaluation";
-  if (status === "passed") return "done";
+  const ok = status === "passed" || status === "passed-with-acknowledged-baseline";
+  const historical = g.cohort === "historical" || g.evidenceClass === "grandfathered";
+  const hg = n.humanGate || null;
+  const heldByGate = (hg && hg.state !== "approved") || !!(n.humanGateBlockedBy || "").length;
+  if (ok && !historical) return "done";
+  if (ok) return "done-hist";
   if (status === "failed" || status === "blocked" || status === "invalid") return "failed";
-  if (active) return "active";
-  if (!status && n.frontier) return "frontier";
-  if (isEval) return "eval";
-  return "queued";
+  if ((c.active || 0) > 0 || (n.l1Lease && n.l1Lease.active)) return "active";
+  if (n.frontier && heldByGate) return "gated";
+  if (n.frontier) return "ready";
+  if (n.kind === "evaluation") return "eval";
+  return "blocked";
 }
 
+// Shape carries the status, not colour alone: filled check, outline check,
+// pulse, diamond outline, filled diamond, pause bars, cross, hollow ring.
 function glyphHtml(kind) {
   if (kind === "done") return `<span class="pdc-glyph g-done">${icon("i-check")}</span>`;
+  if (kind === "done-hist") return `<span class="pdc-glyph g-done-hist">${icon("i-check")}</span>`;
   if (kind === "active") return `<span class="pdc-glyph g-active"><i class="pdc-pulse"></i></span>`;
-  if (kind === "frontier") return `<span class="pdc-glyph g-frontier"><i></i></span>`;
+  if (kind === "gated") return `<span class="pdc-glyph g-gated"><i></i><i></i></span>`;
+  if (kind === "ready") return `<span class="pdc-glyph g-frontier"><i></i></span>`;
   if (kind === "eval") return `<span class="pdc-glyph g-eval"><i></i></span>`;
   if (kind === "failed") return `<span class="pdc-glyph g-failed">&times;</span>`;
-  return `<span class="pdc-glyph g-queued"><i></i></span>`;
+  return `<span class="pdc-glyph g-blocked"><i></i></span>`;
 }
 
-const renderKey = (id) => (collapsed.has(nodesById[id].stage) ? "PH:" + nodesById[id].stage : id);
 function effRect(id) {
-  const st = nodesById[id].stage;
-  if (collapsed.has(st)) { const z = zones[st]; return { left: z.cx - SUM_W / 2, right: z.cx + SUM_W / 2, cy: z.cy }; }
   const p = positions[id];
   return { left: p.x, right: p.x + NODE_W, cy: p.cy };
 }
@@ -174,79 +184,99 @@ function build() {
   computeAncestry(dag);
   computeLayout(dag);
 
-  // dedup edges under the current collapse state
+  // Dedup edges, and drop any whose endpoint this DAG does not place: the server
+  // emits one edge per dependsOn entry including ids outside the node set, and
+  // an unplaced endpoint would otherwise throw mid-build and blank the lens.
   const seen = new Set(); const edges = [];
   for (const e of dag.edges || []) {
-    const fk = renderKey(e.from), tk = renderKey(e.to);
-    if (fk === tk) continue;
-    const key = fk + "->" + tk;
+    if (e.from === e.to || !positions[e.from] || !positions[e.to]) continue;
+    const key = e.from + "->" + e.to;
     if (!seen.has(key)) { seen.add(key); edges.push({ from: e.from, to: e.to }); }
   }
 
-  // ribbons (collapse toggles) + alternating full-height column tints
-  let ribbons = "", tints = "";
-  stageOrder.forEach((sid, i) => {
-    const z = zones[sid];
-    const left = z.x0 - 8, width = z.x1 - z.x0 + 16;
-    const short = sid.split("-")[0];
-    ribbons += `<button class="plan-dag-ribbon" data-stage="${escAttr(sid)}" style="left:${left}px;top:${RIBBON_TOP}px;width:${width}px" aria-expanded="${!collapsed.has(sid)}">
-      <span class="pdr-chev">${icon("i-chev")}</span><span class="pdr-id">${esc(short)}</span>
-      <span class="pdr-count mono">${z.passed}/${z.total}</span></button>`;
-    if (i % 2 === 0) tints += `<div class="plan-dag-tint" style="left:${left}px;width:${width}px;top:${RIBBON_TOP + 30}px;bottom:12px"></div>`;
+  // Wave ruler — one calm header cell per rank column (this replaces the stage
+  // ribbons; a wave is a set of nodes that may all start together) plus the
+  // alternating full-height tints, now keyed by wave parity.
+  let ruler = "", tints = "";
+  waves.forEach((ids, col) => {
+    if (!ids.length) return;
+    const left = MARGIN_X + col * COLUMN_W - 8, width = NODE_W + 16;
+    ruler += `<div class="plan-dag-wave" style="left:${left}px;top:${RULER_TOP}px;width:${width}px">
+      <span class="pdw-id mono">wave ${col}</span>
+      <span class="pdw-count mono">${ids.length} node${ids.length === 1 ? "" : "s"}</span></div>`;
+    if (col % 2 === 0) tints += `<div class="plan-dag-tint" style="left:${left}px;width:${width}px;top:${RULER_TOP + 30}px;bottom:12px"></div>`;
   });
 
-  // svg edges — no markers at rest; hover tracing swaps them in
-  const edgePaths = edges.map((e, i) => {
-    const a = effRect(e.from), b = effRect(e.to);
-    if (a.right === b.right && a.cy === b.cy && a.left === b.left) return "";
-    return `<path data-edge="${i}" data-from="${escAttr(e.from)}" data-to="${escAttr(e.to)}" d="${curve(e.from, e.to)}" fill="none" stroke="var(--n-300)" stroke-width="1.5" opacity="0.7"/>`;
-  }).join("");
+  // svg edges — no markers at rest; hover tracing swaps them in. (The old
+  // coincident-rect suppression is gone with stage collapse: two distinct nodes
+  // can no longer share one rectangle.)
+  const edgePaths = edges.map((e, i) =>
+    `<path data-edge="${i}" data-from="${escAttr(e.from)}" data-to="${escAttr(e.to)}" d="${curve(e.from, e.to)}" fill="none" stroke="var(--n-300)" stroke-width="1.5" opacity="0.7"/>`
+  ).join("");
   const svg = `<svg width="${stageNatW}" height="${stageNatH}" class="plan-dag-edges">
     <defs>
       <marker id="dag-up" markerWidth="9" markerHeight="9" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M1,1.5 L6,4 L1,6.5" fill="none" stroke="var(--tone-blue-dot)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
       <marker id="dag-dn" markerWidth="9" markerHeight="9" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M1,1.5 L6,4 L1,6.5" fill="none" stroke="var(--tone-green-dot)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>
     </defs>${edgePaths}</svg>`;
 
-  // cards (expanded stages only) — glyph + id + ×N badge, attribution line under
+  // cards — glyph + id + ×N badge, attribution (area · stage) line under. A node
+  // the scheduler cannot start yet for a *policy* reason (same-area lease, write
+  // scopes overlapping an active lease — AXON-002) carries data-runnable="false"
+  // and wears a dashed ring: safe serialization has to look deliberate, not
+  // broken. The attribute is only emitted when the server says so.
   let cards = "";
   for (const n of dag.nodes) {
-    if (collapsed.has(n.stage)) continue;
     const p = positions[n.id];
+    if (!p) continue;
     const top = p.cy - NODE_H / 2;
     const kind = statusOf(n);
     const c = (n.tasks && n.tasks.counts) || {};
     const badge = (c.total || 0) > 1 ? `<span class="pdc-badge mono">&times;${c.total}</span>` : "";
     const dotTone = n.kind === "evaluation" ? "coral" : "neutral";
+    const stageShort = n.stage ? String(n.stage).split("-")[0] : "";
+    const runAttr = n.runnable === false ? ` data-runnable="false"` : "";
+    const tip = [n.id, n.stage, n.area].filter(Boolean).join(" · ");
     cards += `<div class="plan-dag-cardwrap" style="left:${p.x}px;top:${top}px">
-      <button class="plan-dag-card" data-node="${escAttr(n.id)}" data-selected="false" data-status="${kind}">
+      <button class="plan-dag-card" data-node="${escAttr(n.id)}" data-selected="false" data-status="${kind}"${runAttr} title="${escAttr(tip)}">
         ${glyphHtml(kind)}<span class="pdc-name mono">${esc(n.id)}</span>${badge}</button>
-      <div class="plan-dag-attr" data-attr="${escAttr(n.id)}"><span class="pdc-avatar" data-tone="${dotTone}"></span><span class="pdc-owner">${esc(n.area)}</span></div>
+      <div class="plan-dag-attr" data-attr="${escAttr(n.id)}"><span class="pdc-avatar" data-tone="${dotTone}"></span><span class="pdc-owner">${esc(n.area)}</span>${stageShort ? `<span class="pdc-stage mono">${esc(stageShort)}</span>` : ""}</div>
     </div>`;
   }
 
-  // collapsed stage summaries (match the card look)
-  let summaries = "";
-  for (const sid of stageOrder) {
-    if (!collapsed.has(sid)) continue;
-    const z = zones[sid];
-    summaries += `<button class="plan-dag-summary" data-stage="${escAttr(sid)}" style="left:${z.cx - SUM_W / 2}px;top:${z.cy - 26}px;width:${SUM_W}px">
-      <span class="pds-eyebrow">${esc(sid.split("-")[0])}</span>
-      <span class="pds-name">${esc(sid.replace(/^S\d+-/, ""))}</span>
-      <span class="pds-meta mono">${z.total} nodes · ${z.passed}/${z.total} gated</span></button>`;
-  }
-
-  // progress footer dots (all nodes, stage order)
-  let dots = "", pTotal = 0, pPassed = 0;
-  for (const sid of stageOrder) {
-    for (const nid of (zones[sid].ids || [])) {
-      const n = nodesById[nid]; const g = n.gate || {}; const c = (n.tasks && n.tasks.counts) || {};
+  // Progress footer dots, in wave order. Historical completion is counted and
+  // drawn apart from campaign completion — a plan carried over from an earlier
+  // run must not read as progress on this one (PMGO-002).
+  let dots = "", pTotal = 0, pPassed = 0, curTotal = 0, curPassed = 0, histPassed = 0;
+  let cohortSeen = false, serializedSeen = false;
+  const present = new Set();
+  for (const ids of waves) {
+    for (const nid of ids) {
+      const n = nodesById[nid]; const g = n.gate || {};
+      const kind = statusOf(n);
+      present.add(kind);
+      if (n.runnable === false) serializedSeen = true;
+      if (g.cohort != null) cohortSeen = true;
       pTotal++;
       let cls = "hollow";
-      if (g.status === "passed") { cls = "pass"; pPassed++; }
-      else if ((c.active || 0) > 0) cls = "active";
+      if (kind === "done") { cls = "pass"; pPassed++; curTotal++; curPassed++; }
+      else if (kind === "done-hist") { cls = "hist"; pPassed++; histPassed++; cohortSeen = true; }
+      else { curTotal++; if (kind === "active") cls = "active"; }
       dots += `<i class="pdf-dot ${cls}"></i>`;
     }
   }
+  const countLine = cohortSeen
+    ? `${curPassed}/${curTotal} campaign · ${histPassed} historical`
+    : `${pPassed}/${pTotal} gates`;
+
+  // One-line glyph legend, restricted to the statuses this plan actually uses so
+  // it stays a single quiet line.
+  const LEGEND = [["done", "done"], ["done-hist", "historical"], ["active", "running"],
+                  ["ready", "ready"], ["gated", "human gate"], ["blocked", "blocked"],
+                  ["failed", "failed"], ["eval", "eval"]];
+  let legend = LEGEND.filter(([k]) => present.has(k))
+    .map(([k, label]) => `<span class="lg-item">${glyphHtml(k)}<span class="lg-text">${label}</span></span>`)
+    .join("");
+  if (serializedSeen) legend += `<span class="lg-item"><span class="lg-dash"></span><span class="lg-text">serialized</span></span>`;
 
   pane.style.overflow = "hidden";
   pane.innerHTML =
@@ -254,7 +284,7 @@ function build() {
        <div class="plan-dag-scroll">
          <div class="plan-dag-stagewrap">
            <div class="plan-dag-stage" style="width:${stageNatW}px;height:${stageNatH}px">
-             ${tints}${ribbons}${svg}${cards}${summaries}
+             ${tints}${ruler}${svg}${cards}
            </div>
          </div>
        </div>
@@ -262,7 +292,8 @@ function build() {
        <div class="plan-fade left"></div>
        <div class="plan-fade right"></div>
        <button class="plan-dag-fit" aria-pressed="${fitOn}" title="Fit to width">${icon("i-expand")}</button>
-       <button class="plan-dag-progress" title="Plan overview">${dots}<span class="pdf-count mono">${pPassed}/${pTotal} gates</span></button>
+       ${legend ? `<div class="plan-dag-legend mono">${legend}</div>` : ""}
+       <button class="plan-dag-progress" title="Plan overview">${dots}<span class="pdf-count mono">${countLine}</span></button>
      </div>`;
 
   // cache refs
@@ -299,10 +330,12 @@ function applyFit() {
   let k = 1;
   if (fitOn) {
     const paneW = scrollEl.clientWidth || stageNatW;
-    // Lower legibility floor is 0.25 (not 0.45): this plan is a wide, near-linear
-    // 19-column pipeline (~4950px), so a 0.45 floor could not remove horizontal
-    // scroll on a ~1360px pane. 0.25 lets the whole graph fit while still guarding
-    // against microscopic scaling on pathologically wide DAGs.
+    // Lower legibility floor is 0.25 (not 0.45). One column per dependency wave
+    // is far narrower than the old one-column-per-stage layout, but a deep plan
+    // still runs long (18 waves ≈ 4700px at 260px stride), and a 0.45 floor
+    // could not remove horizontal scroll on a ~1360px pane. 0.25 lets the whole
+    // graph fit while still guarding against microscopic scaling on
+    // pathologically deep DAGs.
     k = Math.max(0.25, Math.min(paneW / stageNatW, 1));
   }
   stageEl.style.transformOrigin = "top left";
@@ -353,7 +386,7 @@ function repaint(focusId) {
 function showDetail(id) {
   const n = nodesById[id]; if (!n || !detailEl) return;
   const p = positions[id], el = nodeEls[id];
-  if (!p || !el || collapsed.has(n.stage)) { detailEl.hidden = true; return; }
+  if (!p || !el) { detailEl.hidden = true; return; }
   const g = n.gate || {}; const c = (n.tasks && n.tasks.counts) || {};
   const deps = (n.dependsOn || []).join(" · ") || "—";
   detailEl.innerHTML =
@@ -391,8 +424,6 @@ function showDetail(id) {
 // --------------------------------------------------------------- wire ------
 function wire() {
   stageEl.addEventListener("click", (e) => {
-    const ribbon = e.target.closest("[data-stage]");
-    if (ribbon) { const s = ribbon.dataset.stage; if (collapsed.has(s)) collapsed.delete(s); else collapsed.add(s); sigLast = null; build(); return; }
     const node = e.target.closest("[data-node]");
     if (node && bus.onNodeSelect) bus.onNodeSelect(node.dataset.node);
   });
@@ -420,13 +451,24 @@ function measureFades() {
 }
 
 // --------------------------------------------------------------- iface -----
+// Everything a rebuild would change: status inputs (gate status AND cohort, task
+// counts, lease liveness, human-gate state, runnability), the rank the layout is
+// keyed on, and the edge SET — an edge-count signature missed a rewired
+// dependency that kept the same number of edges, which is precisely the change
+// that moves cards.
 function currentSig() {
   const dag = getDag();
   if (!dag) return "nodag";
   return JSON.stringify({
-    nodes: dag.nodes.map((n) => [n.id, (n.gate || {}).status, (n.tasks && n.tasks.counts && n.tasks.counts.active) || 0, (n.tasks && n.tasks.counts && n.tasks.counts.total) || 0, n.kind, !!n.frontier]),
-    edges: (dag.edges || []).length,
-    collapsed: [...collapsed].sort(),
+    nodes: dag.nodes.map((n) => {
+      const g = n.gate || {}, c = (n.tasks && n.tasks.counts) || {};
+      return [n.id, g.status, g.cohort == null ? null : g.cohort, g.evidenceClass == null ? null : g.evidenceClass,
+              c.active || 0, c.total || 0, n.kind, !!n.frontier,
+              !!(n.l1Lease && n.l1Lease.active), (n.humanGate || {}).state || null,
+              String(n.humanGateBlockedBy || ""), n.runnable === false,
+              Number.isFinite(n.rank) ? n.rank : null];
+    }),
+    edges: (dag.edges || []).map((e) => e.from + ">" + e.to).join(","),
   });
 }
 

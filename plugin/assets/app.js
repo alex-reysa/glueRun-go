@@ -11,7 +11,7 @@
 
 import { bus } from "./core/bus.js";
 import { startFeed } from "./core/sessions-feed.js";
-import { apiFetch, isHistorical } from "./core/api.js";
+import { apiFetch, isHistorical, setExecState } from "./core/api.js";
 
   const POLL_MS = 10000;
   const $ = (id) => document.getElementById(id);
@@ -137,6 +137,7 @@ import { apiFetch, isHistorical } from "./core/api.js";
       // A stale-served snapshot (server is recomputing in the background) is
       // shown, but flagged via the existing stale hint rather than as live.
       setConn(S.snap && S.snap.stale ? "stale" : "connected");
+      publishExec();   // execution state, before anything paints off the store
       seedSelection();
       renderAll();
       maybeRefreshOpenTask();
@@ -145,6 +146,29 @@ import { apiFetch, isHistorical } from "./core/api.js";
       setConn("down");
       console.error("[gluerun] load failed:", err && err.stack ? err.stack : err);
     }
+  }
+
+  // PMGO-003 — the single writer into core/api.js's execution-state store, fed
+  // from the two payloads app.js already owns: /api/state (snap.loop.alive is
+  // the daemon-pidfile authority, snap.stop.present the sentinel) and
+  // /api/overview (loop.stopReason — WHY it is stopped, which is the whole
+  // point: "stopped" with no reason reads as "broken"). Nothing is derived here
+  // beyond OR-ing the two stop signals; every field is optional, so a pre-0.17
+  // server simply publishes a null reason.
+  //
+  // Historical mode is a hard no-write: an archived plan's snapshot is a
+  // synthetic projection of a finished run (see historicalBoot), and letting it
+  // reach this store would recreate PMGO-003 in the opposite direction — an
+  // archive claiming an execution state it cannot have.
+  function publishExec() {
+    if (isHistorical()) return;
+    const snap = S.snap || {};
+    const ovLoop = (S.overview && S.overview.loop) || {};
+    setExecState({
+      loopAlive: !!(snap.loop && snap.loop.alive),
+      stopPresent: !!((snap.stop && snap.stop.present) || ovLoop.stopPresent),
+      stopReason: ovLoop.stopReason ? String(ovLoop.stopReason) : null,
+    });
   }
 
   function setConn(state) {
@@ -294,7 +318,19 @@ import { apiFetch, isHistorical } from "./core/api.js";
     if (!isHistorical()) {
       const g = (d.orchestration && d.orchestration.gates) || {};
       const val = $("plan-gates-val");
-      if (val) val.textContent = `${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}`;
+      // PMGO-002: the readout is the CURRENT campaign when the server splits the
+      // cohorts; historical accepted-as-done + the combined figure move into the
+      // tooltip. Older server (no cohorts) → the combined readout, unchanged.
+      const cur = g.cohorts && g.cohorts.current;
+      const hist = (g.cohorts && g.cohorts.historical) || {};
+      const combined = `${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}`;
+      if (val && cur) {
+        val.textContent = `${cur.passed != null ? cur.passed : "?"}/${cur.total != null ? cur.total : "?"}`;
+        val.title = `current campaign · historical ${hist.passed || 0}/${hist.total || 0} · combined ${combined}`;
+      } else if (val) {
+        val.textContent = combined;
+        val.removeAttribute("title");
+      }
     }
   }
 
@@ -753,6 +789,7 @@ import { apiFetch, isHistorical } from "./core/api.js";
       const res = await apiFetch("/api/overview", { cache: "no-store" });
       if (!res.ok) throw new Error("http " + res.status);
       S.overview = await res.json();
+      publishExec();   // loop.stopReason only exists on this payload
       if (S.selectedKind === "overview") renderInspectorOverview();
     } catch (e) {
       /* pill keeps its last value; overview is optional chrome */
@@ -1126,6 +1163,18 @@ import { apiFetch, isHistorical } from "./core/api.js";
     }).join("");
   }
 
+  // Execution state as a chip INSIDE the progress block (PMGO-002/003): a cohort
+  // split is only honest beside whether the loop that would move it is running.
+  // `stopped` names the reason, because "0 / 31 current campaign · stopped" with
+  // no WHY is exactly the reading that made a deliberate operator hold look like
+  // a broken engine.
+  function ovExecChip(o) {
+    const running = !!(o.pulse && o.pulse.running);
+    const reason = (o.loop && o.loop.stopReason) || "";
+    const label = running ? "running" : (reason ? "stopped — " + reason : "stopped");
+    return `<span class="status-chip ov-exec-chip" data-tone="${running ? "success" : "idle"}">${toneDot(running ? "integrated" : "idle")}<span>${esc(label)}</span></span>`;
+  }
+
   function ovProgressPanel(o) {
     const p = o.progress || {};
     const ladder = (o.stages || []).map((s) => {
@@ -1139,11 +1188,27 @@ import { apiFetch, isHistorical } from "./core/api.js";
         <span class="ph-count">${s.passed}/${s.total}</span>
       </div>`;
     }).join("");
+    // PMGO-002 — the primary number is the CURRENT campaign. The historical
+    // cohort is accepted-as-done evidence (grandfathered gates, green by
+    // construction) and can never be a denominator this run is measured against;
+    // reporting one blended "13 / 44 DAG nodes gated complete" beside a loop that
+    // had never actuated made every reading of that number wrong. The combined
+    // figure survives as secondary mono text. No `cohorts` (older server) → the
+    // block renders exactly as it did before, chip and all.
+    const cur = p.cohorts && p.cohorts.current;
+    const hist = (p.cohorts && p.cohorts.historical) || {};
+    const pct = cur ? cur.pct : p.pct;
+    const sub = cur
+      ? `${cur.passed || 0} / ${cur.total || 0} current campaign`
+      : `${p.passedNodes || 0} / ${p.totalNodes || 0} DAG nodes gated complete`;
+    const cohortLine = cur
+      ? `<div class="ov-progress-cohort mono">historical accepted ${hist.passed || 0}/${hist.total || 0} · combined ${p.passedNodes || 0}/${p.totalNodes || 0}</div>`
+      : "";
     return `<div class="tab-panel" data-tab="progress">
       <div class="field-block">
-        <div class="ov-progress-head"><span class="ov-pct">${p.pct != null ? p.pct + "%" : "—"}</span>
-          <span class="ov-progress-sub">${p.passedNodes || 0} / ${p.totalNodes || 0} DAG nodes gated complete</span></div>
-        <div class="ov-progress-bar"><span class="ov-progress-fill" style="width:${p.pct || 0}%"></span></div>
+        <div class="ov-progress-head"><span class="ov-pct">${pct != null ? pct + "%" : "—"}</span>
+          <span class="ov-progress-sub">${sub}</span>${cur ? ovExecChip(o) : ""}</div>
+        <div class="ov-progress-bar"><span class="ov-progress-fill" style="width:${pct || 0}%"></span></div>${cohortLine}
       </div>
       ${ovPulseStrip(o)}
       <div class="field-block"><span class="meta-label">phases · D-stages + S0</span><div class="ph-ladder">${ladder}</div></div>
@@ -1321,10 +1386,13 @@ import { apiFetch, isHistorical } from "./core/api.js";
     return "idle";
   }
   // gate-result.v0 status -> tone. passed=forest, blocked/invalid=red, stale=amber,
-  // absent=gray.
+  // absent=gray. "passed-with-acknowledged-baseline" is a PASS with a recorded
+  // pre-existing-failure acknowledgement — it is in the server's
+  // SUCCESSFUL_GATE_STATUSES and counts toward passed/total, so painting it gray
+  // made a counted-complete node read as ungated everywhere pips are drawn.
   function gateTone(status) {
     status = String(status || "").toLowerCase();
-    if (status === "passed") return "integrated";
+    if (status === "passed" || status === "passed-with-acknowledged-baseline") return "integrated";
     if (status === "blocked" || status === "invalid") return "blocked";
     if (status === "stale") return "warn";
     return "idle";

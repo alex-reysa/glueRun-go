@@ -592,7 +592,12 @@ class PlanOverviewTests(unittest.TestCase):
             "S0.base": "passed",
         }
         progress, stages, frontier = srv.compute_plan_progress(registry, gates)
-        self.assertEqual(progress, {"passedNodes": 3, "totalNodes": 4, "pct": 75})
+        # Combined figures are unchanged; with no gate records the provenance is
+        # unknown, so every passed gate reads as current-campaign work.
+        self.assertEqual(progress, {
+            "passedNodes": 3, "totalNodes": 4, "pct": 75,
+            "cohorts": {"historical": {"passed": 0, "total": 0},
+                        "current": {"passed": 3, "total": 4, "pct": 75}}})
         d1 = [s for s in stages if s["stage"] == "D1"][0]
         self.assertEqual((d1["passed"], d1["total"], d1["status"]), (1, 2, "active"))
         # D0/S0 complete; ordering puts D-stages before S-stages
@@ -680,6 +685,164 @@ class PlanOverviewTests(unittest.TestCase):
         self.assertEqual(s["parkedLifetime"], 71)
         self.assertEqual(s["branch"], "codex/gluerun-bootstrap-target")
         self.assertEqual(s["breaker"], "0 / 5")
+
+
+class NodeRankAndStageOrderTests(unittest.TestCase):
+    """PMGO-001: rank comes from the dependency edges, and stage order follows
+    rank — the lexical D-prefix/numeric key survives only as the tie-break."""
+
+    def test_ranks_chain_diamond_and_dangling(self) -> None:
+        registry = srv.parse_dag({"nodes": [
+            {"id": "root", "stage": "S0", "dependsOn": []},
+            {"id": "left", "stage": "S1", "dependsOn": ["root"]},
+            {"id": "right", "stage": "S1", "dependsOn": ["root"]},
+            {"id": "join", "stage": "S2", "dependsOn": ["left", "right"]},
+            # dependency on an id the registry does not know: ignored, not fatal
+            {"id": "orphan", "stage": "S3", "dependsOn": ["nowhere"]},
+        ]})
+        ranks = srv.compute_node_ranks(registry["by_id"])
+        self.assertEqual(ranks, {"root": 0, "left": 1, "right": 1, "join": 2, "orphan": 0})
+
+    def test_ranks_tolerate_a_cycle_without_crashing(self) -> None:
+        registry = srv.parse_dag({"nodes": [
+            {"id": "a", "dependsOn": ["b"]},
+            {"id": "b", "dependsOn": ["a"]},
+            {"id": "c", "dependsOn": []},
+            {"id": "d", "dependsOn": ["c", "a"]},
+        ]})
+        ranks = srv.compute_node_ranks(registry["by_id"])
+        self.assertEqual(set(ranks), {"a", "b", "c", "d"})  # every node ranked
+        self.assertEqual(ranks["c"], 0)
+        self.assertTrue(all(isinstance(v, int) for v in ranks.values()))
+
+    def _inverted_registry(self) -> dict:
+        """Unique stage per node, with the NUMERIC stage order exactly inverted
+        against the dependency order: lexical sorting yields D1, D5, D9;
+        dependency order is D9 -> D5 -> D1."""
+        return {"nodes": [
+            {"id": "first", "stage": "D9", "area": "core", "layer": "contract",
+             "kind": "contract", "dependsOn": [], "requiredCompletion": "x"},
+            {"id": "second", "stage": "D5", "area": "core", "layer": "service",
+             "kind": "runtime", "dependsOn": ["first"], "requiredCompletion": "x"},
+            {"id": "third", "stage": "D1", "area": "core", "layer": "service",
+             "kind": "runtime", "dependsOn": ["second"], "requiredCompletion": "x"},
+        ]}
+
+    def test_plan_progress_stages_follow_dependencies_not_stage_numbers(self) -> None:
+        registry = srv.parse_dag(self._inverted_registry())
+        _progress, stages, _frontier = srv.compute_plan_progress(registry, {})
+        self.assertEqual([s["stage"] for s in stages], ["D9", "D5", "D1"])
+
+    def test_dag_view_stages_follow_dependencies_not_stage_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "docs/orchestration/gates").mkdir(parents=True)
+            (repo / "docs/orchestration/dag.v0.json").write_text(
+                json.dumps({"schema": "gluerun.orchestration.dag.v0",
+                            **self._inverted_registry()}))
+            view = srv.collect_dag_view(repo)
+            self.assertEqual([s["id"] for s in view["stages"]], ["D9", "D5", "D1"])
+            ranks = {n["id"]: n["rank"] for n in view["nodes"]}
+            self.assertEqual(ranks, {"first": 0, "second": 1, "third": 2})
+
+    def test_equal_ranks_keep_the_legacy_lexical_order(self) -> None:
+        # No edges anywhere -> every stage rank ties -> the old key decides, so
+        # existing plans keep the exact stage order they render today.
+        registry = srv.parse_dag({"nodes": [
+            {"id": "s0", "stage": "S0"}, {"id": "d1", "stage": "D1"},
+            {"id": "d0", "stage": "D0"},
+        ]})
+        _progress, stages, _frontier = srv.compute_plan_progress(registry, {})
+        self.assertEqual([s["stage"] for s in stages], ["D0", "D1", "S0"])
+
+
+class GateCohortTests(unittest.TestCase):
+    """PMGO-002: passed gates split into the historical accepted-as-done set and
+    what the current campaign earned. The combined figures never move."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / "docs/orchestration/gates").mkdir(parents=True)
+        return repo
+
+    def _dag(self, repo: Path, node_ids: list[str]) -> None:
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+            "schema": "gluerun.orchestration.dag.v0",
+            "nodes": [{"id": nid, "stage": "D0", "area": "core", "layer": "contract",
+                       "kind": "contract", "dependsOn": [], "requiredCompletion": "x"}
+                      for nid in node_ids]}))
+
+    def _gate(self, repo: Path, node_id: str, status: str, evidence_class: str) -> None:
+        (repo / "docs/orchestration/gates" / f"{node_id}.gate-result.json").write_text(
+            json.dumps({"node": node_id, "status": status, "authoritative": True,
+                        "evidenceClass": evidence_class,
+                        "recordedAt": "2026-06-25T22:53:13Z"}))
+
+    def test_gate_cohort_classification(self) -> None:
+        self.assertEqual(srv._gate_cohort(
+            {"status": "passed", "evidenceClass": "grandfathered"}), "historical")
+        self.assertEqual(srv._gate_cohort(
+            {"status": "passed", "evidenceClass": "deterministic-proof"}), "current")
+        # acknowledged-baseline is a successful status too, and provenance still
+        # decides which campaign it belongs to
+        self.assertEqual(srv._gate_cohort(
+            {"status": "passed-with-acknowledged-baseline", "evidenceClass": None}), "current")
+        self.assertEqual(srv._gate_cohort(
+            {"status": "passed-with-acknowledged-baseline",
+             "evidenceClass": "grandfathered"}), "historical")
+        # nothing unsuccessful belongs to a cohort
+        for status in ("absent", "failed", "blocked", "stale"):
+            self.assertIsNone(srv._gate_cohort({"status": status}), status)
+        self.assertIsNone(srv._gate_cohort(None))
+
+    def test_mixed_provenance_counts(self) -> None:
+        repo = self._repo()
+        self._dag(repo, ["h1", "h2", "c1", "absent1"])
+        self._gate(repo, "h1", "passed", "grandfathered")
+        self._gate(repo, "h2", "passed-with-acknowledged-baseline", "grandfathered")
+        self._gate(repo, "c1", "passed", "deterministic-proof")
+        registry = srv.load_dag_registry(repo)
+        records = srv._all_gate_records(repo)
+        statuses = srv._all_gate_statuses(repo)
+        self.assertEqual(statuses["h2"], "passed-with-acknowledged-baseline")
+        progress, _stages, _frontier = srv.compute_plan_progress(registry, statuses, records)
+        self.assertEqual((progress["passedNodes"], progress["totalNodes"], progress["pct"]),
+                         (3, 4, 75))
+        self.assertEqual(progress["cohorts"], {
+            "historical": {"passed": 2, "total": 2},
+            "current": {"passed": 1, "total": 2, "pct": 50}})
+        # the same block reaches /api/state + /api/home through the gate summary
+        self.assertEqual(srv.collect_gates_summary(repo)["cohorts"], progress["cohorts"])
+
+    def test_axon_shape_every_passed_gate_is_historical(self) -> None:
+        # The reported shape: 2 authoritative grandfathered gates, 2 future nodes
+        # with no gate at all, and a loop that has never actuated.
+        repo = self._repo()
+        self._dag(repo, ["old1", "old2", "new1", "new2"])
+        self._gate(repo, "old1", "passed", "grandfathered")
+        self._gate(repo, "old2", "passed", "grandfathered")
+        registry = srv.load_dag_registry(repo)
+        records = srv._all_gate_records(repo)
+        progress, _stages, _frontier = srv.compute_plan_progress(
+            registry, srv._all_gate_statuses(repo), records)
+        # combined math is untouched: still the same 2/4 = 50% it reports today
+        self.assertEqual((progress["passedNodes"], progress["totalNodes"], progress["pct"]),
+                         (2, 4, 50))
+        # ... but the current campaign has produced nothing, and says so
+        self.assertEqual(progress["cohorts"]["current"], {"passed": 0, "total": 2, "pct": 0})
+        self.assertEqual(progress["cohorts"]["historical"], {"passed": 2, "total": 2})
+
+    def test_home_digest_carries_cohorts(self) -> None:
+        repo = self._repo()
+        self._dag(repo, ["old1", "new1"])
+        self._gate(repo, "old1", "passed", "grandfathered")
+        home = srv.collect_home(repo)
+        self.assertEqual(home["gates"]["passed"], 1)
+        self.assertEqual(home["gates"]["cohorts"]["historical"], {"passed": 1, "total": 1})
+        self.assertEqual(home["gates"]["cohorts"]["current"],
+                         {"passed": 0, "total": 1, "pct": 0})
 
 
 # --------------------------------------------------------------------------- #
@@ -1013,8 +1176,20 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             # were replaced by orchestration.gates, and disk.du became a
             # non-blocking background peek — see NativeFrontierTests /
             # ValidateDagNativeTests / SnapshotNoSubprocessTests below.
-            # /api/overview (includes settings groups)
-            self.assertEqual(wire(srv.collect_overview(repo)),
+            # /api/overview (includes settings groups). 0.17.0 adds three fields
+            # HEAD cannot have: progress.cohorts (PMGO-002), loop.stopReason
+            # (PMGO-003) and l1Selection (AXON-002). They are removed before the
+            # comparison rather than the comparison being dropped — everything
+            # else in the payload must still be byte-identical to HEAD, and the
+            # new fields have their own assertions below.
+            def drop_new_overview_fields(payload: dict) -> dict:
+                out = dict(payload)
+                out.pop("l1Selection", None)
+                out["progress"] = {k: v for k, v in out["progress"].items() if k != "cohorts"}
+                out["loop"] = {k: v for k, v in out["loop"].items() if k != "stopReason"}
+                return out
+
+            self.assertEqual(wire(drop_new_overview_fields(srv.collect_overview(repo))),
                              wire(head.collect_overview(repo)))
             self.assertEqual(wire(srv.collect_settings(repo)),
                              wire(head.collect_settings(repo)))
@@ -1228,7 +1403,9 @@ class SnapshotNoSubprocessTests(unittest.TestCase):
             self.assertTrue(snap["orchestration"]["status"].get("native"))
             self.assertTrue(snap["orchestration"]["validateDag"].get("native"))
             self.assertEqual(snap["orchestration"]["gates"],
-                             {"passed": 0, "total": 1, "byNode": {"D0.a": "absent"}})
+                             {"passed": 0, "total": 1, "byNode": {"D0.a": "absent"},
+                              "cohorts": {"historical": {"passed": 0, "total": 0},
+                                          "current": {"passed": 0, "total": 1, "pct": 0}}})
             self.assertEqual(snap["resources"]["configuredSlots"], 7)
             self.assertEqual(snap["resources"]["reserveBytes"], 0)
             self.assertEqual(snap["resources"]["estimatedWorktreeBytes"], 1024)
@@ -1515,6 +1692,346 @@ class CollectDagViewTests(unittest.TestCase):
             self.assertTrue(srv.NODE_ID_RE.match(nid), nid)
         for bad in ("", "-lead", "a/b", "a b"):
             self.assertFalse(srv.NODE_ID_RE.match(bad), bad)
+
+    def _write_wave_dag(self, repo: Path) -> None:
+        """root, then a three-node wave: two nodes sharing the `mcp` area and one
+        in `cli`. The audit's "ready 3, runnable 2" shape in miniature."""
+        def node(nid: str, area: str, stage: str, deps: list[str]) -> dict:
+            return {"id": nid, "stage": stage, "area": area, "layer": "service",
+                    "kind": "runtime", "dependsOn": deps, "requiredCompletion": "x"}
+
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+            "schema": "gluerun.orchestration.dag.v0",
+            "nodes": [node("root", "core", "S0", []),
+                      node("mcp-a", "mcp", "S1", ["root"]),
+                      node("mcp-b", "mcp", "S1", ["root"]),
+                      node("cli-a", "cli", "S2", ["root"])]}))
+
+    def test_ranks_cohort_lease_and_l1_selection(self) -> None:
+        repo = self._repo()
+        self._write_wave_dag(repo)
+        (repo / "gluerun.config.json").write_text(json.dumps(
+            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "1", "GLUERUN_MAX_L1_CONCURRENT": "3"}}))
+        # root is historical evidence: authoritative, passed, grandfathered.
+        (repo / "docs/orchestration/gates/root.gate-result.json").write_text(json.dumps(
+            {"node": "root", "status": "passed", "authoritative": True,
+             "evidenceClass": "grandfathered", "recordedAt": "2026-06-25T22:53:13Z"}))
+        # A RELEASED lease is history, not an active planner: it must pass its
+        # area/scopes through to the UI without influencing selection.
+        (repo / ".gluerun-state/l1-leases/mcp-b.json").write_text(json.dumps(
+            {"node": "mcp-b", "area": "mcp", "status": "released",
+             "allowedWriteScopes": ["internal/mcp/"], "updatedAt": "2026-07-10T01:00:00Z"}))
+
+        view = srv.collect_dag_view(repo)
+        by_id = {n["id"]: n for n in view["nodes"]}
+        # rank: longest path over dependsOn, not stage position
+        self.assertEqual({n["id"]: n["rank"] for n in view["nodes"]},
+                         {"root": 0, "mcp-a": 1, "mcp-b": 1, "cli-a": 1})
+        # provenance rides on the gate projection
+        self.assertEqual(by_id["root"]["gate"]["cohort"], "historical")
+        self.assertNotIn("cohort", by_id["mcp-a"]["gate"])  # absent gate, no cohort
+        # lease passthrough
+        self.assertEqual(by_id["mcp-b"]["l1Lease"]["area"], "mcp")
+        self.assertEqual(by_id["mcp-b"]["l1Lease"]["allowedWriteScopes"], ["internal/mcp/"])
+        self.assertFalse(by_id["mcp-b"]["l1Lease"]["active"])
+        # ready by dependency: all three; runnable: one per area
+        self.assertEqual(sorted(n["id"] for n in view["nodes"] if n["frontier"]),
+                         ["cli-a", "mcp-a", "mcp-b"])
+        self.assertTrue(by_id["mcp-a"]["runnable"])
+        self.assertTrue(by_id["cli-a"]["runnable"])
+        self.assertFalse(by_id["mcp-b"]["runnable"])
+        self.assertEqual(by_id["mcp-b"]["exclusion"]["rule"], "batch-area")
+        self.assertIn("mcp area already selected (mcp-a)", by_id["mcp-b"]["exclusion"]["detail"])
+        # a passed node is not on the frontier and carries no runnable verdict
+        self.assertNotIn("runnable", by_id["root"])
+        selection = view["l1Selection"]
+        self.assertTrue(selection["enabled"])
+        self.assertEqual(selection["cap"], 3)
+        self.assertEqual(selection["readyByDependency"], 3)
+        self.assertEqual(selection["runnableNow"], 2)
+        self.assertEqual(selection["serialized"],
+                         [{"node": "mcp-b", "area": "mcp", "rule": "batch-area",
+                           "detail": "mcp area already selected (mcp-a)"}])
+        self.assertEqual(selection["policy"],
+                         ["node-lease", "area-lease", "scope-overlap", "cap"])
+        # the plan header must tell the identical story
+        self.assertEqual(srv.collect_overview(repo)["l1Selection"], selection)
+
+    def test_l1_parallel_disabled_caps_at_one(self) -> None:
+        repo = self._repo()
+        self._write_wave_dag(repo)
+        (repo / "docs/orchestration/gates/root.gate-result.json").write_text(json.dumps(
+            {"node": "root", "status": "passed", "authoritative": True}))
+        view = srv.collect_dag_view(repo)
+        self.assertEqual(view["l1Selection"]["enabled"], False)
+        self.assertEqual(view["l1Selection"]["cap"], 1)
+        self.assertEqual(view["l1Selection"]["runnableNow"], 1)
+        rules = {e["node"]: e["rule"] for e in view["l1Selection"]["serialized"]}
+        self.assertEqual(rules, {"mcp-b": "batch-area", "cli-a": "cap"})
+
+    def test_human_gate_projection(self) -> None:
+        repo = self._repo()
+        (repo / "docs/orchestration/human-gates").mkdir(parents=True)
+        request_ref = "docs/orchestration/human-gates/G100.human-gate.json"
+        (repo / request_ref).write_text(json.dumps({
+            "schema": "gluerun.orchestration.human-gate.v0",
+            "gateId": "G100", "node": "gate-node", "approvalType": "exact-artifact",
+            "requiredOwner": "owner@example.com",
+            "questions": [{"id": "risk", "prompt": "Accept?", "required": True}],
+            "artifacts": [], "createdAt": "2026-07-24T10:00:00Z",
+            "expiresAt": "2099-07-25T10:00:00Z"}))
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+            "schema": "gluerun.orchestration.dag.v0",
+            "nodes": [
+                {"id": "gate-node", "stage": "S0", "area": "core", "layer": "contract",
+                 "kind": "contract", "dependsOn": [], "requiredCompletion": "x",
+                 "humanGate": {"requestRef": request_ref,
+                               "approvalRef": "docs/orchestration/human-gates/G100.approval.json"}},
+                {"id": "downstream", "stage": "S1", "area": "core", "layer": "service",
+                 "kind": "runtime", "dependsOn": ["gate-node"], "requiredCompletion": "x"},
+            ]}))
+        view = srv.collect_dag_view(repo)
+        by_id = {n["id"]: n for n in view["nodes"]}
+        # no approval document exists, so the gate is anything but approved
+        self.assertNotEqual(by_id["gate-node"]["humanGate"]["state"], "approved")
+        self.assertEqual(by_id["gate-node"]["humanGate"]["gateId"], "G100")
+        self.assertIn("reason", by_id["gate-node"]["humanGate"])
+        # the descendant is blocked BY the gate node, and says which one
+        self.assertEqual(by_id["downstream"]["humanGateBlockedBy"], ["gate-node"])
+        self.assertNotIn("humanGateBlockedBy", by_id["gate-node"])
+        self.assertNotIn("humanGate", by_id["downstream"])
+
+
+class NativeL1SelectionTests(unittest.TestCase):
+    """AXON-002: compute_l1_selection_native must reproduce engine/lib.sh
+    `gluerun_select_l1_frontier` — same selection, plus the per-node reason the
+    engine computes and discards."""
+
+    def _entry(self, node: str, area: str) -> dict:
+        return {"node": node, "area": area, "stage": "S1", "layer": "service",
+                "kind": "runtime", "requiredCompletion": "x"}
+
+    def _lease(self, node: str, area: str, status: str = "active",
+               scopes: list[str] | None = None) -> dict:
+        return {"node": node, "area": area, "status": status,
+                "allowedWriteScopes": scopes if scopes is not None else [f"internal/{area}/"]}
+
+    def _scopes(self, *areas: str) -> dict:
+        return {area: [f"internal/{area}/"] for area in areas}
+
+    def test_audit_wave_serializes_the_second_mcp_node(self) -> None:
+        # The reported wave: theoretical width 4, practical width 3.
+        frontier = [self._entry("B120", "mcp"), self._entry("B130", "mcp"),
+                    self._entry("B160", "cli"), self._entry("C100", "platform")]
+        out = srv.compute_l1_selection_native(
+            frontier, [], self._scopes("mcp", "cli", "platform"), 3, True)
+        self.assertEqual(out["selected"], ["B120", "B160", "C100"])
+        self.assertEqual(list(out["exclusions"]), ["B130"])
+        self.assertEqual(out["exclusions"]["B130"],
+                         {"rule": "batch-area", "detail": "mcp area already selected (B120)"})
+
+    def test_node_already_leased(self) -> None:
+        frontier = [self._entry("B120", "mcp"), self._entry("B160", "cli")]
+        out = srv.compute_l1_selection_native(
+            frontier, [self._lease("B120", "mcp")], self._scopes("mcp", "cli"), 3, True)
+        self.assertEqual(out["selected"], ["B160"])
+        self.assertEqual(out["exclusions"]["B120"]["rule"], "node-lease")
+        self.assertIn("B120", out["exclusions"]["B120"]["detail"])
+
+    def test_area_already_leased_by_another_node(self) -> None:
+        frontier = [self._entry("B130", "mcp"), self._entry("B160", "cli")]
+        out = srv.compute_l1_selection_native(
+            frontier, [self._lease("B120", "mcp")], self._scopes("mcp", "cli"), 3, True)
+        self.assertEqual(out["selected"], ["B160"])
+        self.assertEqual(out["exclusions"]["B130"]["rule"], "area-lease")
+        self.assertIn("B120", out["exclusions"]["B130"]["detail"])
+
+    def test_released_lease_frees_the_area(self) -> None:
+        frontier = [self._entry("B130", "mcp")]
+        out = srv.compute_l1_selection_native(
+            frontier, [self._lease("B120", "mcp", status="released")],
+            self._scopes("mcp"), 3, True)
+        self.assertEqual(out["selected"], ["B130"])
+        self.assertEqual(out["exclusions"], {})
+
+    def test_scope_overlap_with_an_active_lease_in_another_area(self) -> None:
+        # Distinct areas whose configured write scopes nest: the overlap guard,
+        # not the area guard, is what serializes them.
+        frontier = [self._entry("B160", "cli")]
+        leases = [self._lease("B120", "mcp", scopes=["internal/shared/"])]
+        out = srv.compute_l1_selection_native(
+            frontier, leases, {"cli": ["internal/shared/cli/"]}, 3, True)
+        self.assertEqual(out["selected"], [])
+        self.assertEqual(out["exclusions"]["B160"]["rule"], "scope-overlap-active")
+        self.assertIn("internal/shared", out["exclusions"]["B160"]["detail"])
+        self.assertIn("B120", out["exclusions"]["B160"]["detail"])
+
+    def test_scope_overlap_within_one_batch(self) -> None:
+        frontier = [self._entry("B120", "mcp"), self._entry("B160", "cli")]
+        scopes = {"mcp": ["internal/shared/"], "cli": ["internal/shared/cli/"]}
+        out = srv.compute_l1_selection_native(frontier, [], scopes, 3, True)
+        self.assertEqual(out["selected"], ["B120"])
+        self.assertEqual(out["exclusions"]["B160"]["rule"], "scope-overlap-batch")
+        self.assertIn("B120", out["exclusions"]["B160"]["detail"])
+
+    def test_unmapped_area_falls_back_to_the_engine_default_prefix(self) -> None:
+        # No entry in the scope map: internal/<area>/, exactly like the engine.
+        frontier = [self._entry("B120", "mcp"), self._entry("B160", "cli")]
+        leases = [self._lease("B999", "other", scopes=["internal/mcp/"])]
+        out = srv.compute_l1_selection_native(frontier, leases, {}, 3, True)
+        self.assertEqual(out["selected"], ["B160"])
+        self.assertEqual(out["exclusions"]["B120"]["rule"], "scope-overlap-active")
+
+    def test_cap_cuts_the_batch_off(self) -> None:
+        frontier = [self._entry("B120", "mcp"), self._entry("B160", "cli"),
+                    self._entry("C100", "platform")]
+        out = srv.compute_l1_selection_native(
+            frontier, [], self._scopes("mcp", "cli", "platform"), 2, True)
+        self.assertEqual(out["selected"], ["B120", "B160"])
+        self.assertEqual(out["exclusions"]["C100"],
+                         {"rule": "cap", "detail": "concurrency cap 2 reached"})
+
+    def test_intrinsic_rule_is_reported_ahead_of_the_cap(self) -> None:
+        # B130 would still be serialized if the cap were raised; say so.
+        frontier = [self._entry("B120", "mcp"), self._entry("B130", "mcp")]
+        out = srv.compute_l1_selection_native(frontier, [], self._scopes("mcp"), 1, True)
+        self.assertEqual(out["selected"], ["B120"])
+        self.assertEqual(out["exclusions"]["B130"]["rule"], "batch-area")
+
+    def test_fanout_disabled_forces_a_single_node(self) -> None:
+        frontier = [self._entry("B120", "mcp"), self._entry("B160", "cli")]
+        out = srv.compute_l1_selection_native(
+            frontier, [], self._scopes("mcp", "cli"), 3, False)
+        self.assertEqual(out["selected"], ["B120"])
+        self.assertEqual(out["exclusions"]["B160"]["rule"], "cap")
+
+
+class L1SelectionConfigTests(unittest.TestCase):
+    """The knobs behind the replica, resolved from repo files the way the engine
+    resolves them (never from the console's own process environment)."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / ".gluerun-state").mkdir()
+        return repo
+
+    def test_limits_default_to_disabled_cap_one(self) -> None:
+        self.assertEqual(srv._l1_selection_limits(self._repo()), (False, 1))
+
+    def test_limits_from_config_env(self) -> None:
+        repo = self._repo()
+        (repo / "gluerun.config.json").write_text(json.dumps(
+            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "1", "GLUERUN_MAX_L1_CONCURRENT": "4"}}))
+        self.assertEqual(srv._l1_selection_limits(repo), (True, 4))
+
+    def test_enabled_default_cap_is_three_and_junk_floors_to_one(self) -> None:
+        repo = self._repo()
+        (repo / "gluerun.config.json").write_text(json.dumps(
+            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "1"}}))
+        self.assertEqual(srv._l1_selection_limits(repo), (True, 3))
+        (repo / "gluerun.config.json").write_text(json.dumps(
+            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "1", "GLUERUN_MAX_L1_CONCURRENT": "0"}}))
+        self.assertEqual(srv._l1_selection_limits(repo), (True, 1))
+
+    def test_state_env_override_beats_config_env(self) -> None:
+        repo = self._repo()
+        (repo / "gluerun.config.json").write_text(json.dumps(
+            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "0", "GLUERUN_MAX_L1_CONCURRENT": "2"}}))
+        (repo / ".gluerun-state/.env").write_text(
+            "GLUERUN_ENABLE_L1_PARALLEL=1\nGLUERUN_MAX_L1_CONCURRENT=5\nDATABASE_URL=secret\n")
+        self.assertEqual(srv._l1_selection_limits(repo), (True, 5))
+
+    def test_area_scopes_from_structured_config_and_prefix(self) -> None:
+        repo = self._repo()
+        (repo / "gluerun.config.json").write_text(json.dumps(
+            {"areaPrefix": "src/", "areas": {"mcp": ["internal/mcp/", "cmd/mcp/"],
+                                             "cli": "internal/cli/"}}))
+        self.assertEqual(srv._l1_area_scopes(repo, ["mcp", "cli", "unmapped"]), {
+            "mcp": ["internal/mcp/", "cmd/mcp/"],
+            "cli": ["internal/cli/"],
+            "unmapped": ["src/unmapped/"]})
+
+    def test_area_scopes_default_prefix_when_unconfigured(self) -> None:
+        self.assertEqual(srv._l1_area_scopes(self._repo(), ["mcp"]), {"mcp": ["internal/mcp/"]})
+
+
+class StopReasonTests(unittest.TestCase):
+    """PMGO-003: a stopped loop must say WHY, and name the next action when one
+    exists."""
+
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(tmp.name)
+        (repo / "docs/orchestration/gates").mkdir(parents=True)
+        (repo / ".gluerun-state").mkdir()
+        return repo
+
+    def _gated_dag(self, repo: Path) -> None:
+        (repo / "docs/orchestration/human-gates").mkdir(parents=True, exist_ok=True)
+        request_ref = "docs/orchestration/human-gates/G100.human-gate.json"
+        (repo / request_ref).write_text(json.dumps({
+            "schema": "gluerun.orchestration.human-gate.v0",
+            "gateId": "G100", "node": "G100", "approvalType": "exact-artifact",
+            "requiredOwner": "owner@example.com",
+            "questions": [{"id": "risk", "prompt": "Accept?", "required": True}],
+            "artifacts": [], "createdAt": "2026-07-24T10:00:00Z",
+            "expiresAt": "2099-07-25T10:00:00Z"}))
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
+            "schema": "gluerun.orchestration.dag.v0",
+            "nodes": [
+                {"id": "G100", "stage": "S0", "area": "core", "layer": "contract",
+                 "kind": "contract", "dependsOn": [], "requiredCompletion": "x",
+                 "humanGate": {"requestRef": request_ref,
+                               "approvalRef": "docs/orchestration/human-gates/G100.approval.json"}},
+                {"id": "B100", "stage": "S1", "area": "core", "layer": "service",
+                 "kind": "runtime", "dependsOn": ["G100"], "requiredCompletion": "x"},
+            ]}))
+
+    def test_no_stop_no_reason(self) -> None:
+        repo = self._repo()
+        self._gated_dag(repo)
+        self.assertIsNone(srv.derive_stop_reason(repo, {"stopPresent": False}))
+
+    def test_pending_human_gate_on_a_ready_node_names_the_node(self) -> None:
+        repo = self._repo()
+        self._gated_dag(repo)
+        self.assertEqual(srv.derive_stop_reason(repo, {"stopPresent": True}),
+                         "operator approval required for G100")
+
+    def test_stop_alone_falls_back_to_the_sentinel(self) -> None:
+        repo = self._repo()
+        (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps(
+            {"schema": "gluerun.orchestration.dag.v0",
+             "nodes": [{"id": "B100", "stage": "S0", "area": "core", "layer": "service",
+                        "kind": "runtime", "dependsOn": [], "requiredCompletion": "x"}]}))
+        self.assertEqual(srv.derive_stop_reason(repo, {"stopPresent": True}),
+                         "STOP sentinel present")
+
+    def test_status_note_explaining_a_halt_wins_over_the_sentinel(self) -> None:
+        repo = self._repo()
+        self.assertEqual(
+            srv.derive_stop_reason(repo, {"stopPresent": True,
+                                          "note": "stopped (budget exhausted)"}),
+            "stopped (budget exhausted)")
+        # a note that does not explain a stop is not a stop reason
+        self.assertEqual(
+            srv.derive_stop_reason(repo, {"stopPresent": True, "note": "iteration 6 done"}),
+            "STOP sentinel present")
+
+    def test_overview_publishes_the_stop_reason(self) -> None:
+        repo = self._repo()
+        self._gated_dag(repo)
+        overview = srv.collect_overview(repo)
+        self.assertIsNone(overview["loop"]["stopReason"])  # no sentinel yet
+        (repo / ".gluerun-state/STOP").write_text("")
+        srv._OVERVIEW_CACHE.invalidate()
+        overview = srv.collect_overview(repo)
+        self.assertTrue(overview["loop"]["stopPresent"])
+        self.assertEqual(overview["loop"]["stopReason"],
+                         "operator approval required for G100")
 
 
 def _tev(ts: str, etype: str, **data: object) -> dict:
@@ -2095,7 +2612,10 @@ class CollectHomeTests(unittest.TestCase):
         self.assertEqual(home["schema"], "gluerun.codex.home.v0")
         self.assertEqual(home["health"], "ok")
         self.assertEqual(home["attention"], [])
-        self.assertEqual(home["gates"], {"passed": 0, "total": 0})
+        self.assertEqual(home["gates"], {
+            "passed": 0, "total": 0,
+            "cohorts": {"historical": {"passed": 0, "total": 0},
+                        "current": {"passed": 0, "total": 0, "pct": 0}}})
         self.assertEqual(home["frontier"], {"count": 0, "nodes": []})
         self.assertEqual(home["taskCounts"]["total"], 0)
         self.assertEqual(home["dispatch"], {"launched": 0, "pidAlive": 0})

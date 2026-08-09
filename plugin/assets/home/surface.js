@@ -88,7 +88,17 @@ function signature() {
   const d = HOME.data;
   if (!d) return "nohome";
   const abd = (d.activityByDay || []).map((x) => [x.dispatches, x.integrations, x.failures]).join(",");
-  const gates = d.gates ? `${d.gates.passed}/${d.gates.total}` : "-";
+  // Gates: the combined figure PLUS the cohort split, so a campaign gate landing
+  // (which moves cohorts.current without changing the combined total) repaints.
+  // Appended, not substituted, so a server without cohorts produces the exact
+  // signature it did before and no spurious rebuild happens mid-deploy.
+  const gc = (d.gates && d.gates.cohorts) || null;
+  const gcCur = (gc && gc.current) || {};
+  const gcHist = (gc && gc.historical) || {};
+  const gates = d.gates
+    ? `${d.gates.passed}/${d.gates.total}` +
+      (gc ? `~${gcCur.passed}/${gcCur.total}~${gcHist.passed}/${gcHist.total}` : "")
+    : "-";
   const dag = getDag();
   const stages = dag ? (dag.stages || []).map((s) => `${s.id}:${s.passed}/${s.total}`).join("|") : "-";
   const disk = S.snap && S.snap.disk;
@@ -449,8 +459,14 @@ function resetsIn(epochSec) {
 }
 
 // 2. Gates block — gates X/Y headline + per-stage bars (from the shared dag).
+// PMGO-002: when the server splits the cohorts the headline is the CURRENT
+// campaign and the historical accepted-as-done set drops to a subline, so the
+// landing page can never present grandfathered evidence as this run's delivery.
+// Older server (no cohorts) → the combined headline, unchanged.
 function gatesHtml(d) {
   const g = d.gates || {};
+  const cur = g.cohorts && g.cohorts.current;
+  const hist = (g.cohorts && g.cohorts.historical) || {};
   const dag = getDag();
   const stages = dag ? (dag.stages || []) : [];
   const bars = stages.map((s) => {
@@ -463,9 +479,17 @@ function gatesHtml(d) {
       <span class="hsb-count mono">${s.passed}/${s.total}</span>
     </button>`;
   }).join("") || `<div class="home-empty">no stages</div>`;
+  const combined = `${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}`;
+  const headline = cur
+    ? `${cur.passed != null ? cur.passed : "?"}/${cur.total != null ? cur.total : "?"}`
+    : combined;
+  const nums = cur
+    ? `<span class="home-gates-nums"><span class="home-gates-val mono">${headline}</span>
+        <span class="home-gates-sub mono">historical ${hist.passed || 0}/${hist.total || 0} · all-time ${combined}</span></span>`
+    : `<span class="home-gates-val mono">${headline}</span>`;
   return `<section class="home-block home-gates">
-    <div class="home-block-head"><span class="home-eyebrow">gates</span>
-      <span class="home-gates-val mono">${g.passed != null ? g.passed : "?"}/${g.total != null ? g.total : "?"}</span></div>
+    <div class="home-block-head"><span class="home-eyebrow">gates${cur ? " · current campaign" : ""}</span>
+      ${nums}</div>
     <div class="hb-body"><div class="home-stage-bars">${bars}</div></div>
   </section>`;
 }

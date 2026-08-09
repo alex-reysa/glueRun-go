@@ -9,10 +9,18 @@
 
    Import direction: plans.js → core/api.js only (never a surface, never app.js,
    never the router — the active surface is read from location.hash instead), so
-   it sits low in the graph and any surface + main.js may import it. The tiny
-   esc/fmtDate helpers are local (kept dependency-free on purpose). */
+   it sits low in the graph and any surface + main.js may import it. That still
+   holds with the execution-state subscription (0.17.0): the store lives in
+   core/api.js, so plans.js reads app.js's execution facts without importing
+   app.js. The tiny esc/fmtDate helpers are local (kept dependency-free on
+   purpose).
 
-import { activePlan, isHistorical, apiFetch, switchPlan } from "./api.js";
+   PMGO-003 vocabulary rule: this module describes DATA SOURCES, never execution.
+   A plan row's meta says "connected" (we are attached to the live tree) or a
+   date; the words running / stopped / waiting / blocked belong to execution and
+   appear here only in #crumb-exec, which is fed from the exec store. */
+
+import { activePlan, isHistorical, apiFetch, switchPlan, onExecState } from "./api.js";
 
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -139,8 +147,11 @@ function renderThreads() {
   if (!host) return;
   const list = plansData || [];
   const live = !isHistorical();
-  // Live row: green (success) dot, "live" meta, active (page bg) only when live.
-  let html = threadRow("", "success", live, "Current plan", "live");
+  // Live row: green (success) dot = we are CONNECTED to the live tree (a data
+  // source), active (page bg) only when live. The meta used to read "live",
+  // which operators read as "the orchestration loop is running" — the dot stays,
+  // the word does not (PMGO-003). Execution state is #crumb-exec's job.
+  let html = threadRow("", "success", live, "Current plan", "connected");
   for (const p of list) {
     const on = p.id === activePlan;
     // The pinned archived plan gets the coral accent dot; the rest stay quiet.
@@ -165,6 +176,21 @@ function paintBreadcrumb() {
   if (!isHistorical()) { cur.textContent = "Current plan"; return; }
   const entry = activePlanEntry();
   cur.textContent = (entry && entry.name) || activePlan || "archived plan";
+}
+
+// ------------------------------------------------------------- exec chip ------
+// #crumb-exec — the ONLY execution-state text in the breadcrumb. Stopped names
+// the reason ("Stopped — operator approval required for G100"), which is what
+// turns a status into a next action; running renders nothing at all, because the
+// dock's loop cell already owns that word and two liveness readouts in one
+// viewport is how PMGO-003 started. Fed by core/api.js's exec store, which
+// app.js writes only in live mode — so an archived plan leaves the chip hidden.
+function paintExecCrumb(state) {
+  const chip = document.getElementById("crumb-exec");
+  if (!chip) return;
+  if (!state || !state.stopPresent) { chip.textContent = ""; chip.hidden = true; return; }
+  chip.textContent = "Stopped" + (state.stopReason ? " — " + state.stopReason : "");
+  chip.hidden = false;
 }
 
 // ------------------------------------------------------------- banner ---------
@@ -220,6 +246,10 @@ export function initPlans() {
     const nav = document.querySelector('#side-nav [data-surface="providers"]');
     if (nav) { nav.disabled = true; nav.title = "live only"; }
   }
+
+  // Execution chip: subscribe-with-replay, so it paints on the first snapshot
+  // app.js publishes (initPlans runs before start()) and on every change after.
+  onExecState(paintExecCrumb);
 
   renderThreads();   // paints the live row (+ self-heal id) immediately
   paintBanner();     // shows the id fallback immediately; refreshed once plans resolve

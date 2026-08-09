@@ -86,6 +86,11 @@
 
 /* ---- 2. gates ------------------------------------------------------------- */
 .home-gates-val { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--ink); }
+/* cohort split (PMGO-002): current-campaign headline + a faint historical/all-time
+   subline. One wrapper carries the auto margin so the pair stays right-aligned. */
+.home-gates-nums { margin-left: auto; display: inline-flex; align-items: baseline; gap: 9px; min-width: 0; }
+.home-gates-nums .home-gates-val { margin-left: 0; }
+.home-gates-sub { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .home-stage-bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 16px; }
 .home-stage-bar {
   display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 9px;
