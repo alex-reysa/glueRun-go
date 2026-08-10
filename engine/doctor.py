@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shlex
 import shutil
 import subprocess
 import sys
@@ -176,6 +177,19 @@ class Doctor:
         self.repair_model_cache = repair_model_cache
         self.checks: list[dict[str, Any]] = []
         self.config: dict[str, Any] = {}
+        # Primary diagnosis, once one is reached. A repo whose schema does not
+        # match the engine cannot have its artifacts interpreted by this engine,
+        # so every check that reads one afterwards would report a derivative
+        # error about a file the operator was never asked to fix (PMGO-008).
+        self.blocking: dict[str, str] | None = None
+        self.repo_pin = ""
+        self.repo_pin_source = ""
+        try:
+            self.engine_version = (
+                (self.engine / "VERSION").read_text(encoding="utf-8").strip()
+            )
+        except OSError:
+            self.engine_version = ""
         self.runtime_env = dict(os.environ)
         self.runner: Path | None = None
         self.provider: str | None = None
@@ -497,6 +511,8 @@ class Doctor:
             )
 
     def effective_environment(self) -> None:
+        if self.blocked("runtime.config-load"):
+            return
         if not self.repo or not (self.engine / "engine/lib.sh").is_file():
             return
         script = r'''
@@ -541,6 +557,266 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 remediation="Inspect output emitted while sourcing engine/lib.sh.",
             )
 
+    def config_source_conflict(self) -> None:
+        """Two configuration sources, one silent winner (AXON-001).
+
+        `resources.maxConcurrent: 3` and `env: {"GLUERUN_MAX_CONCURRENT": "2"}`
+        both describe the dispatch cap; the env{} map wins and nothing said so,
+        so an operator who raised the structured field kept running at the old
+        concurrency. Rather than re-deriving the structured->env mapping here
+        (which would drift the moment engine/lib.sh gains a field), this asks
+        the REAL generator what it emits and reads the duplicates: setv() in
+        gluerun_json_config_to_env appends in source order, structured fields
+        first and the `env` map last, and `eval` applies them in that order --
+        so for any key emitted twice, the first occurrence is the structured
+        field and the last is the env{} override that actually takes effect.
+        """
+        if self.blocked("config.source-conflict"):
+            return
+        if not self.repo or not (self.engine / "engine/lib.sh").is_file():
+            return
+        config_path = self.repo / "gluerun.config.json"
+        if not config_path.is_file():
+            return
+        script = r'''
+source "$1/engine/lib.sh" >/dev/null 2>&1 || exit $?
+gluerun_json_config_to_env "$2"
+'''
+        env = dict(os.environ)
+        env["GLUERUN_ROOT"] = str(self.repo)
+        env["GLUERUN_ENGINE_HOME"] = str(self.engine)
+        result = command(
+            [str(self.bash), "-c", script, "_", str(self.engine), str(config_path)],
+            cwd=self.repo,
+            env=env,
+        )
+        if result.returncode != 0:
+            self.add(
+                "config.source-conflict",
+                "skip",
+                (
+                    "configuration sources could not be compared: the config "
+                    f"generator exited {result.returncode}"
+                ),
+                required_for=("all-runs",),
+                remediation="Repair gluerun.config.json (see runtime.config-load).",
+                details={"detail": first_line(result.stderr or result.stdout)},
+            )
+            return
+        # shlex over the WHOLE emission, not line by line: setv() quotes with
+        # shlex.quote, and a quoted value (areas, prompts) may span lines.
+        try:
+            tokens = shlex.split(result.stdout)
+        except ValueError as exc:
+            self.add(
+                "config.source-conflict",
+                "skip",
+                f"configuration export stream is unparseable: {exc}",
+                required_for=("all-runs",),
+                remediation="Inspect gluerun_json_config_to_env output by hand.",
+            )
+            return
+        emitted: dict[str, list[str]] = {}
+        index = 0
+        while index < len(tokens):
+            if tokens[index] != "export" or index + 1 >= len(tokens):
+                index += 1
+                continue
+            assignment = tokens[index + 1]
+            index += 2
+            key, sep, value = assignment.partition("=")
+            if not sep or not key:
+                continue
+            emitted.setdefault(key, []).append(value)
+        conflicts: list[dict[str, Any]] = []
+        for key in sorted(emitted):
+            values = emitted[key]
+            if len(values) < 2 or len(set(values)) == 1:
+                continue
+            structured, effective = values[0], values[-1]
+            entry: dict[str, Any] = {
+                "key": key,
+                "structuredValue": structured,
+                "envValue": effective,
+                "effective": effective,
+            }
+            # A third source (gluerun.config.sh, .gluerun-state/config.local.sh)
+            # sources AFTER the eval, so it can beat the winner named here.
+            if self.runtime_env.get(key, effective) != effective:
+                entry["runtimeDiffers"] = True
+                entry["runtimeValue"] = self.runtime_env.get(key, "")
+            conflicts.append(entry)
+        if not conflicts:
+            self.add(
+                "config.source-conflict",
+                "pass",
+                "no conflicting configuration sources",
+                required_for=("all-runs",),
+                details={"conflicts": []},
+            )
+            return
+        clauses = [
+            (
+                f"{item['key']} (structured field {item['structuredValue']}, "
+                f"env{{}} map {item['envValue']}, effective {item['effective']}"
+                + (
+                    f", but the loaded runtime uses {item['runtimeValue']})"
+                    if item.get("runtimeDiffers")
+                    else ")"
+                )
+            )
+            for item in conflicts
+        ]
+        self.add(
+            "config.source-conflict",
+            "warn",
+            "configuration sources disagree: " + "; ".join(clauses),
+            required_for=("all-runs",),
+            remediation=(
+                "Remove the legacy env override or align it with the structured "
+                "field; bind concurrency changes to explicit operator approval."
+            ),
+            details={"conflicts": conflicts},
+        )
+
+    def blocked(self, *check_ids: str) -> bool:
+        """Cascade guard: one primary diagnosis instead of a dozen derivatives.
+
+        Every check that INTERPRETS a repository artifact calls this first. When
+        a primary incompatibility is already known, the check records why it did
+        not run instead of reporting what a schema the engine cannot read looks
+        like. Environmental checks (bash, python, git, process control, disk,
+        worktrees) never call it: those answer questions about the host, and
+        their answers stay true no matter which schema the repo is on.
+        """
+        if not self.blocking:
+            return False
+        for check_id in check_ids:
+            self.add(
+                check_id,
+                "skip",
+                f"blocked by {self.blocking['checkId']} ({self.blocking['code']})",
+                details={"blockedBy": self.blocking["checkId"]},
+            )
+        return True
+
+    def pin_checks(self) -> None:
+        """Which engine does this repo ask for, and is it the one being examined?
+
+        Doctor never read .gluerun-version at all: the only pin comparison in
+        the product lived in the CLI's legacy bash doctor, which nothing
+        dispatched to (PMGO-008). Mirrors repo_pin() in cli/gluerun --
+        .gluerun-version is authoritative, gluerun.config.json engineVersion is
+        the fallback, and a disagreement is reported without changing which one
+        wins.
+        """
+        if not self.repo:
+            return
+        try:
+            file_pin = (
+                (self.repo / ".gluerun-version").read_text(encoding="utf-8").strip()
+            )
+        except OSError:
+            file_pin = ""
+        config_pin = str(self.config.get("engineVersion", "") or "").strip()
+        self.repo_pin = file_pin or config_pin
+        self.repo_pin_source = (
+            ".gluerun-version"
+            if file_pin
+            else ("gluerun.config.json engineVersion" if config_pin else "")
+        )
+        if file_pin and config_pin and file_pin != config_pin:
+            self.add(
+                "pin.sources",
+                "warn",
+                (
+                    f".gluerun-version ({file_pin}) and gluerun.config.json "
+                    f"engineVersion ({config_pin}) disagree; using .gluerun-version"
+                ),
+                required_for=("all-runs",),
+                remediation=(
+                    "Align gluerun.config.json engineVersion with .gluerun-version "
+                    "(or delete one of them)."
+                ),
+                details={
+                    "versionFile": file_pin,
+                    "configEngineVersion": config_pin,
+                    "resolved": file_pin,
+                },
+            )
+        elif file_pin and config_pin:
+            self.add(
+                "pin.sources",
+                "pass",
+                f"engine pin sources agree: {file_pin}",
+                required_for=("all-runs",),
+                details={
+                    "versionFile": file_pin,
+                    "configEngineVersion": config_pin,
+                    "resolved": file_pin,
+                },
+            )
+        elif self.repo_pin:
+            self.add(
+                "pin.sources",
+                "pass",
+                f"engine pin: {self.repo_pin} ({self.repo_pin_source})",
+                required_for=("all-runs",),
+                details={"resolved": self.repo_pin, "source": self.repo_pin_source},
+            )
+        else:
+            self.add(
+                "pin.sources",
+                "pass",
+                (
+                    "no engine pin declared (.gluerun-version, "
+                    "gluerun.config.json engineVersion)"
+                ),
+                required_for=("all-runs",),
+                details={"resolved": "", "source": ""},
+            )
+        if self.repo_pin and self.engine_version and self.repo_pin != self.engine_version:
+            self.add(
+                "pin.engine-version",
+                "warn",
+                (
+                    f"repo pins engine {self.repo_pin} but the examined engine is "
+                    f"{self.engine_version}; every check below describes "
+                    f"{self.engine_version}, not the engine this repo runs"
+                ),
+                required_for=("all-runs",),
+                remediation=(
+                    "Re-run doctor under the pinned engine, or repin the repo: "
+                    "gluerun update"
+                ),
+                details={
+                    "repoPin": self.repo_pin,
+                    "pinSource": self.repo_pin_source,
+                    "engineVersion": self.engine_version,
+                    "enginePath": str(self.engine),
+                },
+            )
+        elif self.repo_pin:
+            self.add(
+                "pin.engine-version",
+                "pass",
+                f"examined engine matches the repo pin: {self.repo_pin}",
+                required_for=("all-runs",),
+                details={
+                    "repoPin": self.repo_pin,
+                    "pinSource": self.repo_pin_source,
+                    "engineVersion": self.engine_version,
+                },
+            )
+        else:
+            self.add(
+                "pin.engine-version",
+                "pass",
+                f"no repo engine pin; examined engine {self.engine_version or '?'}",
+                required_for=("all-runs",),
+                details={"repoPin": "", "engineVersion": self.engine_version},
+            )
+
     def schema_checks(self) -> None:
         schema_dir = self.engine / "schemas"
         try:
@@ -551,13 +827,40 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             engine_schema = ""
         repo_schema = str(self.config.get("schemaVersion", "") or "")
         if engine_schema and repo_schema and engine_schema != repo_schema:
+            # The message prefix is a contract (tests/test-versioning.sh); the
+            # diagnosis the audit asked for is appended to it, not instead of it.
+            message = (
+                f"schemaVersion mismatch: repo {repo_schema} vs engine {engine_schema}"
+            )
+            details: dict[str, Any] = {
+                "code": "GLUERUN_SCHEMA_MISMATCH",
+                "repoSchema": repo_schema,
+                "engineSchema": engine_schema,
+                "engineVersion": self.engine_version,
+                "repoPin": self.repo_pin,
+                "alternateRemediation": "Run: gluerun migrate",
+            }
+            if self.repo_pin:
+                message += (
+                    f" — Repository: engine {self.repo_pin} / schema {repo_schema}; "
+                    f"Selected engine: {self.engine_version or 'unknown'} / "
+                    f"schema {engine_schema}. "
+                    "No planning or actuation was attempted."
+                )
             self.add(
                 "schema.version",
                 "fail",
-                f"schemaVersion mismatch: repo {repo_schema} vs engine {engine_schema}",
+                message,
                 required_for=("all-runs",),
-                remediation="Run gluerun migrate.",
+                remediation="Run: gluerun setup",
+                details=details,
             )
+            # Everything downstream that reads a repository artifact reads it
+            # through a schema this engine cannot interpret. Stop here.
+            self.blocking = {
+                "checkId": "schema.version",
+                "code": "GLUERUN_SCHEMA_MISMATCH",
+            }
         elif engine_schema:
             suffix = repo_schema or "not declared"
             status = "pass" if repo_schema else "warn"
@@ -568,6 +871,12 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 required_for=("all-runs",),
                 remediation="" if repo_schema else "Declare schemaVersion in gluerun.config.json.",
             )
+        # The bundle comparison mirrors the REPO's schemas against the engine's.
+        # It used to half-suppress itself on a version mismatch by silently
+        # dropping the repo-consumer bundle, which read as a clean pass over a
+        # repo nobody had looked at; now it says it did not run.
+        if self.blocked("schema.bundle", "schema.fixture.runner-result"):
+            return
         parsed: dict[Path, dict[str, Any]] = {}
         errors: list[str] = []
 
@@ -767,7 +1076,21 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 errors.append(f"{key} type mismatch")
         return errors
 
-    def repo_hygiene_checks(self) -> None:
+    def host_hygiene_checks(self) -> None:
+        """Checks that describe the HOST, not the repository's data contract.
+
+        These used to sit inside repo_hygiene_checks(), behind its cascade
+        guard, so a schema mismatch made them vanish outright -- not even a
+        `skip` with a blockedBy, which is the one thing blocked() promises. A
+        broken ~/.codex/hooks.json breaks every Codex run on this machine
+        whatever schema the repo is on, and a pidfile names a process that is
+        either running or not; neither answer is a function of the schema. Both
+        stay live, always, exactly as blocked()'s own docstring says the
+        environmental checks must.
+
+        Called from run() immediately before repo_hygiene_checks(), so the
+        report keeps its established order.
+        """
         codex_dir = Path(
             self.runtime_env.get(
                 "CODEX_HOME", str(Path(self.runtime_env.get("HOME", str(Path.home()))) / ".codex")
@@ -800,38 +1123,6 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             )
         if not self.repo:
             return
-        hits: list[str] = []
-        for base in (
-            self.repo / "docs/orchestration/prompts",
-            self.repo / "schemas",
-        ):
-            if not base.is_dir():
-                continue
-            for path in base.rglob("*"):
-                if path.suffix not in {".json", ".md"} or not path.is_file():
-                    continue
-                try:
-                    if '"pmgo.' in path.read_text(encoding="utf-8", errors="replace"):
-                        hits.append(str(path.relative_to(self.repo)))
-                except OSError:
-                    continue
-                if len(hits) >= 5:
-                    break
-        if hits:
-            self.add(
-                "schema.legacy-ids",
-                "fail",
-                f"legacy pmgo.* schema ids found: {', '.join(hits)}",
-                required_for=("all-runs",),
-                remediation="Run migrations/v0-to-v1.sh or gluerun migrate.",
-            )
-        else:
-            self.add(
-                "schema.legacy-ids",
-                "pass",
-                "no legacy pmgo.* schema ids in prompts/schemas",
-                required_for=("all-runs",),
-            )
         # A pidfile probe has FOUR outcomes, and they are not interchangeable.
         # This loop used to catch `(OSError, ValueError)` as one case and call
         # all of it "stale", so a sandbox that denies process inspection made
@@ -901,6 +1192,51 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                     details=details,
                 )
 
+    def repo_hygiene_checks(self) -> None:
+        """The half that INTERPRETS repository artifacts, and only that half.
+
+        Scanning prompts and mirrored schemas for legacy `pmgo.*` ids is a
+        statement about a data contract this engine may not be able to read at
+        all, so it is exactly what the cascade guard is for -- and the skip
+        entry it leaves keeps the audit trail intact.
+        """
+        if self.blocked("schema.legacy-ids"):
+            return
+        if not self.repo:
+            return
+        hits: list[str] = []
+        for base in (
+            self.repo / "docs/orchestration/prompts",
+            self.repo / "schemas",
+        ):
+            if not base.is_dir():
+                continue
+            for path in base.rglob("*"):
+                if path.suffix not in {".json", ".md"} or not path.is_file():
+                    continue
+                try:
+                    if '"pmgo.' in path.read_text(encoding="utf-8", errors="replace"):
+                        hits.append(str(path.relative_to(self.repo)))
+                except OSError:
+                    continue
+                if len(hits) >= 5:
+                    break
+        if hits:
+            self.add(
+                "schema.legacy-ids",
+                "fail",
+                f"legacy pmgo.* schema ids found: {', '.join(hits)}",
+                required_for=("all-runs",),
+                remediation="Run migrations/v0-to-v1.sh or gluerun migrate.",
+            )
+        else:
+            self.add(
+                "schema.legacy-ids",
+                "pass",
+                "no legacy pmgo.* schema ids in prompts/schemas",
+                required_for=("all-runs",),
+            )
+
     def pidfile_probe_verdict(self, pid: int) -> str:
         """alive | stale | unknown-permission | malformed, for the loop above.
 
@@ -932,6 +1268,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         return "alive"
 
     def resolve_runner(self) -> None:
+        if self.blocked("runner.selected"):
+            return
         raw = self.runtime_env.get(
             "GLUERUN_RUNNER", str(self.engine / "engine/codex-run.sh")
         )
@@ -961,6 +1299,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             )
 
     def check_runner_contract(self) -> None:
+        if self.blocked("runner.contract-v1"):
+            return
         if not self.runner or not self.runner.is_file():
             return
         result = command(
@@ -1027,6 +1367,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             )
 
     def resolve_provider_executable(self) -> None:
+        if self.blocked("provider.executable"):
+            return
         if not self.provider:
             self.add(
                 "provider.executable",
@@ -1101,6 +1443,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             )
 
     def provider_auth(self) -> None:
+        if self.blocked("provider.authentication"):
+            return
         if not self.provider or not self.provider_bin:
             return
         label = "Codex" if self.provider == "codex" else self.provider
@@ -1164,6 +1508,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         )
 
     def model_checks(self) -> None:
+        if self.blocked("model.availability"):
+            return
         for provider, (env_name, default) in MODEL_ENV.items():
             model = self.runtime_env.get(env_name, default)
             if not model:
@@ -1279,6 +1625,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             )
 
     def model_cache_compatibility(self) -> None:
+        if self.blocked("model-cache.compatibility"):
+            return
         if self.provider != "codex":
             self.add(
                 "model-cache.compatibility",
@@ -1441,6 +1789,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         return names
 
     def capability_profiles(self) -> None:
+        if self.blocked("capability.profiles"):
+            return
         profiles = self.config.get("capabilityProfiles")
         role_profiles = self.config.get("roleProfiles")
         registry = self.config.get("capabilities", {})
@@ -1841,6 +2191,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         return False, "unsupported capability descriptor"
 
     def bootstrap_check(self) -> None:
+        if self.blocked("bootstrap.dry-run"):
+            return
         if not self.repo:
             return
         config: Any = self.config.get("bootstrap")
@@ -2061,6 +2413,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             )
 
     def governance_checks(self) -> None:
+        if self.blocked("governance.unbound-waivers"):
+            return
         compatibility = self.config.get("legacyCompatibility", {})
         if compatibility is None:
             compatibility = {}
@@ -2128,6 +2482,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         gluerun_dag_next_areas_json), and doctor is where an operator goes to ask
         why nothing is happening -- so it must answer that question directly.
         """
+        if self.blocked("dag.evaluation"):
+            return
         state, result = self._dag_frontier_probe()
         if state == "absent":
             self.add(
@@ -2174,6 +2530,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         Both remedies already exist and neither is discoverable: the `promoter`
         config key, and `authority: agent-review-allowed`. This check names them.
         """
+        if self.blocked("graph.promotability"):
+            return
         if not self.repo:
             return
         dag_path = self.repo / "docs/orchestration/dag.v0.json"
@@ -2286,6 +2644,8 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
         return result.returncode == 0
 
     def deployment_credentials(self) -> None:
+        if self.blocked("deployment.credentials"):
+            return
         if not self.repo:
             return
         state, result = self._dag_frontier_probe()
@@ -2399,11 +2759,20 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             )
 
     def run(self) -> int:
+        # Order is the diagnosis. Host capability first (true regardless of any
+        # repository), then which engine this repo asks for, then whether this
+        # engine can read this repo at all. Only after that does anything load
+        # or interpret a repository artifact -- so an incompatibility is stated
+        # once, by the check that found it, instead of a dozen times by the
+        # checks that tripped over it (PMGO-008).
         self.basic_checks()
         self.process_control_checks()
         self.load_config()
-        self.effective_environment()
+        self.pin_checks()
         self.schema_checks()
+        self.effective_environment()
+        self.config_source_conflict()
+        self.host_hygiene_checks()
         self.repo_hygiene_checks()
         self.resolve_runner()
         self.check_runner_contract()
@@ -2431,6 +2800,10 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             "ok": failed == 0,
             "repo": str(self.repo) if self.repo else None,
             "engine": str(self.engine),
+            # Additive: the primary diagnosis every "skip" entry points back to,
+            # or null. Readers that predate it see the same schema id and the
+            # same checks[] they always did.
+            "blocking": self.blocking,
             "summary": {
                 "passed": passed,
                 "warnings": warned,

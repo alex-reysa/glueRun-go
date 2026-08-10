@@ -6,6 +6,8 @@
 #   - gluerun migrate: clean no-op when versions match
 #   - gluerun migrate: hard error when the repo is behind and no script exists
 #   - gluerun migrate: a dummy v0-to-v1.sh runs and schemaVersion advances
+#   - gluerun migrate --dry-run: resolves and prints the whole chain, touching
+#     neither the config nor the repo
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -104,5 +106,48 @@ assert_contains "$out" "repo is now at schema v1" "migrate completion message"
 [[ -f "$tmp/repo-e/MIGRATED-v0-to-v1" ]] || fail "migration script did not run against the repo"
 sv="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schemaVersion"])' "$tmp/repo-e/gluerun.config.json")"
 [[ "$sv" == "v1" ]] || fail "schemaVersion should advance to v1 (got $sv)"
+
+# --- (f) --dry-run resolves the whole chain and changes nothing --------------
+# "What will this do to my repository" must be answerable without finding out.
+# The dry run walks the same discovery as the real loop, across more than one
+# step, and is required to leave both the config and the repo untouched.
+make_engine "$tmp/engine-dry" "0.2.0" "v2"
+for step in v0-to-v1 v1-to-v2; do
+  cat > "$tmp/engine-dry/migrations/$step.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+touch "\$1/MIGRATED-$step"
+EOF
+  chmod +x "$tmp/engine-dry/migrations/$step.sh"
+done
+make_repo "$tmp/repo-f" v0
+before="$(shasum "$tmp/repo-f/gluerun.config.json" | awk '{print $1}')"
+out="$(cd "$tmp/repo-f" && GLUERUN_ENGINE_HOME="$tmp/engine-dry" bash "$CLI" migrate --dry-run 2>&1)"
+rc=$?
+[[ "$rc" -eq 0 ]] || fail "migrate --dry-run should exit 0 (rc=$rc, out=$out)"
+assert_contains "$out" "would run: v0-to-v1.sh (v0 -> v1)" "dry run announces the first step"
+assert_contains "$out" "would run: v1-to-v2.sh (v1 -> v2)" "dry run announces the second step"
+assert_contains "$out" "nothing was changed" "dry run says it changed nothing"
+[[ "$out" != *"  run   "* ]] || fail "dry run must not report a migration as run: $out"
+after="$(shasum "$tmp/repo-f/gluerun.config.json" | awk '{print $1}')"
+[[ "$before" == "$after" ]] || fail "dry run rewrote gluerun.config.json"
+compgen -G "$tmp/repo-f/MIGRATED-*" >/dev/null \
+  && fail "dry run executed a migration script"
+
+# The same flag on an up-to-date repo is the existing no-op, not a new message.
+make_repo "$tmp/repo-f2" v2
+out="$(cd "$tmp/repo-f2" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate --dry-run 2>&1)"
+rc=$?
+[[ "$rc" -eq 0 ]] || fail "migrate --dry-run should exit 0 when up to date (rc=$rc, out=$out)"
+assert_contains "$out" "up to date, nothing to do" "dry run reuses the up-to-date no-op message"
+
+# A dry run must never be able to become a real one by falling through.
+make_repo "$tmp/repo-f3" v0
+out="$(cd "$tmp/repo-f3" && GLUERUN_ENGINE_HOME="$tmp/engine-v2" bash "$CLI" migrate --dry-run 2>&1)"
+rc=$?
+[[ "$rc" -ne 0 ]] || fail "dry run must fail on an unresolvable chain like the real path"
+assert_contains "$out" "no migration found for v0 -> v2" "dry run reports the same missing-script error"
+sv="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schemaVersion"])' "$tmp/repo-f3/gluerun.config.json")"
+[[ "$sv" == "v0" ]] || fail "a failed dry run must not advance schemaVersion (got $sv)"
 
 echo "versioning tests passed"

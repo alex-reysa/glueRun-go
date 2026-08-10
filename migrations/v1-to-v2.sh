@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Migrations are documented as directly invocable (`bash <script> <repo-root>`),
+# so they carry the Bash >= 4 guard themselves rather than trusting the caller.
+# migrations/ sits beside engine/ in a checkout and in an installed engine
+# alike, so the relative path holds in both layouts.
+# shellcheck source=../engine/bash-guard.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../engine" && pwd)/bash-guard.sh"
+
 repo="${1:-}"
 [[ -n "$repo" && -d "$repo" ]] || {
   echo "v1-to-v2: repo directory required" >&2

@@ -67,6 +67,58 @@ test_init_scaffolds_fresh_repo_and_reconcile_apply_is_noop_safe() {
   assert_contains "$(cat "$repo/docs/orchestration/project-state.md")" "Latest Reconcile Snapshot" "fresh reconcile writes project snapshot"
 }
 
+# PMGO-006: an operator who already ran `init` must be able to reach a verified
+# stopped state without undoing anything. Every ladder step that init already
+# satisfied has to report itself as satisfied — not redo the work — and the
+# config init wrote must come out byte-for-byte identical.
+test_setup_after_init_is_a_clean_noop_ladder() {
+  local tmp repo out rc before_config before_dag
+  tmp="$(mktemp -d)"
+  repo="$tmp/repo"
+  new_git_repo "$repo"
+
+  out="$(cd "$repo" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" init 2>&1)"
+  assert_contains "$out" "gluerun init ->" "init runs before setup"
+  before_config="$(shasum -a 256 "$repo/gluerun.config.json" | awk '{print $1}')"
+  before_dag="$(shasum -a 256 "$repo/docs/orchestration/dag.v0.json" | awk '{print $1}')"
+
+  # doctor probes the SELECTED provider's real executable, so pin a stub one
+  # through the operator override lib.sh sources last; otherwise this test would
+  # assert facts about whichever CLI happens to be authenticated on the host.
+  mkdir -p "$repo/.gluerun-state" "$tmp/bin"
+  cat >"$tmp/bin/codex" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version) echo "codex-cli 0.0.0-stub" ;;
+  *) echo "stub" ;;
+esac
+exit 0
+SH
+  chmod +x "$tmp/bin/codex"
+  cat >"$repo/.gluerun-state/config.local.sh" <<SH
+export GLUERUN_RUNNER="$SCRIPT_DIR/codex-run.sh"
+export GLUERUN_CODEX_BIN="$tmp/bin/codex"
+SH
+
+  set +e
+  out="$(cd "$repo" && HOME="$tmp/home" GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" setup --no-test 2>&1)"
+  rc=$?
+  set -e
+  assert_eq "$rc" "0" "setup after init succeeds ($out)"
+  assert_contains "$out" "gluerun.config.json exists — init not re-run" "setup does not re-scaffold"
+  assert_contains "$out" ".gluerun-version present" "setup keeps the pin init wrote"
+  assert_contains "$out" "matches engine schema — nothing to migrate" "setup migrates nothing"
+  assert_not_contains "$out" "gluerun init ->" "setup did not re-run init"
+  assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "setup prints exactly one next action"
+  assert_file "$repo/.gluerun-state/STOP" "setup leaves the repository stopped"
+  assert_eq "$(json_file_field "$repo/.gluerun-state/setup/state.json" state)" "validated" \
+    "setup reaches validated without a regression run"
+  assert_eq "$(shasum -a 256 "$repo/gluerun.config.json" | awk '{print $1}')" "$before_config" \
+    "setup left gluerun.config.json byte-identical"
+  assert_eq "$(shasum -a 256 "$repo/docs/orchestration/dag.v0.json" | awk '{print $1}')" "$before_dag" \
+    "setup left the DAG byte-identical"
+}
+
 test_v0_to_v2_migration_backfills_scaffold_rebrands_and_syncs_contracts() {
   local tmp repo out
   tmp="$(mktemp -d)"
@@ -376,6 +428,7 @@ SH
 }
 
 test_init_scaffolds_fresh_repo_and_reconcile_apply_is_noop_safe
+test_setup_after_init_is_a_clean_noop_ladder
 test_v0_to_v2_migration_backfills_scaffold_rebrands_and_syncs_contracts
 test_integrate_parks_missing_branch_once_then_skips_blocked_history
 test_l1_drive_provisions_gitignored_files_and_allowlisted_env

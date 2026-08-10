@@ -34,7 +34,7 @@ fi
 skill_dir="$ROOT/plugin/skills/singular-orchestration"
 if [[ -d "$skill_dir" ]]; then
   cli_verbs="$(sed -n 's/^    \([a-z-]*\))[[:space:]].*/\1/p' "$ROOT/cli/gluerun" | sort -u)"
-  doc_verbs="$(grep -rhoE 'gluerun (supersede|clear-backoff|breaker|stop|resume|wake|gates|health|gc|lease|accept-packet|console|status|recover|next-areas|promote-gate|auto|doctor|init|metrics|validate-dag|area-gate)' \
+  doc_verbs="$(grep -rhoE 'gluerun (supersede|clear-backoff|breaker|stop|resume|wake|gates|health|gc|lease|accept-packet|console|status|recover|next-areas|promote-gate|auto|doctor|init|setup|test|metrics|validate-dag|area-gate)' \
     "$skill_dir"/SKILL.md "$skill_dir"/references/*.md 2>/dev/null | awk '{print $2}' | sort -u)"
   for v in $doc_verbs; do
     if ! grep -qx "$v" <<<"$cli_verbs"; then

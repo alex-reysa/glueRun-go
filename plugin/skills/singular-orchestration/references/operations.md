@@ -102,6 +102,9 @@ warned, either update the selected CLI or explicitly run
 to a timestamped, SHA-tagged backup and lets Codex regenerate it on its next
 run.
 
+`gluerun setup` (below) runs the same doctor invocation and keeps the report as
+evidence instead of printing it and losing it.
+
 Human approvals use `gluerun human-gate request|approve|status`. Requests bind
 an owner, expiry, required questions, blocked nodes, and exact artifact hashes.
 Approvals must link the exact request path and hash, answer exactly its
@@ -109,6 +112,130 @@ mandatory question set, and bind at least one evidence file. Approval is
 invalid as soon as the request, an artifact, or evidence bytes change. Schema
 v2 rejects the old unbound `promote-gate --operator --evidence` route unless
 `legacyCompatibility.unboundWaivers` is explicitly enabled for migration.
+
+## One-command setup (`gluerun setup`)
+
+The recommended entry point into a repository whose state you do not already
+know. It COMPOSES the individual verbs rather than replacing them —
+`gluerun init` scaffolds, `gluerun migrate` migrates, `gluerun doctor`
+validates, `gluerun test` runs the suite — and contributes the order, the
+evidence, and the contract.
+
+```bash
+gluerun setup                 # full path; ends at stopped-ready
+gluerun setup --no-test       # stop at `validated`, no regression run
+gluerun setup --test-async    # start the suite detached; attach with gluerun test --wait
+gluerun setup --json          # one gluerun.setup-report.v0 on stdout, narration on stderr
+```
+
+The order is the point — every prerequisite fails before the repository is
+mutated:
+
+1. Interpreter (Bash >= 4), repository root, and a git work tree whose `HEAD`
+   resolves to a commit.
+2. Pin resolution said out loud: both sources are printed, and a
+   `.gluerun-version` vs `gluerun.config.json` `engineVersion` disagreement is
+   a named `GLUERUN_PIN_CONFLICT` warning, not a silent precedence rule.
+3. Engine presence. An absent pinned engine is installed **only** from a
+   matching engine checkout already on this machine — there is no download
+   mechanism, and the failure says so instead of implying a fetch.
+4. `.gluerun-state/STOP` — the FIRST repo write, so everything after it happens
+   in a repo that cannot dispatch a worker. Mirrored into `.pmgo-state/` only
+   when that legacy root already exists; never created.
+5. Version pin, then scaffold (skipped when `gluerun.config.json` exists).
+6. A hash snapshot of every gate result, written fresh each run to
+   `.gluerun-state/setup/gates-pre-migrate.json` — a stale snapshot can never
+   bless a rewrite it did not see.
+7. The migration chain printed first (`gluerun migrate --dry-run`), then run.
+8. Gate preservation verified **semantically**: `node`, `status`,
+   `authoritative`, and `recordedAt` must survive. A byte-rewritten file (the
+   v0→v1 namespace rebrand) is informational; a changed verdict — or a check
+   that did not complete — is `GLUERUN_GATE_PRESERVATION_FAILED`.
+9. `gluerun doctor`, report kept at `.gluerun-state/setup/doctor.json`.
+10. A supervised regression run (next section).
+
+State ladder, recorded in `.gluerun-state/setup/state.json` and never claiming
+a state that was not reached: `installed → migrated → validated →
+stopped-ready`. Then exactly one next action:
+
+```text
+State: stopped-ready (STOP active; no workers dispatched)
+Next: gluerun resume
+```
+
+That line is a pending `gluerun human-gate status <id>` when one is waiting,
+`gluerun test --wait` after `--test-async`,
+`GLUERUN_ENGINE_HOME=<engine checkout> gluerun test` when the resolved engine
+cannot host the suite, `gluerun test` when the suite has simply not passed yet,
+and `gluerun resume` only at `stopped-ready`. Setup never removes STOP —
+actuation stays a separate, explicit operator action.
+
+Step 10 is where a consumer on an INSTALLED engine stops. The suite runs only
+from a checkout (next section), which is a fact about the engine, not a defect
+in the repository — so setup records `GLUERUN_TEST_SUITE_UNAVAILABLE` (or
+`GLUERUN_TEST_SOURCE_UNSUPPORTED`) as a **warning** in the report, skips the
+step, and finishes at `validated` with the checkout as its next action. It does
+not fail a repository whose own steps all passed, and it never claims
+`stopped-ready` without a passing run.
+
+Failures carry a stable code and one recovery instruction
+(`gluerun.operator-failure.v0`, mirrored into
+`.gluerun-state/setup/last-result.json`): `GLUERUN_NOT_A_REPOSITORY`,
+`GLUERUN_TEST_SOURCE_UNSUPPORTED` (as a failure: the *repository* is not a Git
+work tree), `GLUERUN_ENGINE_NOT_INSTALLED`, `GLUERUN_REPO_UNWRITABLE`,
+`GLUERUN_MIGRATION_MISSING`, `GLUERUN_MIGRATION_FAILED`,
+`GLUERUN_GATE_PRESERVATION_FAILED`, `GLUERUN_DOCTOR_BLOCKED`,
+`GLUERUN_TEST_RUN_FAILED`. Re-running is safe: no migration repeats, no config
+is rewritten, no second suite starts.
+
+## Supervised regression runs (`gluerun test`)
+
+The engine's own suite is a long job (`<engine home>/tests/run.sh`, ~185 test
+files) that outlives the session which started it. `gluerun test` makes it a
+supervised, attachable run whose evidence lands in the current repo under
+`.gluerun-state/test-runs/<runId>/` (`manifest.json`, `suite.log`, `logs/`,
+`progress.jsonl`).
+
+**The engine home must be a checkout.** Most tests build disposable Git
+worktrees of `HEAD`, so `tests/run.sh` opens with a source preflight requiring
+real history — which an installed version (a plain copy under
+`~/.gluerun/versions/`) cannot satisfy, and which is why installed versions ship
+no `tests/` at all. Run it from the consumer repo against a checkout; the
+evidence still lands in the repo you are in:
+
+```bash
+GLUERUN_ENGINE_HOME=/path/to/engine-checkout gluerun test
+```
+
+```bash
+gluerun test                    # start a run and attach — or attach to the live one
+gluerun test --no-wait          # start detached; the run id goes to stdout
+gluerun test --wait             # attach to the live (or last recorded) run
+gluerun test --status [--json]  # report on the current run
+gluerun test --new-run          # deliberately start a concurrent second run
+gluerun test --rerun-failures   # re-run only the last completed run's failures
+```
+
+Liveness is proved, not guessed. The detached supervisor holds an exclusive
+`flock` on `supervisor.lock` for its entire life, and the kernel releases that
+lock on ANY death — crash, `kill -9`, power loss — so a non-blocking shared
+probe answers "is it still running?" without consulting `ps` and without
+trusting a pid that may have been recycled. A supervisor that died mid-run
+reconciles the manifest to `interrupted` **with the counts it reached**, so a
+killed suite never reads as finished or as a silent pass — and reconciliation
+kills the run's recorded process group, because the suite is a child of the
+supervisor and outlives it: left alone it keeps appending results to a run
+already declared dead, and the next `gluerun test` starts a duplicate.
+
+One live run at a time: a second invocation attaches instead of starting a
+duplicate, and `--new-run` is the only way to say otherwise.
+
+Starting a run on an engine home that cannot host the suite fails once, by name,
+**before any run directory, manifest, lock or supervisor is created** —
+`GLUERUN_TEST_SUITE_UNAVAILABLE` when there is no `tests/run.sh`,
+`GLUERUN_TEST_SOURCE_UNSUPPORTED` when there is one but the tree is not a Git
+checkout. `--status` and `--wait` are exempt in both cases: reporting on a past
+run needs no runnable suite.
 
 ## Context knobs (0.4.x)
 
@@ -270,5 +397,7 @@ stdin `</dev/null` for a reason).
 **Engine vs repo drift.** `.gluerun-version` (repo pin) wins over
 `gluerun.config.json` `engineVersion`; `gluerun doctor` warns on
 disagreement, fails on schema mismatch (`gluerun migrate` upgrades).
-`gluerun update <ver>` repins. Remember: the installed
-`~/.gluerun/bin/gluerun` drives — never run engine tree scripts directly.
+`gluerun update <ver>` repins. `gluerun setup` resolves the pin, migrates, and
+re-validates in one pass when you would otherwise be running those verbs in
+sequence. Remember: the installed `~/.gluerun/bin/gluerun` drives — never run
+engine tree scripts directly.

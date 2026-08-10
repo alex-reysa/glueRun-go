@@ -7,21 +7,73 @@
 # bumping the pinned version (`gluerun update`).
 set -euo pipefail
 
-# GLUERUN_BASH_BIN is intentionally bootstrap-only: it must be available before
-# repo configuration is loaded. Re-exec exactly once so every CLI command and
-# engine entrypoint starts under the requested interpreter without changing
-# PATH (and therefore without changing provider resolution).
-if [[ -n "${GLUERUN_BASH_BIN:-}" && "${GLUERUN_BASH_BOOTSTRAPPED:-0}" != "1" ]]; then
-  if [[ "$GLUERUN_BASH_BIN" != /* || ! -x "$GLUERUN_BASH_BIN" ]]; then
-    echo "gluerun: GLUERUN_BASH_BIN must be an absolute executable path: $GLUERUN_BASH_BIN" >&2
+# Interpreter guard — a verbatim embedded copy of engine/bash-guard.sh.
+# *** keep in sync with engine/bash-guard.sh ***
+#
+# Embedded, not sourced: the CLI must be able to fix its own interpreter
+# before it can resolve an engine home (that resolution itself needs Bash >=
+# 4), so it cannot depend on a file it has not located yet. GLUERUN_BASH_BIN
+# stays bootstrap-only — available before repo configuration is loaded, and
+# honored by re-exec'ing exactly once so every CLI command and engine
+# entrypoint starts under the requested interpreter without changing PATH (and
+# therefore without changing provider resolution). A bare `/bin/bash gluerun`
+# on macOS Bash 3.2 with no pin set is the case the fallback probes close.
+if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 || -n "${GLUERUN_BASH_BIN:-}" ]]; then
+
+  # Terminal diagnosis: fixed block, optional one-line detail, exit 2.
+  gluerun_bash_guard__fail() {
+    {
+      echo "GLUERUN_BASH_UNSUPPORTED"
+      echo "Found: ${BASH:-bash} ${BASH_VERSION%%(*}"
+      echo "Required: Bash >= 4"
+      echo "Recovery: brew install bash && GLUERUN_BASH_BIN=/opt/homebrew/bin/bash gluerun setup"
+      if [[ -n "${1:-}" ]]; then echo "  detail: $1"; fi
+    } >&2
     exit 2
+  }
+
+  # An executable bit is not proof of a version: ask the candidate itself.
+  gluerun_bash_guard__probe() {
+    [[ -n "${1:-}" && "$1" == /* && -x "$1" ]] || return 1
+    "$1" -c '[[ "${BASH_VERSINFO[0]}" -ge 4 ]]' >/dev/null 2>&1 || return 1
+    return 0
+  }
+
+  # (2) Loop guard: we already re-exec'd and are still < 4. Never exec again.
+  if [[ "${GLUERUN_BASH_BOOTSTRAPPED:-0}" == "1" && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+    gluerun_bash_guard__fail "re-exec target did not provide Bash >= 4: ${GLUERUN_BASH_BIN:-<unset>}"
   fi
-  export GLUERUN_BASH_BOOTSTRAPPED=1
-  exec "$GLUERUN_BASH_BIN" "$0" "$@"
-fi
-if [[ -n "${GLUERUN_BASH_BIN:-}" && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  echo "gluerun: GLUERUN_BASH_BIN must provide bash >= 4: $GLUERUN_BASH_BIN" >&2
-  exit 2
+
+  # (3) Explicit pin wins over the running interpreter, exactly once. PATH is
+  # deliberately not modified: provider resolution must not shift.
+  if [[ -n "${GLUERUN_BASH_BIN:-}" && "${GLUERUN_BASH_BOOTSTRAPPED:-0}" != "1" ]]; then
+    if [[ "$GLUERUN_BASH_BIN" != /* || ! -x "$GLUERUN_BASH_BIN" ]]; then
+      gluerun_bash_guard__fail "GLUERUN_BASH_BIN must be an absolute executable path: $GLUERUN_BASH_BIN"
+    fi
+    if ! gluerun_bash_guard__probe "$GLUERUN_BASH_BIN"; then
+      gluerun_bash_guard__fail "GLUERUN_BASH_BIN must provide Bash >= 4: $GLUERUN_BASH_BIN"
+    fi
+    export GLUERUN_BASH_BOOTSTRAPPED=1
+    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  fi
+
+  # (4) No pin and still < 4: the bare-invocation case. Probe before exec so a
+  # broken candidate cannot swallow the diagnosis.
+  if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+    gluerun_bash_guard__path="$(command -v bash 2>/dev/null || true)"
+    if [[ "$gluerun_bash_guard__path" == "${BASH:-}" ]]; then gluerun_bash_guard__path=""; fi
+    for gluerun_bash_guard__cand in /opt/homebrew/bin/bash /usr/local/bin/bash "$gluerun_bash_guard__path"; do
+      if gluerun_bash_guard__probe "$gluerun_bash_guard__cand"; then
+        export GLUERUN_BASH_BOOTSTRAPPED=1
+        exec "$gluerun_bash_guard__cand" "$0" "$@"
+      fi
+    done
+    gluerun_bash_guard__fail "no Bash >= 4 found (checked /opt/homebrew/bin/bash, /usr/local/bin/bash, PATH)"
+  fi
+
+  # Reached only when the pin was already honored: leave no residue behind.
+  unset -f gluerun_bash_guard__fail gluerun_bash_guard__probe
+  unset gluerun_bash_guard__path gluerun_bash_guard__cand 2>/dev/null || true
 fi
 
 GLUERUN_CLI_VERSION="0.1.0"
@@ -142,348 +194,6 @@ cmd_version() {
   [[ -n "$root" ]] && echo "repo        $root"
 }
 
-doctor_probe_command() {
-  # Run a no-inference provider probe with a hard wall-clock bound. A separate
-  # process group lets timeout cleanup kill wrapper + packaged native child.
-  python3 - "$@" <<'PY'
-import os
-import signal
-import subprocess
-import sys
-
-timeout = int(sys.argv[1])
-argv = sys.argv[2:]
-try:
-    proc = subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-except OSError as exc:
-    print(str(exc))
-    raise SystemExit(127)
-try:
-    out, err = proc.communicate(timeout=timeout)
-except subprocess.TimeoutExpired:
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except OSError:
-        pass
-    proc.communicate()
-    print(f"probe timed out after {timeout}s")
-    raise SystemExit(124)
-text = (out or "") + (err or "")
-sys.stdout.write(text[:4096])
-raise SystemExit(proc.returncode)
-PY
-}
-
-cmd_doctor() {
-  local ok=0
-  check() { # label  test-cmd...
-    local label="$1"; shift
-    if "$@" >/dev/null 2>&1; then printf "  ok    %s\n" "$label"
-    else printf "  FAIL  %s\n" "$label"; ok=1; fi
-  }
-  echo "gluerun doctor"
-  # bash >= 4
-  if [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]; then printf "  ok    bash >= 4 (%s)\n" "${BASH_VERSION%%(*}"
-  else printf "  FAIL  bash >= 4 (found %s; brew install bash)\n" "${BASH_VERSION%%(*}"; ok=1; fi
-  check "python3" python3 --version
-  check "git" git --version
-  local home="" esv=""
-  if home="$(resolve_engine_home 2>/dev/null)"; then
-    printf "  ok    engine resolved (%s, v%s)\n" "$home" "$(cat "$home/VERSION" 2>/dev/null || echo '?')"
-    printf "  ok    versions: cli %s / engine %s (info only)\n" "$GLUERUN_CLI_VERSION" "$(cat "$home/VERSION" 2>/dev/null || echo '?')"
-    esv="$(engine_schema_version "$home")"
-    if [[ -n "$esv" ]]; then printf "  ok    engine schema: %s\n" "$esv"
-    else printf "  warn  engine has no SCHEMA_VERSION file\n"; fi
-    [[ -f "$home/schemas/gate-result.v0.schema.json" ]] \
-      && printf "  ok    schemas present\n" || { printf "  FAIL  schemas missing in engine\n"; ok=1; }
-  else printf "  FAIL  engine not resolved (run install.sh or set GLUERUN_ENGINE_HOME)\n"; ok=1; fi
-  local root; root="$(repo_root)"
-  if [[ -n "$root" ]]; then
-    printf "  ok    repo: %s\n" "$root"
-    [[ -f "$root/gluerun.config.json" || -f "$root/gluerun.config.sh" ]] \
-      && printf "  ok    repo config present\n" \
-      || printf "  warn  no gluerun.config.json (run: gluerun init)\n"
-    # schemaVersion: repo config vs engine SCHEMA_VERSION.
-    if [[ -f "$root/gluerun.config.json" ]]; then
-      local rsv; rsv="$(repo_schema_version "$root")"
-      if [[ -z "$rsv" ]]; then
-        printf "  warn  gluerun.config.json has no schemaVersion key (engine schema: %s)\n" "${esv:-?}"
-      elif [[ -n "$esv" && "$rsv" != "$esv" ]]; then
-        printf "  FAIL  schemaVersion mismatch: repo %s vs engine %s (run: gluerun migrate)\n" "$rsv" "$esv"; ok=1
-      else
-        printf "  ok    repo schema: %s\n" "$rsv"
-      fi
-    fi
-    # Engine pin sources should agree (.gluerun-version is authoritative).
-    local pinfile="" cfgpin=""
-    [[ -f "$root/.gluerun-version" ]] && pinfile="$(tr -d '[:space:]' < "$root/.gluerun-version")"
-    cfgpin="$(config_engine_version "$root")"
-    if [[ -n "$pinfile" && -n "$cfgpin" && "$pinfile" != "$cfgpin" ]]; then
-      printf "  warn  .gluerun-version (%s) and gluerun.config.json engineVersion (%s) disagree; .gluerun-version wins\n" "$pinfile" "$cfgpin"
-    fi
-  else printf "  warn  not in a git repo\n"; fi
-  # Runner provider inventory is informational. The selected standard Codex
-  # runner receives strict executable + auth probes below.
-  provider_auth_hint() { # <id> -> "auth: <one line>" via pure FS/env inference
-    case "$1" in
-      claude)
-        if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then echo "auth: ok (ANTHROPIC_API_KEY)"
-        elif [[ -f "$HOME/.claude/.credentials.json" ]]; then echo "auth: ok (.credentials.json)"
-        else echo "auth: unknown (may use Keychain; login: claude auth login)"; fi ;;
-      codex)
-        if [[ -n "${OPENAI_API_KEY:-}" ]]; then echo "auth: ok (OPENAI_API_KEY)"
-        elif [[ -f "$HOME/.codex/auth.json" ]]; then echo "auth: ok (auth.json)"
-        else echo "auth: none (login: codex login)"; fi ;;
-      gemini)
-        if [[ -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then echo "auth: ok (API key env)"
-        elif [[ -f "$HOME/.gemini/oauth_creds.json" ]]; then echo "auth: ok (oauth_creds.json)"
-        else echo "auth: none (login: run gemini once to sign in)"; fi ;;
-      opencode)
-        local ocf="$HOME/.local/share/opencode/auth.json"
-        if [[ -n "${OPENCODE_AUTH_CONTENT:-}" ]]; then echo "auth: ok (OPENCODE_AUTH_CONTENT)"
-        elif [[ -f "$ocf" ]]; then
-          local n; n="$(python3 -c 'import json,sys
-try: print(len(json.load(open(sys.argv[1]))))
-except Exception: print(0)' "$ocf" 2>/dev/null || echo 0)"
-          echo "auth: ok ($n provider entries)"
-        else echo "auth: none (login: opencode auth login)"; fi ;;
-      cursor)
-        if [[ -n "${CURSOR_API_KEY:-}" ]]; then echo "auth: ok (CURSOR_API_KEY)"
-        elif [[ -f "$HOME/.cursor/cli-config.json" ]] && grep -q '"authInfo"' "$HOME/.cursor/cli-config.json" 2>/dev/null; then echo "auth: ok (cli-config.json)"
-        else echo "auth: none (login: cursor-agent login)"; fi ;;
-      grok)
-        echo "auth: n/a (version probe only)" ;;
-      *) echo "auth: unknown" ;;
-    esac
-  }
-  local _prov _id _bin
-  for _prov in "claude:claude" "codex:codex" "gemini:gemini" "opencode:opencode" "cursor:cursor-agent" "grok:grok"; do
-    _id="${_prov%%:*}"; _bin="${_prov##*:}"
-    if command -v "$_bin" >/dev/null 2>&1; then
-      if [[ "$_id" == "codex" ]]; then
-        printf "  info  %s CLI candidate (%s) on PATH — selected runtime is checked below\n" "$_id" "$_bin"
-      else
-        printf "  info  %s CLI candidate (%s) on PATH — %s\n" "$_id" "$_bin" "$(provider_auth_hint "$_id")"
-      fi
-    else
-      printf "  warn  %s CLI (%s) not on PATH\n" "$_id" "$_bin"
-    fi
-  done
-
-  # Resolve the configured runner and Codex executable through engine/lib.sh,
-  # exactly as the runtime does. When the standard Codex runner is selected,
-  # both probes are required and make no inference/API request.
-  if [[ -n "$home" && -n "$root" ]]; then
-    local bash_bin="${GLUERUN_BASH_BIN:-bash}" runtime_info="" runtime_rc=0
-    runtime_info="$(
-      GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" "$bash_bin" -c '
-        source "$1/engine/lib.sh"
-        runner="${GLUERUN_RUNNER:-$GLUERUN_ENGINE_DIR/codex-run.sh}"
-        printf "runner=%s\n" "$runner"
-        if [[ "$(basename "$runner")" == "codex-run.sh" ]]; then
-          codex_bin="$(gluerun_resolve_codex_bin)" || exit $?
-          printf "codex=%s\n" "$codex_bin"
-        fi
-      ' _ "$home" 2>&1
-    )" || runtime_rc=$?
-    local selected_runner=""
-    selected_runner="$(printf '%s\n' "$runtime_info" | sed -n 's/^runner=//p' | tail -1)"
-    if [[ "$runtime_rc" -ne 0 || -z "$selected_runner" ]]; then
-      printf "  FAIL  selected runner resolution failed: %s\n" "$(printf '%s' "$runtime_info" | tail -1)"
-      ok=1
-    else
-      printf "  ok    selected runner: %s\n" "$selected_runner"
-      if [[ "$(basename "$selected_runner")" == "codex-run.sh" ]]; then
-        local selected_codex=""
-        selected_codex="$(printf '%s\n' "$runtime_info" | sed -n 's/^codex=//p' | tail -1)"
-        if [[ -z "$selected_codex" ]]; then
-          printf "  FAIL  selected Codex executable could not be resolved: %s\n" "$(printf '%s' "$runtime_info" | tail -1)"
-          ok=1
-        else
-          printf "  ok    selected Codex executable: %s\n" "$selected_codex"
-          local probe_out="" probe_rc=0 version_line=""
-          probe_out="$(doctor_probe_command 10 "$selected_codex" --version 2>&1)" || probe_rc=$?
-          if [[ "$probe_rc" -eq 0 ]]; then
-            version_line="$(printf '%s\n' "$probe_out" | head -1)"
-            printf "  ok    selected Codex spawn: %s\n" "${version_line:-version probe passed}"
-            probe_out=""; probe_rc=0
-            probe_out="$(doctor_probe_command 10 "$selected_codex" login status 2>&1)" || probe_rc=$?
-            if [[ "$probe_rc" -eq 0 ]]; then
-              printf "  ok    selected Codex authentication\n"
-            else
-              printf "  FAIL  selected Codex authentication probe failed (exit %s): %s\n" \
-                "$probe_rc" "$(printf '%s' "$probe_out" | head -1)"
-              ok=1
-            fi
-          else
-            printf "  FAIL  selected Codex spawn probe failed (exit %s): %s\n" \
-              "$probe_rc" "$(printf '%s' "$probe_out" | head -1)"
-            ok=1
-          fi
-        fi
-      fi
-    fi
-  fi
-
-  # --- 0.5.0 preflights (each bit the field run) -------------------------------
-  # Model id prefix sanity (invalid `gpt-5.6` failed only at planner runtime as
-  # a generic codex-exit, costing three launches).
-  local cfg_env_val
-  cfg_env_val() { # key -> config env{} value (empty if none)
-    [[ -n "$root" && -f "$root/gluerun.config.json" ]] || { echo ""; return; }
-    python3 -c 'import json,sys
-try:
-    print(json.load(open(sys.argv[1])).get("env", {}).get(sys.argv[2], ""))
-except Exception:
-    print("")' "$root/gluerun.config.json" "$1" 2>/dev/null
-  }
-  local claude_model codex_model
-  claude_model="${GLUERUN_CLAUDE_MODEL:-$(cfg_env_val GLUERUN_CLAUDE_MODEL)}"
-  codex_model="${GLUERUN_CODEX_MODEL:-$(cfg_env_val GLUERUN_CODEX_MODEL)}"
-  if [[ -n "$claude_model" ]]; then
-    case "$claude_model" in
-      claude-*|sonnet*|opus*|haiku*) printf "  ok    claude model: %s\n" "$claude_model" ;;
-      *) printf "  warn  GLUERUN_CLAUDE_MODEL '%s' has an unrecognized prefix (typo?)\n" "$claude_model" ;;
-    esac
-  fi
-  if [[ -n "$codex_model" ]]; then
-    case "$codex_model" in
-      gpt-*|o[0-9]*|codex-*) printf "  ok    codex model: %s\n" "$codex_model" ;;
-      *) printf "  warn  GLUERUN_CODEX_MODEL '%s' has an unrecognized prefix (typo?)\n" "$codex_model" ;;
-    esac
-  fi
-  # New 0.9.0 provider model keys (checked only when set; each CLI has its own
-  # default when the key is unset, in which case the runner omits the model flag).
-  local gemini_model opencode_model cursor_model
-  gemini_model="${GLUERUN_GEMINI_MODEL:-$(cfg_env_val GLUERUN_GEMINI_MODEL)}"
-  opencode_model="${GLUERUN_OPENCODE_MODEL:-$(cfg_env_val GLUERUN_OPENCODE_MODEL)}"
-  cursor_model="${GLUERUN_CURSOR_MODEL:-$(cfg_env_val GLUERUN_CURSOR_MODEL)}"
-  if [[ -n "$gemini_model" ]]; then
-    case "$gemini_model" in
-      gemini-*|auto) printf "  ok    gemini model: %s\n" "$gemini_model" ;;
-      *) printf "  warn  GLUERUN_GEMINI_MODEL '%s' has an unrecognized prefix (expect gemini-* or auto)\n" "$gemini_model" ;;
-    esac
-  fi
-  if [[ -n "$opencode_model" ]]; then
-    case "$opencode_model" in
-      */*|auto) printf "  ok    opencode model: %s\n" "$opencode_model" ;;
-      *) printf "  warn  GLUERUN_OPENCODE_MODEL '%s' should be provider/model (e.g. anthropic/claude-sonnet-4-5)\n" "$opencode_model" ;;
-    esac
-  fi
-  if [[ -n "$cursor_model" ]]; then
-    case "$cursor_model" in
-      auto|gpt-*|cursor-*|claude-*|sonnet*|opus*|o[0-9]*) printf "  ok    cursor model: %s\n" "$cursor_model" ;;
-      *) printf "  warn  GLUERUN_CURSOR_MODEL '%s' has an unrecognized prefix (typo?)\n" "$cursor_model" ;;
-    esac
-  fi
-
-  # ~/.codex/hooks.json parseability (a 0-byte file spammed a parse error into
-  # EVERY runner spawn for four days).
-  if [[ -f "$HOME/.codex/hooks.json" ]]; then
-    if python3 -m json.tool "$HOME/.codex/hooks.json" >/dev/null 2>&1; then
-      printf "  ok    ~/.codex/hooks.json parses\n"
-    else
-      printf "  FAIL  ~/.codex/hooks.json is not valid JSON (every codex spawn logs a parse error; fix or: echo '{}' > ~/.codex/hooks.json)\n"; ok=1
-    fi
-  fi
-
-  # MCP fan-out: every configured server spawns as a child of every worker.
-  local mcp_count=0 mcp_src=""
-  if [[ -n "$root" && -f "$root/.mcp.json" ]]; then
-    local c; c="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1])).get("mcpServers",{})))' "$root/.mcp.json" 2>/dev/null || echo 0)"
-    mcp_count=$((mcp_count + c)); [[ "$c" -gt 0 ]] && mcp_src+=" repo:.mcp.json($c)"
-  fi
-  if [[ -f "$HOME/.claude.json" ]]; then
-    local c; c="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1])).get("mcpServers",{})))' "$HOME/.claude.json" 2>/dev/null || echo 0)"
-    mcp_count=$((mcp_count + c)); [[ "$c" -gt 0 ]] && mcp_src+=" ~/.claude.json($c)"
-  fi
-  if [[ -f "$HOME/.codex/config.toml" ]]; then
-    local c; c="$(grep -c '^\[mcp_servers\.' "$HOME/.codex/config.toml" 2>/dev/null || true)"
-    [[ "$c" =~ ^[0-9]+$ ]] || c=0
-    mcp_count=$((mcp_count + c)); [[ "$c" -gt 0 ]] && mcp_src+=" ~/.codex/config.toml($c)"
-  fi
-  if [[ "$mcp_count" -gt 0 ]]; then
-    printf "  warn  %s MCP server(s) configured (%s) — each worker/auditor spawn may start them (latency, log noise)\n" "$mcp_count" "${mcp_src# }"
-  else
-    printf "  ok    no MCP servers inherited by workers\n"
-  fi
-
-  # Legacy pmgo.* schema ids in consumer artifacts (parked every decider
-  # verdict in the field until repaired).
-  if [[ -n "$root" ]]; then
-    local pmgo_hits
-    pmgo_hits="$(grep -rl --include='*.json' --include='*.md' '"pmgo\.' \
-      "$root/docs/orchestration/prompts" "$root/schemas" 2>/dev/null | head -5 || true)"
-    if [[ -n "$pmgo_hits" ]]; then
-      printf "  FAIL  legacy pmgo.* schema ids found (run migrations/v0-to-v1.sh):\n"
-      printf "        %s\n" $pmgo_hits
-      ok=1
-    else
-      printf "  ok    no legacy pmgo.* schema ids in prompts/schemas\n"
-    fi
-    # Stale pidfiles.
-    local pidf pid
-    for pidf in "$root/.gluerun-state/autonomate.pid" "$root/.gluerun-state/console.pid"; do
-      [[ -f "$pidf" ]] || continue
-      pid="$(tr -d '[:space:]' <"$pidf" 2>/dev/null || true)"
-      if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-        printf "  ok    %s alive (pid %s)\n" "$(basename "$pidf")" "$pid"
-      else
-        printf "  warn  stale pidfile %s (pid %s dead; rm it or restart)\n" "$pidf" "${pid:-?}"
-      fi
-    done
-    # Disk floor.
-    local free_gb min_gb
-    free_gb="$(df -Pk "$root" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1048576}')"
-    min_gb="${GLUERUN_MIN_DISK_GB:-$(cfg_env_val GLUERUN_MIN_DISK_GB)}"; [[ "$min_gb" =~ ^[0-9]+$ ]] || min_gb=2
-    if [[ "$free_gb" =~ ^[0-9]+$ ]]; then
-      if (( free_gb < min_gb )); then
-        printf "  FAIL  disk below floor: %sGiB free < %sGiB (GLUERUN_MIN_DISK_GB) — gates go all-red on a full volume\n" "$free_gb" "$min_gb"; ok=1
-      elif (( free_gb < min_gb * 2 )); then
-        printf "  warn  disk near floor: %sGiB free (floor %sGiB)\n" "$free_gb" "$min_gb"
-      else
-        printf "  ok    disk: %sGiB free (floor %sGiB)\n" "$free_gb" "$min_gb"
-      fi
-    fi
-    # .worktrees size.
-    if [[ -d "$root/.worktrees" ]]; then
-      local wt_n wt_kb wt_gb warn_gb
-      wt_n="$(find "$root/.worktrees" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | grep -c . || true)"
-      wt_kb="$(du -sk "$root/.worktrees" 2>/dev/null | awk '{print $1}' || echo 0)"
-      wt_gb=$((wt_kb / 1048576))
-      warn_gb="${GLUERUN_WORKTREES_WARN_GB:-5}"
-      if (( wt_gb >= warn_gb )); then
-        printf "  warn  .worktrees: %s entries, %sGiB (>= %sGiB; run: gluerun gc)\n" "$wt_n" "$wt_gb" "$warn_gb"
-      else
-        printf "  ok    .worktrees: %s entries, %sGiB\n" "$wt_n" "$wt_gb"
-      fi
-    fi
-    # Console port availability (when pinned).
-    local cport
-    cport="${GLUERUN_CONSOLE_PORT:-$(cfg_env_val GLUERUN_CONSOLE_PORT)}"
-    if [[ "$cport" =~ ^[0-9]+$ && "$cport" -gt 0 ]]; then
-      if python3 -c 'import socket,sys
-s=socket.socket()
-try:
-    s.bind(("127.0.0.1", int(sys.argv[1])))
-    s.close()
-except OSError:
-    sys.exit(1)' "$cport" 2>/dev/null; then
-        printf "  ok    console port %s free\n" "$cport"
-      else
-        printf "  warn  console port %s already bound (a healthy console? check .gluerun-state/console.url)\n" "$cport"
-      fi
-    fi
-  fi
-  return "$ok"
-}
-
 cmd_doctor_v1() {
   local home root bash_path
   home="$(resolve_engine_home)"
@@ -538,12 +248,16 @@ EOF
     echo "  new   docs/orchestration/gates/gate.sh (optional adapter — read the header)"
   fi
   GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" "${GLUERUN_BASH_BIN:-bash}" "$home/engine/scaffold.sh"
-  echo "  ok    docs/orchestration scaffold + schema mirrors"
+  # One line for what scaffold.sh actually did. There used to be a second line
+  # claiming ".gitignore (...)" as a separate init step; init never touched
+  # .gitignore — gluerun_ensure_repo_scaffold appends those entries — so the line
+  # reported work by the wrong actor and would have kept printing "ok" even if
+  # scaffold had stopped doing it.
+  echo "  ok    docs/orchestration scaffold + schema mirrors + .gitignore entries (.gluerun-state/, .worktrees/, .gluerun-evidence/, .gluerun-cache/)"
   # version pin
   if [[ ! -f "$root/.gluerun-version" ]]; then
     cp "$home/VERSION" "$root/.gluerun-version"; echo "  new   .gluerun-version ($(cat "$home/VERSION"))"
   fi
-  echo "  ok    .gitignore (.gluerun-state/, .worktrees/, .gluerun-evidence/, .gluerun-cache/)"
   echo ""
   echo "Next: edit gluerun.config.json + docs/orchestration/dag.v0.json, then: gluerun doctor"
 }
@@ -571,7 +285,13 @@ cmd_update() {
 
 # Bring the repo's schemaVersion up to the engine's SCHEMA_VERSION by running
 # the migrations/<from>-to-<to>.sh chain (see migrations/README.md).
+#
+# `--dry-run` answers "what would this do to my repository" WITHOUT touching it:
+# it resolves the same chain, by the same discovery, and prints it. It runs no
+# migration and writes no schemaVersion — the mutating path below is untouched.
 cmd_migrate() {
+  local dry_run=0
+  if [[ "${1:-}" == "--dry-run" ]]; then dry_run=1; shift; fi
   local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
   local esv rsv
   esv="$(engine_schema_version "$home")"
@@ -583,6 +303,22 @@ cmd_migrate() {
     echo "gluerun migrate: repo schema $rsv matches engine schema — up to date, nothing to do"
     return 0
   fi
+  if [[ "$dry_run" == "1" ]]; then
+    echo "gluerun migrate --dry-run: repo schema $rsv -> engine schema $esv"
+    local dry_steps=0 dry_script dry_next
+    while [[ "$rsv" != "$esv" ]]; do
+      dry_script="$(ls "$home/migrations/$rsv-to-"*.sh 2>/dev/null | sort | head -n1 || true)"
+      [[ -n "$dry_script" && -f "$dry_script" ]] \
+        || die "no migration found for $rsv -> $esv (looked for $home/migrations/$rsv-to-*.sh); see CHANGELOG.md"
+      dry_next="$(basename "$dry_script" .sh)"; dry_next="${dry_next#*-to-}"
+      echo "  would run: $(basename "$dry_script") ($rsv -> $dry_next)"
+      rsv="$dry_next"
+      dry_steps=$((dry_steps + 1))
+      [[ "$dry_steps" -le 64 ]] || die "migration chain exceeded 64 steps without reaching $esv (cycle in migrations/?)"
+    done
+    echo "gluerun migrate --dry-run: $dry_steps step(s) would bring the repo to schema $rsv; nothing was changed"
+    return 0
+  fi
   echo "gluerun migrate: repo schema $rsv -> engine schema $esv"
   local steps=0 script next
   while [[ "$rsv" != "$esv" ]]; do
@@ -591,7 +327,7 @@ cmd_migrate() {
       || die "no migration found for $rsv -> $esv (looked for $home/migrations/$rsv-to-*.sh); see CHANGELOG.md"
     next="$(basename "$script" .sh)"; next="${next#*-to-}"
     echo "  run   $(basename "$script") ($rsv -> $next)"
-    "${GLUERUN_BASH_BIN:-bash}" "$script" "$root" || die "migration $(basename "$script") failed (repo left at schema $rsv)"
+    "$BASH" "$script" "$root" || die "migration $(basename "$script") failed (repo left at schema $rsv)"
     set_repo_schema_version "$root" "$next" || die "migration ran but schemaVersion could not be updated in gluerun.config.json"
     rsv="$next"
     steps=$((steps + 1))
@@ -831,6 +567,1651 @@ cmd_console() {
   GLUERUN_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" --host 127.0.0.1 --port "$port" "$@"
 }
 
+# --- supervised regression-suite runs (cmd_test) -----------------------------
+#
+# PMGO-009. `bash tests/run.sh` is ~185 test files over ~50 minutes with no
+# lock, no durable result, and no way to ask "is that still running?". When the
+# session that started one stopped reporting, the next operator could not tell a
+# live suite from a dead one — and the safe-looking move (start another) is the
+# expensive wrong one.
+#
+# `gluerun test` turns a run into a supervised, attachable job:
+#
+#   * one detached supervisor per run (double-fork + setsid, the same shape
+#     console_ensure uses) holding an exclusive flock on supervisor.lock for its
+#     entire life. The kernel releases that lock on ANY death — crash, kill -9,
+#     power loss — so liveness is PROVED by a non-blocking probe instead of
+#     guessed from a pid that may have been recycled. `ps` is never consulted.
+#   * a durable manifest (schemas/test-run.v0.schema.json), written atomically,
+#     that outlives the session which started the run;
+#   * per-test logs + progress.jsonl written by tests/run.sh, so a run killed
+#     halfway reconciles to "interrupted" WITH the counts it reached rather than
+#     disappearing.
+#
+# The suite is the ENGINE's own (<engine home>/tests/run.sh, run with cwd there);
+# the state lives in the current repo (.gluerun-state/test-runs/). Inside an
+# engine checkout those are the same directory, which is the self-hosting case.
+gluerun_test_py() {
+  python3 - "$@" <<'PY'
+import errno
+import fcntl
+import json
+import os
+import random
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+
+SCHEMA = "gluerun.test-run.v0"
+POLL_SECONDS = 0.5
+
+
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def runs_root(state):
+    return os.path.join(state, "test-runs")
+
+
+def run_dir(state, rid):
+    return os.path.join(runs_root(state), rid)
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def write_json(path, obj):
+    """Atomic: a reader never sees a half-written manifest, and a crash between
+    the two steps leaves the previous complete file in place."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(obj, handle, indent=2)
+        handle.write("\n")
+    os.replace(tmp, path)
+
+
+def current_id(state):
+    cur = read_json(os.path.join(runs_root(state), "current.json")) or {}
+    rid = cur.get("runId")
+    return rid if isinstance(rid, str) and rid else None
+
+
+def progress(state, rid):
+    """Counts as of right now, from the lines tests/run.sh appends per test."""
+    passed = failed = 0
+    names = []
+    try:
+        with open(os.path.join(run_dir(state, rid), "progress.jsonl"),
+                  encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("status") == "pass":
+                    passed += 1
+                elif record.get("status") == "fail":
+                    failed += 1
+                    name = record.get("test")
+                    if isinstance(name, str) and name:
+                        names.append(name)
+    except OSError:
+        pass
+    return passed, failed, names
+
+
+def summary(state, rid):
+    """Final counts as the harness itself reported them (SUMMARY:/FAILED:)."""
+    passed = failed = None
+    names = []
+    try:
+        with open(os.path.join(run_dir(state, rid), "suite.log"),
+                  encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.rstrip("\n")
+                if line.startswith("SUMMARY: "):
+                    parts = line[len("SUMMARY: "):].replace(",", " ").split()
+                    try:
+                        passed, failed = int(parts[0]), int(parts[2])
+                    except (IndexError, ValueError):
+                        passed = failed = None
+                elif line.startswith("FAILED:"):
+                    names = line[len("FAILED:"):].split()
+    except OSError:
+        pass
+    return passed, failed, names
+
+
+def final_counts(state, rid):
+    """The harness's own SUMMARY when it got that far, else the per-test
+    progress lines (a suite killed before SUMMARY still has those)."""
+    passed, failed, names = summary(state, rid)
+    if passed is None or failed is None:
+        return progress(state, rid)
+    return passed, failed, names
+
+
+def pid_alive(manifest):
+    pid = (manifest or {}).get("pid")
+    if not isinstance(pid, int) or pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError as exc:
+        return exc.errno == errno.EPERM
+    return True
+
+
+REAP_STALE_SEC = 300
+
+
+def reap_run_group(state, rid, manifest):
+    """Kill the whole process group the dead supervisor started.
+
+    The supervisor is setsid'd, so its recorded pgid names the RUN: the
+    supervisor plus the tests/run.sh child `subprocess.call` started. Killing
+    the supervisor alone (kill -9, a crashed session) orphans that child — it
+    keeps running tests and appending to progress.jsonl long after the manifest
+    says `interrupted`, and the next `gluerun test` sees no live run and starts
+    a genuinely duplicate ~50-minute suite. Only signalling the group ends it.
+
+    Guarded three ways, and the third is the one that matters. pgid must be
+    > 1, because kill(2)/killpg read 0 and negatives as "our own group" or
+    "everything we may signal". It must not BE our own group, or a caller
+    running inside the run's group would kill itself while reconciling.
+
+    And the run must have written something RECENTLY. A recorded pgid is not
+    an identity: once the group is gone the number is recycled, and after a
+    reboot pids restart low and come back around within hours. Without this
+    bound, a manifest left `running` by a crash or a power cut turns the next
+    `gluerun test --status` — a read-only-looking command — into a SIGKILL
+    aimed at whatever unrelated group inherited that number. An orphan worth
+    killing is by definition still producing output, so recent writes are the
+    evidence that the pgid still means what the manifest says. Erring long
+    only leaks an orphan (recoverable, and the bug this fixes); erring short
+    kills a stranger.
+    """
+    pgid = (manifest or {}).get("pgid")
+    if not isinstance(pgid, int) or pgid <= 1:
+        return
+    try:
+        if pgid == os.getpgid(0):
+            return
+    except OSError:
+        return
+    rdir = run_dir(state, rid)
+    newest = 0.0
+    for rel in ("progress.jsonl", "suite.log"):
+        try:
+            newest = max(newest, os.path.getmtime(os.path.join(rdir, rel)))
+        except OSError:
+            pass
+    # Per-test logs are tee'd live, so they track a running suite far more
+    # tightly than the per-test summary lines do.
+    logs = os.path.join(rdir, "logs")
+    try:
+        for name in os.listdir(logs):
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(logs, name)))
+            except OSError:
+                pass
+    except OSError:
+        pass
+    if newest <= 0 or (time.time() - newest) > REAP_STALE_SEC:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def reconcile(state, rid, manifest):
+    """A manifest still saying "running" while nothing holds the lock means the
+    supervisor died mid-run. Say so, durably, with the counts it reached."""
+    if not isinstance(manifest, dict) or manifest.get("status") != "running":
+        return manifest
+    # Before the counts are read, not after: an orphan still appending to
+    # progress.jsonl would otherwise make the recorded counts stale the instant
+    # they were written.
+    reap_run_group(state, rid, manifest)
+    passed, failed, names = progress(state, rid)
+    manifest = dict(manifest)
+    manifest["status"] = "interrupted"
+    manifest["endedAt"] = now()
+    manifest["counts"] = {"pass": passed, "fail": failed}
+    manifest["failed"] = names
+    manifest["exitCode"] = None
+    manifest["reconciledBy"] = "gluerun test"
+    write_json(os.path.join(run_dir(state, rid), "manifest.json"), manifest)
+    return manifest
+
+
+def probe(state, rid):
+    """(liveness, alive, manifest).
+
+    The supervisor holds LOCK_EX for its whole life, so a LOCK_SH|LOCK_NB probe
+    that cannot be taken proves one is alive. Probers use a SHARED lock so two
+    of them never mistake each other for the supervisor. When flock itself is
+    unavailable (exotic filesystem) we say "unverified" and fall back to the
+    recorded pid — degraded, but never silently."""
+    directory = run_dir(state, rid)
+    manifest = read_json(os.path.join(directory, "manifest.json"))
+    try:
+        fd = os.open(os.path.join(directory, "supervisor.lock"),
+                     os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        return "unverified", pid_alive(manifest), manifest
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
+                return "running", True, manifest
+            return "unverified", pid_alive(manifest), manifest
+        try:
+            manifest = reconcile(state, rid, manifest)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        return "not-running", False, manifest
+    finally:
+        os.close(fd)
+
+
+def last_line(state, rid):
+    path = os.path.join(run_dir(state, rid), "suite.log")
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as handle:
+            handle.seek(max(0, size - 8192))
+            tail = handle.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(tail):
+        if line.strip():
+            return line
+    return None
+
+
+def drain(path, offset, out):
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(offset)
+            data = handle.read()
+    except OSError:
+        return offset
+    if data:
+        out.write(data.decode("utf-8", "replace"))
+        out.flush()
+        offset += len(data)
+    return offset
+
+
+# --- modes -------------------------------------------------------------------
+
+def cmd_start(args):
+    state, suite, home, bash_bin, bash_version, version, commit = args[:7]
+    filters = [a for a in args[7:] if a]
+    rid = "%s-%04x" % (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+                       random.randrange(0x10000))
+    directory = run_dir(state, rid)
+    os.makedirs(os.path.join(directory, "logs"), exist_ok=True)
+
+    # A pipe, not a sleep: the caller returns only once the supervisor has taken
+    # the lock and published the manifest, so "started" is never a guess.
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid > 0:
+        os.close(write_fd)
+        os.waitpid(pid, 0)
+        with os.fdopen(read_fd, "rb") as handle:
+            note = handle.read()
+        if not note.startswith(b"ok"):
+            sys.stderr.write("gluerun test: supervisor failed to start\n")
+            if note:
+                sys.stderr.write(note.decode("utf-8", "replace"))
+            return 1
+        print(rid)
+        return 0
+
+    # Detach: double-fork + setsid so the run outlives this CLI invocation and
+    # never holds its terminal.
+    os.close(read_fd)
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)
+
+    manifest_path = os.path.join(directory, "manifest.json")
+    try:
+        # Redirect FIRST: until this happens the supervisor still holds the
+        # caller's stdout, and a command substitution around it would block
+        # until the whole suite finished.
+        log_fd = os.open(os.path.join(directory, "suite.log"),
+                         os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        null_fd = os.open(os.devnull, os.O_RDONLY)
+        os.dup2(null_fd, 0)
+        os.dup2(log_fd, 1)
+        os.dup2(log_fd, 2)
+        os.close(null_fd)
+        if log_fd > 2:
+            os.close(log_fd)
+        # The liveness proof. Held until this process dies, by any means.
+        lock_fd = os.open(os.path.join(directory, "supervisor.lock"),
+                          os.O_RDWR | os.O_CREAT, 0o644)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        manifest = {
+            "schema": SCHEMA,
+            "runId": rid,
+            "status": "running",
+            "startedAt": now(),
+            "endedAt": None,
+            "suitePath": suite,
+            "engineVersion": version or None,
+            "engineCommit": commit or None,
+            "interpreter": {"path": bash_bin, "version": bash_version},
+            "pid": os.getpid(),
+            "pgid": os.getpgid(0),
+            "filter": filters or None,
+            "counts": {"pass": 0, "fail": 0},
+            "failed": [],
+            "exitCode": None,
+        }
+        write_json(manifest_path, manifest)
+        write_json(os.path.join(runs_root(state), "current.json"), {"runId": rid})
+    except Exception as exc:  # noqa: BLE001 - reported verbatim to the caller
+        try:
+            os.write(write_fd, ("  detail: %r\n" % (exc,)).encode("utf-8"))
+        except OSError:
+            pass
+        os._exit(1)
+    os.write(write_fd, b"ok\n")
+    os.close(write_fd)
+
+    code = 1
+    try:
+        env = dict(os.environ)
+        env["GLUERUN_TEST_RUN_DIR"] = directory
+        # close_fds (the default) matters: the suite must NOT inherit the lock,
+        # or killing the supervisor would leave it held and the run would look
+        # alive forever.
+        code = subprocess.call([bash_bin, suite] + filters, cwd=home, env=env,
+                               stdin=subprocess.DEVNULL, close_fds=True)
+    finally:
+        passed, failed, names = final_counts(state, rid)
+        manifest["status"] = "passed" if code == 0 else "failed"
+        manifest["exitCode"] = code
+        manifest["endedAt"] = now()
+        manifest["counts"] = {"pass": passed, "fail": failed}
+        manifest["failed"] = names
+        write_json(manifest_path, manifest)
+    os._exit(0)
+
+
+def cmd_live(state):
+    """Print the run id of a provably live run, else nothing."""
+    rid = current_id(state)
+    if rid is None:
+        return 0
+    liveness, alive, _ = probe(state, rid)
+    if liveness == "unverified":
+        sys.stderr.write(
+            "gluerun test: warning: flock is unavailable here; liveness is "
+            "unverified (falling back to the recorded pid)\n")
+    if alive:
+        print(rid)
+    return 0
+
+
+def cmd_attach(state, rid, origin):
+    directory = run_dir(state, rid)
+    if not os.path.isdir(directory):
+        sys.stderr.write("gluerun test: no such run: %s\n" % rid)
+        return 1
+    log = os.path.join(directory, "suite.log")
+    offset = 0
+    if origin == "now":
+        try:
+            offset = os.path.getsize(log)
+        except OSError:
+            offset = 0
+    while True:
+        offset = drain(log, offset, sys.stdout)
+        liveness, alive, _ = probe(state, rid)
+        if not alive:
+            break
+        if liveness == "unverified":
+            sys.stderr.write(
+                "gluerun test: warning: flock is unavailable here; liveness is "
+                "unverified (falling back to the recorded pid)\n")
+        time.sleep(POLL_SECONDS)
+    drain(log, offset, sys.stdout)
+    manifest = read_json(os.path.join(directory, "manifest.json")) or {}
+    code = manifest.get("exitCode")
+    if isinstance(code, int):
+        return code
+    sys.stderr.write(
+        "gluerun test: run %s ended without an exit code (status %s)\n"
+        % (rid, manifest.get("status") or "unknown"))
+    return 1
+
+
+def cmd_status(state, as_json):
+    rid = current_id(state)
+    if rid is None:
+        if as_json:
+            print(json.dumps({"runId": None, "status": None, "liveness": "none"},
+                             indent=2))
+        else:
+            print("test: no run recorded (start one: gluerun test)")
+        return 1
+    liveness, _, manifest = probe(state, rid)
+    if manifest is None:
+        manifest = {"schema": SCHEMA, "runId": rid, "status": None}
+    else:
+        manifest = dict(manifest)
+    if manifest.get("status") == "running":
+        passed, failed, names = progress(state, rid)
+        manifest["counts"] = {"pass": passed, "fail": failed}
+        manifest["failed"] = names
+    line = last_line(state, rid)
+    if as_json:
+        manifest["liveness"] = liveness
+        manifest["lastLogLine"] = line
+        print(json.dumps(manifest, indent=2))
+        return 0
+    counts = manifest.get("counts") or {}
+    print("test run %s  status %s  liveness %s"
+          % (rid, manifest.get("status") or "unknown", liveness))
+    print("  started  %s" % (manifest.get("startedAt") or "-"))
+    print("  ended    %s" % (manifest.get("endedAt") or "-"))
+    print("  counts   %s passed, %s failed"
+          % (counts.get("pass", 0), counts.get("fail", 0)))
+    if manifest.get("failed"):
+        print("  failed   %s" % " ".join(manifest["failed"]))
+    if manifest.get("filter"):
+        print("  filter   %s" % " ".join(manifest["filter"]))
+    print("  exit     %s" % ("-" if manifest.get("exitCode") is None
+                             else manifest["exitCode"]))
+    print("  dir      %s" % run_dir(state, rid))
+    print("  last     %s" % (line or "-"))
+    return 0
+
+
+def cmd_failures(state):
+    """The failed[] list of the most recent COMPLETED run (a run that was
+    interrupted never finished deciding what failed)."""
+    try:
+        entries = sorted(os.listdir(runs_root(state)), reverse=True)
+    except OSError:
+        entries = []
+    for name in entries:
+        manifest = read_json(os.path.join(runs_root(state), name, "manifest.json"))
+        if not manifest or manifest.get("status") not in ("passed", "failed"):
+            continue
+        names = [n for n in (manifest.get("failed") or []) if isinstance(n, str)]
+        if not names:
+            sys.stderr.write(
+                "gluerun test: last completed run (%s) has no failures to re-run\n"
+                % name)
+            return 1
+        for entry in names:
+            print(entry)
+        return 0
+    sys.stderr.write(
+        "gluerun test: no completed run recorded yet (start one: gluerun test)\n")
+    return 1
+
+
+MODE = sys.argv[1]
+ARGS = sys.argv[2:]
+if MODE == "start":
+    sys.exit(cmd_start(ARGS))
+if MODE == "live":
+    sys.exit(cmd_live(ARGS[0]))
+if MODE == "attach":
+    sys.exit(cmd_attach(ARGS[0], ARGS[1], ARGS[2]))
+if MODE == "status":
+    sys.exit(cmd_status(ARGS[0], ARGS[1] == "1"))
+if MODE == "failures":
+    sys.exit(cmd_failures(ARGS[0]))
+sys.stderr.write("gluerun test: internal mode error: %s\n" % MODE)
+sys.exit(2)
+PY
+}
+
+cmd_test() {
+  local want_status=0 as_json=0 wait_only=0 no_wait=0 new_run=0 rerun=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --status)         want_status=1 ;;
+      --json)           as_json=1 ;;
+      --wait)           wait_only=1 ;;
+      --no-wait)        no_wait=1 ;;
+      --new-run)        new_run=1 ;;
+      --rerun-failures) rerun=1 ;;
+      *) die "test: unknown argument: $1 (usage: gluerun test [--status [--json]|--wait|--no-wait|--new-run|--rerun-failures])" ;;
+    esac
+    shift
+  done
+
+  local home root state suite
+  home="$(resolve_engine_home)"; root="$(require_repo)"
+  state="$root/.gluerun-state"
+  suite="$home/tests/run.sh"
+
+  # One terminal diagnosis, in the shape of the other engine preflight blocks.
+  # Reporting on a past run needs no suite, so --status/--wait stay usable on an
+  # engine build that does not ship tests/.
+  if [[ "$want_status" != "1" && "$wait_only" != "1" && ! -f "$suite" ]]; then
+    {
+      echo "GLUERUN_TEST_SUITE_UNAVAILABLE"
+      echo "Found: no regression suite at $suite"
+      echo "Required: <engine home>/tests/run.sh"
+      echo "Recovery: run from an engine checkout, or point GLUERUN_ENGINE_HOME at one"
+    } >&2
+    exit 2
+  fi
+
+  # ...and a suite that exists is still only runnable from a CHECKOUT. Most tests
+  # build disposable worktrees of HEAD, so tests/run.sh opens with a Git source
+  # preflight (PMGO-010) that a plain `cp -Rp` install tree can never satisfy.
+  # Refusing HERE — before a run dir, a manifest, a lock or a supervisor exists —
+  # is the difference between one honest diagnosis and a supervised run that has
+  # to be reconciled after reaching the same verdict from inside. This is
+  # property 1 of engine/git-preflight.sh, run against the same directory run.sh
+  # would test; the slower properties (history, disposable worktrees) stay its
+  # job, so this never duplicates a probe or an answer. Same carve-out as above:
+  # --status/--wait report on a PAST run and need no runnable suite at all.
+  if [[ "$want_status" != "1" && "$wait_only" != "1" ]] \
+     && [[ "$(git -C "$home" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]]; then
+    {
+      echo "GLUERUN_TEST_SOURCE_UNSUPPORTED"
+      echo "Found: engine home is not a Git working tree: $home"
+      echo "Required: an engine checkout — the suite needs history and disposable worktrees"
+      echo "Recovery: run from an engine checkout, or point GLUERUN_ENGINE_HOME at one"
+    } >&2
+    exit 2
+  fi
+
+  if [[ "$want_status" == "1" ]]; then
+    gluerun_test_py status "$state" "$as_json"
+    return $?
+  fi
+
+  local rid=""
+  if [[ "$wait_only" == "1" ]]; then
+    rid="$(gluerun_test_py live "$state")"
+    if [[ -z "$rid" ]]; then
+      # A finished run is still something to wait for — attaching to it prints
+      # its tail and mirrors its exit code. Nothing recorded at all is an error.
+      rid="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("runId") or "")
+except Exception:
+    print("")' "$state/test-runs/current.json" 2>/dev/null || true)"
+      [[ -n "$rid" ]] || die "test --wait: no test run recorded (start one: gluerun test)"
+    fi
+    # --wait carries no other context, so say what is being waited on first: for
+    # a finished (or interrupted) run that report IS the answer, and the stream
+    # below adds nothing. stderr, so stdout stays the suite's output alone.
+    gluerun_test_py status "$state" "0" >&2 || true
+    gluerun_test_py attach "$state" "$rid" now
+    return $?
+  fi
+
+  # Identity recorded with every run, so a result is attributable months later.
+  local bash_bin version commit
+  bash_bin="${GLUERUN_BASH_BIN:-$BASH}"
+  version=""; [[ -f "$home/VERSION" ]] && version="$(tr -d '[:space:]' < "$home/VERSION")"
+  commit=""
+  if [[ -e "$home/.git" ]]; then commit="$(git -C "$home" rev-parse HEAD 2>/dev/null || true)"; fi
+
+  local origin="0"
+  local -a filters=()
+  if [[ "$rerun" == "1" ]]; then
+    local names=""
+    names="$(gluerun_test_py failures "$state")" || exit 1
+    local line
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && filters+=("$line")
+    done <<<"$names"
+    [[ "${#filters[@]}" -gt 0 ]] || die "test --rerun-failures: the last completed run recorded no failures"
+    echo "gluerun test: re-running ${#filters[@]} failed test(s): ${names//$'\n'/ }" >&2
+  elif [[ "$new_run" == "0" ]]; then
+    rid="$(gluerun_test_py live "$state")"
+  fi
+
+  if [[ -n "$rid" ]]; then
+    echo "gluerun test: attaching to live run $rid (--new-run starts a concurrent one)" >&2
+    origin="now"
+  else
+    rid="$(gluerun_test_py start "$state" "$suite" "$home" "$bash_bin" "$BASH_VERSION" \
+             "$version" "$commit" ${filters[@]+"${filters[@]}"})" || exit 1
+    echo "gluerun test: started run $rid ($state/test-runs/$rid)" >&2
+  fi
+
+  if [[ "$no_wait" == "1" ]]; then
+    echo "$rid"
+    echo "gluerun test: status: gluerun test --status   attach: gluerun test --wait" >&2
+    return 0
+  fi
+  gluerun_test_py attach "$state" "$rid" "$origin"
+  return $?
+}
+
+# --- one idempotent path to a verified, stopped repository (cmd_setup) --------
+#
+# PMGO-006. Bringing a consumer repo to a safe, verified, STOPPED state used to
+# mean holding seven unrelated facts at once: repo pin vs installed engine, repo
+# schema vs engine schema, whether a migration would rewrite authoritative
+# historical gates, which state root owns STOP, what doctor's evidence proves,
+# whether a regression run survived the session that started it, and that
+# "validated" is not "running". `gluerun setup` performs or explains every one of
+# those steps, in an order where every prerequisite fails BEFORE anything is
+# written, and it ends by printing exactly one next action.
+#
+# It COMPOSES rather than reimplements: cmd_init scaffolds, cmd_migrate (and its
+# --dry-run) migrates, engine/doctor.py validates, cmd_test runs the regression
+# suite. Setup contributes the ORDER, the EVIDENCE (gate snapshot, doctor report,
+# regression manifest), and the CONTRACT (stable codes, one recovery action, a
+# state ladder that never claims more than was reached).
+#
+# It lives in the CLI, as bash + python3 heredocs, because it has to run and
+# diagnose when engine resolution ITSELF is what is broken — the case where
+# sourcing anything out of the engine is not yet possible.
+#
+# Two shapes it writes that have no schema file of their own, documented here:
+#
+#   .gluerun-state/setup/gates-pre-migrate.json  gluerun.setup.gate-snapshot.v0
+#     {schema, generatedAt, headCommit, repoRoot, count,
+#      gates:[{path, sha256, node, status, authoritative, recordedAt,
+#              evidenceClass, parseError}]}
+#     Written fresh every run. Verification always compares against THIS run's
+#     snapshot, never a stale one: a snapshot that predates an unrelated edit
+#     would accuse the wrong migration.
+#
+#   .gluerun-state/setup/state.json              gluerun.setup-state.v0
+#     {schema, state, updatedAt, engineVersion, schemaVersion, lastTestRunId}
+#     state ∈ installed|migrated|validated|stopped-ready, written atomically at
+#     each phase boundary, and only ever set to a state actually reached.
+
+SETUP_US=$'\x1f'          # array-record separator: never appears in these values
+SETUP_JSON=0
+SETUP_STATE="blocked"
+SETUP_STATE_DIR=""        # <repo>/.gluerun-state once it exists; "" before that
+SETUP_ENGINE_HOME=""
+SETUP_ENGINE_VERSION=""
+SETUP_SCHEMA_VERSION=""
+SETUP_TEST_RUN_ID=""
+SETUP_STEPS=()
+SETUP_WARNINGS=()
+
+# Human stream. Under --json it is stderr, so stdout carries exactly one JSON
+# object and nothing else.
+setup_note() {
+  if [[ "$SETUP_JSON" == "1" ]]; then printf '%s\n' "$1" >&2; else printf '%s\n' "$1"; fi
+}
+
+# One line per step, in cmd_init's `ok`/`new`/`skip` style, recorded for the
+# report at the same moment it is printed — the two can never disagree.
+setup_step() { # id status detail
+  SETUP_STEPS+=("$1$SETUP_US$2$SETUP_US$3")
+  setup_note "$(printf '  %-5s %s' "$2" "$3")"
+}
+
+setup_warn() { # code message
+  SETUP_WARNINGS+=("$1$SETUP_US$2")
+  setup_note "$(printf '  %-5s %s [%s]' "warn" "$2" "$1")"
+}
+
+# Serializer for BOTH contract shapes. One implementation, so the object printed
+# on stdout and the copy persisted under .gluerun-state/setup/ are identical by
+# construction. Segment lengths are explicit because step details are free text.
+setup_py_emit() { # kind print out n_head head... n_steps steps... n_warn warns...
+  python3 - "$@" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+US = "\x1f"
+args = sys.argv[1:]
+kind, do_print, out = args[0], args[1] == "1", args[2]
+cursor = 3
+
+
+def take():
+    global cursor
+    count = int(args[cursor])
+    cursor += 1
+    values = args[cursor:cursor + count]
+    cursor += count
+    return values
+
+
+head = take()
+steps = [item.split(US, 2) for item in take()]
+warnings = [item.split(US, 1) for item in take()]
+now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+warn_list = [{"code": code, "message": message} for code, message in warnings]
+
+if kind == "report":
+    state, engine_version, engine_home, schema, run_id, command, instruction, safe = head
+    document = {
+        "schema": "gluerun.setup-report.v0",
+        "state": state,
+        "steps": [{"id": i, "status": s, "detail": d} for i, s, d in steps],
+        "warnings": warn_list,
+        "nextAction": {"command": command, "instruction": instruction},
+        "safeToActuate": safe == "1",
+        "generatedAt": now,
+        "engineVersion": engine_version or None,
+        "engineHome": engine_home or None,
+        "schemaVersion": schema or None,
+        "lastTestRunId": run_id or None,
+    }
+else:
+    code, phase, state, summary, command, instruction, cause = head
+    try:
+        cause_obj = json.loads(cause) if cause else {}
+    except ValueError:
+        cause_obj = {"detail": cause}
+    document = {
+        "schema": "gluerun.operator-failure.v0",
+        "code": code,
+        "phase": phase,
+        "state": state,
+        # A command that refused cannot have proved the repository safe to run.
+        "safeToActuate": False,
+        "summary": summary,
+        "cause": cause_obj,
+        "recovery": {"command": command, "instruction": instruction},
+        "generatedAt": now,
+        "warnings": warn_list,
+    }
+
+if out:
+    try:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = out + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, indent=2)
+            handle.write("\n")
+        os.replace(tmp, out)
+    except OSError:
+        pass  # persistence is evidence, never the reason a run fails
+if do_print:
+    print(json.dumps(document, indent=2))
+PY
+}
+
+# Small structured cause objects (all-string values) without quoting games.
+setup_cause() { # key value [key value ...]
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+args = sys.argv[1:]
+print(json.dumps({args[i]: args[i + 1] for i in range(0, len(args) - 1, 2)}))
+PY
+}
+
+# Phase boundary. The ladder only ever moves to a state that was REACHED: a run
+# that stops at `validated` has not been told the suite passed, and must not say
+# stopped-ready just because it intended to get there.
+setup_set_state() { # state
+  SETUP_STATE="$1"
+  [[ -n "$SETUP_STATE_DIR" && -d "$SETUP_STATE_DIR/setup" ]] || return 0
+  python3 - "$SETUP_STATE_DIR/setup/state.json" "$1" "$SETUP_ENGINE_VERSION" \
+    "$SETUP_SCHEMA_VERSION" "$SETUP_TEST_RUN_ID" <<'PY' || true
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, state, engine, schema, run_id = sys.argv[1:6]
+document = {
+    "schema": "gluerun.setup-state.v0",
+    "state": state,
+    "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "engineVersion": engine or None,
+    "schemaVersion": schema or None,
+    "lastTestRunId": run_id or None,
+}
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2)
+    handle.write("\n")
+os.replace(tmp, path)
+PY
+}
+
+# Terminal diagnosis. Human output leads with the code; --json prints the same
+# primary failure as one gluerun.operator-failure.v0 object. Both are persisted
+# once a state directory exists — a failure before that is stdout/stderr only,
+# because there is nowhere in the repo it could honestly be written.
+setup_fail() { # code phase summary recovery_command recovery_instruction [cause_json]
+  local out=""
+  [[ -n "$SETUP_STATE_DIR" && -d "$SETUP_STATE_DIR/setup" ]] \
+    && out="$SETUP_STATE_DIR/setup/last-result.json"
+  {
+    echo "$1"
+    echo "Phase: $2"
+    echo "State: $SETUP_STATE (safe to actuate: no)"
+    echo "Summary: $3"
+    echo "Recovery: $4"
+    echo "  $5"
+  } >&2
+  setup_py_emit failure "$SETUP_JSON" "$out" \
+    7 "$1" "$2" "$SETUP_STATE" "$3" "$4" "$5" "${6:-{\}}" \
+    "${#SETUP_STEPS[@]}" ${SETUP_STEPS[@]+"${SETUP_STEPS[@]}"} \
+    "${#SETUP_WARNINGS[@]}" ${SETUP_WARNINGS[@]+"${SETUP_WARNINGS[@]}"} || true
+  exit 1
+}
+
+# Hash and read every gate-result BEFORE anything can rewrite one. Prints the
+# number of files captured.
+setup_gate_snapshot() { # repo out
+  python3 - "$1" "$2" <<'PY'
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+repo, out = sys.argv[1:3]
+gates = os.path.join(repo, "docs", "orchestration", "gates")
+entries = []
+try:
+    names = sorted(n for n in os.listdir(gates) if n.endswith(".gate-result.json"))
+except OSError:
+    names = []
+for name in names:
+    path = os.path.join(gates, name)
+    entry = {
+        "path": os.path.relpath(path, repo),
+        "sha256": None,
+        "node": None,
+        "status": None,
+        "authoritative": None,
+        "recordedAt": None,
+        "evidenceClass": None,
+        "parseError": None,
+    }
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError as exc:
+        entry["parseError"] = "unreadable: %s" % exc
+        entries.append(entry)
+        continue
+    entry["sha256"] = hashlib.sha256(raw).hexdigest()
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        entry["parseError"] = str(exc)
+    else:
+        if isinstance(document, dict):
+            for key in ("node", "status", "authoritative", "recordedAt",
+                        "evidenceClass"):
+                entry[key] = document.get(key)
+        else:
+            entry["parseError"] = "gate-result is not a JSON object"
+    entries.append(entry)
+
+head = ""
+try:
+    result = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                            capture_output=True, text=True)
+    if result.returncode == 0:
+        head = result.stdout.strip()
+except OSError:
+    head = ""
+
+snapshot = {
+    "schema": "gluerun.setup.gate-snapshot.v0",
+    "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "headCommit": head or None,
+    "repoRoot": repo,
+    "count": len(entries),
+    "gates": entries,
+}
+os.makedirs(os.path.dirname(out), exist_ok=True)
+tmp = out + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(snapshot, handle, indent=2)
+    handle.write("\n")
+os.replace(tmp, out)
+print(len(entries))
+PY
+}
+
+# SEMANTIC preservation, not byte equality. migrations/v0-to-v1.sh legitimately
+# rewrites `pmgo.orchestration.*` -> `gluerun.orchestration.*` INSIDE gate files,
+# so a hash comparison would condemn every correct migration. What must not move
+# is the historical verdict: the file still exists, and its node, status,
+# authoritative flag and recordedAt are untouched. Byte changes are reported as
+# informational. Writes the machine-readable cause to <cause_out>; prints
+#   ok US checked US rewritten US deltas US first-delta-detail
+setup_gate_verify() { # repo snapshot cause_out
+  python3 - "$1" "$2" "$3" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+US = "\x1f"
+repo, snapshot_path, cause_out = sys.argv[1:4]
+try:
+    with open(snapshot_path, encoding="utf-8") as handle:
+        snapshot = json.load(handle)
+except (OSError, ValueError) as exc:
+    print(US.join(["0", "0", "0", "1", "gate snapshot unreadable: %s" % exc]))
+    with open(cause_out, "w", encoding="utf-8") as handle:
+        json.dump({"snapshot": snapshot_path, "detail": str(exc)}, handle)
+    raise SystemExit(0)
+
+FIELDS = ("node", "status", "authoritative", "recordedAt")
+deltas = []
+rewritten = []
+before = snapshot.get("gates") or []
+for entry in before:
+    path = os.path.join(repo, entry.get("path", ""))
+    if not os.path.isfile(path):
+        deltas.append({"path": entry.get("path"), "field": "existence",
+                       "before": "present", "after": "missing"})
+        continue
+    # A gate that was readable at snapshot time and is not readable now is a
+    # DELTA, not a crash. Unguarded this raised straight out of the script, so
+    # an operator saw a raw Python traceback on stderr immediately ahead of the
+    # GLUERUN_GATE_PRESERVATION_FAILED block that the non-zero exit then
+    # produced. Failing closed is preserved — an unverifiable gate is a delta,
+    # so verification still refuses — but the diagnosis is the clean block and
+    # it now names the file.
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError as exc:
+        deltas.append({"path": entry.get("path"), "field": "readability",
+                       "before": "readable", "after": "unreadable: %s" % exc})
+        continue
+    if hashlib.sha256(raw).hexdigest() != entry.get("sha256"):
+        rewritten.append(entry.get("path"))
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        deltas.append({"path": entry.get("path"), "field": "parse",
+                       "before": entry.get("parseError") or "parsed",
+                       "after": str(exc)})
+        continue
+    if not isinstance(document, dict):
+        deltas.append({"path": entry.get("path"), "field": "parse",
+                       "before": "object", "after": "not an object"})
+        continue
+    for field in FIELDS:
+        if document.get(field) != entry.get(field):
+            deltas.append({"path": entry.get("path"), "field": field,
+                           "before": entry.get(field),
+                           "after": document.get(field)})
+
+gates_dir = os.path.join(repo, "docs", "orchestration", "gates")
+try:
+    now_count = len([n for n in os.listdir(gates_dir)
+                     if n.endswith(".gate-result.json")])
+except OSError:
+    now_count = 0
+if now_count != len(before):
+    deltas.append({"path": "docs/orchestration/gates", "field": "count",
+                   "before": len(before), "after": now_count})
+
+with open(cause_out, "w", encoding="utf-8") as handle:
+    json.dump({
+        "snapshot": os.path.relpath(snapshot_path, repo),
+        "checked": len(before),
+        "semanticDeltas": deltas,
+        "byteRewrittenInformational": rewritten,
+    }, handle)
+
+first = ""
+if deltas:
+    item = deltas[0]
+    first = "%s: %s %r -> %r" % (item["path"], item["field"],
+                                 item["before"], item["after"])
+print(US.join(["1" if not deltas else "0", str(len(before)),
+               str(len(rewritten)), str(len(deltas)), first]))
+PY
+}
+
+# Reduce a doctor report to ONE primary diagnosis. `blocking` (added with the
+# cascade guard) already names it when doctor found a primary incompatibility —
+# and its code, e.g. GLUERUN_SCHEMA_MISMATCH, is passed straight through so the
+# operator sees the same code from `gluerun setup` and `gluerun doctor --json`.
+# Otherwise the first FAIL in check order is the primary one. Prints
+#   code US checkId US message US passed US warnings US failed US skipped
+setup_doctor_classify() { # report.json
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+US = "\x1f"
+
+
+def headline(value):
+    """One clean sentence for the operator's summary line.
+
+    Doctor messages end in a captured probe's output, and that output is often
+    machine text: a provider that fails while printing JSON produced
+
+        selected Codex spawn probe failed (exit 1): {
+
+    — a raw fragment where a diagnosis belonged. Trailing structural
+    punctuation carries no information at all, so it is dropped rather than
+    shown. (Doctor already reduces captured output to its first line, so this
+    is about the fragment, not the line count.)
+
+    The first-line pass matters for a second reason: the caller reads these
+    fields with a single `read -r` over one US-joined line, so any embedded
+    newline would silently truncate every field after the message —
+    passed/warnings/failed/skipped would all come back empty.
+    """
+    line = ""
+    for candidate in str(value or "").splitlines():
+        if candidate.strip():
+            line = candidate.strip()
+            break
+    while line and line[-1] in "{[(,:":
+        line = line[:-1].rstrip()
+    return line
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        report = json.load(handle)
+except (OSError, ValueError) as exc:
+    print(US.join(["GLUERUN_DOCTOR_BLOCKED", "", headline("doctor produced no "
+                   "parseable report: %s" % exc), "0", "0", "0", "0"]))
+    raise SystemExit(0)
+
+checks = report.get("checks") or []
+blocking = report.get("blocking")
+if isinstance(blocking, dict) and blocking.get("code"):
+    code = str(blocking["code"])
+    check_id = str(blocking.get("checkId") or "")
+else:
+    code = "GLUERUN_DOCTOR_BLOCKED"
+    check_id = ""
+first_fail = next((item for item in checks if item.get("status") == "fail"), None)
+if not check_id and first_fail:
+    check_id = str(first_fail.get("id") or "")
+message = ""
+for item in checks:
+    if item.get("id") == check_id:
+        message = headline(item.get("message"))
+        break
+if not message and first_fail:
+    message = headline(first_fail.get("message"))
+summary = report.get("summary") or {}
+print(US.join([code, check_id, message,
+               str(summary.get("passed", 0)), str(summary.get("warnings", 0)),
+               str(summary.get("failed", 0)), str(summary.get("skipped", 0))]))
+PY
+}
+
+# The one place a pending human decision outranks everything setup could suggest.
+# Both request namings seen in the field are recognised (`<id>.human-gate.json`,
+# which engine/human_gate.py writes, and the `<id>.request.json` form carried by
+# older consumer repos), and a request counts as answered when the matching
+# approval artifact exists next to it. Prints the gate id, or nothing.
+setup_pending_human_gate() { # repo
+  python3 - "$1" <<'PY'
+import json
+import os
+import sys
+
+directory = os.path.join(sys.argv[1], "docs", "orchestration", "human-gates")
+try:
+    names = sorted(os.listdir(directory))
+except OSError:
+    raise SystemExit(0)
+present = set(names)
+for name in names:
+    for suffix in (".human-gate.json", ".request.json"):
+        if not name.endswith(suffix):
+            continue
+        base = name[: -len(suffix)]
+        if any(base + answer in present
+               for answer in (".human-approval.json", ".approval.json")):
+            break
+        gate_id = base
+        try:
+            with open(os.path.join(directory, name), encoding="utf-8") as handle:
+                document = json.load(handle)
+            if isinstance(document, dict) and isinstance(document.get("gateId"), str):
+                gate_id = document["gateId"] or base
+        except (OSError, ValueError):
+            pass
+        print(gate_id)
+        raise SystemExit(0)
+PY
+}
+
+cmd_setup() {
+  local no_test=0 test_async=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)        SETUP_JSON=1 ;;
+      --no-test)     no_test=1 ;;
+      --test-async)  test_async=1 ;;
+      *) die "setup: unknown argument: $1 (usage: gluerun setup [--json] [--no-test] [--test-async])" ;;
+    esac
+    shift
+  done
+  if [[ "$no_test" == "1" && "$test_async" == "1" ]]; then
+    die "setup: --no-test and --test-async are mutually exclusive"
+  fi
+
+  setup_note "gluerun setup"
+
+  # (1) Interpreter. The embedded guard at the top of this file already re-exec'd
+  # or refused; reaching here IS the proof. GLUERUN_BASH_UNSUPPORTED is the
+  # guard's code and is never emitted from down here.
+  setup_step interpreter ok "bash ${BASH_VERSION%%(*} (>= 4 required)"
+
+  # (2) Repository. Nothing below has a meaningful target without one.
+  local root; root="$(repo_root)"
+  if [[ -z "$root" ]]; then
+    setup_fail GLUERUN_NOT_A_REPOSITORY repository \
+      "not inside a git repository; setup has no repository to prepare" \
+      "cd <your project> && gluerun setup" \
+      "Run setup from inside the consumer repository you want prepared." \
+      "$(setup_cause cwd "$PWD")"
+  fi
+  setup_step repository ok "repository root: $root"
+
+  # (3) Git source preflight, properties 1-2 of engine/git-preflight.sh. Inlined
+  # deliberately: cmd_setup must not have to source an engine file before it has
+  # resolved (or installed) an engine. The disposable-worktree probe (property 3)
+  # is doctor's job at step 12, where an engine is guaranteed.
+  local detail=""
+  if [[ "$(git -C "$root" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]]; then
+    detail="not a Git working tree: $root"
+  elif ! git -C "$root" rev-parse -q --verify 'HEAD^{commit}' >/dev/null 2>&1; then
+    detail="HEAD does not resolve to a commit (no history): $root"
+  fi
+  if [[ -n "$detail" ]]; then
+    setup_fail GLUERUN_TEST_SOURCE_UNSUPPORTED git-preflight \
+      "$detail" \
+      "git commit --allow-empty -m init && gluerun setup" \
+      "Setup needs a real Git working tree with history: migrations, gate evidence and worktrees are all committed-state operations." \
+      "$(setup_cause repoRoot "$root" detail "$detail")"
+  fi
+  setup_step git ok "git work tree with history at HEAD"
+
+  # (4) Pin resolution, said out loud. Same precedence as repo_pin() —
+  # .gluerun-version is authoritative, gluerun.config.json engineVersion is the
+  # fallback — but setup reports the disagreement itself instead of leaving
+  # repo_pin's one-line stderr warning to carry it.
+  local pin_file="" pin_cfg="" pin=""
+  [[ -f "$root/.gluerun-version" ]] && pin_file="$(tr -d '[:space:]' < "$root/.gluerun-version")"
+  pin_cfg="$(config_engine_version "$root")"
+  pin="$pin_file"; [[ -n "$pin" ]] || pin="$pin_cfg"
+  if [[ -z "$pin" ]]; then
+    setup_step pin skip "no engine pin (.gluerun-version absent, no gluerun.config.json engineVersion)"
+  else
+    setup_step pin ok "engine pin $pin (.gluerun-version: ${pin_file:-absent}; gluerun.config.json engineVersion: ${pin_cfg:-absent})"
+  fi
+  if [[ -n "$pin_file" && -n "$pin_cfg" && "$pin_file" != "$pin_cfg" ]]; then
+    setup_warn GLUERUN_PIN_CONFLICT \
+      ".gluerun-version ($pin_file) and gluerun.config.json engineVersion ($pin_cfg) disagree; .gluerun-version wins"
+  fi
+
+  # (5) Engine presence. There is NO registry and no download path: install.sh
+  # installs a checkout that is already on this machine, and nothing else can.
+  # Saying so is the whole point of the failure below.
+  local home="" checkout="" checkout_version="" self
+  self="$(self_dir)"
+  if [[ -f "$self/../engine/lib.sh" && -f "$self/../VERSION" ]]; then
+    checkout="$(cd "$self/.." && pwd)"
+    checkout_version="$(tr -d '[:space:]' < "$checkout/VERSION")"
+  fi
+  if [[ -n "${GLUERUN_ENGINE_HOME:-}" ]]; then
+    if [[ ! -f "$GLUERUN_ENGINE_HOME/engine/lib.sh" ]]; then
+      setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-resolution \
+        "GLUERUN_ENGINE_HOME is set but has no engine/lib.sh: $GLUERUN_ENGINE_HOME" \
+        "unset GLUERUN_ENGINE_HOME && gluerun setup" \
+        "Point GLUERUN_ENGINE_HOME at an engine checkout or installed version, or unset it and let the repo pin decide." \
+        "$(setup_cause engineHome "$GLUERUN_ENGINE_HOME")"
+    fi
+    home="$GLUERUN_ENGINE_HOME"
+    setup_step engine ok "engine home overridden by GLUERUN_ENGINE_HOME ($home)"
+  elif [[ -n "$pin" && -d "$HOME/.gluerun/versions/$pin" ]]; then
+    home="$HOME/.gluerun/versions/$pin"
+    setup_step engine ok "engine $pin already installed ($home)"
+  elif [[ -n "$pin" && -n "$checkout" && "$checkout_version" == "$pin" ]]; then
+    setup_note "  ...   installing engine $pin from $checkout"
+    if ! "${GLUERUN_BASH_BIN:-bash}" "$checkout/install.sh" >&2; then
+      setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-install \
+        "install.sh failed for engine $pin from $checkout" \
+        "bash $checkout/install.sh" \
+        "Run the installer directly and read its output; setup cannot continue without an installed engine." \
+        "$(setup_cause pin "$pin" checkout "$checkout")"
+    fi
+    [[ -d "$HOME/.gluerun/versions/$pin" ]] || setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-install \
+      "install.sh reported success but $HOME/.gluerun/versions/$pin does not exist" \
+      "bash $checkout/install.sh" \
+      "Check GLUERUN_HOME and the installer output; the pinned version was not created." \
+      "$(setup_cause pin "$pin" checkout "$checkout")"
+    home="$HOME/.gluerun/versions/$pin"
+    setup_step engine new "engine $pin installed from $checkout ($home)"
+  elif [[ -z "$pin" && -n "$checkout" ]]; then
+    if [[ -d "$HOME/.gluerun/versions/$checkout_version" ]]; then
+      home="$HOME/.gluerun/versions/$checkout_version"
+      setup_step engine ok "no repo pin; engine $checkout_version already installed ($home)"
+    else
+      setup_note "  ...   installing engine $checkout_version from $checkout"
+      if ! "${GLUERUN_BASH_BIN:-bash}" "$checkout/install.sh" >&2; then
+        setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-install \
+          "install.sh failed for engine $checkout_version from $checkout" \
+          "bash $checkout/install.sh" \
+          "Run the installer directly and read its output; setup cannot continue without an installed engine." \
+          "$(setup_cause checkout "$checkout")"
+      fi
+      home="$HOME/.gluerun/versions/$checkout_version"
+      [[ -d "$home" ]] || setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-install \
+        "install.sh reported success but $home does not exist" \
+        "bash $checkout/install.sh" \
+        "Check GLUERUN_HOME and the installer output; the version was not created." \
+        "$(setup_cause checkout "$checkout")"
+      setup_step engine new "engine $checkout_version installed from $checkout ($home)"
+    fi
+  elif [[ -z "$pin" && -d "$HOME/.gluerun/current" ]]; then
+    # Not in PMGO-006's list, but refusing here would contradict every other
+    # command: resolve_engine_home falls back to ~/.gluerun/current, and step 7
+    # then pins this repo to whatever that turned out to be.
+    home="$HOME/.gluerun/current"
+    setup_step engine ok "no repo pin; using the default install ($home)"
+  else
+    setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-resolution \
+      "repo pins engine ${pin:-<none>} but it is not installed (${HOME}/.gluerun/versions/${pin:-<none>})" \
+      "bash <engine checkout>/install.sh" \
+      "There is no download mechanism: gluerun installs ONLY from an engine checkout already on this machine. Clone or fetch the engine at version ${pin:-<any>}, then run install.sh from it (this CLI is at ${checkout:-$self})." \
+      "$(setup_cause pin "${pin:-}" expectedPath "$HOME/.gluerun/versions/${pin:-}" checkoutSeen "${checkout:-none}" checkoutVersion "${checkout_version:-none}")"
+  fi
+  # Every composed step from here on must use the engine setup just resolved,
+  # not re-resolve and possibly pick a different one.
+  export GLUERUN_ENGINE_HOME="$home"
+  SETUP_ENGINE_HOME="$home"
+  SETUP_ENGINE_VERSION=""
+  [[ -f "$home/VERSION" ]] && SETUP_ENGINE_VERSION="$(tr -d '[:space:]' < "$home/VERSION")"
+
+  # (6) STOP is the FIRST thing setup writes into the repository. Everything
+  # after this point happens in a repo that cannot dispatch a worker. Setup never
+  # removes STOP — lifting it is the separate, explicit actuation step.
+  local state_dir="$root/.gluerun-state"
+  if ! mkdir -p "$state_dir/setup" 2>/dev/null; then
+    setup_fail GLUERUN_REPO_UNWRITABLE stop \
+      "cannot create $state_dir/setup (repository is not writable)" \
+      "chmod u+w $root && gluerun setup" \
+      "Setup must be able to write STOP and its evidence before it changes anything else." \
+      "$(setup_cause path "$state_dir/setup")"
+  fi
+  SETUP_STATE_DIR="$state_dir"
+  if [[ -f "$state_dir/STOP" ]]; then
+    setup_step stop ok "STOP already present (.gluerun-state/STOP) — no workers will be dispatched"
+  else
+    if ! : > "$state_dir/STOP" 2>/dev/null; then
+      setup_fail GLUERUN_REPO_UNWRITABLE stop \
+        "cannot write $state_dir/STOP" \
+        "chmod u+w $state_dir && gluerun setup" \
+        "STOP must exist before setup changes anything else in the repository." \
+        "$(setup_cause path "$state_dir/STOP")"
+    fi
+    setup_step stop new "STOP written (.gluerun-state/STOP) — no workers will be dispatched"
+  fi
+  # A pre-rebrand consumer may still have autonomate loops reading .pmgo-state/.
+  # Mirror STOP there so both roots agree — but NEVER create that directory:
+  # conjuring a legacy state root into a clean repo would be a lie about history.
+  if [[ -d "$root/.pmgo-state" ]]; then
+    if [[ -f "$root/.pmgo-state/STOP" ]]; then
+      setup_step stop.legacy ok "STOP already present in the legacy state root (.pmgo-state/STOP)"
+    elif : > "$root/.pmgo-state/STOP" 2>/dev/null; then
+      setup_step stop.legacy new "STOP mirrored into the legacy state root (.pmgo-state/STOP)"
+    else
+      setup_step stop.legacy warn "legacy state root .pmgo-state/ exists but STOP could not be written there"
+    fi
+  fi
+
+  # (7) Pin the repo to the engine it was just verified against, if it does not
+  # already say. Same write cmd_init performs.
+  if [[ -f "$root/.gluerun-version" ]]; then
+    setup_step version-pin ok ".gluerun-version present ($pin_file)"
+  else
+    # Guarded like every other repo write in this command. Unguarded, a read-only
+    # repository root got a raw `cp: Permission denied` and exit 1 with no code,
+    # no recovery and no `Next:` — and under --json, zero bytes on stdout where
+    # the contract promises exactly one operator-failure.v0 object.
+    if ! cp "$home/VERSION" "$root/.gluerun-version" 2>/dev/null; then
+      setup_fail GLUERUN_REPO_UNWRITABLE version-pin \
+        "cannot write $root/.gluerun-version (repository root is not writable)" \
+        "chmod u+w $root && gluerun setup" \
+        "Setup pins the repository to the engine it just verified; it will not report a repository as prepared while that pin is missing." \
+        "$(setup_cause path "$root/.gluerun-version" engineVersion "$SETUP_ENGINE_VERSION")"
+    fi
+    setup_step version-pin new ".gluerun-version ($SETUP_ENGINE_VERSION)"
+  fi
+
+  # (8) Scaffold only a repo that has never been scaffolded. cmd_init is
+  # idempotent internally (cp -n, [[ -f ]] guards, mkdir -p), but the presence of
+  # gluerun.config.json is the honest signal that this repo is already a consumer.
+  if [[ -f "$root/gluerun.config.json" ]]; then
+    setup_step scaffold skip "gluerun.config.json exists — init not re-run"
+  else
+    local init_out="" init_rc=0
+    set +e
+    init_out="$(cmd_init 2>&1)"
+    init_rc=$?
+    set -e
+    local line
+    while IFS= read -r line; do
+      # cmd_init ends with its own next action; setup prints exactly one, at the
+      # very end, and it is not "edit the config you have not seen yet".
+      [[ -z "$line" || "$line" == Next:* ]] && continue
+      setup_note "  $line"
+    done <<<"$init_out"
+    # cmd_init's exit code alone does not answer "did it scaffold?". It runs
+    # inside a `set +e` command substitution, so it inherits errexit OFF and
+    # returns the status of its LAST command (an echo) no matter how many of
+    # its writes were refused — on a read-only root every cp and mkdir failed
+    # and init still exited 0, so setup reported "scaffold created", walked on,
+    # and finally blamed the migration for a gluerun.config.json that was never
+    # written. The artifact is the evidence; check for it.
+    local config_state="absent"
+    [[ -f "$root/gluerun.config.json" ]] && config_state="present"
+    if [[ "$init_rc" -ne 0 || "$config_state" != "present" ]]; then
+      setup_fail GLUERUN_REPO_UNWRITABLE scaffold \
+        "gluerun init did not scaffold $root (init exit $init_rc; gluerun.config.json $config_state)" \
+        "gluerun init" \
+        "Run init on its own and read its output; setup cannot validate a repository it could not scaffold." \
+        "$(setup_cause exitCode "$init_rc" configJson "$config_state" repoRoot "$root")"
+    fi
+    setup_step scaffold new "gluerun.config.json + docs/orchestration scaffold created"
+  fi
+  SETUP_SCHEMA_VERSION="$(repo_schema_version "$root")"
+  setup_set_state installed
+
+  # (9) Snapshot the authoritative history BEFORE a migration can touch it.
+  # Fresh every run: verification at step 11 compares against THIS snapshot, so a
+  # stale one can never be used to bless a rewrite it never saw.
+  local snapshot="$state_dir/setup/gates-pre-migrate.json" gate_count=""
+  if ! gate_count="$(setup_gate_snapshot "$root" "$snapshot")"; then
+    setup_fail GLUERUN_REPO_UNWRITABLE gate-snapshot \
+      "could not write the pre-migration gate snapshot ($snapshot)" \
+      "chmod u+w $state_dir && gluerun setup" \
+      "Setup refuses to migrate gates it could not first record." \
+      "$(setup_cause path "$snapshot")"
+  fi
+  setup_step gate-snapshot new \
+    "$gate_count gate-result file(s) hashed -> .gluerun-state/setup/gates-pre-migrate.json"
+
+  # (10) Migration: say what it would do, then do it. The dry run is the same
+  # discovery the real chain walks, so it is also the classifier for a chain that
+  # cannot be resolved — reported before the repository is touched.
+  local mig_out="" mig_rc=0
+  set +e
+  mig_out="$(cmd_migrate --dry-run 2>&1)"
+  mig_rc=$?
+  set -e
+  if [[ "$mig_rc" -ne 0 ]]; then
+    if [[ "$mig_out" == *"no migration found for"* ]]; then
+      setup_fail GLUERUN_MIGRATION_MISSING migration-plan \
+        "$(printf '%s' "$mig_out" | tail -n1)" \
+        "gluerun migrate --dry-run" \
+        "This engine ships no migration for the repository's schema. Install the engine version whose migrations cover it, or migrate through an intermediate version; see CHANGELOG.md." \
+        "$(setup_cause repoSchema "${SETUP_SCHEMA_VERSION:-unknown}" engineHome "$home" output "$mig_out")"
+    fi
+    setup_fail GLUERUN_MIGRATION_FAILED migration-plan \
+      "$(printf '%s' "$mig_out" | tail -n1)" \
+      "gluerun migrate --dry-run" \
+      "The migration chain could not be planned; nothing was migrated and the repository is unchanged." \
+      "$(setup_cause repoSchema "${SETUP_SCHEMA_VERSION:-unknown}" output "$mig_out")"
+  fi
+  if [[ "$mig_out" == *"up to date, nothing to do"* ]]; then
+    setup_step migrate ok "repo schema ${SETUP_SCHEMA_VERSION:-unknown} matches engine schema — nothing to migrate"
+  else
+    while IFS= read -r line; do
+      [[ "$line" == *"would run:"* ]] && setup_note "  plan  ${line#*would run: }"
+    done <<<"$mig_out"
+    set +e
+    mig_out="$(cmd_migrate 2>&1)"
+    mig_rc=$?
+    set -e
+    if [[ "$mig_rc" -ne 0 ]]; then
+      SETUP_SCHEMA_VERSION="$(repo_schema_version "$root")"
+      if [[ "$mig_out" == *"no migration found for"* ]]; then
+        setup_fail GLUERUN_MIGRATION_MISSING migration \
+          "$(printf '%s' "$mig_out" | tail -n1)" \
+          "gluerun migrate" \
+          "The repository is left at the last completed schema (${SETUP_SCHEMA_VERSION:-unknown}); no partial migration was recorded." \
+          "$(setup_cause repoSchema "${SETUP_SCHEMA_VERSION:-unknown}" output "$mig_out")"
+      fi
+      setup_fail GLUERUN_MIGRATION_FAILED migration \
+        "$(printf '%s' "$mig_out" | tail -n1)" \
+        "gluerun migrate" \
+        "The repository is left at the last completed schema (${SETUP_SCHEMA_VERSION:-unknown}). Fix the failing migration step, then run setup again — completed steps are not repeated." \
+        "$(setup_cause repoSchema "${SETUP_SCHEMA_VERSION:-unknown}" output "$mig_out")"
+    fi
+    SETUP_SCHEMA_VERSION="$(repo_schema_version "$root")"
+    setup_step migrate new "repository migrated to schema ${SETUP_SCHEMA_VERSION:-unknown}"
+  fi
+
+  # (11) Did the migration preserve the historical verdicts it inherited?
+  local verify="" verify_rc=0 verify_ok="" checked="" rewritten="" delta_count="" first_delta=""
+  local cause_file="$state_dir/setup/gate-verification.json" verify_err=""
+  # The verifier's stderr is CAPTURED, never passed through. Whatever it says —
+  # an interpreter traceback from a case the guards above did not anticipate, a
+  # write failure on the cause file — must not print ahead of the failure block
+  # below: the contract is one diagnosis, led by its code. It is not discarded
+  # either; its first line becomes part of that diagnosis.
+  set +e
+  verify="$(setup_gate_verify "$root" "$snapshot" "$cause_file" 2>"$cause_file.err")"
+  verify_rc=$?
+  set -e
+  [[ -s "$cause_file.err" ]] && verify_err="$(tail -n1 "$cause_file.err")"
+  # "The check did not run" is not "the gates are fine". Refuse either way.
+  if [[ "$verify_rc" -ne 0 || -z "$verify" ]]; then
+    setup_fail GLUERUN_GATE_PRESERVATION_FAILED gate-verification \
+      "gate preservation could not be verified (verifier exited $verify_rc)${verify_err:+ — $verify_err}" \
+      "gluerun setup --json" \
+      "Setup will not report gates as preserved on the strength of a check that did not complete. Inspect .gluerun-state/setup/gates-pre-migrate.json by hand; the verifier's own output is at .gluerun-state/setup/gate-verification.json.err." \
+      "$(setup_cause snapshot ".gluerun-state/setup/gates-pre-migrate.json" exitCode "$verify_rc" stderr "$verify_err")"
+  fi
+  rm -f "$cause_file.err"
+  IFS="$SETUP_US" read -r verify_ok checked rewritten delta_count first_delta <<<"$verify"
+  if [[ "$verify_ok" != "1" ]]; then
+    setup_fail GLUERUN_GATE_PRESERVATION_FAILED gate-verification \
+      "$delta_count historical gate field(s) changed across migration — first: $first_delta" \
+      "gluerun setup --json" \
+      "Compare the repository against .gluerun-state/setup/gates-pre-migrate.json; the full per-file delta is in .gluerun-state/setup/gate-verification.json. Historical gate verdicts (node, status, authoritative, recordedAt) must survive a migration untouched." \
+      "$(cat "$cause_file")"
+  fi
+  if [[ "$rewritten" != "0" ]]; then
+    setup_step gate-preservation ok \
+      "$checked gate(s) semantically preserved; $rewritten file(s) byte-rewritten (namespace rebrand — informational)"
+  else
+    setup_step gate-preservation ok "$checked gate(s) preserved (no changes)"
+  fi
+  setup_set_state migrated
+
+  # (12) Validation. Same invocation cmd_doctor_v1 makes, with the report kept as
+  # evidence rather than printed and lost.
+  local doctor_report="$state_dir/setup/doctor.json" doctor_rc=0
+  if [[ ! -f "$home/engine/doctor.py" ]]; then
+    setup_fail GLUERUN_DOCTOR_BLOCKED doctor \
+      "engine $home has no structured doctor helper (engine/doctor.py)" \
+      "gluerun version" \
+      "Install an engine build that ships engine/doctor.py; setup cannot validate a repository without it." \
+      "$(setup_cause engineHome "$home")"
+  fi
+  set +e
+  python3 "$home/engine/doctor.py" \
+    --engine-home "$home" \
+    --repo-root "$root" \
+    --bash "${BASH:-${GLUERUN_BASH_BIN:-bash}}" \
+    --bash-version "$BASH_VERSION" \
+    --json >"$doctor_report" 2>"$doctor_report.err"
+  doctor_rc=$?
+  set -e
+  local d_code="" d_check="" d_message="" d_pass="" d_warn="" d_fail="" d_skip="" classified=""
+  set +e
+  classified="$(setup_doctor_classify "$doctor_report")"
+  set -e
+  IFS="$SETUP_US" read -r d_code d_check d_message d_pass d_warn d_fail d_skip <<<"$classified"
+  if [[ "$doctor_rc" -ne 0 ]]; then
+    setup_fail "${d_code:-GLUERUN_DOCTOR_BLOCKED}" doctor \
+      "${d_message:-doctor reported $d_fail failing check(s)}" \
+      "gluerun doctor --json" \
+      "Fix the primary diagnosis${d_check:+ ($d_check)} and run setup again; the full report is in .gluerun-state/setup/doctor.json." \
+      "$(setup_cause primaryCheck "${d_check:-unknown}" message "$d_message" failed "${d_fail:-0}" report ".gluerun-state/setup/doctor.json")"
+  fi
+  rm -f "$doctor_report.err"
+  setup_step doctor ok \
+    "doctor passed: $d_pass ok, $d_warn warning(s), $d_skip informational (.gluerun-state/setup/doctor.json)"
+  setup_set_state validated
+
+  # (13) Regression. Evidence lands under .gluerun-state/test-runs/<runId>/ either
+  # way, so a failed suite is as attributable as a passing one.
+  #
+  # The suite is runnable only from an engine CHECKOUT — most tests build
+  # disposable worktrees of HEAD, which an installed version (a plain `cp -Rp`
+  # tree with no .git) cannot provide, and installed versions ship no tests/ at
+  # all. That is a fact about the ENGINE, not a defect in this repository: every
+  # repo-side step above passed, STOP is in place, and nothing here is unsafe. So
+  # it is reported with its stable code as a WARNING and the ladder stops at
+  # `validated` — the state actually reached — with a next action that works,
+  # instead of failing a correctly prepared repository over the engine's inability
+  # to test itself. Nothing new is invented: same codes, same recovery, delivered
+  # through setup_warn/setup_step rather than setup_fail.
+  local suite="$home/tests/run.sh" suite_code=""
+  if [[ ! -f "$suite" ]]; then
+    suite_code="GLUERUN_TEST_SUITE_UNAVAILABLE"
+  elif [[ "$(git -C "$home" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]]; then
+    suite_code="GLUERUN_TEST_SOURCE_UNSUPPORTED"
+  fi
+  if [[ "$no_test" == "1" ]]; then
+    setup_step test skip "regression suite not run (--no-test); stopped-ready needs a passing run"
+  elif [[ -n "$suite_code" ]]; then
+    if [[ "$suite_code" == "GLUERUN_TEST_SUITE_UNAVAILABLE" ]]; then
+      setup_warn "$suite_code" \
+        "engine home $home ships no regression suite ($suite); installed engines never do — the suite lives in an engine checkout"
+    else
+      setup_warn "$suite_code" \
+        "engine home $home is not a Git working tree, so its regression suite cannot run (it needs history and disposable worktrees)"
+    fi
+    setup_step test skip \
+      "regression suite not runnable from this engine home; the repository stays at 'validated'"
+  elif [[ "$test_async" == "1" ]]; then
+    # cmd_test --no-wait prints the run id on stdout and its narration on stderr,
+    # which is already where the human stream lives under --json.
+    SETUP_TEST_RUN_ID="$(cmd_test --no-wait)"
+    setup_step test new "regression run ${SETUP_TEST_RUN_ID:-?} started detached (--test-async); attach with: gluerun test --wait"
+    # Still `validated` — a started run is not a passed one — but the state file
+    # has to carry the run id, or nothing records which run to go and wait on.
+    setup_set_state validated
+  else
+    local test_rc=0
+    set +e
+    if [[ "$SETUP_JSON" == "1" ]]; then ( cmd_test ) >&2; else ( cmd_test ); fi
+    test_rc=$?
+    set -e
+    local names=""
+    SETUP_TEST_RUN_ID="$(python3 - "$state_dir/test-runs/current.json" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        print(json.load(handle).get("runId") or "")
+except (OSError, ValueError):
+    print("")
+PY
+)"
+    if [[ "$test_rc" -ne 0 ]]; then
+      names="$(python3 - "$state_dir/test-runs/${SETUP_TEST_RUN_ID}/manifest.json" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        manifest = json.load(handle)
+except (OSError, ValueError):
+    print("")
+else:
+    print(" ".join(str(n) for n in (manifest.get("failed") or [])))
+PY
+)"
+      setup_fail GLUERUN_TEST_RUN_FAILED regression \
+        "regression run ${SETUP_TEST_RUN_ID:-unknown} did not pass (exit $test_rc)${names:+ — failed: $names}" \
+        "gluerun test --rerun-failures" \
+        "Evidence is kept at .gluerun-state/test-runs/${SETUP_TEST_RUN_ID:-<runId>}/ (manifest.json, suite.log, logs/). The repository stays at 'validated' and STOP stays in place." \
+        "$(setup_cause runId "${SETUP_TEST_RUN_ID:-unknown}" exitCode "$test_rc" failed "$names")"
+    fi
+    setup_step test ok "regression run $SETUP_TEST_RUN_ID passed (.gluerun-state/test-runs/$SETUP_TEST_RUN_ID/)"
+    setup_set_state stopped-ready
+  fi
+
+  # (14) Exactly one next action, chosen by what is actually outstanding.
+  local next_cmd="" next_instr="" gate_id=""
+  gate_id="$(setup_pending_human_gate "$root" || true)"
+  if [[ -n "$gate_id" ]]; then
+    next_cmd="gluerun human-gate status $gate_id"
+    next_instr="A human gate is waiting on a decision; nothing downstream of it can advance until it is answered."
+  elif [[ "$SETUP_STATE" == "stopped-ready" ]]; then
+    next_cmd="gluerun resume"
+    next_instr="Lifts STOP and lets the loop dispatch workers — the separate, explicit actuation step."
+  elif [[ -n "$suite_code" ]]; then
+    # Ordered ahead of both remaining branches on purpose: with no runnable suite
+    # nothing was started, so `gluerun test --wait` has nothing to attach to and a
+    # bare `gluerun test` would refuse with the very code just reported. Naming
+    # the checkout is the only next action that can actually record a passing run.
+    next_cmd="GLUERUN_ENGINE_HOME=<engine checkout> gluerun test"
+    next_instr="This engine home cannot run the regression suite ($suite_code). Point GLUERUN_ENGINE_HOME at an engine checkout and run the suite from this repository — the evidence still lands here under .gluerun-state/test-runs/ — then run setup again to reach 'stopped-ready'."
+  elif [[ "$test_async" == "1" ]]; then
+    next_cmd="gluerun test --wait"
+    next_instr="Attach to the detached regression run; a passing run is the last thing between 'validated' and 'stopped-ready'."
+  else
+    next_cmd="gluerun test"
+    next_instr="Record a passing regression run; it is the last thing between 'validated' and 'stopped-ready'."
+  fi
+
+  local safe=0
+  [[ "$SETUP_STATE" == "stopped-ready" ]] && safe=1
+  setup_note ""
+  setup_note "State: $SETUP_STATE (STOP active; no workers dispatched)"
+  setup_note "Next: $next_cmd"
+  setup_note "      $next_instr"
+  setup_py_emit report "$SETUP_JSON" "$state_dir/setup/last-result.json" \
+    8 "$SETUP_STATE" "$SETUP_ENGINE_VERSION" "$SETUP_ENGINE_HOME" "$SETUP_SCHEMA_VERSION" \
+    "$SETUP_TEST_RUN_ID" "$next_cmd" "$next_instr" "$safe" \
+    "${#SETUP_STEPS[@]}" ${SETUP_STEPS[@]+"${SETUP_STEPS[@]}"} \
+    "${#SETUP_WARNINGS[@]}" ${SETUP_WARNINGS[@]+"${SETUP_WARNINGS[@]}"}
+  return 0
+}
+
 usage() {
   cat <<'EOF'
 gluerun — orchestration engine launcher
@@ -878,10 +2259,20 @@ Setup / lifecycle:
                                                       browsable thread (.gluerun-state/plans/<id>)
                                                       and reset the live tree to a starter DAG
   plan list [--json]   list archived plan threads (id, name, date, gates, tasks)
+  setup [--json] [--no-test] [--test-async]
+                       ONE idempotent path from "a repo" to a verified STOPPED repo:
+                       pin + engine, STOP first, scaffold, gate snapshot, migrate,
+                       gate-preservation check, doctor, regression run. Fails before
+                       mutating, prints exactly one next action, never actuates.
   init                 scaffold gluerun.config.json + docs/orchestration in this repo
   doctor [--json] [--repair-model-cache]               structured operator preflight
+  test [--status [--json]|--wait|--no-wait|--new-run|--rerun-failures]
+                       supervised engine regression run — one live run at a time
+                       (default: attach to it), durable manifest + per-test logs
+                       under .gluerun-state/test-runs/
   update [VERSION]     pin this repo to an engine version (.gluerun-version)
-  migrate              bring this repo's schemaVersion up to the engine's
+  migrate [--dry-run]  bring this repo's schemaVersion up to the engine's
+                       (--dry-run prints the migration chain and changes nothing)
   version              print CLI + resolved engine version
 EOF
   # Flag-gated: the graph subcommand line appears ONLY when GLUERUN_CTX_GRAPH=1,
@@ -944,8 +2335,10 @@ main() {
     graph)         [[ "${GLUERUN_CTX_GRAPH:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_graph "$@" ;;
     experiment-report) [[ "${GLUERUN_CTX_EXPERIMENT:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_experiment_report "$@" ;;
     console)       cmd_console "$@" ;;
+    setup)         cmd_setup "$@" ;;
     init)          cmd_init "$@" ;;
     doctor)        cmd_doctor_v1 "$@" ;;
+    test)          cmd_test "$@" ;;
     update)        cmd_update "$@" ;;
     migrate)       cmd_migrate "$@" ;;
     version|--version|-v) cmd_version ;;

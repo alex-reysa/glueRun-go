@@ -120,8 +120,36 @@ export PATH="$HOME/.gluerun/bin:$PATH"
 In each consumer repo:
 
 ```bash
+gluerun setup     # one idempotent path from "a repo" to a verified, STOPPED repo
+```
+
+`gluerun setup` composes the individual lifecycle verbs and contributes the
+order, the evidence, and the contract. It checks interpreter/repo/git work tree,
+resolves the engine pin (naming the winner when `.gluerun-version` and
+`gluerun.config.json` `engineVersion` disagree), installs the pinned engine when
+it is absent — only from a matching engine checkout already on this machine,
+since there is no download mechanism — writes `.gluerun-state/STOP` as its first
+repo write, pins and scaffolds, hashes every gate result before printing and
+running the migration chain, verifies those historical verdicts survived, runs
+doctor, and records a supervised regression run. Prerequisites fail before
+anything is mutated. It reports a state ladder
+(`installed → migrated → validated → stopped-ready`), never actuates, and prints
+exactly one `Next:` line. Failures carry a stable code and one recovery
+instruction (`gluerun.operator-failure.v0`); evidence lands under
+`.gluerun-state/setup/`.
+
+```bash
+gluerun setup --no-test      # stop at `validated`, without the regression run
+gluerun setup --test-async   # start the suite detached; attach with gluerun test --wait
+gluerun setup --json         # one gluerun.setup-report.v0 object on stdout
+```
+
+The composed steps are still available on their own:
+
+```bash
 gluerun init      # scaffold gluerun.config.json, docs/orchestration/, .gluerun-version
 gluerun doctor    # check deps, engine resolution, repo config
+gluerun migrate   # raise schemaVersion to the engine's (--dry-run prints the chain only)
 ```
 
 `GLUERUN_BASH_BIN` is bootstrap-only and is ignored in `gluerun.config.json`;
@@ -451,7 +479,40 @@ Two versions move independently:
 
 ```bash
 bash tests/run.sh    # full regression suite (120+ tests)
+gluerun test         # the same suite as a supervised, attachable run
 bash tests/field-report-canary.sh  # required before promoting 0.11.2, 0.12.0, or 0.13.0
+```
+
+`gluerun test` runs the resolved engine's own `tests/run.sh` as a supervised job
+and keeps the evidence in the current repo under
+`.gluerun-state/test-runs/<runId>/` (`gluerun.test-run.v0` manifest, `suite.log`,
+per-test logs, `progress.jsonl`), so a result outlives the session that started
+it. A detached supervisor holds an exclusive `flock` for its whole life:
+liveness is proved by the kernel rather than guessed from a pid, and `ps` is
+never consulted. A second invocation attaches to the live run instead of
+starting a duplicate — `--new-run` is the explicit override — and a supervisor
+killed mid-run reconciles to `interrupted` with the counts it reached (and ends
+the run's process group, so an orphaned suite cannot keep writing into it).
+
+**The resolved engine must be a checkout.** Most tests build disposable Git
+worktrees of `HEAD`, so `tests/run.sh` opens with a source preflight that needs
+real history — and an installed version (`~/.gluerun/versions/<ver>/`) is a plain
+copy that ships no `tests/` at all. `gluerun test` refuses up front there, with
+`GLUERUN_TEST_SUITE_UNAVAILABLE` or `GLUERUN_TEST_SOURCE_UNSUPPORTED` and before
+any run directory exists. To record a run for a consumer repo, point the CLI at a
+checkout from inside that repo — evidence still lands in the repo you are in:
+
+```bash
+GLUERUN_ENGINE_HOME=/path/to/engine-checkout gluerun test
+```
+
+`--status` and `--wait` are exempt: reporting on a past run needs no suite.
+
+```bash
+gluerun test --status [--json]  # report on the current run
+gluerun test --wait             # attach to the live (or last recorded) run
+gluerun test --no-wait          # start detached; the run id goes to stdout
+gluerun test --rerun-failures   # re-run only the last completed run's failures
 ```
 
 The test suite uses no live state — all fixtures use a generic layer vocabulary. The

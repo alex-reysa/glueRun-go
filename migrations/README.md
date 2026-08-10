@@ -35,6 +35,25 @@ migrations/<fromSchema>-to-<toSchema>.sh      e.g. v0-to-v1.sh
 6. If a script exits nonzero, migration stops immediately; the repo's
    `schemaVersion` is left at the last completed step.
 
+## Dry run (`gluerun migrate --dry-run`)
+
+`gluerun migrate --dry-run` walks the same discovery as step 3 and prints the
+resolved chain — one `would run: <script> (<from> -> <to>)` line per step —
+then exits.
+
+- It invokes nothing: no migration script is executed, and `schemaVersion` is
+  never written.
+- It is also the classifier for an unresolvable chain: a missing step fails
+  there ("no migration found for X -> Y"), before the repository is touched.
+- Migration scripts themselves have **no dry-run protocol**. They are never
+  invoked with a "pretend" flag, must not implement one, and must not try to
+  detect one — a script that runs is a script that migrates.
+- The operator-facing safety therefore comes from outside the script: the chain
+  plan above, plus `gluerun setup`, which hashes every gate result before
+  migrating (`.gluerun-state/setup/gates-pre-migrate.json`) and afterwards
+  verifies each historical verdict (`node`, `status`, `authoritative`,
+  `recordedAt`) survived, refusing to report success when one did not.
+
 ## What a migration script may touch
 
 Only per-repo, committed orchestration surface in the target repo (`$1`):

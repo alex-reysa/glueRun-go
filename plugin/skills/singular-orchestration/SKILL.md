@@ -52,13 +52,46 @@ cd /path/to/singular-lite && bash install.sh
 export PATH="$HOME/.gluerun/bin:$PATH"
 ```
 
-In a repo that has never been orchestrated:
+In a repo whose state you do not already know — never orchestrated, or on an
+older pin or schema — run the one command that composes the whole lifecycle:
 
 ```bash
-gluerun init      # scaffolds gluerun.config.json, docs/orchestration/, .gluerun-version
+gluerun setup                 # -> a verified, STOPPED repo; ends with one Next: line
+gluerun setup --no-test       # stop at `validated`, without the regression run
+gluerun setup --test-async    # start the regression run detached, attach later
+gluerun setup --json          # one gluerun.setup-report.v0 object on stdout
 ```
 
-Then edit `gluerun.config.json` before anything will run:
+`gluerun setup` is idempotent and never actuates. It checks interpreter, repo
+root, and git work tree; resolves the engine pin (naming the winner when
+`.gluerun-version` and `gluerun.config.json` `engineVersion` disagree);
+installs the pinned engine if absent — **only from a matching engine checkout
+already on this machine, there is no download path**; writes
+`.gluerun-state/STOP` as its first repo write; pins and scaffolds
+(`gluerun init`) when needed; hashes every existing gate result; prints the
+migration chain and then runs it (`gluerun migrate`); verifies those historical
+verdicts survived; runs `gluerun doctor`; and records a supervised regression
+run (`gluerun test`). Prerequisites fail *before* anything is mutated, each
+with a stable code and one recovery instruction
+(`gluerun.operator-failure.v0`); evidence lands in `.gluerun-state/setup/`.
+
+It reports a state ladder — `installed → migrated → validated → stopped-ready`
+— claiming only what it reached, then exactly one next action:
+
+```text
+State: stopped-ready (STOP active; no workers dispatched)
+Next: gluerun resume
+```
+
+Do what that line says and nothing else. Setup never removes STOP: lifting it
+is the separate, explicit actuation step, and when a human gate is pending the
+one next action is that gate instead. Full step order, failure codes, and the
+`gluerun test` contract: [references/operations.md](references/operations.md).
+
+`gluerun init` on its own still scaffolds `gluerun.config.json`,
+`docs/orchestration/`, and `.gluerun-version` when scaffolding is all you want.
+
+Either way, edit `gluerun.config.json` before anything will run:
 
 - `targetBranch` — the integration branch workers merge into (use a working
   branch like `agent/integration`, not `main`; promote to `main` manually at
@@ -99,6 +132,38 @@ Then edit `gluerun.config.json` before anything will run:
 Also rewrite the scaffolded role prompts in `docs/orchestration/prompts/`
 for the repo's stack, and customize `docs/orchestration/planner-contract.md`
 (section 2). Re-run `gluerun doctor` until clean.
+
+The engine's own regression suite — the last thing `gluerun setup` does, and
+the way to re-verify an engine after an environment change — is a supervised
+job rather than a foreground command:
+
+```bash
+gluerun test                    # start a run, or attach to the live one
+gluerun test --status [--json]  # what the current run is doing
+gluerun test --wait             # attach to the live (or last recorded) run
+gluerun test --rerun-failures   # re-run only the last completed run's failures
+```
+
+One live run at a time: a second `gluerun test` attaches instead of starting a
+duplicate (`--new-run` is the explicit override). Liveness is proved by a lock
+the kernel releases on any death, never guessed from a pid, so a supervisor
+killed mid-run reconciles to `interrupted` with the counts it reached rather
+than looking finished. Evidence survives the session that started it, under
+`.gluerun-state/test-runs/<runId>/`.
+
+The suite runs only from an engine **checkout**: most tests build disposable Git
+worktrees of `HEAD`, and an installed engine (`~/.gluerun/versions/<ver>/`) is a
+plain copy with no history — it ships no `tests/`. On one, `gluerun test` refuses
+before creating anything (`GLUERUN_TEST_SUITE_UNAVAILABLE`, or
+`GLUERUN_TEST_SOURCE_UNSUPPORTED` for a suite in a non-checkout tree), and
+`gluerun setup` reports the same code as a warning and finishes at `validated`
+instead of failing a repository that is otherwise correctly prepared. Record the
+run from the consumer repo against a checkout — the evidence still lands in the
+repo you are in:
+
+```bash
+GLUERUN_ENGINE_HOME=/path/to/engine-checkout gluerun test
+```
 
 ## 2. Author the plan (DAG)
 

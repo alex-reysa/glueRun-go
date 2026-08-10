@@ -16,6 +16,12 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$SRC/VERSION" && -f "$SRC/engine/lib.sh" ]] || {
   echo "install.sh must run from an engine checkout (with VERSION + engine/)" >&2; exit 1; }
 
+# Bash >= 4 preflight: same shim, same diagnosis, as the CLI and the engine
+# entrypoints. Installing under macOS Bash 3.2 must not be the thing that
+# teaches an operator the requirement three commands later.
+# shellcheck source=engine/bash-guard.sh
+. "$SRC/engine/bash-guard.sh"
+
 VER="$(tr -d '[:space:]' < "$SRC/VERSION")"
 [[ -n "$VER" ]] || { echo "install.sh: VERSION is empty — refusing to install (would wipe versions/*)" >&2; exit 1; }
 GLUERUN_HOME="${GLUERUN_HOME:-$HOME/.gluerun}"
@@ -38,6 +44,12 @@ copy() {
   cp -Rp "$SRC/$1" "$DEST/"
 }
 rm -rf "$DEST"/* 2>/dev/null || true
+# `tests` is deliberately NOT in this list: the regression suite needs real Git
+# history and disposable worktrees, and an installed version is a plain `cp -Rp`
+# tree with no `.git`. Shipping it would only move the failure later — a run dir
+# and a supervisor created, then GLUERUN_TEST_SOURCE_UNSUPPORTED from run.sh's
+# own preflight. The suite runs from an engine CHECKOUT; `gluerun test` refuses
+# up front anywhere else. (The chmod below tolerates the absent dir.)
 for item in engine schemas promoters templates plugin gluerun-ext cli migrations VERSION SCHEMA_VERSION CHANGELOG.md; do
   copy "$item"
 done
