@@ -478,7 +478,7 @@ Two versions move independently:
 ## Development and tests
 
 ```bash
-bash tests/run.sh    # full regression suite (120+ tests)
+bash tests/run.sh    # full regression suite (190+ tests)
 gluerun test         # the same suite as a supervised, attachable run
 bash tests/field-report-canary.sh  # required before promoting 0.11.2, 0.12.0, or 0.13.0
 ```

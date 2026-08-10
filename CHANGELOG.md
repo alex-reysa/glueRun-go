@@ -143,8 +143,9 @@ four-wide wave runs three — correct, and invisible. A read-only replica of
 selected`). The replica declares its own coverage in a `policy` list: the
 pending-promotion pre-filter is deliberately not modelled, because the console's
 task projection cannot reproduce supersession chains and guessing would produce
-confidently wrong exclusions. It was verified differentially against the bash
-implementation across randomized fixtures before being trusted.
+confidently wrong exclusions. Its rules are pinned case by case against the bash
+implementation by `NativeL1SelectionTests`, and were additionally checked
+differentially against the extracted original during development.
 
 ### Setup was a sequence you had to already know
 
@@ -181,7 +182,7 @@ the migrations had no guard at all, and the CLI only re-exec'd when
 `GLUERUN_BASH_BIN` was already set, so a bare macOS `/bin/bash` walked straight
 into cryptic failures. A pin or schema mismatch is now one primary diagnosis
 instead of a cascade: `schema.version` carries
-`details.code = GLUERUN_SCHEMA_MISMATCH` and blocks the sixteen checks that
+`details.code = GLUERUN_SCHEMA_MISMATCH` and blocks the seventeen checks that
 merely reinterpret repo artifacts, each recording `blockedBy` so the audit trail
 survives, while every environmental check keeps answering for real. And running
 the suite from a Git archive is refused once, up front, instead of failing
@@ -207,8 +208,10 @@ duplicating. A supervisor killed mid-run reconciles to `interrupted` — and rea
 the run's process group, since an orphaned suite would otherwise keep appending
 to a run the manifest had already closed.
 
-`tests/run.sh` keeps its default behaviour byte-for-byte; the hooks are additive
-and it remains directly invocable as this repository's own gate command.
+`tests/run.sh` keeps its default *output* byte-for-byte and remains directly
+invocable as this repository's own gate command; the logging hooks are additive,
+and the two new preflights (Bash and Git source) can refuse up front where it
+previously walked into a cascade.
 
 ### Two settings, one value, and no warning
 
@@ -242,9 +245,11 @@ file at all when disabled.
 
 ### Migrating from 0.16.0
 
-Nothing is required. `schemaVersion` stays v2, every new knob defaults to
-previous behaviour, and `autonomate.alive` keeps its meaning for existing JSON
-consumers (`null` now expresses the previously unrepresentable EPERM case).
+Nothing is required. `schemaVersion` stays v2, every new *tuning* knob defaults
+to previous behaviour, and `autonomate.alive` keeps its meaning for existing
+JSON consumers (`null` now expresses the previously unrepresentable EPERM case).
+The two knobs that do not are the rollback switches for the behaviour changes
+below.
 
 Two behaviour changes are worth knowing. Providers now run in their own session,
 so a SIGKILL of a runner orphans a provider session that the old topology would

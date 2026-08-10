@@ -18,7 +18,7 @@
 # Doctor is host-sensitive (it probes the selected provider's real executable),
 # so fixtures that must reach `validated` pin a stub provider through
 # .gluerun-state/config.local.sh — the operator override lib.sh sources last.
-# Nothing here ever starts the real 185-test suite: every run passes --no-test
+# Nothing here ever starts the real full suite: every run passes --no-test
 # except where the absence of a run is the thing being asserted.
 set -uo pipefail
 
