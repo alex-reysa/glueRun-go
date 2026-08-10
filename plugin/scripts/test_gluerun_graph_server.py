@@ -1176,21 +1176,32 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             # were replaced by orchestration.gates, and disk.du became a
             # non-blocking background peek — see NativeFrontierTests /
             # ValidateDagNativeTests / SnapshotNoSubprocessTests below.
-            # /api/overview (includes settings groups). 0.17.0 adds three fields
-            # HEAD cannot have: progress.cohorts (PMGO-002), loop.stopReason
-            # (PMGO-003) and l1Selection (AXON-002). They are removed before the
-            # comparison rather than the comparison being dropped — everything
-            # else in the payload must still be byte-identical to HEAD, and the
-            # new fields have their own assertions below.
+            # /api/overview (includes settings groups). 0.17.0 added three
+            # fields: progress.cohorts (PMGO-002), loop.stopReason (PMGO-003)
+            # and l1Selection (AXON-002). They are dropped from BOTH sides
+            # rather than the comparison being dropped — everything else must
+            # still be byte-identical, and the new fields have their own
+            # assertions below.
+            #
+            # Both sides, not just the working tree's: the baseline is whatever
+            # `git show HEAD:` yields, so it MOVES. While the change was
+            # uncommitted HEAD predated these fields and stripping one side
+            # happened to work; the moment the change landed, HEAD grew them
+            # too and a one-sided strip could never match again — the test
+            # would fail forever on a clean tree for no product reason.
+            # Stripping symmetrically is what the assertion always meant:
+            # "nothing changed except what we declared."
             def drop_new_overview_fields(payload: dict) -> dict:
                 out = dict(payload)
                 out.pop("l1Selection", None)
-                out["progress"] = {k: v for k, v in out["progress"].items() if k != "cohorts"}
-                out["loop"] = {k: v for k, v in out["loop"].items() if k != "stopReason"}
+                out["progress"] = {k: v for k, v in (out.get("progress") or {}).items()
+                                   if k != "cohorts"}
+                out["loop"] = {k: v for k, v in (out.get("loop") or {}).items()
+                               if k != "stopReason"}
                 return out
 
             self.assertEqual(wire(drop_new_overview_fields(srv.collect_overview(repo))),
-                             wire(head.collect_overview(repo)))
+                             wire(drop_new_overview_fields(head.collect_overview(repo))))
             self.assertEqual(wire(srv.collect_settings(repo)),
                              wire(head.collect_settings(repo)))
             # /api/events live overlay
