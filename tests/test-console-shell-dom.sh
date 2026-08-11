@@ -145,6 +145,33 @@ fi
 assert_absent "$html" 'id="crumb-surface"' "retired breadcrumb #crumb-surface still present"
 assert_contains "$html" 'id="stop-reason"' "stop reason target (#stop-reason) missing"
 
+# Plan lenses are a second-level horizontal tablist at the leading edge of the
+# workbench toolbar. Guard both placement and cardinality so a left column or a
+# duplicate registry cannot quietly return.
+assert_absent "$html" 'id="plan-lensnav"' "retired Plan lens column (#plan-lensnav) still present"
+assert_contains "$html" 'id="plan-workbench-header"' "Plan workbench toolbar (#plan-workbench-header) missing"
+workbenchTail="${html#*id=\"plan-workbench-header\"}"
+[[ "$workbenchTail" != "$html" ]] || fail "could not slice #plan-workbench-header"
+workbench="${workbenchTail%%<div id=\"plan-body\"*}"
+[[ "$workbench" != "$workbenchTail" ]] || fail "#plan-body boundary missing after #plan-workbench-header"
+assert_contains "$workbench" 'id="plan-lens-tabs"' "Plan lens tabs not nested inside #plan-workbench-header"
+beforeSearch="${workbench%%id=\"search-input\"*}"
+[[ "$beforeSearch" != "$workbench" ]] || fail "search control missing from #plan-workbench-header"
+assert_contains "$beforeSearch" 'id="plan-lens-tabs"' "#plan-lens-tabs must lead the toolbar before search"
+lensTabs="${workbench#*id=\"plan-lens-tabs\"}"
+[[ "$lensTabs" != "$workbench" ]] || fail "could not slice #plan-lens-tabs"
+lensOpen="${lensTabs%%>*}"
+assert_contains "$lensOpen" 'role="tablist"' "#plan-lens-tabs must expose role=tablist"
+assert_contains "$lensOpen" 'aria-orientation="horizontal"' "#plan-lens-tabs must expose horizontal orientation"
+lensTabs="${lensTabs%%</nav>*}"
+got="$(printf '%s' "$lensTabs" | grep -o 'data-lens=' | grep -c . || true)"
+[[ "$got" -eq 4 ]] \
+  || fail "expected exactly 4 data-lens tabs inside #plan-lens-tabs, got $got"
+for lens in timeline matrix dag tasks; do
+  got="$(printf '%s' "$lensTabs" | grep -o "data-lens=\"$lens\"" | grep -c . || true)"
+  [[ "$got" -eq 1 ]] || fail "Plan tab data-lens=\"$lens\" not present exactly once inside #plan-lens-tabs (got $got)"
+done
+
 # --- matrix (rebuilt lens) assertions ------------------------------------------
 assert_contains "$html" "plan-mx-scroll" "matrix scroll container (plan-mx-scroll) missing — did #plan/matrix render?"
 assert_contains "$html" "pm-corner"      "matrix sticky corner (pm-corner) missing"

@@ -538,7 +538,7 @@ body.side-rail .side-thread .tone-dot { width: 8px; height: 8px; }
 
 .search-wrap {
   display: flex; align-items: center; gap: 7px;
-  flex: 1 1 220px; min-width: 150px;
+  flex: 0 1 320px; min-width: 150px;
   height: 28px; padding: 0 10px;
   border-radius: var(--r-btn);
   border: 1px solid var(--rule);

@@ -1,6 +1,6 @@
 /* plan.css — the Plan surface (0.6.0 console redesign). Loaded after styles.css.
    Warm-neutral pm-go tokens only (tokens.css). Owns the Plan workbench grid
-   (header · 196px lens nav · center pane · 360px aside) and the shared lens
+   (header lens tabs · center pane · 360px aside) and the shared lens
    chrome (detail cards, dimming classes, scroll-shadow fades). The app-level
    surface tabs live in the top bar (#surface-tabs — styles.css). */
 
@@ -26,7 +26,7 @@
   letter-spacing: 0.02em;
 }
 
-/* ---- Plan workbench: header row + 3-column body ---- */
+/* ---- Plan workbench: header row + 2-column body ---- */
 #plan-workbench-header {
   display: flex;
   align-items: center;
@@ -40,15 +40,25 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: 196px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
+
+/* Horizontal lens tabs lead the toolbar: choose the view, then filter it. */
+#plan-lens-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+#plan-lens-tabs .tab { height: 28px; }
+#plan-lens-tabs .tab[data-empty="1"] { opacity: 0.4; }
 
 /* quick status-filter pills, relocated from the old header stat strip */
 .plan-quickfilters { display: inline-flex; align-items: center; gap: 4px; }
 /* filter-chip recipe: muted, transparent, active fills var(--track) + ink */
 .qf-pill {
   display: inline-flex; align-items: center; gap: 5px;
-  height: 26px; padding: 0 10px; border: 0; border-radius: 7px;
+  height: 28px; padding: 0 10px; border: 0; border-radius: 7px;
   background: transparent; color: var(--muted);
   font-size: 11.5px; font-weight: 600; cursor: pointer;
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
@@ -58,62 +68,25 @@
 .qf-count { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 .qf-pill[aria-pressed="true"] .qf-count { color: var(--ink); }
 
-/* workbench control fields — 29px white, hairline, 7px radius */
+/* workbench controls share one 28px rhythm. */
 #plan-workbench-header .search-wrap {
-  height: 29px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line);
+  height: 28px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line);
 }
 #plan-workbench-header .search-wrap:focus-within { border-color: var(--line-strong); background: var(--paper); }
 #plan-workbench-header select.filter {
-  height: 29px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line);
+  height: 28px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line);
 }
 #plan-workbench-header select.filter:hover { border-color: var(--line-strong); }
-#plan-workbench-header .plan-gates-readout { height: 29px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line); }
+#plan-workbench-header .plan-gates-readout { height: 28px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line); }
 .plan-gates-readout {
   display: inline-flex; align-items: center; gap: 5px;
-  height: 26px; padding: 0 10px; border-radius: var(--radius-md);
+  height: 28px; padding: 0 10px; border-radius: var(--radius-md);
   border: 1px solid var(--border-default); background: var(--surface-page);
   font-size: 11.5px; font-weight: 600; color: var(--text-secondary); cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .plan-gates-readout:hover { border-color: var(--border-strong); background: var(--surface-soft); }
 .plan-gates-readout b { font-family: var(--mono); font-weight: 700; color: var(--text-primary); }
-
-/* lens nav (left tablist) */
-#plan-lensnav {
-  width: 196px;
-  border-right: 1px solid var(--border-subtle);
-  background: var(--surface-panel);
-  padding: 14px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  overflow: auto;
-}
-.plan-lensnav-eyebrow {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--muted);
-  padding: 0 8px 6px;
-}
-/* nav-row grammar: transparent rows, translucent-ink hover + active washes */
-.plan-lenstab {
-  min-height: 34px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--body);
-  font-size: 12px;
-  font-weight: 550;
-  text-align: left;
-  padding: 0 10px;
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-}
-.plan-lenstab:hover { color: var(--ink); background: rgba(0, 0, 0, 0.03); }
-.plan-lenstab[aria-selected="true"] { background: rgba(0, 0, 0, 0.06); color: var(--ink); }
-.plan-lenstab[data-empty="1"] { opacity: 0.4; }
 
 /* center pane */
 #plan-pane {
@@ -135,7 +108,6 @@
 /* right drilldown aside */
 #plan-aside {
   width: 360px;
-  flex: 0 0 360px;
   border-left: 1px solid var(--border-subtle);
   background: var(--surface-panel);
   padding: 12px;
@@ -148,7 +120,6 @@
 }
 #plan-aside[data-open="false"] {
   width: 40px;
-  flex-basis: 40px;
   padding: 12px 0;
   align-items: center;
   overflow: hidden;
@@ -517,9 +488,16 @@
 .tl-node-gutter { cursor: pointer; border: 0; background: var(--surface-panel); text-align: left; }
 .tl-node-gutter:hover { background: var(--surface-hover); }
 .tl-node-gutter .tl-node-id { font-size: 10.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-unattributed-head { background: var(--surface-subtle); }
+.tl-unattributed-head .tl-node-id { font-family: var(--font-sans); color: var(--text-muted); }
+.tl-unattributed-chev { width: 12px; height: 12px; display: inline-flex; flex: none; color: var(--text-muted); transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease-out); }
+.tl-unattributed-chev .icon { width: 12px; height: 12px; }
+.tl-unattributed-head[aria-expanded="false"] .tl-unattributed-chev { transform: rotate(0deg); }
+.tl-unattributed-band { background: var(--surface-subtle); }
+.tl-unattributed-row .tl-heat { opacity: 0.72; }
 /* the single most important fix: lanes clip so labels never bleed across rows */
 .tl-lane { overflow: hidden; }
-/* collapsed-area heat strip lives inside the 30px area header band, centered */
+/* collapsed summaries keep an honest heat trace inside the 24px band */
 .tl-heat { position: absolute; top: 50%; transform: translateY(-50%); height: 3px; background: var(--n-400); border-radius: 2px; }
 
 .tl-bar {
@@ -528,7 +506,7 @@
   background: var(--ink); color: #fff; cursor: pointer; box-shadow: var(--shadow-xs);
   transition: opacity var(--dur-fast) var(--ease-out);
 }
-/* bar label is the TASK ID ONLY — mono 10px, inherits the bar's white ink inline */
+/* bar label is the numeric task suffix only — mono 10px; full id/title are aria/title */
 .tl-bar .tl-bar-label { font: 500 10px var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* right-outside id label: a lane child positioned in its bar's row band (JS sets
    left/top/height inline); the clipped lane cuts it at the right edge, and it
@@ -562,8 +540,8 @@
 .tl-break { position: absolute; top: 0; overflow: hidden; background: color-mix(in srgb, var(--n-100) 45%, transparent); border-left: 1px dotted var(--n-300); border-right: 1px dotted var(--n-300); }
 /* axis-band break glyphs: ⫽ slashes + elided-duration label, clipped to AXIS_H */
 .tl-break-axis { position: absolute; top: 0; bottom: 0; overflow: hidden; }
-.tl-break-axis .tl-break-l1, .tl-break-axis .tl-break-l2 { position: absolute; top: 0; bottom: 0; left: 8px; width: 1.5px; background: var(--n-300); transform: skewX(-18deg); }
-.tl-break-axis .tl-break-l2 { left: 15px; }
+.tl-break-axis .tl-break-l1, .tl-break-axis .tl-break-l2 { position: absolute; top: 0; bottom: 0; left: 30%; width: 1.5px; background: var(--n-300); transform: skewX(-18deg); }
+.tl-break-axis .tl-break-l2 { left: 55%; }
 .tl-break-axis .tl-break-lbl { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(90deg); font: 400 8.5px var(--font-mono); color: var(--text-faint); white-space: nowrap; }
 .tl-break-axis .tl-break-lbl.horiz { transform: translate(-50%, -50%); }
 .tl-now { position: absolute; top: 0; width: 0; border-left: 1.5px dashed var(--ink); z-index: 3; }
@@ -579,12 +557,10 @@
 .tl-cycle { position: absolute; bottom: 0; height: 4px; background: var(--n-100); }
 .tl-detail { right: 26px; bottom: 22px; }
 
-/* responsive — collapse the aside first, then the lens nav */
+/* responsive — narrow only the drilldown; the lens tabs already wrap with the toolbar. */
 @media (max-width: 1100px) {
-  #plan-aside { width: 300px; flex-basis: 300px; }
+  #plan-aside { width: 300px; }
 }
 @media (max-width: 860px) {
-  #plan-body { grid-template-columns: 150px minmax(0, 1fr) auto; }
-  #plan-lensnav { width: 150px; }
-  #plan-aside[data-open="true"] { width: 260px; flex-basis: 260px; }
+  #plan-aside[data-open="true"] { width: 260px; }
 }

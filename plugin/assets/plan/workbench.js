@@ -1,8 +1,8 @@
-/* plan/workbench.js — the Plan surface shell. Owns the left lens tablist, mounts
+/* plan/workbench.js — the Plan surface shell. Owns the toolbar lens tablist, mounts
    exactly one lens at a time into #plan-pane, and drives the right drilldown
    aside. Shared node selection (selectPlanNode) updates the route, tells the
    mounted lens to ring/scroll the node, and renders the aside. Ported from
-   PlanGraphWorkbench.tsx (196px tablist · center pane · 360px aside). */
+   PlanGraphWorkbench.tsx (toolbar tablist · center pane · 360px aside). */
 
 import { S, esc, escAttr, icon, toneOf, labelOf, gateTone, select, relTime } from "../app.js";
 import { writeRoute, currentRoute } from "../core/router.js";
@@ -13,14 +13,14 @@ import { lens as timelineLens } from "./lens_timeline.js";
 import { lens as matrixLens } from "./lens_matrix.js";
 import { lens as dagLens } from "./lens_dag.js";
 import { lens as tasksLens } from "./lens_tasks.js";
+import { LENSES, isPlanLens } from "./lenses.js";
 
-const LENSES = [
-  { id: "timeline", label: "Timeline", lens: timelineLens },
-  { id: "matrix", label: "Matrix", lens: matrixLens },
-  { id: "dag", label: "DAG", lens: dagLens },
-  { id: "tasks", label: "Tasks", lens: tasksLens },
-];
-const LENS_BY_ID = Object.fromEntries(LENSES.map((l) => [l.id, l]));
+const LENS_BY_ID = {
+  timeline: timelineLens,
+  matrix: matrixLens,
+  dag: dagLens,
+  tasks: tasksLens,
+};
 
 let curLens = null;          // current lens id
 let mounted = null;          // current lens object (mounted)
@@ -33,21 +33,20 @@ export function getLens() { return curLens; }
 
 // ------------------------------------------------------------ lens nav -----
 function renderNav() {
-  const nav = document.getElementById("plan-lensnav");
+  const nav = document.getElementById("plan-lens-tabs");
   if (!nav) return;
   const empty = dagIsEmpty();
-  nav.innerHTML = `<div class="plan-lensnav-eyebrow">plan views</div>` +
-    LENSES.map((l) => {
+  nav.innerHTML = LENSES.map((l) => {
       const on = l.id === curLens;
       const dim = empty && l.id !== "tasks";
-      return `<button class="plan-lenstab" role="tab" data-lens="${l.id}" aria-selected="${on}"${dim ? ' data-empty="1"' : ""}>${esc(l.label)}</button>`;
+      return `<button type="button" class="tab" role="tab" data-lens="${l.id}" aria-selected="${on}" tabindex="${on ? 0 : -1}"${dim ? ' data-empty="1"' : ""}>${esc(l.label)}</button>`;
     }).join("");
 }
 
 function dagIsEmpty() { const d = getDag(); return !!d && (d.nodes || []).length === 0; }
 
 export function setLens(id, opts) {
-  if (!LENS_BY_ID[id]) id = "tasks";
+  if (!isPlanLens(id) || !LENS_BY_ID[id]) id = "tasks";
   // With an empty DAG only the Tasks lens is meaningful.
   if (dagIsEmpty()) id = "tasks";
   const pane = document.getElementById("plan-pane");
@@ -55,7 +54,7 @@ export function setLens(id, opts) {
     if (mounted && mounted.unmount) { try { mounted.unmount(); } catch (e) {} }
     curLens = id;
     localStorage.setItem("gluerun.plan.lens", id);
-    mounted = LENS_BY_ID[id].lens;
+    mounted = LENS_BY_ID[id];
     if (pane) pane.dataset.lens = id;
     if (mounted && mounted.mount) mounted.mount(pane);
   }
@@ -202,13 +201,36 @@ export function planTick() {
 export function initWorkbench() {
   if (started) return; started = true;
   curLens = localStorage.getItem("gluerun.plan.lens") || "timeline";
-  if (!LENS_BY_ID[curLens]) curLens = "timeline";
+  if (!isPlanLens(curLens) || !LENS_BY_ID[curLens]) curLens = "timeline";
 
-  const nav = document.getElementById("plan-lensnav");
-  if (nav) nav.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-lens]");
-    if (b) setLens(b.dataset.lens);
-  });
+  const nav = document.getElementById("plan-lens-tabs");
+  if (nav) {
+    nav.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-lens]");
+      if (b) setLens(b.dataset.lens);
+    });
+    // A horizontal tablist uses one tab stop, then arrow/Home/End navigation.
+    // renderNav() replaces the buttons after activation, so focus the freshly
+    // rendered active tab rather than the detached pre-render button.
+    nav.addEventListener("keydown", (e) => {
+      const current = e.target.closest('[role="tab"][data-lens]');
+      if (!current || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+      const tabs = [...nav.querySelectorAll('[role="tab"][data-lens]')];
+      const at = tabs.indexOf(current);
+      if (at < 0 || !tabs.length) return;
+      let next = at;
+      if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = tabs.length - 1;
+      else next = (at + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      e.preventDefault();
+      const id = tabs[next].dataset.lens;
+      setLens(id);
+      // setLens may coerce an unavailable lens (empty DAG -> Tasks); follow the
+      // resulting selected tab, not the originally requested id.
+      const active = nav.querySelector('[role="tab"][aria-selected="true"]');
+      if (active) active.focus();
+    });
+  }
   wireAside();
 
   // Register the seams app.js / router.js call into.

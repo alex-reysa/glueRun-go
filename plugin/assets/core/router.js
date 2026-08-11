@@ -23,9 +23,9 @@
 import { select, navigateToTask, setAreaFilter, S } from "../app.js";
 import { bus } from "./bus.js";
 import { isHistorical } from "./api.js";
+import { isPlanLens } from "../plan/lenses.js";
 
 const SURFACES = ["home", "plan", "consoles", "agents", "providers"];
-const LENSES = ["timeline", "matrix", "dag", "tasks"];
 
 let cfg = { onSurface: null, onLens: null };
 let applying = false;         // guard: suppress route writes while resolving one
@@ -40,7 +40,7 @@ export function currentRoute() {
   const surface = SURFACES.includes(parts[0]) ? parts[0] : "home";
   if (surface === "home") return { surface };
   if (surface === "plan") {
-    const lens = LENSES.includes(parts[1]) ? parts[1] : null;
+    const lens = isPlanLens(parts[1]) ? parts[1] : null;
     let sel = parts[2] != null ? parts.slice(2).join("/") : null;
     let tab = null;
     if (sel) {

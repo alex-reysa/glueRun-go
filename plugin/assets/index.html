@@ -171,6 +171,7 @@
     <!-- MAIN VIEWPORT — three surface roots; the router shows exactly one. -->
     <section id="surface-plan" class="surface" data-active="false" hidden>
       <div id="plan-workbench-header">
+        <nav id="plan-lens-tabs" role="tablist" aria-orientation="horizontal" aria-label="Plan views"></nav>
         <label class="search-wrap"><svg class="icon"><use href="#i-search"/></svg>
           <input id="search-input" type="search" placeholder="search id · title · branch" autocomplete="off" spellcheck="false">
         </label>
@@ -200,7 +201,6 @@
         <span id="showing-count"></span>
       </div>
       <div id="plan-body">
-        <nav id="plan-lensnav" role="tablist" aria-orientation="vertical" aria-label="Plan views"></nav>
         <div id="plan-pane" aria-label="Plan lens"></div>
         <aside id="plan-aside" data-open="true" aria-label="Node drilldown"></aside>
       </div>

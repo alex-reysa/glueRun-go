@@ -17,8 +17,10 @@ import { bus } from "../core/bus.js";
 import { isHistorical } from "../core/api.js";
 import { getDag, dagIndex, fetchTimeline, getTimeline } from "./data.js";
 
-const BAR_H = 20, GAP = 5, LANE_PAD = 8;
-const BREAK_W = 28, AREA_HEAD_H = 30, AXIS_H = 46, CYCLE_H = 4;
+const BAR_H = 20, GAP = 5, LANE_PAD = 4;
+const BREAK_W = 28, BREAK_BUDGET_SHARE = 0.25, AREA_HEAD_H = 24, AXIS_H = 46, CYCLE_H = 4;
+const LABEL_TARGET_W = 56, MAX_PANE_WIDTHS = 8;
+const UNATTRIBUTED = "(unattributed)";
 const M = 60000;
 const MON = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 // --tl-gutter is the single source of truth (CSS var + JS), read once at load.
@@ -29,8 +31,10 @@ const GUTTER = (() => {
 
 let pane = null, sigLast = null, selectedTask = null;
 let openAreas = null;        // Set<area>
+let openUnattributed = null; // Set<area>; absent by default means honestly collapsed
 let axis = null, barIndex = {}, nodeHull = {}, laneY = {};
 let hostEl = null, scrollEl = null, overlayEl = null, detailEl = null;
+let resizeObserver = null, resizeTimer = null, lastPaneW = 0;
 
 // ------------------------------------------------- label width measurement --
 // One offscreen 2d context measures label widths exactly (proportional glyphs);
@@ -46,9 +50,22 @@ function labelWidth(text) {
   _lw.set(text, w); return w;
 }
 
+function visibleTaskId(id) {
+  const match = String(id || "").match(/^TASK-(\d+)$/);
+  return match ? match[1] : String(id || "");
+}
+
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
 // ------------------------------------------------------------- axis --------
 function buildAxis(data, paneW) {
   const spans = [];
+  const taskMinutes = [];
   const nowMs = Date.parse(data.now);
   // `|| []` throughout: the axis is now built for payloads that carry cycles or
   // gates but no tasks at all, and a partial payload must not throw.
@@ -57,6 +74,7 @@ function buildAxis(data, paneW) {
     let e = iv.endedAt ? Date.parse(iv.endedAt) : nowMs;
     if (isNaN(e) || e < s) e = s + M;
     spans.push([s, e]);
+    taskMinutes.push(Math.max(1, (e - s) / M));
   }
   for (const c of (data.cycles || [])) { const s = Date.parse(c.startedAt); if (isNaN(s)) continue; const e = c.endedAt ? Date.parse(c.endedAt) : s; spans.push([s, isNaN(e) ? s : e]); }
   const times = [];
@@ -72,21 +90,38 @@ function buildAxis(data, paneW) {
   raw.push([segS, prev]);
   const segs = raw.map(([s, e]) => ({ s: s - PAD, e: e + PAD, rawS: s, rawE: e }));
   const activeMin = segs.reduce((a, g) => a + (g.e - g.s) / M, 0);
-  // Wider typical bars: 0.8px/min floor + 3.2×pane basis so more bars clear the
-  // label/measure thresholds; 2.5 ceiling keeps short runs from ballooning.
-  const targetW = Math.max(3200, 3.2 * paneW);
-  const SCALE = Math.max(0.8, Math.min(2.5, targetW / Math.max(1, activeMin)));
+  const breakCount = Math.max(0, segs.length - 1);
+  const paneFloor = Math.max(320, paneW - GUTTER);
+  // The cap applies to the full canvas, including its sticky gutter. When a
+  // campaign has hundreds of fragmented activity islands, fixed 28px break
+  // cells alone can exceed that cap; shrink them as a group while preserving
+  // every gap and reserve the rest of the track for activity marks.
+  // Keep the fill floor subordinate to the ceiling: even an artificially tiny
+  // pane must not let the 320px preferred floor override the 8-pane budget.
+  const maxTrack = Math.max(1, paneW * MAX_PANE_WIDTHS - GUTTER);
+  const breakW = breakCount ? Math.min(BREAK_W, maxTrack * BREAK_BUDGET_SHARE / breakCount) : 0;
+  const breakTotal = breakCount * breakW;
+  const scaleDenom = Math.max(1, activeMin);
+  const capScale = Math.max(0, (maxTrack - breakTotal) / scaleDenom);
+  const fillScale = Math.min(capScale, Math.max(0.02, (paneFloor - breakTotal) / scaleDenom));
+  const medianMinutes = median(taskMinutes);
+  const legibleScale = medianMinutes ? LABEL_TARGET_W / medianMinutes : fillScale;
+  // Legibility, not pane width, drives the normal scale: a median task interval
+  // aims for a 56px bar. The pane-fill floor avoids a stranded short axis, while
+  // the 8× cap bounds navigation. Trade-off: short runs grow clearer; long
+  // campaigns may scroll farther than before and eventually yield to the cap.
+  const SCALE = Math.min(capScale, Math.max(fillScale, legibleScale));
   let run = 0; const breaks = [];
   segs.forEach((g, i) => {
     g.x0 = run; g.w = (g.e - g.s) / M * SCALE; run += g.w;
-    if (i < segs.length - 1) { breaks.push({ x: run, fromE: raw[i][1], toS: raw[i + 1][0] }); run += BREAK_W; }
+    if (i < segs.length - 1) { breaks.push({ x: run, w: breakW, fromE: raw[i][1], toS: raw[i + 1][0] }); run += breakW; }
   });
   const xOf = (ms) => {
     if (ms <= segs[0].s) return segs[0].x0;
     for (let i = 0; i < segs.length; i++) {
       const g = segs[i];
       if (ms <= g.e) return g.x0 + Math.max(0, ms - g.s) / M * SCALE;
-      if (i < segs.length - 1 && ms < segs[i + 1].s) return g.x0 + g.w + BREAK_W / 2;
+      if (i < segs.length - 1 && ms < segs[i + 1].s) return g.x0 + g.w + breakW / 2;
     }
     const last = segs[segs.length - 1]; return last.x0 + last.w;
   };
@@ -112,6 +147,22 @@ function taskBusy(t) {
 }
 function busyOverlaps(a, b) { for (const [as, ae] of a) for (const [bs, be] of b) if (as < be && bs < ae) return true; return false; }
 
+// A collapsed row remains an honest trace: every recorded interval is projected
+// onto the same axis instead of disappearing behind the disclosure control.
+function heatFor(tasks) {
+  let html = "";
+  for (const t of tasks) for (const iv of (t.intervals || [])) {
+    const s = Date.parse(iv.startedAt);
+    if (!Number.isFinite(s)) continue;
+    let e = iv.endedAt ? Date.parse(iv.endedAt) : axis.nowMs;
+    if (!Number.isFinite(e) || e < s) e = s + M;
+    for (const [ps, pe] of pieces(s, e)) {
+      html += `<span class="tl-heat" style="left:${axis.xOf(ps)}px;width:${Math.max(2, axis.xOf(pe) - axis.xOf(ps))}px"></span>`;
+    }
+  }
+  return html;
+}
+
 // ------------------------------------------------------------- build -------
 function build() {
   const data = getTimeline();
@@ -125,6 +176,7 @@ function build() {
   if (!data) { pane.innerHTML = `<div class="plan-lens-empty">loading timeline…</div>`; sigLast = sigOf(data); return; }
 
   const paneW = pane.clientWidth || 900;
+  lastPaneW = paneW;
   axis = buildAxis(data, paneW);
   if (!axis) {
     pane.innerHTML = `<div class="plan-lens-empty">no runtime activity recorded yet — no cycles, gates, or tasks in the events window</div>`;
@@ -136,10 +188,10 @@ function build() {
   const gateByNode = {}; for (const g of (data.gates || [])) gateByNode[g.node] = g;
   const totalW = axis.totalWidth;
 
-  // group tasks: area -> node(or "(unattributed)") -> [tasks]
+  // group tasks: area -> node(or an explicit unattributed sentinel) -> [tasks]
   const areas = {};
   for (const t of (data.tasks || [])) {
-    const a = t.area || "(none)"; const nkey = t.node || "(unattributed)";
+    const a = t.area || "(none)"; const nkey = t.node || UNATTRIBUTED;
     (areas[a] = areas[a] || {});
     (areas[a][nkey] = areas[a][nkey] || []).push(t);
   }
@@ -150,7 +202,19 @@ function build() {
     openAreas = new Set();
     const stored = localStorage.getItem("gluerun.plan.tl.open");
     if (stored != null) { try { openAreas = new Set(JSON.parse(stored)); } catch (e) {} }
-    else for (const a of areaOrder) if (Object.values(areas[a]).flat().some((t) => t.status !== "integrated")) openAreas.add(a);
+    else for (const a of areaOrder) {
+      const tasks = Object.values(areas[a]).flat();
+      // The uncertainty lane itself starts collapsed, but its parent must be
+      // open on first render so even an integrated unattributed task is named.
+      if (tasks.some((t) => t.status !== "integrated") || (areas[a][UNATTRIBUTED] || []).length) openAreas.add(a);
+    }
+  }
+  if (openUnattributed == null) {
+    // Deliberately starts empty: uncertainty is summarized, not hidden, until an
+    // operator expands the honest "no node recorded" lane.
+    openUnattributed = new Set();
+    const stored = localStorage.getItem("gluerun.plan.tl.unattributed.open");
+    if (stored != null) { try { openUnattributed = new Set(JSON.parse(stored)); } catch (e) {} }
   }
 
   barIndex = {}; nodeHull = {}; laneY = {};
@@ -159,28 +223,35 @@ function build() {
 
   for (const a of areaOrder) {
     const nodesInArea = Object.keys(areas[a]).sort((x, y2) => (stageOf(x) || "").localeCompare(stageOf(y2) || "") || x.localeCompare(y2));
+    const attributedNodes = nodesInArea.filter((n) => n !== UNATTRIBUTED);
+    const unattributedCount = (areas[a][UNATTRIBUTED] || []).length;
     const allTasks = Object.values(areas[a]).flat();
-    const gatesPassed = nodesInArea.filter((n) => (gateByNode[n] || {}).status === "passed").length;
+    const gatesPassed = attributedNodes.filter((n) => (gateByNode[n] || {}).status === "passed").length;
     const open = openAreas.has(a);
 
-    // collapsed → the heat strip renders INSIDE the 30px area header's band track
-    let bandHeat = "";
-    if (!open) {
-      for (const t of allTasks) for (const iv of t.intervals) {
-        const s = Date.parse(iv.startedAt); let e = iv.endedAt ? Date.parse(iv.endedAt) : axis.nowMs; if (e < s) e = s + M;
-        for (const [ps, pe] of pieces(s, e)) bandHeat += `<span class="tl-heat" style="left:${axis.xOf(ps)}px;width:${Math.max(2, axis.xOf(pe) - axis.xOf(ps))}px"></span>`;
-      }
-    }
+    // Collapsed areas retain a heat strip inside the compact header band.
+    const bandHeat = open ? "" : heatFor(allTasks);
     rowsHtml += `<div class="tl-row tl-arearow" style="height:${AREA_HEAD_H}px">
       <button class="tl-gutter tl-area-head" data-area="${escAttr(a)}" aria-expanded="${open}">
         <span class="tl-area-chev">${icon("i-chev")}</span><span class="tl-area-name">${esc(a)}</span>
-        <span class="tl-area-meta mono">${nodesInArea.length}n · ${gatesPassed}/${nodesInArea.length} · ${allTasks.length} tasks</span></button>
+        <span class="tl-area-meta mono">${attributedNodes.length}n · ${gatesPassed}/${attributedNodes.length} · ${allTasks.length} tasks${unattributedCount ? ` · ${unattributedCount} no node` : ""}</span></button>
       <div class="tl-track tl-area-band">${bandHeat}</div></div>`;
     y += AREA_HEAD_H;
     if (!open) continue;
 
     for (const nkey of nodesInArea) {
       const tasks = areas[a][nkey].slice().sort((t1, t2) => taskStart(t1) - taskStart(t2));
+      const isUnattributed = nkey === UNATTRIBUTED;
+      const uncertaintyLabel = `unattributed · ${tasks.length} — no node recorded`;
+
+      if (isUnattributed && !openUnattributed.has(a)) {
+        rowsHtml += `<div class="tl-row tl-unattributed-row" style="height:${AREA_HEAD_H}px">
+          <button class="tl-gutter tl-node-gutter tl-unattributed-head" data-unattributed-area="${escAttr(a)}" aria-expanded="false" title="${escAttr(uncertaintyLabel)}">
+            <span class="tl-unattributed-chev">${icon("i-chev")}</span><span class="tl-node-id">${esc(uncertaintyLabel)}</span></button>
+          <div class="tl-track tl-lane tl-unattributed-band">${heatFor(tasks)}</div></div>`;
+        y += AREA_HEAD_H;
+        continue;
+      }
 
       // interval-based row packing: a task fits a row iff its busy intervals don't
       // overlap any interval already placed there (keeps task-per-row + connectors).
@@ -229,12 +300,18 @@ function build() {
           taskX0 = Math.min(taskX0, pc.left); taskX1 = Math.max(taskX1, pc.left + pc.width);
           (rowBars[row] = rowBars[row] || []).push({ left: pc.left, right: pc.left + pc.width });
         });
-        const text = t.taskId + (title ? " · " + title : "");   // full "id · title" for title attr + detail card only
-        if (merged.length) {
-          // visible label is the TASK ID ONLY — measure with the mono glyph metrics.
-          labelCands.push({ taskId: t.taskId, row, barLeft: merged[0].left, barRight: merged[0].left + merged[0].width, barWidth: merged[0].width, barTop, labelW: labelWidth(t.taskId), mode: "hidden" });
-        }
         const retries = t.retryCount != null ? t.retryCount : Math.max(0, t.intervals.length - 1);
+        if (retries > 0 && isFinite(taskX1)) {
+          const retryLeft = taskX1 + 6;
+          (rowBars[row] = rowBars[row] || []).push({ left: retryLeft, right: retryLeft + labelWidth("↻" + retries) });
+        }
+        const text = t.taskId + (title ? " · " + title : "");   // full "id · title" for title attr + detail card only
+        const visibleId = visibleTaskId(t.taskId);
+        if (merged.length) {
+          // Visible labels are the numeric suffix only (0041). Every interval
+          // still exposes the unabridged id/title through title + aria-label.
+          labelCands.push({ taskId: t.taskId, visibleId, row, anchors: merged.map((pc, index) => ({ left: pc.left, right: pc.left + pc.width, width: pc.width, index })), barTop, labelW: labelWidth(visibleId), mode: "hidden", anchorIndex: 0 });
+        }
         laneTasks.push({ t, row, barTop, st2, merged, retries, taskX0, taskX1, text });
         nodeX0 = Math.min(nodeX0, taskX0); nodeX1 = Math.max(nodeX1, taskX1);
         barIndex[t.taskId] = { node: nkey, x0: isFinite(taskX0) ? taskX0 : 0, x1: isFinite(taskX1) ? taskX1 : 0, y: laneTop + barTop + BAR_H / 2 };
@@ -248,19 +325,17 @@ function build() {
       let bars = "";
       for (const lt of laneTasks) {
         const cand = labelByTask[lt.t.taskId];
-        const inlineLabel = cand && cand.mode === "inline";
         lt.merged.forEach((pc, mi) => {
-          const isFirst = mi === 0;
-          const inner = (isFirst && inlineLabel)
-            ? `<span class="tl-bar-label">${esc(lt.t.taskId)}</span>` : "";
-          bars += `<div class="tl-bar tl-s-${lt.st2}${pc.amber ? " tl-amber" : ""}${pc.live ? " tl-live" : ""}" data-task="${escAttr(lt.t.taskId)}" data-node="${escAttr(nkey)}" data-live="${pc.live ? 1 : 0}" title="${escAttr(lt.text)}" style="left:${pc.left}px;top:${lt.barTop}px;width:${pc.width}px">${inner}</div>`;
+          const inner = (cand && cand.mode === "inline" && mi === cand.anchorIndex)
+            ? `<span class="tl-bar-label">${esc(cand.visibleId)}</span>` : "";
+          bars += `<div class="tl-bar tl-s-${lt.st2}${pc.amber ? " tl-amber" : ""}${pc.live ? " tl-live" : ""}" role="button" tabindex="${mi === 0 ? 0 : -1}" data-task="${escAttr(lt.t.taskId)}" data-node="${escAttr(nkey)}" data-live="${pc.live ? 1 : 0}" title="${escAttr(lt.text)}" aria-label="${escAttr(lt.text)}" style="left:${pc.left}px;top:${lt.barTop}px;width:${pc.width}px">${inner}</div>`;
           if (mi > 0) {
             const a2 = lt.merged[mi - 1], gapL = a2.left + a2.width, gapR = pc.left;
             if (gapR > gapL) bars += `<span class="tl-retry-link" style="left:${gapL}px;top:${lt.barTop + BAR_H / 2}px;width:${gapR - gapL}px"></span>`;
           }
         });
         if (cand && cand.mode === "out") {
-          bars += `<span class="tl-bar-label tl-label-out" style="left:${cand.barRight + 6}px;top:${lt.barTop}px;height:${BAR_H}px" title="${escAttr(lt.text)}">${esc(lt.t.taskId)}</span>`;
+          bars += `<span class="tl-bar-label tl-label-out" aria-hidden="true" style="left:${cand.outLeft}px;top:${lt.barTop}px;height:${BAR_H}px" title="${escAttr(lt.text)}">${esc(cand.visibleId)}</span>`;
         }
         if (lt.retries > 0 && isFinite(lt.taskX1)) {
           bars += `<span class="tl-retry" style="left:${lt.taskX1 + 6}px;top:${lt.barTop}px;height:${BAR_H}px" title="${lt.retries} retries">↻${lt.retries}</span>`;
@@ -276,8 +351,14 @@ function build() {
       }
       nodeHull[nkey] = { y: laneY[nkey], x0: isFinite(nodeX0) ? nodeX0 : 0, x1: isFinite(nodeX1) ? nodeX1 : 0 };
       const gtone = gateTone((gateByNode[nkey] || {}).status);
-      rowsHtml += `<div class="tl-row" style="height:${laneH}px">
-        <button class="tl-gutter tl-node-gutter" data-node="${escAttr(nkey)}"><span class="tone-dot" data-tone="${gtone}"></span><span class="mono tl-node-id">${esc(nkey)}</span></button>
+      const gutterAttrs = isUnattributed
+        ? `data-unattributed-area="${escAttr(a)}" aria-expanded="true" title="${escAttr(uncertaintyLabel)}"`
+        : `data-node="${escAttr(nkey)}"`;
+      const gutterLabel = isUnattributed
+        ? `<span class="tl-unattributed-chev">${icon("i-chev")}</span><span class="tl-node-id">${esc(uncertaintyLabel)}</span>`
+        : `<span class="tone-dot" data-tone="${gtone}"></span><span class="mono tl-node-id">${esc(nkey)}</span>`;
+      rowsHtml += `<div class="tl-row${isUnattributed ? " tl-unattributed-row" : ""}" style="height:${laneH}px">
+        <button class="tl-gutter tl-node-gutter${isUnattributed ? " tl-unattributed-head" : ""}" ${gutterAttrs}>${gutterLabel}</button>
         <div class="tl-track tl-lane" data-nodelane="${escAttr(nkey)}">${bars}${gate}</div></div>`;
       y += laneH;
     }
@@ -313,7 +394,7 @@ function build() {
   // dotted edges). The slash glyphs + elided-duration label live in the axis
   // header band alone (buildAxisLabels), so nothing floats mid-track.
   for (const b of axis.breaks) {
-    bg += `<div class="tl-break" style="left:${b.x}px;width:${BREAK_W}px;height:${contentH}px"></div>`;
+    bg += `<div class="tl-break" style="left:${b.x}px;width:${b.w}px;height:${contentH}px"></div>`;
   }
   const nowX = axis.xOf(axis.nowMs);
   bg += `<div class="tl-now" style="left:${nowX}px;height:${contentH}px"></div>`;
@@ -349,8 +430,8 @@ function buildAxisLabels(data, totalW) {
   // band; the track body renders each break as a quiet band with no glyphs/text.
   for (const b of axis.breaks) {
     const txt = fmtDur((b.toS - b.fromE) / M);
-    const horiz = labelWidth(txt) <= BREAK_W - 6;   // "2h" fits horizontally, "1h 20m" rotates
-    out += `<div class="tl-break-axis" style="left:${b.x}px;width:${BREAK_W}px"><span class="tl-break-l1"></span><span class="tl-break-l2"></span><span class="tl-break-lbl${horiz ? " horiz" : ""}">${esc(txt)}</span></div>`;
+    const horiz = labelWidth(txt) <= b.w - 6;   // "2h" fits horizontally, "1h 20m" rotates
+    out += `<div class="tl-break-axis" style="left:${b.x}px;width:${b.w}px" title="${escAttr(txt + " elided")}"><span class="tl-break-l1"></span><span class="tl-break-l2"></span><span class="tl-break-lbl${horiz ? " horiz" : ""}">${esc(txt)}</span></div>`;
   }
   out += `<div class="tl-now-cap" style="left:${axis.xOf(axis.nowMs) + 2}px">NOW</div>`;
   // L0 reconcile cycles ride along the bottom edge of the sticky axis band.
@@ -371,19 +452,37 @@ function buildAxisLabels(data, totalW) {
   return out;
 }
 
-// Per-lane label placement: inline if it fits inside the bar; else right-outside
-// if it fits before the next bar on the same row (8px safety); else hidden.
+// Per-lane label placement: try every retry segment for an inline home, then
+// extend a compact numeric label into a quiet right-hand gap. The 3px clearance
+// keeps outside labels from touching the next bar/retry marker while reaching
+// substantially more 20px-ish intervals than the old full-id calculation.
 function resolveLabels(cands, rowBars, totalW) {
   const byRow = {};
   for (const c of cands) (byRow[c.row] = byRow[c.row] || []).push(c);
   for (const row in byRow) {
     const allBars = (rowBars[row] || []).slice().sort((a, b) => a.left - b.left);
     for (const c of byRow[row]) {
-      if (c.labelW + 12 <= c.barWidth) { c.mode = "inline"; continue; }
-      let nextLeft = null;
-      for (const bb of allBars) { if (bb.left > c.barRight + 0.5) { nextLeft = bb.left; break; } }
-      const ceiling = (nextLeft != null ? nextLeft : totalW) - c.barRight;
-      c.mode = (c.labelW + 14 <= ceiling) ? "out" : "hidden";
+      const inline = c.anchors.find((anchor) => c.labelW + 10 <= anchor.width);
+      if (inline) {
+        c.mode = "inline";
+        c.anchorIndex = inline.index;
+        continue;
+      }
+      let best = null;
+      for (const anchor of c.anchors) {
+        let nextLeft = totalW;
+        for (const bb of allBars) {
+          if (bb.left > anchor.right + 0.5) { nextLeft = bb.left; break; }
+        }
+        const available = nextLeft - anchor.right;
+        if (c.labelW + 7 <= available && (!best || available > best.available)) best = { anchor, available };
+      }
+      if (best) {
+        c.mode = "out";
+        c.anchorIndex = best.anchor.index;
+        c.barRight = best.anchor.right;
+        c.outLeft = best.anchor.right + 4;
+      } else c.mode = "hidden";
     }
   }
 }
@@ -451,16 +550,40 @@ function patchLive() {
   });
 }
 
+function rebuildPreservingScroll() {
+  const left = scrollEl ? scrollEl.scrollLeft : 0;
+  const top = scrollEl ? scrollEl.scrollTop : 0;
+  build();
+  if (scrollEl) { scrollEl.scrollLeft = left; scrollEl.scrollTop = top; }
+}
+
 function wire() {
   const flow = pane.querySelector(".tl-flow");
   flow.addEventListener("click", (e) => {
     const head = e.target.closest(".tl-area-head");
-    if (head) { const a = head.dataset.area; if (openAreas.has(a)) openAreas.delete(a); else openAreas.add(a); localStorage.setItem("gluerun.plan.tl.open", JSON.stringify([...openAreas])); sigLast = null; build(); return; }
+    if (head) { const a = head.dataset.area; if (openAreas.has(a)) openAreas.delete(a); else openAreas.add(a); localStorage.setItem("gluerun.plan.tl.open", JSON.stringify([...openAreas])); rebuildPreservingScroll(); return; }
+    const uncertainty = e.target.closest("[data-unattributed-area]");
+    if (uncertainty) {
+      const a = uncertainty.dataset.unattributedArea;
+      if (openUnattributed.has(a)) openUnattributed.delete(a); else openUnattributed.add(a);
+      localStorage.setItem("gluerun.plan.tl.unattributed.open", JSON.stringify([...openUnattributed]));
+      rebuildPreservingScroll();
+      return;
+    }
     const node = e.target.closest(".tl-node-gutter");
-    if (node) { if (node.dataset.node !== "(unattributed)" && bus.onNodeSelect) bus.onNodeSelect(node.dataset.node); return; }
+    if (node) { if (node.dataset.node && bus.onNodeSelect) bus.onNodeSelect(node.dataset.node); return; }
     const bar = e.target.closest(".tl-bar[data-task]");
     if (bar) select("l2", bar.dataset.task);
   });
+  flow.addEventListener("keydown", (e) => {
+    const bar = e.target.closest('.tl-bar[role="button"][data-task]');
+    if (bar && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      select("l2", bar.dataset.task);
+    }
+  });
+  flow.addEventListener("focusin", (e) => { const b = e.target.closest(".tl-bar[data-task]"); if (b) applyHover(b.dataset.task); });
+  flow.addEventListener("focusout", (e) => { const b = e.target.closest(".tl-bar[data-task]"); if (b && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest(".tl-bar"))) applyHover(null); });
   flow.addEventListener("pointerover", (e) => { const b = e.target.closest(".tl-bar[data-task]"); if (b) applyHover(b.dataset.task); });
   flow.addEventListener("pointerout", (e) => { const b = e.target.closest(".tl-bar[data-task]"); if (b && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest(".tl-bar"))) applyHover(null); });
 }
@@ -477,12 +600,30 @@ async function refresh(initial) {
   if (!pane) return;
   const data = getTimeline();
   const sig = sigOf(data);
-  if (initial || sig !== sigLast) { const prev = scrollEl ? scrollEl.scrollLeft : 0; build(); if (scrollEl) scrollEl.scrollLeft = prev; }
+  if (initial || sig !== sigLast) {
+    const left = scrollEl ? scrollEl.scrollLeft : 0;
+    const top = scrollEl ? scrollEl.scrollTop : 0;
+    build();
+    if (scrollEl) { scrollEl.scrollLeft = left; scrollEl.scrollTop = top; }
+  }
   else if (!isHistorical()) patchLive();   // archived bars never extend (no liveNow)
 }
 
 export const lens = {
-  mount(p) { pane = p; sigLast = null; if (getTimeline()) build(); else pane.innerHTML = `<div class="plan-lens-empty">loading timeline…</div>`; refresh(true); },
+  mount(p) {
+    pane = p; sigLast = null;
+    if (getTimeline()) build(); else pane.innerHTML = `<div class="plan-lens-empty">loading timeline…</div>`;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver((entries) => {
+        const width = Math.round((entries[0] && entries[0].contentRect && entries[0].contentRect.width) || (pane && pane.clientWidth) || 0);
+        if (!pane || width <= 0 || Math.abs(width - lastPaneW) < 2) return;
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => { if (pane && Math.abs((pane.clientWidth || width) - lastPaneW) >= 2) rebuildPreservingScroll(); }, 80);
+      });
+      resizeObserver.observe(p);
+    }
+    refresh(true);
+  },
   update() { refresh(false); },
   applySelection(id) { /* node selection has no direct bar; hover drives relations */ },
   focusTask(id) {
@@ -490,5 +631,11 @@ export const lens = {
     const b = pane && pane.querySelector(`.tl-bar[data-task="${window.CSS && CSS.escape ? CSS.escape(id) : id}"]`);
     if (b) b.scrollIntoView({ block: "center", inline: "center" });
   },
-  unmount() { if (pane) pane.style.overflow = ""; pane = null; sigLast = null; barIndex = {}; },
+  unmount() {
+    if (resizeObserver) resizeObserver.disconnect();
+    resizeObserver = null;
+    clearTimeout(resizeTimer); resizeTimer = null;
+    if (pane) pane.style.overflow = "";
+    pane = null; sigLast = null; barIndex = {}; lastPaneW = 0;
+  },
 };
