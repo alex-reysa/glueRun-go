@@ -165,7 +165,7 @@ select.ag-set-input { appearance: none; padding-right: 26px; }
 .ag-set-hint { font-size: 11px; color: var(--tone-amber-fg); }
 
 /* editable role matrix: one shared model/tier, then per-role reasoning */
-.ag-role-matrix-shared { padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--surface-subtle); }
+.ag-role-matrix-shared { padding: 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); background: transparent; }
 .ag-role-matrix-shared-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 2px 1px; font-size: 10.5px; font-weight: 600; color: var(--text-meta); }
 .ag-role-matrix-shared-head span:last-child { font-size: 9.5px; font-weight: 500; color: var(--text-faint); }
 .ag-role-matrix-shared .ag-set-erow { padding-right: 0; padding-left: 0; }
