@@ -3,7 +3,7 @@
 # `subgraph-rehydrate` (stage S6-graph, layer engine_runtime): the pure,
 # read-only, deterministic resolver `engine/ctx-rehydrate-subgraph-sources.sh`.
 #
-#   gluerun_ctx_rehydrate_subgraph_sources [file]
+#   singular_ctx_rehydrate_subgraph_sources [file]
 #
 # Reads a stream of canonical schemas/context-graph.v0.schema.json NODE records
 # (JSONL) from stdin (or a file arg) — the SELECTED subgraph — and maps each
@@ -23,8 +23,8 @@
 #
 #   - Emitted ids match the integrated assembler vocabulary EXACTLY (the RANK in
 #     engine/ctx-rehydrate.sh, same as engine/ctx-rehydrate-sources.sh), so the
-#     stdout composes directly as arguments to gluerun_ctx_rehydrate_packet /
-#     gluerun_ctx_rehydrate_manifest.
+#     stdout composes directly as arguments to singular_ctx_rehydrate_packet /
+#     singular_ctx_rehydrate_manifest.
 #   - Order: PRESERVES the input record order (the selector's contradictions-first
 #     selection order) — it does NOT re-sort by source-class rank.
 #   - Data contract: consumes selected node records as INPUT; it does NOT call the
@@ -42,19 +42,19 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export GLUERUN_ROOT="$tmp"
+export SINGULAR_ROOT="$tmp"
 
 # Resolver invocation: stdin-driven, optional file arg.
 subgraph() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_subgraph_sources "$@"
+    singular_ctx_rehydrate_subgraph_sources "$@"
   ' _ "$@"
 }
 manifest() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_manifest "$@"
+    singular_ctx_rehydrate_manifest "$@"
   ' _ "$@"
 }
 manifest_ids() {
@@ -66,9 +66,9 @@ manifest_ids() {
 node() {
   local type="$1" sp="$2" role="${3-}"
   if [[ -n "$role" ]]; then
-    printf '{"schema":"gluerun.orchestration.context-graph.v0","kind":"node","id":"n-000000000000","type":"%s","evidenceClass":"claim","provenance":{"sourcePath":"%s","contentHash":"sha256:%064d"},"attributes":{"role":"%s"}}\n' "$type" "$sp" 0 "$role"
+    printf '{"schema":"singular.orchestration.context-graph.v0","kind":"node","id":"n-000000000000","type":"%s","evidenceClass":"claim","provenance":{"sourcePath":"%s","contentHash":"sha256:%064d"},"attributes":{"role":"%s"}}\n' "$type" "$sp" 0 "$role"
   else
-    printf '{"schema":"gluerun.orchestration.context-graph.v0","kind":"node","id":"n-000000000000","type":"%s","evidenceClass":"claim","provenance":{"sourcePath":"%s","contentHash":"sha256:%064d"}}\n' "$type" "$sp" 0
+    printf '{"schema":"singular.orchestration.context-graph.v0","kind":"node","id":"n-000000000000","type":"%s","evidenceClass":"claim","provenance":{"sourcePath":"%s","contentHash":"sha256:%064d"}}\n' "$type" "$sp" 0
   fi
 }
 
@@ -183,7 +183,7 @@ snap_after="$(find "$art" -type f -print0 | sort -z | xargs -0 shasum | shasum |
 [[ "$snap_before" == "$snap_after" ]] || fail "case9: resolver mutated the source tree (not read-only)"
 
 # grants no independence: rehydrate strategy stays tainted
-tainted="$(bash -c 'source "'"$LIB"'"; gluerun_ctx_route_strategy_tainted rehydrate')" \
+tainted="$(bash -c 'source "'"$LIB"'"; singular_ctx_route_strategy_tainted rehydrate')" \
   || fail "case9: taint query exited non-zero"
 [[ "$tainted" == "1" ]] || fail "case9: rehydrate strategy no longer tainted (got [$tainted])"
 

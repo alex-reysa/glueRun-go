@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gluerun gate adapter — scaffold. Copy to docs/orchestration/gates/gate.sh,
+# singular gate adapter — scaffold. Copy to docs/orchestration/gates/gate.sh,
 # point gateCommand at it, and replace the RUN block with your real gate.
 #
 # WHY THIS EXISTS
@@ -8,7 +8,7 @@
 # needs two more that an exit code cannot express.
 #
 #   1. WHICH failures happened, as stable signatures. That is what lets a repo
-#      register a baseline of known-failing tests (`gluerun gate baseline`) and
+#      register a baseline of known-failing tests (`singular gate baseline`) and
 #      have the engine tell an acknowledged failure apart from a new one. With
 #      no signatures the engine can only see "non-zero" and must treat every
 #      run against a baseline as unclassifiable.
@@ -26,13 +26,13 @@
 #
 # CONTRACT
 #
-# The engine sets GLUERUN_GATE_REPORT_FILE to a path. Write a
-# gluerun.orchestration.gate-observation.v0 document there, or don't — an absent
+# The engine sets SINGULAR_GATE_REPORT_FILE to a path. Write a
+# singular.orchestration.gate-observation.v0 document there, or don't — an absent
 # file is a valid outcome and means "no structured information". It is never
 # required just because the repo is on schemaVersion v2.
 #
 #   {
-#     "schema": "gluerun.orchestration.gate-observation.v0",
+#     "schema": "singular.orchestration.gate-observation.v0",
 #     "failures": [ {"signature": "suite/case-name", "title": "human summary"} ],
 #     "infrastructureFailure": false,
 #     "infrastructureReason": ""
@@ -43,8 +43,8 @@
 # Report failures even when the command exits 0 if you know about them.
 set -uo pipefail
 
-report="${GLUERUN_GATE_REPORT_FILE:-}"
-log="$(mktemp "${TMPDIR:-/tmp}/gluerun-gate.XXXXXX")"
+report="${SINGULAR_GATE_REPORT_FILE:-}"
+log="$(mktemp "${TMPDIR:-/tmp}/singular-gate.XXXXXX")"
 trap 'rm -f "$log"' EXIT
 
 # --- RUN: replace with your real gate ----------------------------------------
@@ -97,7 +97,7 @@ if rc != 0 and not failures and not infrastructure:
     failures.append({"signature": "gate-failed-without-parsed-failures"})
 
 document = {
-    "schema": "gluerun.orchestration.gate-observation.v0",
+    "schema": "singular.orchestration.gate-observation.v0",
     "failures": failures,
 }
 if infrastructure:

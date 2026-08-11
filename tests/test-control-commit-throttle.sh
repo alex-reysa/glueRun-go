@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$ROOT/cli/gluerun"
+CLI="$ROOT/cli/singular"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 repo="$tmp/repo"
@@ -17,9 +17,9 @@ git -C "$repo" commit -qm seed
 
 (
   cd "$repo"
-  GLUERUN_ENGINE_HOME="$ROOT" bash "$CLI" init >/dev/null
+  SINGULAR_ENGINE_HOME="$ROOT" bash "$CLI" init >/dev/null
 )
-python3 - "$repo/gluerun.config.json" <<'PY'
+python3 - "$repo/singular.config.json" <<'PY'
 import json
 import sys
 
@@ -42,9 +42,9 @@ run_cycle() {
   local epoch="$1"
   (
     cd "$repo"
-    GLUERUN_ENGINE_HOME="$ROOT" \
-    GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC=300 \
-    GLUERUN_CONTROL_COMMIT_NOW_EPOCH="$epoch" \
+    SINGULAR_ENGINE_HOME="$ROOT" \
+    SINGULAR_CONTROL_COMMIT_MIN_INTERVAL_SEC=300 \
+    SINGULAR_CONTROL_COMMIT_NOW_EPOCH="$epoch" \
       bash "$CLI" reconcile --apply
   ) >"$tmp/reconcile-$epoch.log" 2>&1
   if [[ -n "$(git -C "$repo" status --porcelain -- docs/orchestration)" ]]; then

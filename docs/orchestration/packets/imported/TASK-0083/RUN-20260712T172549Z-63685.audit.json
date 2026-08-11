@@ -1,13 +1,13 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0083",
   "runId": "RUN-20260712T172549Z-63685",
   "branch": "agent/eval/TASK-0083-experiment-summary-bundle",
   "verdict": "accepted",
   "evidenceReviewed": [
-    ".gluerun-state/runs/RUN-20260712T172549Z-63685/packet.json (status needs-review, baseRef b3fb2a4, headSha 4143428, ownedFiles == changedFiles)",
-    ".gluerun-state/runs/RUN-20260712T172549Z-63685/gate-check.json (exitCode 0)",
-    ".gluerun-state/runs/RUN-20260712T172549Z-63685/worker-evidence/{red,green,regression}.log",
+    ".singular-state/runs/RUN-20260712T172549Z-63685/packet.json (status needs-review, baseRef b3fb2a4, headSha 4143428, ownedFiles == changedFiles)",
+    ".singular-state/runs/RUN-20260712T172549Z-63685/gate-check.json (exitCode 0)",
+    ".singular-state/runs/RUN-20260712T172549Z-63685/worker-evidence/{red,green,regression}.log",
     "HEAD commit 4143428 diff (git show --name-status: 3 files, all additions)",
     "engine/ctx-experiment-summary.sh",
     "schemas/orchestration/ctx-experiment-summary.v0.schema.json",
@@ -30,8 +30,8 @@
     "No branch drift: packet baseRef b3fb2a46 is the exact parent of HEAD (HEAD^); headSha 41434289 matches packet.",
     "Test-first evidence genuine: red.log fails with 'tool not present yet' (test authored and run before implementation existed); green.log and regression.log pass; I independently reran the owned test (exit 0) and regression test-engine-clean.sh (exit 0).",
     "Test coverage is thorough and behavioral (planner rule 9): valid-fixture bundle across both arms and all three families, schema validation via bundled mini-validator, sorted-key canonical determinism, loss-preserving byte-identity of each nested sub-object vs direct composer calls, cross-run determinism, read-only fixture-tree + sibling-file hash invariance, fail-safe zeroed bundle on missing inputs, and no-arg default invocation.",
-    "Provenance/schema consistency: bundle carries const schema 'gluerun.orchestration.ctx-experiment-summary.v0' and nests report/strategy/attempts verbatim; schema inlines each family's sub-schema with additionalProperties:false and validates.",
-    "Foundation compliance: regression test-engine-clean.sh confirms engine/ + schemas/ free of GLUERUN-specific symbols; implementation is read-only, delegates verbatim, and defines a new uncalled function (OFF-parity), matching the sibling ctx-experiment-*.sh idiom.",
+    "Provenance/schema consistency: bundle carries const schema 'singular.orchestration.ctx-experiment-summary.v0' and nests report/strategy/attempts verbatim; schema inlines each family's sub-schema with additionalProperties:false and validates.",
+    "Foundation compliance: regression test-engine-clean.sh confirms engine/ + schemas/ free of consumer-specific symbols; implementation is read-only, delegates verbatim, and defines a new uncalled function (OFF-parity), matching the sibling ctx-experiment-*.sh idiom.",
     "No hidden scope expansion: ships no metric of its own; nextAction documents the operator A/B experiment and decisions.md recording as explicitly OUT OF SCOPE.",
     "Working tree remained clean (git status --porcelain empty) after running tests, confirming tests use mktemp and mutate nothing in-repo."
   ],

@@ -200,7 +200,7 @@ function build() {
 
   if (openAreas == null) {
     openAreas = new Set();
-    const stored = localStorage.getItem("gluerun.plan.tl.open");
+    const stored = localStorage.getItem("singular.plan.tl.open");
     if (stored != null) { try { openAreas = new Set(JSON.parse(stored)); } catch (e) {} }
     else for (const a of areaOrder) {
       const tasks = Object.values(areas[a]).flat();
@@ -213,7 +213,7 @@ function build() {
     // Deliberately starts empty: uncertainty is summarized, not hidden, until an
     // operator expands the honest "no node recorded" lane.
     openUnattributed = new Set();
-    const stored = localStorage.getItem("gluerun.plan.tl.unattributed.open");
+    const stored = localStorage.getItem("singular.plan.tl.unattributed.open");
     if (stored != null) { try { openUnattributed = new Set(JSON.parse(stored)); } catch (e) {} }
   }
 
@@ -561,12 +561,12 @@ function wire() {
   const flow = pane.querySelector(".tl-flow");
   flow.addEventListener("click", (e) => {
     const head = e.target.closest(".tl-area-head");
-    if (head) { const a = head.dataset.area; if (openAreas.has(a)) openAreas.delete(a); else openAreas.add(a); localStorage.setItem("gluerun.plan.tl.open", JSON.stringify([...openAreas])); rebuildPreservingScroll(); return; }
+    if (head) { const a = head.dataset.area; if (openAreas.has(a)) openAreas.delete(a); else openAreas.add(a); localStorage.setItem("singular.plan.tl.open", JSON.stringify([...openAreas])); rebuildPreservingScroll(); return; }
     const uncertainty = e.target.closest("[data-unattributed-area]");
     if (uncertainty) {
       const a = uncertainty.dataset.unattributedArea;
       if (openUnattributed.has(a)) openUnattributed.delete(a); else openUnattributed.add(a);
-      localStorage.setItem("gluerun.plan.tl.unattributed.open", JSON.stringify([...openUnattributed]));
+      localStorage.setItem("singular.plan.tl.unattributed.open", JSON.stringify([...openUnattributed]));
       rebuildPreservingScroll();
       return;
     }

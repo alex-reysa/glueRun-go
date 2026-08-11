@@ -2,7 +2,7 @@
 # Covers Slice B of artifact-secret-scan containment: the exclusion filter.
 # `engine/ctx-artifact-exclude.sh` ships a PURE, read-only, present-but-uncalled
 # helper
-#   gluerun_ctx_artifact_exclude [path...]        # or paths on stdin
+#   singular_ctx_artifact_exclude [path...]        # or paths on stdin
 # that, given a set of candidate artifact paths, drops every quarantined entry —
 #   * any path ending in `.quarantined`, and
 #   * any original path whose `.quarantined` sibling exists on disk —
@@ -44,13 +44,13 @@ printf '{"leak":"x"}\n'     >"$run_dir/dirty.json.quarantined"
 before_hash="$(find "$run_dir" -type f -print0 | sort -z | xargs -0 shasum | shasum | awk '{print $1}')"
 
 exclude() {
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
     if [[ "$1" == "--stdin" ]]; then
       shift
-      printf "%s\n" "$@" | gluerun_ctx_artifact_exclude
+      printf "%s\n" "$@" | singular_ctx_artifact_exclude
     else
-      gluerun_ctx_artifact_exclude "$@"
+      singular_ctx_artifact_exclude "$@"
     fi
   ' _ "$@"
 }

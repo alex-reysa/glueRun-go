@@ -10,15 +10,15 @@ evidence attached to `docs/orchestration/gates/experiment-run.gate-result.json`.
 
 This is an **observational before/after comparison over one real backlog**
 (this repo's own context-evolution build, 105 integrated tasks with full
-lifecycle records in `.gluerun-state/events.ndjson` — the arms-analyzed
+lifecycle records in `.singular-state/events.ndjson` — the arms-analyzed
 corpus; the finished plan totals 107, the last two release-phase tasks
 landing after this analysis was cut), not a randomized
 concurrent A/B. Arms are defined by knob-state era, matching the DAG's
 `control = M0 knob-state` framing:
 
 - **Arm A (control era)** — tasks first dispatched before
-  `2026-07-11T14:46Z`, the commit that flipped `GLUERUN_PLAN_CRITIQUE=1` and
-  `GLUERUN_PAIRED_AUDIT_PCT=25` (M0/M1 knob-state: continuity mostly OFF;
+  `2026-07-11T14:46Z`, the commit that flipped `SINGULAR_PLAN_CRITIQUE=1` and
+  `SINGULAR_PAIRED_AUDIT_PCT=25` (M0/M1 knob-state: continuity mostly OFF;
   planner sessions landed mid-era).
 - **Arm B (treatment era)** — tasks first dispatched after that flip
   (critique + revision + context packets live; routing and rehydration landed
@@ -93,7 +93,7 @@ before/after design.
 
 **Rehydration:** the assembly→routing→injection→manifest pipeline is fully
 built and fixture-proven (packets deterministic, capped, quarantine-aware;
-injected ≡ recorded manifests asserted end-to-end), but `GLUERUN_REHYDRATE`
+injected ≡ recorded manifests asserted end-to-end), but `SINGULAR_REHYDRATE`
 stayed OFF during this run's own execution, so no live hit-rate is claimable.
 The flat-vs-subgraph rehydration A/B arm is wired (TASK-0104–0106) for the
 consumer experiment.
@@ -124,16 +124,16 @@ Recorded, with rationale, in `docs/orchestration/decisions.md`
 
 | Knob | Decision | Basis |
 | --- | --- | --- |
-| `GLUERUN_PLANNER_SESSION` | **default-ON** | 76% resume rate, zero affinity incidents, graceful quota/runner degradation |
-| `GLUERUN_PLAN_CRITIQUE` | **default-ON** | treatment-era batch quality (60+ first-attempt streak); caught real plan gaps |
-| `GLUERUN_CTX_PACKET` | **default-ON** | high-quality packets consumed by workers; no incidents; visible reasoning-residue value |
-| `GLUERUN_PAIRED_AUDIT_PCT` | **keep 25** | zero disagreements = the independence spine is cheap insurance, not waste |
-| `GLUERUN_CTX_ROUTING` | **default-ON** | 364 reason-coded decisions, enumerated refusal mix, structural taint rule |
-| `GLUERUN_CTX_ARTIFACT_SCAN` | **default-ON** | quarantine + exclusion proven; negligible cost; security posture |
-| `GLUERUN_REHYDRATE` | opt-in | mechanism proven on fixtures; no live-scale evidence yet |
-| `GLUERUN_CTX_MANIFEST` | opt-in (default 0) | fixture-only by design; consumer corpus experiment pending |
-| `GLUERUN_CTX_GRAPH` | opt-in | projector deterministic/loss-free per exit gate; not yet consumed by live routing long enough to earn ON |
-| `GLUERUN_CTX_EXPERIMENT` / `GLUERUN_CTX_ARMSTATE` | opt-in | operator tooling, on-demand |
+| `SINGULAR_PLANNER_SESSION` | **default-ON** | 76% resume rate, zero affinity incidents, graceful quota/runner degradation |
+| `SINGULAR_PLAN_CRITIQUE` | **default-ON** | treatment-era batch quality (60+ first-attempt streak); caught real plan gaps |
+| `SINGULAR_CTX_PACKET` | **default-ON** | high-quality packets consumed by workers; no incidents; visible reasoning-residue value |
+| `SINGULAR_PAIRED_AUDIT_PCT` | **keep 25** | zero disagreements = the independence spine is cheap insurance, not waste |
+| `SINGULAR_CTX_ROUTING` | **default-ON** | 364 reason-coded decisions, enumerated refusal mix, structural taint rule |
+| `SINGULAR_CTX_ARTIFACT_SCAN` | **default-ON** | quarantine + exclusion proven; negligible cost; security posture |
+| `SINGULAR_REHYDRATE` | opt-in | mechanism proven on fixtures; no live-scale evidence yet |
+| `SINGULAR_CTX_MANIFEST` | opt-in (default 0) | fixture-only by design; consumer corpus experiment pending |
+| `SINGULAR_CTX_GRAPH` | opt-in | projector deterministic/loss-free per exit gate; not yet consumed by live routing long enough to earn ON |
+| `SINGULAR_CTX_EXPERIMENT` / `SINGULAR_CTX_ARMSTATE` | opt-in | operator tooling, on-demand |
 
 **Stage 6 graph investment verdict:** earn-in achieved for the projection
 layer (schema, mappers, sync≡rebuild, query, CLI — all evidence-gated);
@@ -142,7 +142,7 @@ selection) is frozen pending the consumer-run subgraph-vs-flat measurement.
 
 ## 6. Raw artifacts
 
-- Event log: `.gluerun-state/events.ndjson` (3.7k events; the durable basis
+- Event log: `.singular-state/events.ndjson` (3.7k events; the durable basis
   for every number above).
 - Gate records + hashed evidence logs: `docs/orchestration/gates/`.
 - Incident and decision trail: `docs/orchestration/decisions.md`.

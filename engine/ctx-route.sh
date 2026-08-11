@@ -7,12 +7,12 @@
 # adding the taint/independence pin and the three fail-closed resume gates on top.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines a new
-# function only; NO existing engine path invokes it, so with GLUERUN_CTX_ROUTING
+# function only; NO existing engine path invokes it, so with SINGULAR_CTX_ROUTING
 # OFF (default 0) and the file present-but-uncalled the engine is byte-identical
 # to the legacy decide paths. The l1-drive.sh second-wave hook and the
 # ctx-metrics.sh strategy/outcome split are later slices and are OUT OF SCOPE.
 #
-#   gluerun_ctx_route <role> <step> <meta> <key> <run_id> <runner> <prompt_sha> \
+#   singular_ctx_route <role> <step> <meta> <key> <run_id> <runner> <prompt_sha> \
 #                     <worktree> <lineage_head> <transcript> <lease_key> \
 #                     <base_sha> [role-relevant-paths...]
 #
@@ -37,8 +37,8 @@
 #   <base_sha>      headShaAtCreate for the diff gate (churn base; head=lineage_head)
 #   [paths...]      role-relevant pathspec scoping the diff gate
 #
-# Composition when GLUERUN_CTX_ROUTING=1 (fail-closed, first refusal wins):
-#   1. Independence pin FIRST (gluerun_ctx_route_independence_admit): an
+# Composition when SINGULAR_CTX_ROUTING=1 (fail-closed, first refusal wins):
+#   1. Independence pin FIRST (singular_ctx_route_independence_admit): an
 #      independence-required step (final-audit, paired-audit) is PINNED to fresh —
 #      a would-be resume/rehydrate is refused as `fresh tainted`, structurally,
 #      with no knob able to reroute it.
@@ -50,7 +50,7 @@
 # Routing is composed boolean gates plus the wrapped decider, never a numeric
 # score. The gates only ADD refusals; none can turn a fresh-required decision into
 # a resumable one.
-gluerun_ctx_route() {
+singular_ctx_route() {
   local role="$1" step="$2" meta="$3" key="$4" run_id="$5" runner="$6" \
         prompt_sha="$7" worktree="$8" lineage_head="$9"
   shift 9 || true
@@ -64,10 +64,10 @@ gluerun_ctx_route() {
   local baseline strategy
   case "$role" in
     planner)
-      baseline="$(gluerun_planner_resume_decide "$meta" "$key" "$runner" "$worktree" "$lineage_head")"
+      baseline="$(singular_planner_resume_decide "$meta" "$key" "$runner" "$worktree" "$lineage_head")"
       ;;
     *)
-      baseline="$(gluerun_session_resume_decide "$meta" "$role" "$key" "$run_id" "$runner" "$prompt_sha" "$worktree" "$lineage_head")"
+      baseline="$(singular_session_resume_decide "$meta" "$role" "$key" "$run_id" "$runner" "$prompt_sha" "$worktree" "$lineage_head")"
       ;;
   esac
   strategy="${baseline%% *}"
@@ -75,14 +75,14 @@ gluerun_ctx_route() {
   # --- OFF-parity: byte-identical to the legacy decide path --------------------
   # With the flag unset or != 1 the router emits the decider's line VERBATIM — no
   # gate, no independence pin, no strategy outside {resume,fresh}.
-  if [[ "${GLUERUN_CTX_ROUTING:-0}" != "1" ]]; then
+  if [[ "${SINGULAR_CTX_ROUTING:-0}" != "1" ]]; then
     printf '%s\n' "$baseline"
     return 0
   fi
 
   # --- 1. Independence pin FIRST (structural; no knob reroutes it) -------------
   local admit
-  admit="$(gluerun_ctx_route_independence_admit "$strategy" "$role" "$step")"
+  admit="$(singular_ctx_route_independence_admit "$strategy" "$role" "$step")"
   case "$admit" in
     admit)
       : # step admissible for this strategy; fall through to the resume gates
@@ -108,21 +108,21 @@ gluerun_ctx_route() {
   # --- Resume gates, fail-closed, first refusal wins ---------------------------
   # Each refusal is a refused-resume lineage-continuation step: emit its reason
   # through the rehydrate wire-in, which upgrades `fresh <reason>` to `rehydrate
-  # <reason>` only behind GLUERUN_REHYDRATE=1 with a non-empty run_dir packet and
+  # <reason>` only behind SINGULAR_REHYDRATE=1 with a non-empty run_dir packet and
   # otherwise stays byte-identical to the bare `fresh <reason>` line.
   # (a) live generalized session lease: another fanout is using the role's session.
   local lease_path
-  lease_path="$(gluerun_ctx_route_session_lease_path "$role" "$lease_key")"
-  if [[ -n "$lease_path" ]] && gluerun_ctx_route_session_lease_live "$lease_path"; then
-    _gluerun_ctx_route_refuse_resume session-lease "$role" "$step" "$meta" "$key"; return 0
+  lease_path="$(singular_ctx_route_session_lease_path "$role" "$lease_key")"
+  if [[ -n "$lease_path" ]] && singular_ctx_route_session_lease_live "$lease_path"; then
+    _singular_ctx_route_refuse_resume session-lease "$role" "$step" "$meta" "$key"; return 0
   fi
   # (b) window pressure: the session transcript is over the usage threshold.
-  if [[ "$(gluerun_ctx_route_window_gate "$role" "$transcript")" != "pass" ]]; then
-    _gluerun_ctx_route_refuse_resume window-pressure "$role" "$step" "$meta" "$key"; return 0
+  if [[ "$(singular_ctx_route_window_gate "$role" "$transcript")" != "pass" ]]; then
+    _singular_ctx_route_refuse_resume window-pressure "$role" "$step" "$meta" "$key"; return 0
   fi
   # (c) diff volume: role-relevant churn since headShaAtCreate is over the limit.
-  if [[ "$(gluerun_ctx_route_diff_gate "$role" "$worktree" "$base_sha" "$lineage_head" "$@")" != "pass" ]]; then
-    _gluerun_ctx_route_refuse_resume diff-volume "$role" "$step" "$meta" "$key"; return 0
+  if [[ "$(singular_ctx_route_diff_gate "$role" "$worktree" "$base_sha" "$lineage_head" "$@")" != "pass" ]]; then
+    _singular_ctx_route_refuse_resume diff-volume "$role" "$step" "$meta" "$key"; return 0
   fi
 
   # Every gate passed -> the wrapped decider's `resume <id>` stands, verbatim.
@@ -130,19 +130,19 @@ gluerun_ctx_route() {
   return 0
 }
 
-# _gluerun_ctx_route_refuse_resume <reason> <role> <step> <meta> <key>
+# _singular_ctx_route_refuse_resume <reason> <role> <step> <meta> <key>
 #
 # The rehydrate wire-in for a refused-resume lineage step. Prints exactly one
-# line: `rehydrate <reason>` when GLUERUN_REHYDRATE=1 and the manifest chosen for
+# line: `rehydrate <reason>` when SINGULAR_REHYDRATE=1 and the manifest chosen for
 # this step yields at least one surviving rehydration source, otherwise the byte-
 # identical `fresh <reason>` this spine emitted before the wire-in. The
-# manifest composition is guarded behind GLUERUN_REHYDRATE so the OFF path spawns
+# manifest composition is guarded behind SINGULAR_REHYDRATE so the OFF path spawns
 # no extra work; the decision leaf (which independently re-checks OFF-parity, the
 # independence pin, and the empty-packet guard) makes the final call.
 #
 # WHICH manifest the leaf sees is delegated to the flat-vs-subgraph selector
-# gluerun_ctx_route_subgraph_manifest (engine/ctx-route-subgraph.sh): with
-# GLUERUN_CTX_SUBGRAPH_REHYDRATE default 0 it returns the flat manifest and this
+# singular_ctx_route_subgraph_manifest (engine/ctx-route-subgraph.sh): with
+# SINGULAR_CTX_SUBGRAPH_REHYDRATE default 0 it returns the flat manifest and this
 # path is byte-identical to today; only with the subgraph knob on, the treatment
 # arm, and a present non-empty graph corpus does it hand the leaf the graph-
 # selected packet instead of the flat capsule. <key> is the taskId the route
@@ -151,12 +151,12 @@ gluerun_ctx_route() {
 #
 # Appends no events and never exits non-zero — the spine keeps its one-line,
 # no-event contract, and `rehydrate` stays tainted.
-_gluerun_ctx_route_refuse_resume() {
+_singular_ctx_route_refuse_resume() {
   local reason="$1" role="$2" step="$3" meta="$4" key="${5:-}"
 
   # OFF-parity: with the knob unset or != 1, stay byte-identical to `fresh
   # <reason>` and do NO resolver/manifest work at all.
-  if [[ "${GLUERUN_REHYDRATE:-0}" != "1" ]]; then
+  if [[ "${SINGULAR_REHYDRATE:-0}" != "1" ]]; then
     printf 'fresh %s\n' "$reason"; return 0
   fi
 
@@ -164,8 +164,8 @@ _gluerun_ctx_route_refuse_resume() {
   # knob + treatment arm + present corpus) and let the decision leaf render the
   # verdict.
   local manifest
-  manifest="$(gluerun_ctx_route_subgraph_manifest "$reason" "$role" "$step" "$meta" "$key")"
+  manifest="$(singular_ctx_route_subgraph_manifest "$reason" "$role" "$step" "$meta" "$key")"
 
-  gluerun_ctx_route_rehydrate_decide "$reason" "$role" "$step" "$manifest"
+  singular_ctx_route_rehydrate_decide "$reason" "$role" "$step" "$manifest"
   return 0
 }

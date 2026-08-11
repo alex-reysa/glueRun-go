@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # 0.10.0: the autonomate loop grows a supervisor-briefing gate right after the
-# STATUS write. It MUST be byte-inert when GLUERUN_SUPERVISOR_INTERVAL_MIN is
+# STATUS write. It MUST be byte-inert when SINGULAR_SUPERVISOR_INTERVAL_MIN is
 # unset/0 (a reconcile cycle then creates ZERO supervisor artifacts), and when
 # enabled it must brief at most once per interval — stamping supervisor/last-run
 # BEFORE spawning so an immediate next cycle cannot double-spawn.
@@ -32,14 +32,14 @@ cleanup() {
 }
 trap cleanup EXIT
 root="$tmp/repo"
-mkdir -p "$root/.gluerun-state" "$root/docs/orchestration/prompts" \
+mkdir -p "$root/.singular-state" "$root/docs/orchestration/prompts" \
   "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 git -C "$root" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 cp "$ENGINE_HOME/templates/prompts/supervisor.md" "$root/docs/orchestration/prompts/supervisor.md"
 cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
-{"schema":"gluerun.orchestration.dag.v0","layers":["scaffold"],"kinds":["build"],
+{"schema":"singular.orchestration.dag.v0","layers":["scaffold"],"kinds":["build"],
  "nodes":[{"id":"M0.core","stage":"M0","area":"core","layer":"scaffold","kind":"build","dependsOn":[],"requiredCompletion":"scaffold_complete"}]}
 EOF
 
@@ -70,21 +70,21 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
-[[ -n "$meta" ]] && printf '{"schema":"gluerun.orchestration.session-meta.v0","provider":"fake","model":"f","effort":"low","exitCode":0}\n' >"$meta"
-printf '%s\n' '{"schema":"gluerun.orchestration.supervisor-report.v0","stage":"idle","narrative":"Nothing to do."}' >"$out"
+[[ -n "$meta" ]] && printf '{"schema":"singular.orchestration.session-meta.v0","provider":"fake","model":"f","effort":"low","exitCode":0}\n' >"$meta"
+printf '%s\n' '{"schema":"singular.orchestration.supervisor-report.v0","stage":"idle","narrative":"Nothing to do."}' >"$out"
 SH
 chmod +x "$runner"
 
 auto() {
-  env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ORCH_DIR="$root/docs/orchestration" GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
-    GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" GLUERUN_TARGET_BRANCH=target \
-    GLUERUN_PUSH=0 GLUERUN_GENERATE=0 GLUERUN_RECONCILE_SCRIPT="$recon" GLUERUN_RUNNER="$runner" \
+  env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ORCH_DIR="$root/docs/orchestration" SINGULAR_TASKS_DIR="$root/docs/orchestration/tasks" \
+    SINGULAR_EVENTS_FILE="$root/.singular-state/events.ndjson" SINGULAR_TARGET_BRANCH=target \
+    SINGULAR_PUSH=0 SINGULAR_GENERATE=0 SINGULAR_RECONCILE_SCRIPT="$recon" SINGULAR_RUNNER="$runner" \
     "$@" bash "$SCRIPT_DIR/autonomate.sh" --once
 }
 
-sup_dir="$root/.gluerun-state/supervisor"
-count_sup() { find "$root/.gluerun-state/runs" -maxdepth 1 -mindepth 1 -name 'SUP-*' -type d 2>/dev/null | grep -c . || true; }
+sup_dir="$root/.singular-state/supervisor"
+count_sup() { find "$root/.singular-state/runs" -maxdepth 1 -mindepth 1 -name 'SUP-*' -type d 2>/dev/null | grep -c . || true; }
 
 # --- 1. knob unset -> byte-inert (ZERO supervisor artifacts) -----------------
 auto </dev/null >/dev/null 2>&1
@@ -92,7 +92,7 @@ auto </dev/null >/dev/null 2>&1
 [[ "$(count_sup)" -eq 0 ]] || fail "byte-inert violated: a SUP run appeared with knob unset"
 
 # --- 2. knob=1 -> exactly one briefing spawned + stamp -----------------------
-auto GLUERUN_SUPERVISOR_INTERVAL_MIN=1 </dev/null >/dev/null 2>&1
+auto SINGULAR_SUPERVISOR_INTERVAL_MIN=1 </dev/null >/dev/null 2>&1
 [[ -f "$sup_dir/last-run" ]] || fail "last-run stamp not written when enabled"
 stamp1="$(cat "$sup_dir/last-run")"
 [[ "$stamp1" =~ ^[0-9]+$ ]] || fail "last-run stamp not numeric: $stamp1"
@@ -104,7 +104,7 @@ done
 [[ "$(count_sup)" -eq 1 ]] || fail "expected exactly one SUP run, got $(count_sup)"
 
 # --- 3. immediate second cycle -> NO respawn (interval gate holds) -----------
-auto GLUERUN_SUPERVISOR_INTERVAL_MIN=1 </dev/null >/dev/null 2>&1
+auto SINGULAR_SUPERVISOR_INTERVAL_MIN=1 </dev/null >/dev/null 2>&1
 stamp2="$(cat "$sup_dir/last-run")"
 [[ "$stamp2" == "$stamp1" ]] || fail "interval gate failed: stamp re-written within the interval ($stamp1 -> $stamp2)"
 sleep 1

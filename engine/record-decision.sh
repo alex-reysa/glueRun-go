@@ -32,8 +32,8 @@ if [[ -z "$task_id" || -z "$decision" ]]; then
   exit 2
 fi
 
-decisions_file="$GLUERUN_ORCH_DIR/decisions.md"
-ts="$(gluerun_timestamp)"
+decisions_file="$SINGULAR_ORCH_DIR/decisions.md"
+ts="$(singular_timestamp)"
 
 python3 - "$decisions_file" "$ts" "$task_id" "$decision" "$rationale" "$run_id" "$branch" "$authority" <<'PY'
 import os
@@ -69,7 +69,7 @@ with open(path, "w", encoding="utf-8") as f:
     f.write(new)
 PY
 
-gluerun_append_event "decision.recorded" "bootstrap decision recorded" \
+singular_append_event "decision.recorded" "bootstrap decision recorded" \
   "{\"taskId\":\"$task_id\",\"decision\":\"$decision\",\"runId\":\"$run_id\",\"branch\":\"$branch\",\"authority\":\"$authority\"}"
 
 echo "decision recorded: $task_id -> $decision"

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.provider-error.v0",
-  "title": "gluerun Normalized Provider Error",
+  "$id": "singular.orchestration.provider-error.v0",
+  "title": "singular Normalized Provider Error",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -20,7 +20,7 @@
     "recordedAt"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.provider-error.v0" },
+    "schema": { "const": "singular.orchestration.provider-error.v0" },
     "provider": {
       "type": "string",
       "enum": ["codex", "claude", "gemini", "opencode", "cursor", "grok"]

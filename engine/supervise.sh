@@ -2,9 +2,9 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "supervise.sh requires bash >= 4" >&2; exit 1
@@ -16,7 +16,7 @@ fi
 # card reads. Modeled on decide.sh (one-shot readonly spawn + kill-tree watchdog
 # + extract/validate). NEVER edits code, git, tasks, leases, or settings.
 #
-# On success:  .gluerun-state/supervisor/latest.json (+ history/<utc>.json, 20 kept)
+# On success:  .singular-state/supervisor/latest.json (+ history/<utc>.json, 20 kept)
 #              and a supervisor.report event.
 # On failure:  a supervisor.failed event; latest.json is left untouched.
 #
@@ -28,8 +28,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 
-# Briefing runner. Defaults to the codex runner; GLUERUN_RUNNER selects a drop-in.
-GLUERUN_RUNNER_BIN="${GLUERUN_RUNNER:-$SCRIPT_DIR/codex-run.sh}"
+# Briefing runner. Defaults to the codex runner; SINGULAR_RUNNER selects a drop-in.
+SINGULAR_RUNNER_BIN="${SINGULAR_RUNNER:-$SCRIPT_DIR/codex-run.sh}"
 
 # --once is the only supported mode; accepted (and default) for symmetry with the
 # rest of the engine and forward-compatibility.
@@ -40,22 +40,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-timeout_sec="${GLUERUN_SUPERVISOR_TIMEOUT_SEC:-900}"
+timeout_sec="${SINGULAR_SUPERVISOR_TIMEOUT_SEC:-900}"
 [[ "$timeout_sec" =~ ^[0-9]+$ && "$timeout_sec" -gt 0 ]] || timeout_sec=900
 
-gluerun_ensure_state_dirs
+singular_ensure_state_dirs
 run_id="SUP-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-run_dir="$(gluerun_run_dir "$run_id")"
+run_dir="$(singular_run_dir "$run_id")"
 mkdir -p "$run_dir"
 
-sup_dir="$GLUERUN_STATE_DIR/supervisor"
+sup_dir="$SINGULAR_STATE_DIR/supervisor"
 mkdir -p "$sup_dir/history"
 
 # Emit a supervisor.failed event with a machine-readable reason, then exit 0.
 # A failed briefing is observability, never a loop-breaking error.
 supervisor_fail() {
   local reason="$1" message="$2"
-  gluerun_append_event "supervisor.failed" "$message" \
+  singular_append_event "supervisor.failed" "$message" \
     "$(python3 - "$run_id" "$reason" <<'PY'
 import json, sys
 run_id, reason = sys.argv[1:3]
@@ -66,17 +66,17 @@ PY
 
 # 1. Digest -> rendered prompt (fall back to engine templates for pre-0.10 repos).
 digest_file="$run_dir/digest.txt"
-gluerun_supervisor_digest "$digest_file"
+singular_supervisor_digest "$digest_file"
 
-tmpl="$GLUERUN_ORCH_DIR/prompts/supervisor.md"
-[[ -f "$tmpl" ]] || tmpl="$GLUERUN_ENGINE_HOME/templates/prompts/supervisor.md"
+tmpl="$SINGULAR_ORCH_DIR/prompts/supervisor.md"
+[[ -f "$tmpl" ]] || tmpl="$SINGULAR_ENGINE_HOME/templates/prompts/supervisor.md"
 if [[ ! -f "$tmpl" ]]; then
   supervisor_fail "no-template" "supervisor prompt template not found"
   echo "runId=$run_id" ; echo "status=failed" ; exit 0
 fi
 
 prompt_file="$run_dir/supervisor-prompt.md"
-gluerun_render_supervisor_prompt "$tmpl" "$digest_file" "$prompt_file"
+singular_render_supervisor_prompt "$tmpl" "$digest_file" "$prompt_file"
 
 # 2. One read-only runner pass + kill-tree watchdog (decide.sh model).
 raw="$run_dir/report-raw.json"
@@ -86,21 +86,21 @@ runner_result="$run_dir/supervisor-runner-result.json"
 
 timed_out="no"
 rm -f "$runner_result"
-supervisor_capability_profile="${GLUERUN_SUPERVISOR_CAPABILITY_PROFILE:-supervisor-core}"
-gluerun_runner_contract_prepare \
-  "$GLUERUN_RUNNER_BIN" supervisor "$supervisor_capability_profile" "$runner_result"
+supervisor_capability_profile="${SINGULAR_SUPERVISOR_CAPABILITY_PROFILE:-supervisor-core}"
+singular_runner_contract_prepare \
+  "$SINGULAR_RUNNER_BIN" supervisor "$supervisor_capability_profile" "$runner_result"
 # `exec` so $! IS the runner script, not a subshell wrapping it. The runner is a
 # cooperative citizen — it traps TERM and group-kills its own provider session —
 # but only if the TERM actually reaches it; with an intermediate subshell the
 # signal landed on a bash that was merely waiting. Deliberately NOT a new
 # session: the supervisor keeps sharing this shell's terminal group.
 (
-  export GLUERUN_RUNNER_ROLE=supervisor
-  export GLUERUN_RUNNER_CAPABILITY_PROFILE="$supervisor_capability_profile"
-  export GLUERUN_RUNNER_RESULT_FILE="$runner_result"
-  export GLUERUN_RUNNER_RUN_ID="$run_id"
-  exec "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
-    --level readonly -C "$GLUERUN_ROOT" \
+  export SINGULAR_RUNNER_ROLE=supervisor
+  export SINGULAR_RUNNER_CAPABILITY_PROFILE="$supervisor_capability_profile"
+  export SINGULAR_RUNNER_RESULT_FILE="$runner_result"
+  export SINGULAR_RUNNER_RUN_ID="$run_id"
+  exec "$SINGULAR_RUNNER_BIN" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
+    --level readonly -C "$SINGULAR_ROOT" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \
     --output-last-message "$raw" \
@@ -113,9 +113,9 @@ while kill -0 "$runner_pid" 2>/dev/null; do
     timed_out="yes"
     # With a grace period, so the runner's EXIT trap — which holds the read-only
     # restore guard — gets to run. autonomate.sh backgrounds this supervisor
-    # every cycle against $GLUERUN_ROOT for up to 900s; a bare SIGKILL here left
+    # every cycle against $SINGULAR_ROOT for up to 900s; a bare SIGKILL here left
     # every mutation it made in the operator's repo.
-    gluerun_kill_tree "$runner_pid" "$(gluerun_kill_grace_sec)"
+    singular_kill_tree "$runner_pid" "$(singular_kill_grace_sec)"
     wait "$runner_pid" 2>/dev/null || true
     break
   fi
@@ -125,8 +125,8 @@ if [[ "$timed_out" != "yes" ]]; then
   wait "$runner_pid" || true
 fi
 
-gluerun_session_meta_finalize "$meta" "supervisor" "" "$run_id" \
-  "$(basename "$GLUERUN_RUNNER_BIN")" "$(gluerun_prompt_sha "$prompt_file")" "" 1 || true
+singular_session_meta_finalize "$meta" "supervisor" "" "$run_id" \
+  "$(basename "$SINGULAR_RUNNER_BIN")" "$(singular_prompt_sha "$prompt_file")" "" 1 || true
 
 # 3. Extract + validate + publish (or record the failure).
 status="failed"
@@ -134,8 +134,8 @@ report_json="$run_dir/report.json"
 validation_log="$run_dir/report.validation.log"
 if [[ "$timed_out" == "yes" ]]; then
   supervisor_fail "timeout" "supervisor briefing timed out after ${timeout_sec}s"
-elif [[ -f "$raw" ]] && gluerun_extract_json "$raw" "$report_json" 2>>"$log"; then
-  if gluerun_validate_supervisor_report "$report_json" >"$validation_log" 2>&1; then
+elif [[ -f "$raw" ]] && singular_extract_json "$raw" "$report_json" 2>>"$log"; then
+  if singular_validate_supervisor_report "$report_json" >"$validation_log" 2>&1; then
     # Publish: enrich with generatedAt + runId, then atomically replace latest.json
     # and drop a history snapshot pruned to the newest 20.
     if python3 - "$report_json" "$sup_dir" "$run_id" <<'PY'
@@ -172,8 +172,8 @@ for name in snaps[:-20]:
 PY
     then
       status="ok"
-      stage="$(gluerun_json_field "$report_json" stage 2>/dev/null || echo "")"
-      gluerun_append_event "supervisor.report" "supervisor briefing published" \
+      stage="$(singular_json_field "$report_json" stage 2>/dev/null || echo "")"
+      singular_append_event "supervisor.report" "supervisor briefing published" \
         "$(python3 - "$run_id" "$stage" <<'PY'
 import json, sys
 run_id, stage = sys.argv[1:3]

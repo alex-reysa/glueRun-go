@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.decider-verdict.v0",
-  "title": "gluerun Autonomous Decider Verdict",
+  "$id": "singular.orchestration.decider-verdict.v0",
+  "title": "singular Autonomous Decider Verdict",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "gluerun.orchestration.decider-verdict.v0"
+      "const": "singular.orchestration.decider-verdict.v0"
     },
     "failureClass": {
       "type": "string",

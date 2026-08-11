@@ -17,7 +17,7 @@ RUN="$SCRIPT_DIR/grok-run.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-grok-test.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-grok-test.XXXXXX")"
 bindir="$workroot/bin"
 mkdir -p "$bindir"
 cleanup() { rm -rf "$workroot"; }
@@ -50,13 +50,13 @@ PY
 MOCK
 chmod +x "$bindir/grok"
 
-export GLUERUN_TARGET_BRANCH="test-target"
+export SINGULAR_TARGET_BRANCH="test-target"
 
 new_repo() {
   local d="$1"; mkdir -p "$d"
   ( cd "$d" && git init -q && git config user.email t@t && git config user.name t \
-      && printf '.gluerun-state/\n' > .gitignore && git add .gitignore && git commit -qm init \
-      && git branch "$GLUERUN_TARGET_BRANCH" )
+      && printf '.singular-state/\n' > .gitignore && git add .gitignore && git commit -qm init \
+      && git branch "$SINGULAR_TARGET_BRANCH" )
 }
 
 prompt() { local p="$workroot/prompt.md"; printf 'do the thing\n' > "$p"; echo "$p"; }
@@ -64,8 +64,8 @@ out() { local o="$workroot/out.$RANDOM.json"; echo "$o"; }
 
 run_grok() {
   local repo="$1"; shift
-  ( cd "$repo" && PATH="$bindir:$PATH" GLUERUN_ROOT="$repo" \
-      GLUERUN_STATE_DIR="$repo/.gluerun-state" "$RUN" "$@" )
+  ( cd "$repo" && PATH="$bindir:$PATH" SINGULAR_ROOT="$repo" \
+      SINGULAR_STATE_DIR="$repo/.singular-state" "$RUN" "$@" )
 }
 
 # --- Case 1: the envelope's .text reaches --output-last-message ----------------
@@ -139,7 +139,7 @@ pass "c7 readonly passes --sandbox read-only and denies mutation tools"
 
 # --- Case 8: a missing binary is 127, not a crash -----------------------------
 r="$workroot/c8"; new_repo "$r"; ec=0
-( cd "$r" && PATH="/usr/bin:/bin" GLUERUN_ROOT="$r" GLUERUN_STATE_DIR="$r/.gluerun-state" \
+( cd "$r" && PATH="/usr/bin:/bin" SINGULAR_ROOT="$r" SINGULAR_STATE_DIR="$r/.singular-state" \
     "$RUN" --level l2 -C "$r" --prompt-file "$(prompt)" ) >/dev/null 2>&1 || ec=$?
 [[ "$ec" -eq 127 ]] || fail "c8: missing grok binary should exit 127 (got $ec)"
 pass "c8 missing binary -> 127"
@@ -156,7 +156,7 @@ pass "c9 error envelope -> nonzero exit"
 # everything below it. The mock's sleep is a grandchild for exactly this reason.
 r="$workroot/c10"; new_repo "$r"; o="$(out)"; marker="$r/completed.marker"; ec=0
 start=$SECONDS
-MOCK_SLEEP=6 MOCK_MARKER="$marker" GLUERUN_GROK_TIMEOUT_SEC=2 \
+MOCK_SLEEP=6 MOCK_MARKER="$marker" SINGULAR_GROK_TIMEOUT_SEC=2 \
   run_grok "$r" --level l2 -C "$r" --prompt-file "$(prompt)" \
   --output-last-message "$o" >/dev/null 2>&1 || ec=$?
 elapsed=$((SECONDS - start))
@@ -173,8 +173,8 @@ r="$workroot/c11"; new_repo "$r"; o="$(out)"
 printf 'committed\n' >"$r/killed.txt"
 ( cd "$r" && git add killed.txt && git commit -qm killed )
 ( cd "$r" && PATH="$bindir:$PATH" MOCK_TEXT='{"ok":true}' MOCK_WRITE="$r/killed.txt" \
-    MOCK_SLEEP=20 GLUERUN_GROK_TIMEOUT_SEC=0 GLUERUN_ROOT="$r" \
-    GLUERUN_STATE_DIR="$r/.gluerun-state" \
+    MOCK_SLEEP=20 SINGULAR_GROK_TIMEOUT_SEC=0 SINGULAR_ROOT="$r" \
+    SINGULAR_STATE_DIR="$r/.singular-state" \
     exec "$RUN" --level readonly -C "$r" --prompt-file "$(prompt)" \
     --output-last-message "$o" ) >/dev/null 2>&1 &
 kill_pid=$!

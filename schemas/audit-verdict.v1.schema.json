@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.audit-verdict.v1",
-  "title": "gluerun Auditor Verdict v1",
+  "$id": "singular.orchestration.audit-verdict.v1",
+  "title": "singular Auditor Verdict v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,7 @@
     "rationale"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.audit-verdict.v1" },
+    "schema": { "const": "singular.orchestration.audit-verdict.v1" },
     "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
     "runId": { "type": "string", "minLength": 1 },
     "branch": { "type": "string", "minLength": 1 },

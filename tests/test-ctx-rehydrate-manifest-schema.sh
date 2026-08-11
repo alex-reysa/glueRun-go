@@ -13,7 +13,7 @@
 # authored schema can never certify an entry as authoritative.
 #
 # Faithful-to-emitter: assertions validate LIVE emitter output (from
-# gluerun_ctx_rehydrate_manifest / gluerun_ctx_rehydrate_authored_manifest via
+# singular_ctx_rehydrate_manifest / singular_ctx_rehydrate_authored_manifest via
 # engine/lib.sh), not a hand-authored sample, so a schema that diverges from
 # what the engine emits fails.
 #
@@ -33,10 +33,10 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 # Source the engine so the real emitters are in scope (the ctx-*.sh files load
 # via the context-evolution glob block in engine/lib.sh).
 source "$ENGINE_HOME/engine/lib.sh"
-type gluerun_ctx_rehydrate_manifest >/dev/null 2>&1 \
-  || fail "gluerun_ctx_rehydrate_manifest not defined after sourcing engine/lib.sh"
-type gluerun_ctx_rehydrate_authored_manifest >/dev/null 2>&1 \
-  || fail "gluerun_ctx_rehydrate_authored_manifest not defined after sourcing engine/lib.sh"
+type singular_ctx_rehydrate_manifest >/dev/null 2>&1 \
+  || fail "singular_ctx_rehydrate_manifest not defined after sourcing engine/lib.sh"
+type singular_ctx_rehydrate_authored_manifest >/dev/null 2>&1 \
+  || fail "singular_ctx_rehydrate_authored_manifest not defined after sourcing engine/lib.sh"
 
 # RED precondition: the schema files must be absent before they are authored, so
 # validation cannot resolve them and this guard fails.
@@ -110,18 +110,18 @@ printf 'implementer capsule body'> "$TMP/impl-capsule.txt"
 printf 'decision record body'    > "$TMP/decision.txt"
 
 # --- core-manifest conformance (LIVE emitter, multiple sources) --------------
-CORE="$(gluerun_ctx_rehydrate_manifest \
+CORE="$(singular_ctx_rehydrate_manifest \
   "task-packet=$TMP/task-packet.txt" \
   "implementer-capsule=$TMP/impl-capsule.txt" \
   "decision-record=$TMP/decision.txt")"
 assert_valid "$SCHEMA_CORE" "$CORE" "live core manifest (multi-source)"
 
 core_schema_const="$(printf '%s' "$CORE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["schema"])')"
-[[ "$core_schema_const" == "gluerun.orchestration.ctx-rehydrate-manifest.v0" ]] \
+[[ "$core_schema_const" == "singular.orchestration.ctx-rehydrate-manifest.v0" ]] \
   || fail "core manifest schema const unexpected: $core_schema_const"
 
 # --- empty-source robustness (sources: []) -----------------------------------
-CORE_EMPTY="$(gluerun_ctx_rehydrate_manifest)"
+CORE_EMPTY="$(singular_ctx_rehydrate_manifest)"
 assert_valid "$SCHEMA_CORE" "$CORE_EMPTY" "live core manifest (empty sources)"
 
 # --- authored-manifest conformance (LIVE emitter) ----------------------------
@@ -131,12 +131,12 @@ cat > "$TMP/authored.json" <<JSON
   {"id":"auth-guide-b","body":"authored knowledge body B","load-when":["implement"],"freshness":"2026-07-10"}
 ]}
 JSON
-AUTHORED="$(gluerun_ctx_rehydrate_authored_manifest "$TMP/authored.json" implement)"
+AUTHORED="$(singular_ctx_rehydrate_authored_manifest "$TMP/authored.json" implement)"
 [[ -n "$AUTHORED" ]] || fail "authored manifest emitter produced no output over fixture"
 assert_valid "$SCHEMA_AUTHORED" "$AUTHORED" "live authored manifest"
 
 auth_schema_const="$(printf '%s' "$AUTHORED" | python3 -c 'import json,sys; print(json.load(sys.stdin)["schema"])')"
-[[ "$auth_schema_const" == "gluerun.orchestration.ctx-rehydrate-authored-manifest.v0" ]] \
+[[ "$auth_schema_const" == "singular.orchestration.ctx-rehydrate-authored-manifest.v0" ]] \
   || fail "authored manifest schema const unexpected: $auth_schema_const"
 
 # Every emitted authored entry must carry class=authored-knowledge /
@@ -176,10 +176,10 @@ assert_valid "$SCHEMA_CORE" "$CORE"               "core manifest WITHOUT authore
 
 # --- closed-object discipline: an unknown top-level key is rejected -----------
 assert_invalid "$SCHEMA_CORE" \
-  '{"schema":"gluerun.orchestration.ctx-rehydrate-manifest.v0","sources":[],"bogus":1}' \
+  '{"schema":"singular.orchestration.ctx-rehydrate-manifest.v0","sources":[],"bogus":1}' \
   "core manifest with unknown top-level property"
 assert_invalid "$SCHEMA_AUTHORED" \
-  '{"schema":"gluerun.orchestration.ctx-rehydrate-authored-manifest.v0","sources":[],"bogus":1}' \
+  '{"schema":"singular.orchestration.ctx-rehydrate-authored-manifest.v0","sources":[],"bogus":1}' \
   "authored manifest with unknown top-level property"
 
 # --- additive-schema discipline: neither schema is referenced by any emitter --

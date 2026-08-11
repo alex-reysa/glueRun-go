@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0107",
   "runId": "RUN-20260713T022215Z-67611",
   "branch": "agent/graph/TASK-0107-subgraph-e2e",
@@ -12,7 +12,7 @@
     "worker-evidence/green.log: all 8 sections PASS, GREEN_EXIT=0",
     "worker-evidence/regression.log: e2e + test-engine-clean.sh PASS, REGRESSION_EXIT=0",
     "git diff --name-status 83ab65f..1e4b52e: single add A tests/test-ctx-rehydrate-subgraph-e2e.sh (455 insertions); git status clean",
-    "tests/test-ctx-rehydrate-subgraph-e2e.sh (455 lines): hermetic guard, scrubs GLUERUN_*, mktemp-scoped, composes integrated selectors/assembler over one deep-lineage corpus",
+    "tests/test-ctx-rehydrate-subgraph-e2e.sh (455 lines): hermetic guard, scrubs SINGULAR_*, mktemp-scoped, composes integrated selectors/assembler over one deep-lineage corpus",
     "engine/ctx-rehydrate-subgraph-packet.sh & engine/ctx-route-subgraph.sh: real definitions of composed functions (sourced by engine/lib.sh), confirming compose-not-reimplement",
     "schemas/orchestration/audit-verdict.v0.schema.json"
   ],
@@ -21,14 +21,14 @@
     "git branch --show-current; git rev-parse HEAD; git diff --stat/--name-status 83ab65f HEAD; git status --porcelain",
     "bash tests/test-ctx-rehydrate-subgraph-e2e.sh (GREEN_EXIT=0, all 8 PASS)",
     "bash tests/test-engine-clean.sh (CLEAN_EXIT=0)",
-    "reproduced RED via mirrored temp tree (symlinked engine/ + schemas/): sed '/gluerun_graph_emit_edge contradicts/d' > mutant; bash mutant -> FAIL 'contradictions-first violated', MUTANT_EXIT=1",
-    "grep -rln for gluerun_ctx_rehydrate_subgraph_assemble()/gluerun_ctx_route_subgraph_render() in engine/ (found in integrated modules)"
+    "reproduced RED via mirrored temp tree (symlinked engine/ + schemas/): sed '/singular_graph_emit_edge contradicts/d' > mutant; bash mutant -> FAIL 'contradictions-first violated', MUTANT_EXIT=1",
+    "grep -rln for singular_ctx_rehydrate_subgraph_assemble()/singular_ctx_route_subgraph_render() in engine/ (found in integrated modules)"
   ],
   "findings": [
     "File scope compliant: exactly one file added, tests/test-ctx-rehydrate-subgraph-e2e.sh, matching ownedFiles and packet.changedFiles; no forbidden/engine file modified; working tree clean.",
     "Branch/base consistent: branch agent/graph/TASK-0107-subgraph-e2e, HEAD 1e4b52e == packet.headSha, base 83ab65f == packet.baseRef; single commit; no drift.",
     "Test-first evidence valid: gate candidate did not exist before this task (RED file-absent), and mutation-proof (dropping the open contradicts edge flips assertion 2 to FAIL exit 1) demonstrates the guard bites a composed-path regression. Independently reproduced RED (exit 1 at contradictions-first) and GREEN (all 8 PASS, exit 0).",
-    "Gate exit 0 reproduced: bash e2e && bash test-engine-clean.sh both green; engine/ and schemas/ free of GLUERUN symbols \u2014 no engine code touched.",
+    "Gate exit 0 reproduced: bash e2e && bash test-engine-clean.sh both green; engine/ and schemas/ free of consumer-specific symbols \u2014 no engine code touched.",
     "Consistency verified by the guard itself: manifest validated against shipped ctx-rehydrate-manifest.v0 core schema, same-sources invariant (ids+sha256 match packet sources), caps (default 4000 + shrink), determinism (byte-identical repeats), OFF-parity (unset/0/control-arm/absent-corpus fall back to flat), and evidence invariance (no events, no state writes, corpus untouched, rehydrate strategy stays tainted). Composed functions resolve to already-integrated engine modules, not reimplementations.",
     "Observation (non-blocking): packet.commands[0] RED writes a transient in-repo mutant tests/.mutant-e2e-red.sh; it is cleaned up (git status clean) and dot-prefixed, so it does not affect committed scope. My own RED reproduction avoided the repo entirely by mirroring the tree in a temp dir."
   ],

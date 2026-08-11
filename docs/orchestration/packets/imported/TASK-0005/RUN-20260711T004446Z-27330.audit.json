@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0005",
   "runId": "RUN-20260711T004446Z-27330",
   "branch": "agent/foundation/TASK-0005-ctx-paired-audit",
@@ -9,19 +9,19 @@
     "gate-check.json (exitCode 0) and gate-check.log (28 passed, 0 failed incl test-ctx-paired-audit.sh + test-engine-clean.sh)",
     "worker-evidence/red.log (FAIL 'engine not present yet', EXIT=1), green.log (tests passed, EXIT=0), regression.log (28 passed/0 failed, EXIT=0)",
     "scope-check.log ('2 changed path(s), all allowed'), secret-scan.log ('secret-scan: clean')",
-    "engine/ctx-paired-audit.sh (168 lines: bucket/should_sample/record functions; sampling gate before any write; --level readonly, no --resume, base auditor prompt; only gluerun_append_event + paired-audit.json writes)",
-    "tests/test-ctx-paired-audit.sh (252 lines: isolated GLUERUN_EVENTS_FILE, temp run dir, stub GLUERUN_RUNNER; cases a-e)",
+    "engine/ctx-paired-audit.sh (168 lines: bucket/should_sample/record functions; sampling gate before any write; --level readonly, no --resume, base auditor prompt; only singular_append_event + paired-audit.json writes)",
+    "tests/test-ctx-paired-audit.sh (252 lines: isolated SINGULAR_EVENTS_FILE, temp run dir, stub SINGULAR_RUNNER; cases a-e)",
     "l2-active-prompt.md (objective + acceptance criteria + strict_test_first policy)",
-    "engine/lib.sh ctx-loader block (lines 3851-3863 auto-source ctx-*.sh) and gluerun_append_event (lines 470-497, emits compact \"type\":<t> with JSON data)",
+    "engine/lib.sh ctx-loader block (lines 3851-3863 auto-source ctx-*.sh) and singular_append_event (lines 470-497, emits compact \"type\":<t> with JSON data)",
     "git diff base..head: A engine/ctx-paired-audit.sh, A tests/test-ctx-paired-audit.sh only; forbidden lib.sh/l1-drive.sh untouched"
   ],
   "commandsRun": [
     "git log --oneline -10 && git branch --show-current && git status --porcelain",
     "git diff --stat/--name-only/--name-status 9a1beed..d03b912",
     "git diff --name-only 9a1beed..d03b912 -- engine/lib.sh engine/l1-drive.sh (empty: untouched)",
-    "ls -la .gluerun-state/runs/RUN-20260711T004446Z-27330/ and worker-evidence/",
+    "ls -la .singular-state/runs/RUN-20260711T004446Z-27330/ and worker-evidence/",
     "cat red.log green.log regression.log gate-check.log scope-check.log secret-scan.log",
-    "grep/sed ctx-loader block and gluerun_append_event in engine/lib.sh",
+    "grep/sed ctx-loader block and singular_append_event in engine/lib.sh",
     "bash tests/test-ctx-paired-audit.sh (independent GREEN: passed, EXIT=0)",
     "bash tests/run.sh (independent full gate: SUMMARY 28 passed, 0 failed, EXIT=0)"
   ],
@@ -35,6 +35,6 @@
     "Non-blocking observation: the recorder also writes an intermediate paired-audit-raw.json (runner --output-last-message target) in the run dir in addition to paired-audit.json; it is confined to the run dir, touches no packet/lease/inbox/primary-audit path, and does not violate the no-outcome-change invariant, though it is not named in the acceptance criteria."
   ],
   "requiredFixes": [],
-  "rationale": "Accepted with evidence. The committed diff (base 9a1beed -> head d03b912) adds exactly the two owned files and touches no forbidden file; scope-check and secret-scan are clean. Test-first is proven by red.log (fail, exit 1) then green.log (pass, exit 0), and I independently reproduced both the targeted green test and the full regression gate at 28 passed / 0 failed (exit 0), matching gate-check.json. Every acceptance criterion is backed by a corresponding test assertion and by reading the implementation: default-OFF is byte-identical (sampling gate short-circuits before any side effect), sampling is a deterministic machine-independent content hash mod 100 honoring GLUERUN_PAIRED_AUDIT_PCT, the sampled path performs one fresh read-only auditor pass with the base prompt and records exactly one ctx.paired_audit event plus one paired-audit.json, disagreement is flagged in both, and no packet/lease/inbox/primary-audit state is created/moved/mutated. The engine defines new functions only, auto-sourced yet uncalled, with lib.sh and l1-drive.sh unedited. The two observations (file-absence RED, extra paired-audit-raw.json intermediate) are non-blocking and require no fix.",
+  "rationale": "Accepted with evidence. The committed diff (base 9a1beed -> head d03b912) adds exactly the two owned files and touches no forbidden file; scope-check and secret-scan are clean. Test-first is proven by red.log (fail, exit 1) then green.log (pass, exit 0), and I independently reproduced both the targeted green test and the full regression gate at 28 passed / 0 failed (exit 0), matching gate-check.json. Every acceptance criterion is backed by a corresponding test assertion and by reading the implementation: default-OFF is byte-identical (sampling gate short-circuits before any side effect), sampling is a deterministic machine-independent content hash mod 100 honoring SINGULAR_PAIRED_AUDIT_PCT, the sampled path performs one fresh read-only auditor pass with the base prompt and records exactly one ctx.paired_audit event plus one paired-audit.json, disagreement is flagged in both, and no packet/lease/inbox/primary-audit state is created/moved/mutated. The engine defines new functions only, auto-sourced yet uncalled, with lib.sh and l1-drive.sh unedited. The two observations (file-absence RED, extra paired-audit-raw.json intermediate) are non-blocking and require no fix.",
   "findingsStatus": {}
 }

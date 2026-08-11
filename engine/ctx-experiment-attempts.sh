@@ -49,16 +49,16 @@
 # exit, never an error, divide error, or partial output.
 #
 # Public entry points:
-#   gluerun_ctx_experiment_attempts_to_accept [runs_dir] [events_file]
+#   singular_ctx_experiment_attempts_to_accept [runs_dir] [events_file]
 #     Prints {"A":SLICE,"B":SLICE} where
 #       SLICE = {acceptedTasks, attemptsToAcceptSum, attemptsToAcceptMean}.
-#   gluerun_ctx_experiment_findings_per_attempt [runs_dir] [events_file]
+#   singular_ctx_experiment_findings_per_attempt [runs_dir] [events_file]
 #     Prints {"A":SLICE,"B":SLICE} where
 #       SLICE = {attempts, findingsTotal, findingsPerAttemptMean}.
-#   gluerun_ctx_experiment_attempts_json [runs_dir] [events_file]
+#   singular_ctx_experiment_attempts_json [runs_dir] [events_file]
 #     Emits ONE deterministic, sorted-key JSON object conforming to
-#     gluerun.orchestration.ctx-experiment-attempts.v0, merging both per-arm
-#     rollups. Defaults: runs_dir=$GLUERUN_RUNS_DIR, events_file=$GLUERUN_EVENTS_FILE.
+#     singular.orchestration.ctx-experiment-attempts.v0, merging both per-arm
+#     rollups. Defaults: runs_dir=$SINGULAR_RUNS_DIR, events_file=$SINGULAR_EVENTS_FILE.
 
 # --- shared read-only parser -------------------------------------------------
 # Emits Python that, when included, defines:
@@ -68,7 +68,7 @@
 #   attempts_to_accept(tasks, arm_of) -> {"A":SLICE,"B":SLICE}
 #   findings_per_attempt(tasks, arm_of) -> {"A":SLICE,"B":SLICE}
 # plus the ARMS / ACCEPTED_CLASSES constants. Pure; no writes.
-_gluerun_ctx_experiment_attempts_py() {
+_singular_ctx_experiment_attempts_py() {
   cat <<'PY'
 import json
 import os
@@ -205,12 +205,12 @@ PY
 }
 
 # Per-arm attempts-to-accept. Fail-safe.
-gluerun_ctx_experiment_attempts_to_accept() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_attempts_to_accept() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$runs_dir" "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_attempts_py)
+$(_singular_ctx_experiment_attempts_py)
 
 runs_dir, events_file = sys.argv[1], sys.argv[2]
 arm_of = load_arms(events_file)
@@ -221,12 +221,12 @@ PY
 }
 
 # Per-arm findings-per-attempt. Fail-safe.
-gluerun_ctx_experiment_findings_per_attempt() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_findings_per_attempt() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$runs_dir" "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_attempts_py)
+$(_singular_ctx_experiment_attempts_py)
 
 runs_dir, events_file = sys.argv[1], sys.argv[2]
 arm_of = load_arms(events_file)
@@ -238,18 +238,18 @@ PY
 
 # Composed secondary-metrics artifact. Merges both per-arm rollups into one
 # deterministic sorted-key JSON object. Fail-safe.
-gluerun_ctx_experiment_attempts_json() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_attempts_json() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$runs_dir" "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_attempts_py)
+$(_singular_ctx_experiment_attempts_py)
 
 runs_dir, events_file = sys.argv[1], sys.argv[2]
 arm_of = load_arms(events_file)
 tasks = load_tasks(runs_dir)
 artifact = {
-    "schema": "gluerun.orchestration.ctx-experiment-attempts.v0",
+    "schema": "singular.orchestration.ctx-experiment-attempts.v0",
     "attemptsToAccept": attempts_to_accept(tasks, arm_of),
     "findingsPerAttempt": findings_per_attempt(tasks, arm_of),
 }

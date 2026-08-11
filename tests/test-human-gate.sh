@@ -7,7 +7,7 @@ trap 'rm -rf "$tmp"' EXIT
 repo="$tmp/repo"
 mkdir -p "$repo/docs/orchestration/human-gates" "$repo/docs/orchestration/gates"
 git -C "$tmp" init -q repo
-printf '{"schemaVersion":"v2"}\n' >"$repo/gluerun.config.json"
+printf '{"schemaVersion":"v2"}\n' >"$repo/singular.config.json"
 printf 'release artifact\n' >"$repo/release.txt"
 printf 'review notes\n' >"$repo/review.txt"
 
@@ -15,10 +15,10 @@ printf 'review notes\n' >"$repo/review.txt"
 # frontier evaluation has no such flag and used to read the wall clock. With a
 # fixture that expires at 2026-07-25T10:00:00Z that made this a time bomb: green
 # until real time crossed the expiry, then permanently red with nothing in the
-# diff to explain it. GLUERUN_NOW injects the same instant into that path.
+# diff to explain it. SINGULAR_NOW injects the same instant into that path.
 FIXED_NOW="2026-07-24T12:00:00Z"
 
-common=(GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$repo/.gluerun-state")
+common=(SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$repo/.singular-state")
 request_ref="docs/orchestration/human-gates/release.human-gate.json"
 approval_ref="docs/orchestration/human-gates/release.human-approval.json"
 gate_ref="docs/orchestration/gates/release.gate-result.json"
@@ -55,7 +55,7 @@ import json
 import sys
 
 gate = json.load(open(sys.argv[1], encoding="utf-8"))
-assert gate["schema"] == "gluerun.orchestration.gate-result.v1"
+assert gate["schema"] == "singular.orchestration.gate-result.v1"
 assert gate["verificationClassification"] == "not-rerun-evidence-verified"
 assert gate["humanGateRef"] == sys.argv[2]
 assert gate["humanApprovalRef"] == sys.argv[3]
@@ -159,7 +159,7 @@ assert_invalid "approval predates request creation"
 
 cat >"$repo/docs/orchestration/dag.v0.json" <<JSON
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     {
       "id": "release",
@@ -187,10 +187,10 @@ cat >"$repo/docs/orchestration/dag.v0.json" <<JSON
   ]
 }
 JSON
-frontier="$(env "${common[@]}" GLUERUN_DAG_FILE="$repo/docs/orchestration/dag.v0.json" \
-  GLUERUN_GATES_DIR="$repo/docs/orchestration/gates" \
-  GLUERUN_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
-  GLUERUN_NOW="$FIXED_NOW" \
+frontier="$(env "${common[@]}" SINGULAR_DAG_FILE="$repo/docs/orchestration/dag.v0.json" \
+  SINGULAR_GATES_DIR="$repo/docs/orchestration/gates" \
+  SINGULAR_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
+  SINGULAR_NOW="$FIXED_NOW" \
   "$ROOT/engine/dag.sh" next-areas --explain)"
 python3 - "$frontier" <<'PY'
 import json, sys
@@ -206,7 +206,7 @@ import sys
 
 path = sys.argv[1]
 gate = json.load(open(path, encoding="utf-8"))
-gate["schema"] = "gluerun.orchestration.gate-result.v0"
+gate["schema"] = "singular.orchestration.gate-result.v0"
 for key in (
     "verificationClassification",
     "humanGateRef",
@@ -218,11 +218,11 @@ with open(path, "w", encoding="utf-8") as handle:
     json.dump(gate, handle)
     handle.write("\n")
 PY
-frontier="$(env "${common[@]}" GLUERUN_DAG_FILE="$repo/docs/orchestration/dag.v0.json" \
-  GLUERUN_GATES_DIR="$repo/docs/orchestration/gates" \
-  GLUERUN_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
-  GLUERUN_GATE_SCHEMA_V1="$ROOT/schemas/gate-result.v1.schema.json" \
-  GLUERUN_NOW="$FIXED_NOW" \
+frontier="$(env "${common[@]}" SINGULAR_DAG_FILE="$repo/docs/orchestration/dag.v0.json" \
+  SINGULAR_GATES_DIR="$repo/docs/orchestration/gates" \
+  SINGULAR_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
+  SINGULAR_GATE_SCHEMA_V1="$ROOT/schemas/gate-result.v1.schema.json" \
+  SINGULAR_NOW="$FIXED_NOW" \
   "$ROOT/engine/dag.sh" next-areas --explain)"
 python3 - "$frontier" <<'PY'
 import json, sys
@@ -255,10 +255,10 @@ if env "${common[@]}" "$ROOT/engine/human-gate.sh" status \
   exit 1
 fi
 
-frontier="$(env "${common[@]}" GLUERUN_DAG_FILE="$repo/docs/orchestration/dag.v0.json" \
-  GLUERUN_GATES_DIR="$repo/docs/orchestration/gates" \
-  GLUERUN_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
-  GLUERUN_NOW="$FIXED_NOW" \
+frontier="$(env "${common[@]}" SINGULAR_DAG_FILE="$repo/docs/orchestration/dag.v0.json" \
+  SINGULAR_GATES_DIR="$repo/docs/orchestration/gates" \
+  SINGULAR_GATE_SCHEMA="$ROOT/schemas/gate-result.v0.schema.json" \
+  SINGULAR_NOW="$FIXED_NOW" \
   "$ROOT/engine/dag.sh" next-areas --explain)"
 python3 - "$frontier" <<'PY'
 import json, sys

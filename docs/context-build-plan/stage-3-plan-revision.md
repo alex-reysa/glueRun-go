@@ -12,12 +12,12 @@ here, not later.
 Chains behind `planner-session-meta` for the `generate-tasks.sh` /
 `l1-plan-node.sh` files, and behind `critique-import-gate` for semantics.
 
-- On a `revise` verdict (and `GLUERUN_PLAN_CRITIQUE=1`): re-invoke the planner
-  RESUMING its persisted node session (via `gluerun_planner_resume_decide`),
+- On a `revise` verdict (and `SINGULAR_PLAN_CRITIQUE=1`): re-invoke the planner
+  RESUMING its persisted node session (via `singular_planner_resume_decide`),
   with a revision prompt = base planner prompt + the structured critique
   findings (per-id) + the prior candidate set. Resume-refused → fresh planner
   with the same revision prompt (rehydrate-by-prompt; record which happened).
-- Bounded by `GLUERUN_PLAN_REVISE_MAX` (default 1). Exhausted budget with a
+- Bounded by `SINGULAR_PLAN_REVISE_MAX` (default 1). Exhausted budget with a
   still-non-approve verdict → `park`.
 - Revised candidates re-enter the critic (same critic session where its gates
   allow — its prior concerns are the checklist). Approve → import.
@@ -40,7 +40,7 @@ stubs; every disposition observable in events.
   with its own prior findings: "which of your concerns are addressed, which
   survive?" Output: per-finding `addressed | survives | obsolete` +
   `ctx.critic_recheck` events. Behind the paired-audit sampling knob's sibling
-  `GLUERUN_CRITIC_RECHECK_PCT` (default 0).
+  `SINGULAR_CRITIC_RECHECK_PCT` (default 0).
 - Never blocks or changes the outcome (records only) — it is the
   resume-a-specialist probe from the review, instrumented as data: its
   survives-rate vs. the paired FRESH audit's findings is the

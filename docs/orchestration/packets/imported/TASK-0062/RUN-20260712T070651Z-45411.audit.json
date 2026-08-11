@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0062",
   "runId": "RUN-20260712T070651Z-45411",
   "branch": "agent/routing/TASK-0062-rehydrate-authored-inject-wirein",
@@ -12,7 +12,7 @@
     "worker-evidence/regression.log (SUMMARY: 85 passed, 0 failed)",
     "git diff base..HEAD for engine/l1-drive.sh (+27 additive lines inside rehydrate_inject_packet)",
     "git diff base..HEAD for tests/test-ctx-rehydrate-authored-inject-drive.sh (new 311-line hermetic driver test)",
-    "engine/ctx-rehydrate-authored-config.sh:69 (render fn gluerun_ctx_rehydrate_authored_config_render defined pre-integration, out of owned scope)"
+    "engine/ctx-rehydrate-authored-config.sh:69 (render fn singular_ctx_rehydrate_authored_config_render defined pre-integration, out of owned scope)"
   ],
   "commandsRun": [
     "cat packet.json / gate-check.json",
@@ -21,17 +21,17 @@
     "git diff base..HEAD -- engine/l1-drive.sh",
     "git diff base..HEAD -- tests/test-ctx-rehydrate-authored-inject-drive.sh",
     "cat red.log green.log regression.log",
-    "grep for gluerun_ctx_rehydrate_authored_config_render definition/callers; sed context 415-480 of l1-drive.sh",
+    "grep for singular_ctx_rehydrate_authored_config_render definition/callers; sed context 415-480 of l1-drive.sh",
     "bash tests/test-ctx-rehydrate-authored-inject-drive.sh (independent re-run: EXIT=0, ALL TESTS PASSED)",
     "git diff --name-only base..HEAD; git status --porcelain"
   ],
   "findings": [
     "File scope: clean \u2014 only the two owned files (engine/l1-drive.sh, tests/test-ctx-rehydrate-authored-inject-drive.sh) changed; no forbidden file touched; working tree clean.",
     "Test-first: red.log fails precisely on the new (ON) assertion 'authored section not found verbatim in active prompt', consistent with running the test against pre-augmentation l1-drive.sh; green.log then passes all 5 assertions.",
-    "Implementation is a minimal delegating append: authored=$(gluerun_ctx_rehydrate_authored_config_render implement); the render is defined in the already-integrated engine/ctx-rehydrate-authored-config.sh (0 definitions in l1-drive.sh) \u2014 no config/selection/render logic reimplemented in owned scope.",
-    "OFF-parity is guaranteed: '[[ -n \"$authored\" ]] || return 0' means when GLUERUN_CTX_MANIFEST or contextManifest is OFF the render is empty and nothing is appended, keeping durable-only injection byte-identical (asserted by the two OFF-parity tests).",
+    "Implementation is a minimal delegating append: authored=$(singular_ctx_rehydrate_authored_config_render implement); the render is defined in the already-integrated engine/ctx-rehydrate-authored-config.sh (0 definitions in l1-drive.sh) \u2014 no config/selection/render logic reimplemented in owned scope.",
+    "OFF-parity is guaranteed: '[[ -n \"$authored\" ]] || return 0' means when SINGULAR_CTX_MANIFEST or contextManifest is OFF the render is empty and nothing is appended, keeping durable-only injection byte-identical (asserted by the two OFF-parity tests).",
     "Idempotency and taint framing verified: authored wrapper header appears exactly once and is headed reference-only / NOT authoritative; append occurs once at attempt-open.",
-    "Provenance/status/schema consistent: packet status needs-review, schema gluerun.orchestration.state-packet.v0, headSha matches HEAD (785d8f3).",
+    "Provenance/status/schema consistent: packet status needs-review, schema singular.orchestration.state-packet.v0, headSha matches HEAD (785d8f3).",
     "No hidden scope expansion: the deferred engine/ctx-rehydrate-event.sh manifest-recording slice is explicitly documented as OPTIONAL/out-of-scope in nextAction and does not gate this node.",
     "Gate exit 0 and full suite 85 passed / 0 failed; independent re-run of the target test reproduced green (EXIT=0)."
   ],

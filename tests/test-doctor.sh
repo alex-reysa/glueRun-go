@@ -16,7 +16,7 @@ root="$tmp/repo"
 fakehome="$tmp/home"
 fakebin="$tmp/bin"
 mkdir -p "$root/docs/orchestration/prompts" "$root/schemas/orchestration" \
-  "$root/.gluerun-state" "$fakehome/.codex" "$fakebin"
+  "$root/.singular-state" "$fakehome/.codex" "$fakebin"
 for schema in "$ENGINE_HOME"/schemas/*.schema.json; do
   cp "$schema" "$root/schemas/orchestration/"
 done
@@ -35,12 +35,12 @@ case "${1:-} ${2:-}" in
 esac
 EOF
 chmod +x "$fakebin/codex"
-cat >"$root/gluerun.config.json" <<'EOF'
+cat >"$root/singular.config.json" <<'EOF'
 {
   "schemaVersion": "v2",
   "targetBranch": "main",
   "gateCommand": "true",
-  "env": { "GLUERUN_CODEX_MODEL": "gpt-5.6-sol", "GLUERUN_CLAUDE_MODEL": "bogus-model" }
+  "env": { "SINGULAR_CODEX_MODEL": "gpt-5.6-sol", "SINGULAR_CLAUDE_MODEL": "bogus-model" }
 }
 EOF
 
@@ -48,17 +48,17 @@ doctor() {
   (
     cd "$root"
     extra_env=()
-    [[ -n "${DOCTOR_CODEX_BIN:-}" ]] && extra_env+=("GLUERUN_CODEX_BIN=$DOCTOR_CODEX_BIN")
-    env HOME="$fakehome" GLUERUN_ENGINE_HOME="$ENGINE_HOME" GLUERUN_MIN_DISK_GB=0 \
+    [[ -n "${DOCTOR_CODEX_BIN:-}" ]] && extra_env+=("SINGULAR_CODEX_BIN=$DOCTOR_CODEX_BIN")
+    env HOME="$fakehome" SINGULAR_ENGINE_HOME="$ENGINE_HOME" SINGULAR_MIN_DISK_GB=0 \
       PATH="${DOCTOR_PATH:-$fakebin:$PATH}" "${extra_env[@]}" \
-      bash "$ENGINE_HOME/cli/gluerun" doctor "$@" 2>&1
+      bash "$ENGINE_HOME/cli/singular" doctor "$@" 2>&1
   )
 }
 
 # 1. Clean baseline: hooks absent, no pmgo, models checked.
 out="$(doctor)" || true
 assert_contains "$out" "ok    codex model: gpt-5.6-sol" "known codex prefix ok"
-assert_contains "$out" "warn  GLUERUN_CLAUDE_MODEL 'bogus-model'" "unknown claude prefix warns"
+assert_contains "$out" "warn  SINGULAR_CLAUDE_MODEL 'bogus-model'" "unknown claude prefix warns"
 assert_contains "$out" "selected Codex executable: $fakebin/codex" "selected codex path reported"
 assert_contains "$out" "ok    selected Codex spawn: codex-cli test-1.0" "selected codex is spawned"
 assert_contains "$out" "ok    selected Codex authentication" "selected codex auth is checked"
@@ -83,7 +83,7 @@ assert_contains "$out" "migrations/v0-to-v1.sh" "migrate pointer"
 rm -f "$root/docs/orchestration/prompts/decider.md"
 
 # 4. Stale pidfile -> warn.
-printf '99999999\n' >"$root/.gluerun-state/autonomate.pid"
+printf '99999999\n' >"$root/.singular-state/autonomate.pid"
 out="$(doctor)" || true
 assert_contains "$out" "stale pidfile" "stale pidfile warned"
 
@@ -103,7 +103,7 @@ assert_contains "$out" "selected Codex executable: $brokenbin/codex" "doctor rep
 assert_contains "$out" "selected Codex spawn probe failed" "broken native spawn is surfaced"
 assert_contains "$out" "ENOENT" "spawn failure preserves useful diagnostic"
 
-# 6. GLUERUN_CODEX_BIN pins the healthy executable independently from PATH.
+# 6. SINGULAR_CODEX_BIN pins the healthy executable independently from PATH.
 out="$(DOCTOR_PATH="$brokenbin:$fakebin:$PATH" DOCTOR_CODEX_BIN="$fakebin/codex" doctor)"
 assert_contains "$out" "selected Codex executable: $fakebin/codex" "explicit Codex pin wins"
 assert_contains "$out" "ok    selected Codex authentication" "pinned Codex auth passes"
@@ -121,10 +121,10 @@ out="$(DOCTOR_CODEX_SLEEP=1 doctor)" || rc=$?
 assert_contains "$out" "probe timed out after 10s" "spawn timeout surfaced"
 
 # 9. `bootstrap.required: true` with no commands guarantees nothing, and doctor
-# used to report it as passing. templates/gluerun.config.json shipped exactly
-# that block, so every `gluerun init` inherited the empty promise.
-cp "$root/gluerun.config.json" "$tmp/config.backup"
-python3 - "$root/gluerun.config.json" <<'PY'
+# used to report it as passing. templates/singular.config.json shipped exactly
+# that block, so every `singular init` inherited the empty promise.
+cp "$root/singular.config.json" "$tmp/config.backup"
+python3 - "$root/singular.config.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path))
@@ -136,7 +136,7 @@ assert_contains "$out" "required: true but defines no commands" \
   "empty required bootstrap must warn"
 
 # The same block WITH a command is a real guarantee and must not warn.
-python3 - "$root/gluerun.config.json" <<'PY'
+python3 - "$root/singular.config.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path))
@@ -148,10 +148,10 @@ out="$(doctor)" || true
   || fail "a bootstrap with commands must not warn"
 
 # The shipped template must not carry the empty promise it used to: every
-# `gluerun init` copies this file, so a vacuous required:true there put the
+# `singular init` copies this file, so a vacuous required:true there put the
 # warning above into every new repo.
-python3 - "$ENGINE_HOME/templates/gluerun.config.json" <<'PY' \
-  || fail "templates/gluerun.config.json ships bootstrap.required: true with no commands"
+python3 - "$ENGINE_HOME/templates/singular.config.json" <<'PY' \
+  || fail "templates/singular.config.json ships bootstrap.required: true with no commands"
 import json, sys
 data = json.load(open(sys.argv[1]))
 bootstrap = data.get("bootstrap") or {}
@@ -160,14 +160,14 @@ raise SystemExit(
     1 if bootstrap.get("required") and not (bootstrap.get("command") or commands) else 0
 )
 PY
-cp "$tmp/config.backup" "$root/gluerun.config.json"
+cp "$tmp/config.backup" "$root/singular.config.json"
 
 # 10. A read-only guard journal whose owner is gone means some worktree still
-# holds changes a read-only run made. Only `gluerun reconcile` applies those, so
+# holds changes a read-only run made. Only `singular reconcile` applies those, so
 # doctor has to say so rather than let the repo sit in that state silently.
-mkdir -p "$root/.gluerun-state/readonly-guard/orphan-run"
-cat >"$root/.gluerun-state/readonly-guard/orphan-run/journal.json" <<'EOF'
-{"schema":"gluerun.orchestration.readonly-guard.v0","ownerPid":999999,
+mkdir -p "$root/.singular-state/readonly-guard/orphan-run"
+cat >"$root/.singular-state/readonly-guard/orphan-run/journal.json" <<'EOF'
+{"schema":"singular.orchestration.readonly-guard.v0","ownerPid":999999,
  "worktree":"/nonexistent","entries":{},"trackedBefore":[],"excludes":[]}
 EOF
 out="$(doctor)" || true
@@ -175,7 +175,7 @@ out="$(doctor)" || true
 # PASS message ("no read-only guard journals are pending") contains that too, so
 # the looser substring made this case pass with the warn removed entirely.
 assert_contains "$out" "were never applied" "orphaned guard journal must warn"
-rm -rf "$root/.gluerun-state/readonly-guard"
+rm -rf "$root/.singular-state/readonly-guard"
 out="$(doctor)" || true
 [[ "$out" != *"were never applied"* ]] || fail "no journals must not warn"
 
@@ -186,7 +186,7 @@ out="$(doctor)" || true
 #
 # (a) alive: previously emitted NOTHING at all, so a healthy pidfile and a
 # pidfile doctor had not looked at were indistinguishable.
-printf '%s\n' "$$" >"$root/.gluerun-state/autonomate.pid"
+printf '%s\n' "$$" >"$root/.singular-state/autonomate.pid"
 rc=0; out="$(doctor)" || rc=$?
 assert_contains "$out" "names live PID $$" "a live pidfile is reported as live"
 [[ "$rc" -eq 0 ]] || fail "a live pidfile must not fail doctor"
@@ -194,7 +194,7 @@ assert_contains "$out" "names live PID $$" "a live pidfile is reported as live"
 
 # (b) malformed: not a pid at all. Distinct from staleness — there is no process
 # to restart, and "remove this stale pidfile" is the wrong instruction.
-printf 'not-a-pid\n' >"$root/.gluerun-state/autonomate.pid"
+printf 'not-a-pid\n' >"$root/.singular-state/autonomate.pid"
 out="$(doctor)" || true
 assert_contains "$out" "malformed pidfile" "unparseable contents are reported as malformed"
 [[ "$out" != *"stale pidfile"* ]] || fail "malformed contents are not staleness"
@@ -202,7 +202,7 @@ assert_contains "$out" "malformed pidfile" "unparseable contents are reported as
 # A negative number parses as an int but is a process-GROUP selector to kill(2),
 # not a pid: probing it asks about every process this user may signal, which
 # answers "alive" for a garbage file.
-printf -- '-1\n' >"$root/.gluerun-state/autonomate.pid"
+printf -- '-1\n' >"$root/.singular-state/autonomate.pid"
 out="$(doctor)" || true
 assert_contains "$out" "malformed pidfile" "a group selector is not a live pid"
 [[ "$out" != *"names live PID"* ]] || fail "a negative pid must never read as alive"
@@ -213,7 +213,7 @@ assert_contains "$out" "malformed pidfile" "a group selector is not a live pid"
 # sandbox gives for every pid. Skipped under root, where the probe legitimately
 # succeeds; the seam below covers that case.
 if [[ "$(id -u)" -ne 0 ]]; then
-  printf '1\n' >"$root/.gluerun-state/autonomate.pid"
+  printf '1\n' >"$root/.singular-state/autonomate.pid"
   out="$(doctor)" || true
   assert_contains "$out" "Do not delete the pidfile automatically." \
     "a real EPERM warns without inviting deletion"
@@ -222,34 +222,34 @@ fi
 
 # The same verdict through the seam, which is how a CI job on a permissive host
 # exercises the branch at all.
-printf '99999999\n' >"$root/.gluerun-state/autonomate.pid"
-out="$(GLUERUN_TEST_PID_PROBE=1 GLUERUN_TEST_PID_PROBE_STATE=unknown doctor)" || true
+printf '99999999\n' >"$root/.singular-state/autonomate.pid"
+out="$(SINGULAR_TEST_PID_PROBE=1 SINGULAR_TEST_PID_PROBE_STATE=unknown doctor)" || true
 assert_contains "$out" "Do not delete the pidfile automatically." \
   "the seam reports an uninspectable pid the same way"
 [[ "$out" != *"stale pidfile"* ]] || fail "the seam must not report EPERM as stale"
 
-# (d) A lone seam variable is not a seam: an inherited GLUERUN_TEST_PID_PROBE_STATE
+# (d) A lone seam variable is not a seam: an inherited SINGULAR_TEST_PID_PROBE_STATE
 # must not be able to rewrite a real operator's diagnosis.
-out="$(GLUERUN_TEST_PID_PROBE_STATE=unknown doctor)" || true
+out="$(SINGULAR_TEST_PID_PROBE_STATE=unknown doctor)" || true
 assert_contains "$out" "stale pidfile" "a lone seam variable falls through to the real probe"
 
 # (e) Doctor is read-only about pidfiles in every verdict, including under the
 # one flag that does mutate state. An inconclusive probe must not lose the file.
-out="$(GLUERUN_TEST_PID_PROBE=1 GLUERUN_TEST_PID_PROBE_STATE=unknown doctor --repair-model-cache)" || true
-[[ -f "$root/.gluerun-state/autonomate.pid" ]] \
+out="$(SINGULAR_TEST_PID_PROBE=1 SINGULAR_TEST_PID_PROBE_STATE=unknown doctor --repair-model-cache)" || true
+[[ -f "$root/.singular-state/autonomate.pid" ]] \
   || fail "doctor must never delete a pidfile, least of all an uninspectable one"
-printf '99999999\n' >"$root/.gluerun-state/autonomate.pid"
+printf '99999999\n' >"$root/.singular-state/autonomate.pid"
 
 # 12. Process-control capability (PMGO-004). Timeout cleanup depends on session
 # creation + group termination; `ps` is now only the fallback.
 rc=0
-out="$(GLUERUN_TEST_PROCESS_CONTROL=1 GLUERUN_TEST_PROCESS_CONTROL_STATE=no-ps doctor)" || rc=$?
+out="$(SINGULAR_TEST_PROCESS_CONTROL=1 SINGULAR_TEST_PROCESS_CONTROL_STATE=no-ps doctor)" || rc=$?
 assert_contains "$out" "descendant-tree fallback cleanup is degraded" \
   "missing ps is surfaced as a degraded fallback"
 [[ "$rc" -eq 0 ]] || fail "missing ps must warn, not block (rc=$rc)"
 
 rc=0
-out="$(GLUERUN_TEST_PROCESS_CONTROL=1 GLUERUN_TEST_PROCESS_CONTROL_STATE=no-group-kill doctor)" || rc=$?
+out="$(SINGULAR_TEST_PROCESS_CONTROL=1 SINGULAR_TEST_PROCESS_CONTROL_STATE=no-group-kill doctor)" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "an environment that cannot kill a process group must fail doctor"
 assert_contains "$out" "Do not run unattended actuation here." \
   "the group-kill failure tells the operator not to actuate unattended"

@@ -17,14 +17,14 @@ repo="$(cd "$repo" && pwd -P)"
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 target="$repo/schemas/orchestration"
-config="$repo/gluerun.config.json"
-template="$ENGINE_HOME/templates/gluerun.config.json"
+config="$repo/singular.config.json"
+template="$ENGINE_HOME/templates/singular.config.json"
 [[ -f "$config" && -f "$template" ]] || {
-  echo "v1-to-v2: gluerun config and engine template are required" >&2
+  echo "v1-to-v2: singular config and engine template are required" >&2
   exit 2
 }
 
-stage="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-v1-to-v2.XXXXXX")"
+stage="$(mktemp -d "${TMPDIR:-/tmp}/singular-v1-to-v2.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/schemas"
 
@@ -35,7 +35,7 @@ while IFS= read -r schema; do
   cp "$schema" "$stage/schemas/$(basename "$schema")"
 done < <(find "$ENGINE_HOME/schemas" -maxdepth 1 -type f -name '*.schema.json' | sort)
 
-python3 - "$config" "$template" "$stage/gluerun.config.json" "$stage/schemas" <<'PY'
+python3 - "$config" "$template" "$stage/singular.config.json" "$stage/schemas" <<'PY'
 import json
 import pathlib
 import copy
@@ -47,7 +47,7 @@ with config_path.open(encoding="utf-8") as handle:
 with template_path.open(encoding="utf-8") as handle:
     template = json.load(handle)
 if not isinstance(config, dict) or not isinstance(template, dict):
-    raise SystemExit("v1-to-v2: gluerun configuration must be a JSON object")
+    raise SystemExit("v1-to-v2: singular configuration must be a JSON object")
 if config.get("schemaVersion") != "v1":
     raise SystemExit("v1-to-v2: source schemaVersion must remain v1 until the migration runner advances it")
 
@@ -85,8 +85,8 @@ while IFS= read -r schema; do
   mv "$target/.$base.v2-tmp" "$target/$base"
 done < <(find "$stage/schemas" -maxdepth 1 -type f -name '*.schema.json' | sort)
 
-cp "$stage/gluerun.config.json" "$repo/.gluerun.config.json.v2-tmp"
-mv "$repo/.gluerun.config.json.v2-tmp" "$config"
+cp "$stage/singular.config.json" "$repo/.singular.config.json.v2-tmp"
+mv "$repo/.singular.config.json.v2-tmp" "$config"
 
 mkdir -p \
   "$repo/docs/orchestration/human-gates" \

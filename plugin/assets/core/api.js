@@ -16,7 +16,7 @@
    of the file), for the same reason: every surface needs it and nothing may
    import a surface to get it. */
 
-// A plan id as minted by `gluerun plan archive` (plan-<UTCstamp>[-<slug>]). This
+// A plan id as minted by `singular plan archive` (plan-<UTCstamp>[-<slug>]). This
 // is also the sole gate on a value that becomes a server-side filesystem root, so
 // the charset is tight and mirrors the server's PLAN_ID_RE exactly.
 const PLAN_ID_RE = /^plan-[A-Za-z0-9-]{1,64}$/;

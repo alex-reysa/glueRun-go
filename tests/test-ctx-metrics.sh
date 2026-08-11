@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Covers the read-only metrics extractor engine/ctx-metrics.sh: given a runs
-# directory of gluerun.orchestration.attempts-index.v0 indexes and an events log,
-# gluerun_ctx_metrics_json emits stable per-task + aggregate JSON WITHOUT mutating
+# directory of singular.orchestration.attempts-index.v0 indexes and an events log,
+# singular_ctx_metrics_json emits stable per-task + aggregate JSON WITHOUT mutating
 # any input. Asserts documented fields, deterministic key ordering, byte-identical
 # inputs after a run, and fail-safe zeroed output for empty/missing inputs.
 set -uo pipefail
@@ -24,8 +24,8 @@ tree_hash() {
 [[ -f "$EXTRACTOR" ]] || fail "extractor not present yet: $EXTRACTOR"
 # shellcheck disable=SC1090
 source "$EXTRACTOR" || fail "sourcing $EXTRACTOR failed"
-[[ "$(type -t gluerun_ctx_metrics_json)" == "function" ]] \
-  || fail "gluerun_ctx_metrics_json is not defined by $EXTRACTOR"
+[[ "$(type -t singular_ctx_metrics_json)" == "function" ]] \
+  || fail "singular_ctx_metrics_json is not defined by $EXTRACTOR"
 
 # --- Fixture: two runs' attempts indexes + an events log ---------------------
 tmp="$(mktemp -d)"
@@ -36,7 +36,7 @@ mkdir -p "$runs/RUN-A/attempts" "$runs/RUN-B/attempts"
 
 cat > "$runs/RUN-A/attempts/index.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.attempts-index.v0",
+  "schema": "singular.orchestration.attempts-index.v0",
   "runId": "RUN-A",
   "taskId": "TASK-0002",
   "attempts": [
@@ -53,7 +53,7 @@ EOF
 
 cat > "$runs/RUN-B/attempts/index.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.attempts-index.v0",
+  "schema": "singular.orchestration.attempts-index.v0",
   "runId": "RUN-B",
   "taskId": "TASK-0003",
   "attempts": [
@@ -75,7 +75,7 @@ EOF
 before="$(tree_hash "$runs")"
 before_events="$(shasum "$events" | awk '{print $1}')"
 
-out="$(gluerun_ctx_metrics_json "$runs" "$events")" \
+out="$(singular_ctx_metrics_json "$runs" "$events")" \
   || fail "extractor exited non-zero on a valid fixture"
 printf '%s' "$out" > "$tmp/out.json"
 
@@ -136,13 +136,13 @@ print("shape-ok")
 PY
 
 # --- Determinism: identical inputs -> byte-identical output ------------------
-out2="$(gluerun_ctx_metrics_json "$runs" "$events")"
+out2="$(singular_ctx_metrics_json "$runs" "$events")"
 [[ "$out" == "$out2" ]] || fail "output not deterministic across identical runs"
 
 # --- Fail-safe: empty/missing inputs -> well-formed zeroed metrics -----------
 empty_runs="$tmp/no-such-runs"
 missing_events="$tmp/no-such-events.ndjson"
-out_empty="$(gluerun_ctx_metrics_json "$empty_runs" "$missing_events")" \
+out_empty="$(singular_ctx_metrics_json "$empty_runs" "$missing_events")" \
   || fail "extractor crashed on missing inputs (should fail safe)"
 printf '%s' "$out_empty" > "$tmp/empty.json"
 python3 - "$tmp/empty.json" <<'PY' || fail "empty-input metrics not well-formed/zeroed"
@@ -159,8 +159,8 @@ print("empty-ok")
 PY
 
 # --- No-args default is also fail-safe (no runs/events configured) -----------
-GLUERUN_RUNS_DIR="$empty_runs" GLUERUN_EVENTS_FILE="$missing_events" \
-  gluerun_ctx_metrics_json >/dev/null \
+SINGULAR_RUNS_DIR="$empty_runs" SINGULAR_EVENTS_FILE="$missing_events" \
+  singular_ctx_metrics_json >/dev/null \
   || fail "no-arg default invocation crashed instead of failing safe"
 
 echo "ctx-metrics tests passed"

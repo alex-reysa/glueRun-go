@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Drives a task through l1-drive.sh in a hermetic GLUERUN_ROOT (isolated events log,
-# stub GLUERUN_RUNNER acting as both implementer and auditor, default provisioning)
+# Drives a task through l1-drive.sh in a hermetic SINGULAR_ROOT (isolated events log,
+# stub SINGULAR_RUNNER acting as both implementer and auditor, default provisioning)
 # and asserts this node's (assumption-ledger) terminal driver wire-in: the per-run
 # assumption ledger seeded from the task's context packet flows into the fix and audit
-# prompts behind GLUERUN_CTX_PACKET (default 0), host-derived status transitions are
+# prompts behind SINGULAR_CTX_PACKET (default 0), host-derived status transitions are
 # applied across attempts via the integrated pure bricks, and behavior is
 # byte-identical when the flag is OFF.
 #
-#   (a) OFF byte-identical (GLUERUN_CTX_PACKET unset AND =0), even with a task that
+#   (a) OFF byte-identical (SINGULAR_CTX_PACKET unset AND =0), even with a task that
 #       DECLARES assumptions: the implementer's active prompt is byte-identical to the
 #       base l2 prompt, the auditor's active prompt is byte-identical to the base
 #       auditor prompt, NO assumptions section is injected into either, NO ledger
 #       sidecar / section files / per-attempt ledger files are written, and the task
 #       is accepted exactly as before.
-#   (b) ON injection (GLUERUN_CTX_PACKET=1): the implementer's active/fix prompt gains
+#   (b) ON injection (SINGULAR_CTX_PACKET=1): the implementer's active/fix prompt gains
 #       the assembled fixSection (`## Assumptions to uphold` listing the assumption id)
 #       and the auditor's active prompt gains the assembled auditSection
 #       (`## Assumption audit` instructing the auditor to cite the assumptionId), and
@@ -34,23 +34,23 @@ fi
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
-# Hermetic guard: scrub any inherited GLUERUN_* env (a leaked GLUERUN_DISPATCH_* or
-# GLUERUN_RUNNER / GLUERUN_CTX_PACKET from a real drive would otherwise poison the
+# Hermetic guard: scrub any inherited SINGULAR_* env (a leaked SINGULAR_DISPATCH_* or
+# SINGULAR_RUNNER / SINGULAR_CTX_PACKET from a real drive would otherwise poison the
 # sandbox). run.sh does this for the suite; do it here so a direct invocation is
 # hermetic too.
-while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: want '$2' got '$1'"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-assumptions-drive.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-assumptions-drive.XXXXXX")"
 trap 'rm -rf "$workroot"' EXIT
 
 drv_root="$workroot/drv"
 mkdir -p "$drv_root/docs/orchestration/prompts" "$drv_root/docs/orchestration/tasks" \
-  "$drv_root/.gluerun-state" "$drv_root/internal/widget"
+  "$drv_root/.singular-state" "$drv_root/internal/widget"
 git -C "$drv_root" init -q
 git -C "$drv_root" config user.email t@t; git -C "$drv_root" config user.name t
 git -C "$drv_root" checkout -q -b target
@@ -130,7 +130,7 @@ if [[ "$level" == "l2" ]]; then
   mkdir -p "$worktree/internal/widget"
   printf 'package widget\n// attempt %s\n' "$c" > "$worktree/internal/widget/parser.go"
   [[ -n "$out" ]] && cat > "$out" <<'PKT'
-{"schema":"gluerun.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
 PKT
   exit 0
 fi
@@ -146,12 +146,12 @@ exit 0
 MOCK
 chmod +x "$mock_runner"
 
-EVENTS="$drv_root/.gluerun-state/events.ndjson"
+EVENTS="$drv_root/.singular-state/events.ndjson"
 
 reset_state() {
   git -C "$drv_root" checkout -q target 2>/dev/null || true
-  rm -rf "$drv_root/.gluerun-state/runs" "$drv_root/.gluerun-state/leases" \
-    "$drv_root/.gluerun-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
+  rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" \
+    "$drv_root/.singular-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
   : > "$EVENTS"
   rm -f "$drv_root/docs/orchestration/decisions.md" 2>/dev/null || true
   rm -f "$workroot/l2-count" "$workroot/audit-count" 2>/dev/null || true
@@ -167,20 +167,20 @@ PY
 
 # Drive TASK-0001. Leading VAR=val args are passed to the drive's env.
 run_drive() {
-  ( cd "$drv_root" && env GLUERUN_ROOT="$drv_root" GLUERUN_STATE_DIR="$drv_root/.gluerun-state" \
-      GLUERUN_ORCH_DIR="$drv_root/docs/orchestration" GLUERUN_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
-      GLUERUN_TARGET_BRANCH=target GLUERUN_RUNNER="$mock_runner" GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+  ( cd "$drv_root" && env SINGULAR_ROOT="$drv_root" SINGULAR_STATE_DIR="$drv_root/.singular-state" \
+      SINGULAR_ORCH_DIR="$drv_root/docs/orchestration" SINGULAR_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
+      SINGULAR_TARGET_BRANCH=target SINGULAR_RUNNER="$mock_runner" SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
       L2_COUNT_FILE="$workroot/l2-count" AUDIT_COUNT_FILE="$workroot/audit-count" \
       "$@" "$SCRIPT_DIR/l1-drive.sh" TASK-0001 )
 }
 
-run_dir_of() { ls -d "$drv_root"/.gluerun-state/runs/RUN-* 2>/dev/null | head -1; }
+run_dir_of() { ls -d "$drv_root"/.singular-state/runs/RUN-* 2>/dev/null | head -1; }
 json_field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2],""))' "$1" "$2"; }
 
 assert_accepted() {
   local run_dir="$1"
   local run_id; run_id="$(basename "$run_dir")"
-  local inbox="$drv_root/.gluerun-state/inbox/$run_id.json"
+  local inbox="$drv_root/.singular-state/inbox/$run_id.json"
   [[ -f "$inbox" ]] || fail "accepted: no inbox packet at $inbox"
   assert_eq "$(json_field "$inbox" status)" "accepted" "accepted: inbox packet status"
   grep -q 'Status: accepted' "$TASK_MD" || fail "accepted: task md not set to accepted"
@@ -216,7 +216,7 @@ pass "(a) OFF (unset): prompts byte-identical to base, no assumptions artifacts"
 
 # OFF byte-identical (explicit =0).
 reset_state
-out="$(run_drive GLUERUN_CTX_PACKET=0 2>&1)" || { echo "$out" | tail -20; fail "OFF (=0): drive failed"; }
+out="$(run_drive SINGULAR_CTX_PACKET=0 2>&1)" || { echo "$out" | tail -20; fail "OFF (=0): drive failed"; }
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "OFF (=0): no run dir"
 assert_accepted "$run_dir"
 cmp -s "$run_dir/l2-active-prompt.md" "$run_dir/l2-prompt.md" \
@@ -230,7 +230,7 @@ pass "(a) OFF (=0): prompts byte-identical to base, no ledger sidecar"
 # (b) ON injection: fix + audit sections appear; per-attempt ledger recorded.
 # ---------------------------------------------------------------------------
 reset_state
-out="$(run_drive GLUERUN_CTX_PACKET=1 2>&1)" || { echo "$out" | tail -20; fail "ON: drive failed"; }
+out="$(run_drive SINGULAR_CTX_PACKET=1 2>&1)" || { echo "$out" | tail -20; fail "ON: drive failed"; }
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "ON: no run dir"
 assert_accepted "$run_dir"
 grep -q '## Assumptions to uphold' "$run_dir/l2-active-prompt.md" \
@@ -255,7 +255,7 @@ pass "(b) ON: fix+audit sections injected, base prompts intact, per-attempt ledg
 # ---------------------------------------------------------------------------
 reset_state
 ec=0
-out="$(run_drive GLUERUN_CTX_PACKET=1 SCENARIO=retry GLUERUN_MAX_RETRIES=1 2>&1)" || ec=$?
+out="$(run_drive SINGULAR_CTX_PACKET=1 SCENARIO=retry SINGULAR_MAX_RETRIES=1 2>&1)" || ec=$?
 assert_eq "$ec" "0" "(c) retry: drive accepted (exit 0)"
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "(c) retry: no run dir"
 assert_accepted "$run_dir"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx-plan-revise.sh — the plan-revision-loop BOUND AUTHORITY: a pure,
 # deterministic decider mapping a plan-critic verdict plus the number of revision
-# rounds already spent to the next loop action, bounded by GLUERUN_PLAN_REVISE_MAX
+# rounds already spent to the next loop action, bounded by SINGULAR_PLAN_REVISE_MAX
 # (default 1).
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
@@ -12,20 +12,20 @@
 #
 # This is the fail-closed authority the later planner-re-invocation slice consults
 # for whether to revise, park, or import. It implements the requiredCompletion
-# predicate "bounded by GLUERUN_PLAN_REVISE_MAX (default 1) ... exhausted budget
-# with a still-non-approve verdict park". The GLUERUN_PLAN_CRITIQUE-gated planner
+# predicate "bounded by SINGULAR_PLAN_REVISE_MAX (default 1) ... exhausted budget
+# with a still-non-approve verdict park". The SINGULAR_PLAN_CRITIQUE-gated planner
 # re-invocation resuming the persisted node session, the rc-86 fresh-fallback
 # record, the per-finding disposition events (plan.revised with revisesRunId),
 # and the generate-tasks.sh / l1-plan-node.sh driver hooks are the sanctioned
 # follow-up slices of this node and are OUT OF SCOPE here.
 #
 # Public entry points (pure; no side effects, no events, no state writes):
-#   gluerun_plan_revise_max
-#     Print the effective revision-round bound. Reads GLUERUN_PLAN_REVISE_MAX,
+#   singular_plan_revise_max
+#     Print the effective revision-round bound. Reads SINGULAR_PLAN_REVISE_MAX,
 #     defaulting to 1 when unset or empty. A set-but-invalid value is printed
 #     verbatim so the decider can reject it fail-closed (it never silently
 #     coerces a bad bound into the default).
-#   gluerun_plan_revise_decide <verdict> <revisions_done>
+#   singular_plan_revise_decide <verdict> <revisions_done>
 #     Print EXACTLY one line and ALWAYS exit 0:
 #       verdict=approve                          -> `import`
 #       verdict=revise,  revisions_done < max    -> `revise <revisions_done+1>`
@@ -40,8 +40,8 @@
 # Pure helper centralizing the default-1 bound. Empty or unset -> 1. A set value
 # (even an invalid one) is echoed verbatim; the decider validates it and fails
 # closed to `park` rather than coercing a bad bound into a silent default.
-gluerun_plan_revise_max() {
-  local raw="${GLUERUN_PLAN_REVISE_MAX:-}"
+singular_plan_revise_max() {
+  local raw="${SINGULAR_PLAN_REVISE_MAX:-}"
   if [[ -z "$raw" ]]; then
     printf '1'
   else
@@ -50,9 +50,9 @@ gluerun_plan_revise_max() {
 }
 
 # The plan-revision-loop decider. Pure: reads only its two arguments and the
-# GLUERUN_PLAN_REVISE_MAX knob; prints one line; always exits 0. See header for
+# SINGULAR_PLAN_REVISE_MAX knob; prints one line; always exits 0. See header for
 # the full contract.
-gluerun_plan_revise_decide() {
+singular_plan_revise_decide() {
   local verdict="${1-}"
   local revisions_done="${2-}"
 
@@ -72,7 +72,7 @@ gluerun_plan_revise_decide() {
       return 0
     fi
     # A non-integer or negative effective bound is an untrustworthy limit -> park.
-    local max; max="$(gluerun_plan_revise_max)"
+    local max; max="$(singular_plan_revise_max)"
     if [[ ! "$max" =~ ^[0-9]+$ ]]; then
       printf 'park bad-max\n'
       return 0

@@ -1,19 +1,19 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0023",
   "runId": "RUN-20260711T084946Z-31359",
   "branch": "agent/plancritic/TASK-0023-plan-revise-loop",
   "verdict": "accepted",
   "evidenceReviewed": [
-    "State packet .gluerun-state/runs/RUN-20260711T084946Z-31359/packet.json (status needs-review, baseRef 4314997, headSha b7d0e62, ownedFiles == changedFiles == [engine/ctx-plan-revise-loop.sh, tests/test-ctx-plan-revision.sh])",
+    "State packet .singular-state/runs/RUN-20260711T084946Z-31359/packet.json (status needs-review, baseRef 4314997, headSha b7d0e62, ownedFiles == changedFiles == [engine/ctx-plan-revise-loop.sh, tests/test-ctx-plan-revision.sh])",
     "gate-check.json: cmd 'bash tests/run.sh' exitCode 0",
     "worker-evidence/red.log: RED_EXIT=1 'engine not present yet: .../engine/ctx-plan-revise-loop.sh' (matches test guard at test-ctx-plan-revision.sh:64)",
     "worker-evidence/green.log: GREEN_EXIT=0 'ctx-plan-revision full-walk tests passed'",
     "worker-evidence/regression.log: 'SUMMARY: 44 passed, 0 failed' REGRESSION_EXIT=0",
-    "engine/ctx-plan-revise-loop.sh (203 lines, +203): new gluerun_plan_revise_loop + gluerun_plan_revise_loop_verdict; composes only integrated helpers via composed-name prefixes _critic_pfx/_rev_pfx/_rec_pfx; fails closed to park",
+    "engine/ctx-plan-revise-loop.sh (203 lines, +203): new singular_plan_revise_loop + singular_plan_revise_loop_verdict; composes only integrated helpers via composed-name prefixes _critic_pfx/_rev_pfx/_rec_pfx; fails closed to park",
     "tests/test-ctx-plan-revision.sh (301 lines, +301): hermetic full-walk covering scenarios A (resume+all dispositions), B (rc-86 fresh fallback), C (budget-exhaustion park), D (immediate approve, no revision), E (present-but-uncalled grep)",
-    "docs/orchestration/dag.v0.json plan-revision-loop node requiredCompletion \u2014 all clauses (revise resumes planner with structured findings, GLUERUN_PLAN_REVISE_MAX default 1 bound, fresh fallback recorded, per-finding accepted/rejected-observation dispositions evented, test green) satisfied",
-    "Existence check: all 10 composed helpers resolve to real integrated functions (gluerun_ctx_plan_critic_run, gluerun_plan_revise_prompt/_decide/_max, gluerun_plan_revise_resume_decide, gluerun_plan_revise_record_strategy/_resume_failed/_dispositions, gluerun_ctx_planner_session_path, gluerun_append_event)",
+    "docs/orchestration/dag.v0.json plan-revision-loop node requiredCompletion \u2014 all clauses (revise resumes planner with structured findings, SINGULAR_PLAN_REVISE_MAX default 1 bound, fresh fallback recorded, per-finding accepted/rejected-observation dispositions evented, test green) satisfied",
+    "Existence check: all 10 composed helpers resolve to real integrated functions (singular_ctx_plan_critic_run, singular_plan_revise_prompt/_decide/_max, singular_plan_revise_resume_decide, singular_plan_revise_record_strategy/_resume_failed/_dispositions, singular_ctx_planner_session_path, singular_append_event)",
     "Composed-name precedent engine/ctx-critique-import-fanout.sh lines 131/136/143 confirms the literal-prefix + variable-suffix pattern is an established convention"
   ],
   "commandsRun": [
@@ -29,7 +29,7 @@
     "File scope compliant: committed diff (+504) touches only the two owned files; no forbidden-file edits; tree clean.",
     "Genuine TDD evidence: red exit 1 (impl-absent guard), green exit 0; node test independently re-run to exit 0.",
     "Gate green: gate-check.json exitCode 0 and full suite 44 passed / 0 failed; 5 relevant sibling tests independently re-run PASS.",
-    "requiredCompletion fully met: resume-with-structured-findings, GLUERUN_PLAN_REVISE_MAX=1 bound (scenario C parks after one round), rc-86 fresh fallback recorded (scenario B context.resume_failed), all three per-finding dispositions evented (scenario A).",
+    "requiredCompletion fully met: resume-with-structured-findings, SINGULAR_PLAN_REVISE_MAX=1 bound (scenario C parks after one round), rc-86 fresh fallback recorded (scenario B context.resume_failed), all three per-finding dispositions evented (scenario A).",
     "Foundation-safe: present-but-uncalled (scenario E + grep), fails closed to park, resume verdict delegated verbatim to integrated decider (fresh never upgraded), critic kept read-only, drives no state beyond stage dir + pinned events log.",
     "NON-BLOCKING OBSERVATION: integrated helpers are reached via dynamically composed function names to keep sibling bricks' frozen literal-symbol greps green, which reduces greppability. This is disclosed in the packet nextAction and file header, mirrors the established precedent engine/ctx-critique-import-fanout.sh, and is slated to switch to literal calls in the sanctioned follow-up call-site slice once those sibling assertions are updated. Not a defect at this task's scope.",
     "No hidden scope expansion, no branch drift (single worker commit on integration base HEAD~1), no failing or skipped commands."

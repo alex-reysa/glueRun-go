@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **glueRun-go** are recorded here. This project follows
+All notable changes to **singular** are recorded here. This project follows
 semantic versioning. The `schemaVersion` (the `.vN` contract of the JSON schemas +
 config shape) is called out separately from the package version, because consumers
 and the plugin negotiate on `schemaVersion`.
@@ -13,8 +13,22 @@ The 68-node, 45-stage AXON plan exposed console problems that small fixtures
 could not: navigation scrolled away, a lens rail consumed useful canvas, most
 Timeline bars had no readable label, repeating Matrix lines overpowered the
 data, and the Agents model picker offered no option for the model actually in
-use. This release refines those surfaces without changing the engine or any
-schema. `schemaVersion` stays **v2**.
+use. The console refinements do not change orchestration semantics or schema
+shape; the pre-launch namespace cut below changes every product-facing
+identity. `schemaVersion` stays **v2**.
+
+### Singular is the only launch namespace
+
+This pre-launch cut adopts Singular as the project's sole identity from top to
+bottom: the `singular` executable, `SINGULAR_*` environment, config/version and
+state paths, shell/Python symbols, schema and API ids, launchd service, browser
+storage, plugin copy, tests, fixtures, documentation and product video all use
+the same namespace.
+
+The cut is intentionally clean. There is no alias, dual-read path or state
+import layer for the pre-launch namespace replaced by this release. Each
+consumer starts with `singular setup` and a freshly authored DAG; unrelated
+machine-wide installations are left untouched.
 
 ### App navigation is static and always in reach
 
@@ -86,11 +100,13 @@ Timeline filter wiring remains a separate pass. A future server-supplied model
 catalog (`options[]` on `/api/settings` items) can replace the client fallback
 vocabulary and the adjacent inference workarounds.
 
-### Migrating from 0.17.0
+### Starting with Singular 0.18.0
 
-Nothing is required. This is a console-only release: no engine behaviour,
-configuration shape, persisted state or schema changes. Existing plans and
-archives open unchanged.
+Treat this as a new installation, not an in-place migration. Install the engine
+under `SINGULAR_HOME` (default `~/.singular`), run `singular setup` in each
+consumer, and author a fresh DAG. Singular does not read, alias or import
+configuration, state, plans or archives from the pre-launch namespace replaced
+by this release; those installations remain untouched.
 
 ---
 
@@ -110,7 +126,7 @@ schema files, new API fields, new environment knobs, new CLI verbs.
 
 ### A timed-out agent could outlive the kill that reported success
 
-`gluerun_kill_tree` built its picture of the process tree from one `ps -A -o
+`singular_kill_tree` built its picture of the process tree from one `ps -A -o
 pid= -o ppid=` call whose return code and stderr were discarded, inside a
 heredoc wrapped in `2>/dev/null || true`. Where `ps` was denied — a restricted
 sandbox, a hardened CI image — the child map came back empty, only the recorded
@@ -121,9 +137,9 @@ where the direct child died and its grandchild did not.
 
 Enumeration was never the right primary mechanism; it was the only one
 available, because no runner had ever been given a session of its own. Each
-provider now spawns through `gluerun_setsid_exec` as the last command of a
+provider now spawns through `singular_setsid_exec` as the last command of a
 background job, so `$!` *is* the session leader — `pid == pgid`, held un-reaped
-by the spawning shell, therefore unrecyclable. `gluerun_kill_tree` gained two
+by the spawning shell, therefore unrecyclable. `singular_kill_tree` gained two
 group modes: **proven** (`os.getpgid(root) == root`, not our own group, `> 1`)
 and **asserted** (the lookup itself is denied, but the caller passed the literal
 `session` argument and the group still answers). It never signals a negative pid
@@ -133,15 +149,15 @@ Enumeration survives as a fallback for descendants that deliberately `setsid`
 away.
 
 The part that matters most is the honesty: a cleanup that cannot be proven now
-sets `GLUERUN_KILL_TREE_RESULT=degraded`, prints one `UNVERIFIED` line into
+sets `SINGULAR_KILL_TREE_RESULT=degraded`, prints one `UNVERIFIED` line into
 whatever log the runner is already writing, and emits a `kill.unverified` event.
 One deliberate exception, argued rather than assumed: a group whose death *was*
 verified while `ps` was denied reports `verified`, with an informational
 `kill.enumeration_unavailable` event — degrading every kill in every restricted
 sandbox would make the signal worthless. Tree mode keeps the strict rule.
 
-`GLUERUN_SESSION_SPAWN=0` restores the old topology wholesale. The duplicate
-`gluerun_claude_kill_tree` is gone. `ask`/`supervise`/`decide` deliberately do
+`SINGULAR_SESSION_SPAWN=0` restores the old topology wholesale. The duplicate
+`singular_claude_kill_tree` is gone. `ask`/`supervise`/`decide` deliberately do
 *not* get a session — they `exec` their runner so a root TERM reaches its trap
 chain, and an attended Ctrl-C still behaves.
 
@@ -166,7 +182,7 @@ group termination is the primary cleanup mechanism for every run — and
 `runtime.process-enumeration` warns, since `ps` is now only a fallback. Doctor
 diagnoses; enforcement lives where unattended work actually starts, so
 `autonomate` runs the same preflight after claiming its pidfile and exits 2
-rather than dispatching workers it could not clean up. `GLUERUN_ALLOW_DEGRADED_KILL=1`
+rather than dispatching workers it could not clean up. `SINGULAR_ALLOW_DEGRADED_KILL=1`
 overrides for operators who accept the risk. Attended commands are never gated.
 
 ### A parallel plan drawn as a single queue
@@ -225,7 +241,7 @@ G100`, derived from a pending human gate on a dependency-ready node.
 Relatedly, safe serialization used to look like a broken scheduler. The engine
 deliberately refuses to plan two nodes in the same area concurrently, so AXON's
 four-wide wave runs three — correct, and invisible. A read-only replica of
-`gluerun_select_l1_frontier` now runs in the console and surfaces
+`singular_select_l1_frontier` now runs in the console and surfaces
 `ready 4 · runnable 3 · cap 3` with the reason per node (`mcp area already
 selected`). The replica declares its own coverage in a `policy` list: the
 pending-promotion pre-filter is deliberately not modelled, because the console's
@@ -243,7 +259,7 @@ behaviour, doctor evidence, and the difference between approving a migration and
 approving actuation. None of that is discoverable, and getting the order wrong
 is destructive.
 
-`gluerun setup` is one idempotent command that performs or explains every step.
+`singular setup` is one idempotent command that performs or explains every step.
 The verb is `setup`, not the field report's `bootstrap`, because `bootstrap`
 already means per-worktree dependency install in four places including a doctor
 check id. Prerequisites fail before any mutation. **STOP is the first repo
@@ -251,7 +267,7 @@ write** — before the pin, before the scaffold, before the migration — and se
 never removes it. Gate results are hashed and parsed into a snapshot before
 migration and verified after it *semantically*, because `v0-to-v1` legitimately
 rewrites gate bytes when it rebrands namespaces; a byte delta is informational,
-a changed status is `GLUERUN_GATE_PRESERVATION_FAILED`. The run ends on an
+a changed status is `SINGULAR_GATE_PRESERVATION_FAILED`. The run ends on an
 explicit ladder — `installed → migrated → validated → stopped-ready`, where
 `stopped-ready` requires migration, verified gates, a passing doctor *and* a
 recorded passing regression run — and prints exactly one `Next:` line. No
@@ -259,17 +275,17 @@ recorded passing regression run — and prints exactly one `Next:` line. No
 that already exist. Actuation remains a separate, explicit operator action.
 
 Every failure carries a stable code and one recovery instruction, as
-`gluerun.operator-failure.v0`; `--json` emits exactly one object and the human
+`singular.operator-failure.v0`; `--json` emits exactly one object and the human
 block leads with the same code, so the two can never name different problems.
 
 Three supporting fixes make that command trustworthy. Bash selection is now one
 shared guard (`engine/bash-guard.sh`) that probes a candidate interpreter before
 exec'ing it and carries a loop guard — the regression harness, the installer and
 the migrations had no guard at all, and the CLI only re-exec'd when
-`GLUERUN_BASH_BIN` was already set, so a bare macOS `/bin/bash` walked straight
+`SINGULAR_BASH_BIN` was already set, so a bare macOS `/bin/bash` walked straight
 into cryptic failures. A pin or schema mismatch is now one primary diagnosis
 instead of a cascade: `schema.version` carries
-`details.code = GLUERUN_SCHEMA_MISMATCH` and blocks the seventeen checks that
+`details.code = SINGULAR_SCHEMA_MISMATCH` and blocks the seventeen checks that
 merely reinterpret repo artifacts, each recording `blockedBy` so the audit trail
 survives, while every environmental check keeps answering for real. And running
 the suite from a Git archive is refused once, up front, instead of failing
@@ -282,15 +298,15 @@ reporting. The next session could not tell whether to start another suite,
 attach to the existing one, or treat the silence as failure — and `tests/run.sh`
 could not have answered: no lock, no manifest, no per-test logs, no exit record.
 
-`gluerun test` supervises the run. A detached supervisor holds an `flock` for its
+`singular test` supervises the run. A detached supervisor holds an `flock` for its
 entire life, so liveness is proven by the kernel rather than inferred from a PID
 that may have been recycled or may merely be uninspectable — the same class of
 mistake as the pidfile bug above, refused by construction. Probers take a
 **shared** lock: with an exclusive probe two concurrent readers would block each
 other and both conclude "running", a false positive on exactly the question this
-command exists to answer. A run persists a `gluerun.test-run.v0` manifest, full
+command exists to answer. A run persists a `singular.test-run.v0` manifest, full
 suite log, per-test logs and a progress stream under
-`.gluerun-state/test-runs/<runId>/`. A second invocation attaches instead of
+`.singular-state/test-runs/<runId>/`. A second invocation attaches instead of
 duplicating. A supervisor killed mid-run reconciles to `interrupted` — and reaps
 the run's process group, since an orphaned suite would otherwise keep appending
 to a run the manifest had already closed.
@@ -302,9 +318,9 @@ previously walked into a cascade.
 
 ### Two settings, one value, and no warning
 
-`gluerun_json_config_to_env` emits structured configuration first and the legacy
+`singular_json_config_to_env` emits structured configuration first and the legacy
 `env{}` map last, so a later duplicate silently wins. AXON's config asked for
-`resources.maxConcurrent: 3` and `GLUERUN_MAX_CONCURRENT: "2"`; it got two, and
+`resources.maxConcurrent: 3` and `SINGULAR_MAX_CONCURRENT: "2"`; it got two, and
 nothing said which had won or that there had been a contest. A new
 `config.source-conflict` check runs the real generator and inspects its emission
 order rather than reimplementing the mapping — so it covers the whole shadowable
@@ -341,13 +357,13 @@ below.
 Two behaviour changes are worth knowing. Providers now run in their own session,
 so a SIGKILL of a runner orphans a provider session that the old topology would
 have left as a plain child; the durable session record exists to make that
-reapable, and `GLUERUN_SESSION_SPAWN=0` reverts the topology entirely. And
+reapable, and `SINGULAR_SESSION_SPAWN=0` reverts the topology entirely. And
 `autonomate` refuses to start where process-group cleanup cannot be verified —
-run `gluerun doctor` to see the capability verdict, or set
-`GLUERUN_ALLOW_DEGRADED_KILL=1` to accept the risk deliberately.
+run `singular doctor` to see the capability verdict, or set
+`SINGULAR_ALLOW_DEGRADED_KILL=1` to accept the risk deliberately.
 
 The regression suite ships only in engine checkouts, because it requires Git
-history and disposable worktrees; `gluerun test` says so up front rather than
+history and disposable worktrees; `singular test` says so up front rather than
 starting a run that cannot succeed.
 
 ---
@@ -364,9 +380,9 @@ the report was indistinguishable from a healthy one.
 ### Parallel L1 planners were invisible
 
 `run-status.sh` keys its record on the run id alone
-(`$GLUERUN_RUNS_DIR/$run_id/run-status.json`), and L0's fanout hands every
+(`$SINGULAR_RUNS_DIR/$run_id/run-status.json`), and L0's fanout hands every
 concurrent planner the **same** origin run id. N planners therefore raced on one
-file, last writer wins, and `gluerun health` could never report more than
+file, last writer wins, and `singular health` could never report more than
 `phases: 1` however many were running. An operator watching `phases: 1` against
 `leases l1=2` mid-incident learned to distrust the phase counter.
 
@@ -377,7 +393,7 @@ the console's `runId == <dirname>` guard. Each planner now derives its own statu
 id, exactly as `integrate.sh` already does per task, so the record lands as a
 direct child of `runs/` and **no scan changes anywhere**. Both layers that write
 planner status — `l1-plan-node.sh` and `generate-tasks.sh`, which inherits the
-origin id through `GLUERUN_PLANNING_RUN_ID` — derive the same id, so one planner
+origin id through `SINGULAR_PLANNING_RUN_ID` — derive the same id, so one planner
 still means one record.
 
 ### A fresh consumer graph could not promote anything, and did not say so
@@ -413,7 +429,7 @@ learns about exactly one violation per run. A consumer hit four in sequence
 own convention, a `taskId` that did not match `^TASK-[0-9]{4,}$`), each hidden by
 the one before, each costing a loop restart.
 
-`gluerun gate validate FILE` reports them together. `fail()` gained a collecting
+`singular gate validate FILE` reports them together. `fail()` gained a collecting
 mode that records and raises instead of exiting, and the independent units —
 each evidence item, the report schema, the log refs and hashes, the baseline, the
 command-log binding, the task-set binding — now report side by side. Collecting
@@ -441,7 +457,7 @@ diagnostic and sent it to `/dev/null`.
 The provider-error classifier gets 503/529 right — `kind = "overloaded"`,
 `retryable = true` — and the next statement discarded it, bucketing `overloaded`
 with `usage-limit` and `entitlement` into one `quota` class. That selected
-`GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS` (1800), and because autonomate's quota
+`SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS` (1800), and because autonomate's quota
 nap `continue`s past `reconcile`, **a capacity blip that clears in seconds idled
 the entire graph for half an hour** — not just planning. At six concurrent
 agents it was the dominant failure mode.
@@ -452,8 +468,8 @@ those refusals do not increment the circuit breaker. Demote `overloaded` to
 
 So there is now a third class, `provider-overloaded`: the same no-breaker
 sleep-through, an order of magnitude shorter
-(`GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS`, default 180), with its own
-`GLUERUN_OVERLOAD_WAIT_BUDGET` (3600) so a burst of 529s cannot spend the
+(`SINGULAR_PLANNER_OVERLOAD_BACKOFF_SECONDS`, default 180), with its own
+`SINGULAR_OVERLOAD_WAIT_BUDGET` (3600) so a burst of 529s cannot spend the
 usage-limit allowance and stop the loop for a reason that was never a usage
 limit.
 
@@ -472,7 +488,7 @@ Two things the class alone did not fix:
 
 ### `evidenceClass: deterministic-proof` was unreachable
 
-`gate-check.sh` built its refs from `GLUERUN_STATE_DIR`, which is absolute, and
+`gate-check.sh` built its refs from `SINGULAR_STATE_DIR`, which is absolute, and
 `gate_report.py` writes `--log-ref` verbatim. `dag.sh`'s `safe_repo_artifact`
 rejects an absolute ref **before** it checks anything else. So no gate report the
 engine produced could ever back a `deterministic-proof` gate-result — regardless
@@ -483,12 +499,12 @@ mean editing evidence"), and fell back to a weaker class.
 The validator did not change — it is a trust boundary and must keep refusing
 absolute paths. Neither did `gate_report.py`, whose `--log-ref` / `--log-path`
 split was already the right seam. **One caller was wrong**, and it now
-relativizes against `GLUERUN_ROOT` (never `$PWD` — gate checks run inside a
+relativizes against `SINGULAR_ROOT` (never `$PWD` — gate checks run inside a
 worktree), leaving the path absolute when the state dir genuinely lives outside
 the repo rather than fabricating a ref that resolves to nothing.
 
 That exposed the real hazard: **a relative `logRef` means three different things
-in this repo** — resolved against `GLUERUN_ROOT` by `dag.sh`, against the *run
+in this repo** — resolved against `SINGULAR_ROOT` by `dag.sh`, against the *run
 directory* by `evidence-manifest.sh`, and against the *report's own directory* by
 `gate-report.py`. Making the citation repo-relative silently broke the other two:
 gate checks downgraded to `inconclusive`, and the audit path reported an
@@ -510,11 +526,11 @@ total, structural failure stayed invisible.
 indistinguishable from an idle graph — 34 minutes of a field run spent reading
 `frontier=0` while three nodes were ready.
 
-`gluerun_dag_next_areas_json` now captures stderr, warns, and emits
+`singular_dag_next_areas_json` now captures stderr, warns, and emits
 `dag.evaluation_failed` (throttled per distinct diagnostic, so the per-cycle
 frontier read cannot flood the event log while a *changed* error still reports).
 It stays non-fatal: the loop keeps dispatching, integrating and reaping. It just
-may not do it silently. `gluerun health` prints `UNEVALUABLE` instead of a count,
+may not do it silently. `singular health` prints `UNEVALUABLE` instead of a count,
 and a new `dag.evaluation` doctor check reports the diagnostic and what to do
 about it.
 
@@ -545,7 +561,7 @@ want to return to, and it was wrong in four separate ways because of it:
 - untracked files that appeared mid-run were `rm -rf`'d.
 
 That last one was not hypothetical. Read-only runs execute against
-`$GLUERUN_ROOT` for up to 1200s (`decide`), 900s (`supervise`) and 600s (`ask`)
+`$SINGULAR_ROOT` for up to 1200s (`decide`), 900s (`supervise`) and 600s (`ask`)
 while `autonomate.sh` keeps importing task files into `docs/orchestration/tasks`
 in that same directory. **The engine was periodically deleting its own freshly
 imported control state.**
@@ -561,9 +577,9 @@ quote, which for a localization program is most of them.
 
 It also now runs on the paths that mattered. `ask`/`supervise`/`decide`
 SIGKILLed on timeout, and the guard was straight-line code after the run, so on
-every timeout it never executed at all. `gluerun_kill_tree` takes a grace period
-(`GLUERUN_KILL_GRACE_SEC`, default 10) and the guard moved into each runner's
-EXIT trap. SIGKILL stays uncoverable, so `gluerun reconcile` sweeps the journals
+every timeout it never executed at all. `singular_kill_tree` takes a grace period
+(`SINGULAR_KILL_GRACE_SEC`, default 10) and the guard moved into each runner's
+EXIT trap. SIGKILL stays uncoverable, so `singular reconcile` sweeps the journals
 killed runs leave behind, `gc` ages them out, and `doctor` reports pending ones.
 
 **In-run restrictions are hardened too**, rather than leaning on cleanup:
@@ -580,7 +596,7 @@ received `prewarm`** — while the worker that produced the green result did. Fr
 outside, a gate that passes for the worker and fails for the auditor is
 indistinguishable from the work being wrong.
 
-`gluerun_worktree_prepare` is now the only way a worktree becomes runnable, for
+`singular_worktree_prepare` is now the only way a worktree becomes runnable, for
 all three sites. Dependency copies are a first-class `worktreeCopyPaths` config
 key that **extends** the `node_modules` default instead of replacing it (a
 monorepo declaring a nested path silently lost the root one), and a declared
@@ -604,13 +620,13 @@ unconditionally and a false positive there is fatal rather than merely wasteful.
 - **No-progress guard.** An attempt that reproduces the previous one exactly —
   same head, same uncommitted diff, same failure — parks immediately instead of
   burning the budget on a rerun that cannot differ.
-- **`gluerun unpark TASK-XXXX`.** A transient fault used to kill a task
+- **`singular unpark TASK-XXXX`.** A transient fault used to kill a task
   permanently: the only operator verb was `supersede`, which buries the task
   rather than repairing it. `unpark` restores Status, lease status, the
   **retryCount** nothing else ever resets, and the refusals counter.
 - **`escalate-infra`.** The decider had no way to say "the work is fine, the
   environment is not"; the nearest action was terminal and meant something else.
-- **Gate timeout.** `GLUERUN_GATE_TIMEOUT_SEC` (default 3600). There was no
+- **Gate timeout.** `SINGULAR_GATE_TIMEOUT_SEC` (default 3600). There was no
   bound at all: one hung gate held a worker slot forever and made cooperative
   STOP never fire. A terminated gate no longer fabricates a product failure —
   the 124/137/143 branch existed but was evaluated after the fabricated
@@ -621,7 +637,7 @@ unconditionally and a false positive there is fatal rather than merely wasteful.
   that it un-halts a stopped loop, and takes `--keep-stop`.
 - **`bootstrap.required: true` with no commands** is a promise that guarantees
   nothing; `doctor` warns, and the template stops shipping it.
-- **`gluerun init` scaffolds a gate adapter** and the README documents
+- **`singular init` scaffolds a gate adapter** and the README documents
   `infrastructureFailure`. Neither existed, which is why no consumer emitted one.
 - **`tests/test-grok-run.sh`** — grok had shipped with no tests at all. Writing
   them found its timeout killed only the direct child, orphaning descendants.
@@ -642,7 +658,7 @@ broke for everyone else.
 
   Nothing shipped or documented an emitter for that sidecar — not the README,
   not `doctor`, and not the scaffold, whose suggested gate is
-  `npm test && npm run build`. So `gluerun init` produced a repo in which every
+  `npm test && npm run build`. So `singular init` produced a repo in which every
   task parked on a passing gate, reported as an infrastructure fault with no
   actionable cause. The engine only worked on itself because the same commit
   that added the requirement also taught `tests/run.sh` to satisfy it.
@@ -677,11 +693,11 @@ were already fixed in 0.13.0; that audit ran against a live 0.11.1 daemon.)
   commit gate and the browser cannot drift to two notions of "looks like a
   secret". The motivating leak was concrete: the gate quotes an offending line
   into `secret-scan.log`, which is in `PLAIN_LOG_NAMES` and streamed verbatim.
-- `/api/raw/config` masks `gluerun.config.json` `env{}` values whose key names
+- `/api/raw/config` masks `singular.config.json` `env{}` values whose key names
   denote credentials, keeping the keys so the Providers model knobs still work.
 - Rules are anchored, never entropy-based: 40-hex git SHAs and 64-hex artifact
   hashes are legitimate content here and are deliberately left intact.
-- `GLUERUN_CONSOLE_REDACT=0` disables it; `/api/health` reports the state so a
+- `SINGULAR_CONSOLE_REDACT=0` disables it; `/api/health` reports the state so a
   disabled control cannot be silently off.
 - `/api/state` no longer ships `autonomateTail` — 80 raw loop-stdout lines on
   every 10s poll, with no consumer anywhere in `plugin/`.
@@ -689,23 +705,23 @@ were already fixed in 0.13.0; that audit ran against a live 0.11.1 daemon.)
 ### Correctness
 
 - Provider resolution is shared with the engine via `engine/provider_resolver.py`
-  (the python twin of `gluerun_resolve_codex_bin`, pinned by
+  (the python twin of `singular_resolve_codex_bin`, pinned by
   `tests/test-provider-resolver-parity.sh`). The console reads
-  `GLUERUN_CODEX_BIN` from config `env{}` as the engine does, and a configured
+  `SINGULAR_CODEX_BIN` from config `env{}` as the engine does, and a configured
   but broken path now reports `misconfigured` instead of silently falling back
   to a different PATH binary.
 - Planner sessions report `accepted` / `rejected` / `failed` / `empty` from the
   critique verdict and import events. A batch critique rejected used to report
   `integrated`, painting the same green as a live session.
-- `GLUERUN_SUPERVISOR_INTERVAL_MIN` is a real setting. Home's "enable
+- `SINGULAR_SUPERVISOR_INTERVAL_MIN` is a real setting. Home's "enable
   auto-briefing" button POSTed a key no whitelist contained, so it always failed.
 - `boolValue` is recomputed when config `env{}` overlays a bool, so the System
-  panel no longer shows the opposite of the truth for `GLUERUN_AUTO_INTEGRATE`,
-  `GLUERUN_PUSH`, `GLUERUN_GENERATE` and `GLUERUN_ENABLE_L1_PARALLEL`.
+  panel no longer shows the opposite of the truth for `SINGULAR_AUTO_INTEGRATE`,
+  `SINGULAR_PUSH`, `SINGULAR_GENERATE` and `SINGULAR_ENABLE_L1_PARALLEL`.
 - The status dock takes both task counts from one payload block with one
   revision, instead of composing "active" and "ready" from two sources with two
   definitions — which is how one task rendered as "1 active · 1 ready".
-- `doctor` maps `resources.maxConcurrent` to `GLUERUN_MAX_CONCURRENT`, the
+- `doctor` maps `resources.maxConcurrent` to `SINGULAR_MAX_CONCURRENT`, the
   variable reconcile actually reads (it was evaluating the L1 planner cap, which
   governs no worktrees).
 
@@ -724,7 +740,7 @@ were already fixed in 0.13.0; that audit ran against a live 0.11.1 daemon.)
 
 ### Behavior changes worth knowing
 
-- A stale `GLUERUN_CODEX_BIN` now surfaces as a red `misconfigured` provider
+- A stale `SINGULAR_CODEX_BIN` now surfaces as a red `misconfigured` provider
   card rather than a green-ish one describing the wrong executable.
 - Log output in the browser shows `[redacted:<kind>]` tokens where credentials
   used to appear.
@@ -736,7 +752,7 @@ were already fixed in 0.13.0; that audit ran against a live 0.11.1 daemon.)
 
 - `claude-run.sh` created its strict-profile MCP config with a `mktemp` template
   ending in `.json`. BSD/macOS `mktemp` substitutes only *trailing* X's, so it
-  produced a file named literally `gluerun-claude-empty-mcp.XXXXXX.json`. That
+  produced a file named literally `singular-claude-empty-mcp.XXXXXX.json`. That
   works once — the EXIT trap removes it — but any hard kill leaves the literal
   name behind and every later strict Claude run dies with `mkstemp failed: File
   exists`. A leaked temp file became a permanent, silent provider outage. Now a
@@ -761,10 +777,10 @@ Suites: bash 178, python 242.
   and validation-preserving support for consumer-only schema extensions.
 - Added a non-destructive release-promotion canary for the captured 26-node
   localization graph and all ten field-report regression scenarios.
-- Added strict `GLUERUN_CODEX_BIN` resolution shared by doctor and the Codex
+- Added strict `SINGULAR_CODEX_BIN` resolution shared by doctor and the Codex
   runner. Doctor now spawns the selected CLI with bounded `--version` and
   authentication probes, catching broken packaged native executables.
-- Added bootstrap-only `GLUERUN_BASH_BIN` so Bash ≥4 can be selected without
+- Added bootstrap-only `SINGULAR_BASH_BIN` so Bash ≥4 can be selected without
   reordering `PATH`; launchd keeps deprecated `CODEX_BIN` as a fallback alias.
 - Active non-quota planner backoffs now defer replanning without creating L1
   leases or repeatedly incrementing the circuit breaker. Imports,
@@ -898,19 +914,19 @@ supervisor artifacts).
 - New engine `engine/supervise.sh` (`--once`) and `engine/ask.sh` run a
   **read-only one-shot runner** over a state digest (STATUS.md, health,
   frontier, gates, recent events, config env{}, settings whitelist).
-  `gluerun report` requests a briefing; `gluerun ask "<question>" [--wait]`
+  `singular report` requests a briefing; `singular ask "<question>" [--wait]`
   asks the supervisor a question. Both are **propose-only** — the model never
   writes; it may only emit a `proposedSettings` map restricted to the settings
   whitelist.
 - Briefings are validated against
   `schemas/supervisor-report.v0.schema.json`
-  (`gluerun.orchestration.supervisor-report.v0`) and written to
-  `.gluerun-state/supervisor/latest.json` (+ pruned history); events
+  (`singular.orchestration.supervisor-report.v0`) and written to
+  `.singular-state/supervisor/latest.json` (+ pruned history); events
   `supervisor.report` / `.failed` / `.ask_started` / `.ask_answered` /
   `.ask_failed`. New knobs, all inert by default:
-  `GLUERUN_SUPERVISOR_INTERVAL_MIN` (`0` = off; the L0 loop then auto-briefs at
+  `SINGULAR_SUPERVISOR_INTERVAL_MIN` (`0` = off; the L0 loop then auto-briefs at
   most once per interval, stamping before spawn so it cannot double-spawn),
-  `GLUERUN_SUPERVISOR_TIMEOUT_SEC` (900), `GLUERUN_ASK_TIMEOUT_SEC` (600).
+  `SINGULAR_SUPERVISOR_TIMEOUT_SEC` (900), `SINGULAR_ASK_TIMEOUT_SEC` (600).
 - Console: `POST /api/report` and `POST /api/ask` spawn the readonly runner
   (a second deliberate subprocess exception — the question is written to a
   file, never passed on argv; `start_new_session`; 429 while busy or inside
@@ -924,7 +940,7 @@ supervisor artifacts).
   sessions.
 
 ### Console — provider subscription quotas
-- `/api/providers` gains an additive **`quota`** field (`gluerun.providers.v0`
+- `/api/providers` gains an additive **`quota`** field (`singular.providers.v0`
   is unchanged otherwise). Codex exposes real usage: a bounded tail probe over
   its newest local rollout JSONL reads the last `rate_limits` (used-percent,
   window, reset time, plan type) — **rollout files only, never a credential**.
@@ -975,12 +991,12 @@ patterns of opencode / pi / t3code (probe → installed/version → auth status
   accepted from stdout OR stderr — 0.42.x emits it on stderr behind
   warning lines), `opencode run --format json`, `cursor-agent -p
   --output-format json -f` (`--mode ask` for readonly). Flat model knobs
-  `GLUERUN_{GEMINI,OPENCODE,CURSOR}_MODEL` (unset = the CLI's own default,
+  `SINGULAR_{GEMINI,OPENCODE,CURSOR}_MODEL` (unset = the CLI's own default,
   flag omitted) + `_TIMEOUT_SEC` (default 1200).
-- Switch runners with `GLUERUN_RUNNER` in config `env{}` (proven to
+- Switch runners with `SINGULAR_RUNNER` in config `env{}` (proven to
   override the top-level `runner` key on every lib.sh source) — the
   console's "Use as default runner" writes exactly that.
-- `gluerun doctor` now checks all six provider CLIs on PATH with
+- `singular doctor` now checks all six provider CLIs on PATH with
   file/env-inference auth hints (warn-only, no subprocess probes) and
   model-prefix sanity for the new keys.
 
@@ -992,7 +1008,7 @@ patterns of opencode / pi / t3code (probe → installed/version → auth status
   + last-used/exit evidence from session metadata, an editable model knob,
   and a "Use as default runner" action (applies next cycle). Live-only;
   disabled while viewing an archived plan.
-- `GET /api/providers` (`gluerun.providers.v0`) + `--providers` one-shot:
+- `GET /api/providers` (`singular.providers.v0`) + `--providers` one-shot:
   per-provider probes (`claude auth status`, `codex login status`,
   `cursor-agent about --format json`, `opencode auth list`, env/file
   inference for gemini; `<bin> --version` for versions) run in a thread
@@ -1003,8 +1019,8 @@ patterns of opencode / pi / t3code (probe → installed/version → auth status
   stays pure-FS.
 - Provider identity generalized: the runner→provider mapping is a
   registry lookup (was a hardcoded claude-else-codex guess), and
-  `/api/config` + `/api/providers` honor env{} `GLUERUN_RUNNER`.
-  POST /api/settings whitelist gains `GLUERUN_RUNNER` (validated
+  `/api/config` + `/api/providers` honor env{} `SINGULAR_RUNNER`.
+  POST /api/settings whitelist gains `SINGULAR_RUNNER` (validated
   `*-run.sh` name only) + the new model/timeout keys.
 
 ### Tests
@@ -1029,35 +1045,35 @@ active plan, older plans read-only. `schemaVersion` stays **v1** (all
 additions are new verbs/endpoints; archived plans are served from mini-repo
 snapshots by the existing collectors).
 
-### Engine — `gluerun plan archive` / `gluerun plan list`
-- `gluerun plan archive [--name <display name>] [--force] [--no-commit]`
+### Engine — `singular plan archive` / `singular plan list`
+- `singular plan archive [--name <display name>] [--force] [--no-commit]`
   moves the finished plan's durable record into
-  `.gluerun-state/plans/<plan-id>/` laid out as a **mini-repo**
+  `.singular-state/plans/<plan-id>/` laid out as a **mini-repo**
   (`docs/orchestration/{dag.v0.json,tasks,gates,areas,packets}` moved;
   `prompts/`, `planner-contract.md`, `decisions.md` copied so they stay
-  live; `.gluerun-state/{events.ndjson,runs,sessions,leases,l1-leases,
+  live; `.singular-state/{events.ndjson,runs,sessions,leases,l1-leases,
   dispatch,inbox,origin-state.json,STATUS.md,circuit.json,
   planner-backoff.json,task-id-counter}` moved), writes a
-  `manifest.json` (`gluerun.plan.manifest.v0`: name, archivedAt,
+  `manifest.json` (`singular.plan.manifest.v0`: name, archivedAt,
   engineVersion, branch, headSha, gates passed/total, taskCount, event
   span) and upserts the `plans/index.json` registry
-  (`gluerun.plans.index.v0`, newest first).
+  (`singular.plans.index.v0`, newest first).
 - Safety: refuses (each override-able only with `--force`) while the
   autonomate loop is alive, the origin lock is held, a launched dispatch
   tree is still running, the DAG frontier is not `allComplete`, or
   `.worktrees/` still has entries (worktrees are never moved — run
-  `gluerun gc` first). Runs under the origin lock.
+  `singular gc` first). Runs under the origin lock.
 - Reset: after archiving, the repo returns to the init starter DAG
   (`M0.scaffold`), a fresh `events.ndjson` seeded with a `plan.archived`
   event, and a cleared task-id counter (next thread numbers from
   TASK-0001); `docs/orchestration` is committed by default
   (`--no-commit` to skip). Config, secrets, locks, console files and
   `STOP` handling are never touched.
-- `gluerun plan list [--json]` prints the registry (self-heals from
+- `singular plan list [--json]` prints the registry (self-heals from
   per-plan manifests if the index is missing).
 
 ### Console — thread switcher + read-only historical mode
-- `GET /api/plans` (`gluerun.plans.v0`) lists archived plans; `--plans`
+- `GET /api/plans` (`singular.plans.v0`) lists archived plans; `--plans`
   one-shot flag added.
 - `?plan=<plan-id>` on the read endpoints (`/api/dag`, `/api/timeline`,
   `/api/overview`, `/api/task`, `/api/node`, `/api/area`, `/api/events`,
@@ -1097,7 +1113,7 @@ Field feedback on 0.6.0 ("half way there"): the dashboard should feel like a
 full canvas per tab, the timeline garbled overlapping labels on dense lanes,
 the matrix didn't use wide screens, settings were read-only, and the system
 felt like a black box. `schemaVersion` stays **v1**; `POST /api/settings` is
-the console's first write path and it only touches `gluerun.config.json`
+the console's first write path and it only touches `singular.config.json`
 `env{}` — orchestration state remains read-only.
 
 ### Workspace shell
@@ -1128,7 +1144,7 @@ the console's first write path and it only touches `gluerun.config.json`
   edit model/effort/concurrency/safety knobs with kind-typed validation and
   per-key "applies next cycle" / "needs loop restart" labels. Saves go
   through **`POST /api/settings`** → atomic write into
-  `gluerun.config.json` `env{}` (the layer the engine actually re-reads
+  `singular.config.json` `env{}` (the layer the engine actually re-reads
   each cycle; `.env` is only read at loop launch). Whitelisted keys only —
   secrets and unknown config keys are never touched; derived knobs render
   read-only. `/api/settings` rows overlay config env{} so saved values are
@@ -1146,7 +1162,7 @@ the console's first write path and it only touches `gluerun.config.json`
   per-root allowlists and containment; quiet `{}` buttons on tasks, nodes,
   Home breaker/backoff, and Agents config open the underlying file in the
   inspector (pretty-printed JSON, path, size, mtime).
-- **`GET /api/home`** (`gluerun.codex.home.v0`, `--home`): the at-a-glance
+- **`GET /api/home`** (`singular.codex.home.v0`, `--home`): the at-a-glance
   digest powering Home — first server-side read of dispatch records and
   planner-backoff.json, pid-liveness without subprocesses.
 
@@ -1164,7 +1180,7 @@ A full information-architecture redesign of the read-only console, replacing
 the static L0→L1→L2 column canvas with three purpose-built surfaces, plus the
 server/engine data layer to power them. `schemaVersion` stays **v1** — every
 API change is additive (three new endpoints, new fields on existing ones);
-`gluerun migrate` is a no-op for 0.5.0 consumers.
+`singular migrate` is a no-op for 0.5.0 consumers.
 
 ### Plan surface (workbench over the DAG)
 - Four lenses behind a vertical lens nav: **Timeline** (execution Gantt on
@@ -1197,7 +1213,7 @@ API change is additive (three new endpoints, new fields on existing ones);
   tasks/areas, model · effort chip, last-activity age) + a dimmed
   declared-roles strip; role detail with processes (jump to their console)
   and **read-only** settings showing env-key provenance
-  (`model → claude-opus-4-8 (GLUERUN_CLAUDE_L2_MODEL)`) plus concurrency
+  (`model → claude-opus-4-8 (SINGULAR_CLAUDE_L2_MODEL)`) plus concurrency
   limits — the console observes, it never writes.
 
 ### Design system
@@ -1211,16 +1227,16 @@ API change is additive (three new endpoints, new fields on existing ones);
   resolved-path containment (subdirectories supported, no per-file registry).
 
 ### Server API (all additive)
-- **`/api/dag`** (`gluerun.codex.dag.v0`, `--dag`): registry nodes merged
+- **`/api/dag`** (`singular.codex.dag.v0`, `--dag`): registry nodes merged
   with gate results, per-node task rollups (events-attributed with the
   `DAG node:` header fallback), L1 leases, frontier flags, `edges[]`, and
   stage/area swimlane metadata.
-- **`/api/timeline`** (`gluerun.codex.timeline.v0`, `--timeline`,
+- **`/api/timeline`** (`singular.codex.timeline.v0`, `--timeline`,
   `?since=`): per-task attempt intervals reconstructed from events
   (dispatch records are overwritten per attempt — history lives in the
   journal), `liveNow` for running bars, gate marks, L0 reconcile cycle
   spans.
-- **`/api/config`** (`gluerun.codex.config.v0`, `--config`): per-role
+- **`/api/config`** (`singular.codex.config.v0`, `--config`): per-role
   model/effort resolved with the engine's own precedence (`.env` override >
   config `env{}` > runner default) with source-key provenance, plus limits
   and flags. Secrets in `.env` are never read (whitelisted parser).
@@ -1252,7 +1268,7 @@ Every change in this release traces to the singular-frontend V1 field run
 (Jul 13–16, codex session 019f5ce7): a 4-day, 78-dispatch, 47-node run that
 converged but lost ~40 of ~96 hours to engine defects and needed ~15 manual
 state surgeries. `schemaVersion` stays **v1** — all schema changes are
-additive (`authority` node field; new `gate-review.v0`), so `gluerun migrate`
+additive (`authority` node field; new `gate-review.v0`), so `singular migrate`
 is a no-op for 0.4.0 consumers.
 
 ### Autonomy & failure classification
@@ -1261,13 +1277,13 @@ is a no-op for 0.4.0 consumers.
   "quota-banner" feature armed ≥13 false 30-minute backoffs in the field),
   markers are word-boundary contextual regexes, quota backoffs refuse to arm
   without a `logRef`, and import rejections are excluded from limit
-  eligibility. **`GLUERUN_LIMIT_SLEEPTHROUGH`** (default 1) supersedes the
-  deprecated `GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH`.
+  eligibility. **`SINGULAR_LIMIT_SLEEPTHROUGH`** (default 1) supersedes the
+  deprecated `SINGULAR_DISABLE_LIMIT_SLEEPTHROUGH`.
 - **Monotonic task ids**: durable counter seeded from every surface (tasks
   incl. `superseded/`, leases, dispatch records, worktrees, imported packets,
   `agent/*` branches). Archived ids can never be recycled (4 field
   collisions, 2 breaker halts); collisions reject the batch instead of
-  overwriting, and `gluerun_lease_write` refuses to clobber
+  overwriting, and `singular_lease_write` refuses to clobber
   accepted/integrated leases.
 - **Duplicate guard v2**: status-aware (terminal tasks never block a
   successor — the blocked-task deadlock killed a whole night), keyed on the
@@ -1277,44 +1293,44 @@ is a no-op for 0.4.0 consumers.
   no-op (`planner.no_tasks`), not invalid output.
 - **Exit-code contract**: dispatch exit 2 = refusal (never breaker input),
   3 = decided-terminal, other = crash. Repeated refusals park the task
-  (**`GLUERUN_REFUSAL_PARK_THRESHOLD`**=3) instead of starving the loop.
+  (**`SINGULAR_REFUSAL_PARK_THRESHOLD`**=3) instead of starving the loop.
 - **Whole-tree reap liveness**: descendants, process group, run-id command
   lines, and recent run-dir writes all count as alive
-  (**`GLUERUN_STALE_HARD_MINUTES`**=240 caps the conservatism). The 0.4.0
+  (**`SINGULAR_STALE_HARD_MINUTES`**=240 caps the conservatism). The 0.4.0
   root-pid check destroyed accepted work under a live auditor.
-- **Accepted-work auto-heal** (**`GLUERUN_AUTO_ACCEPT_EXISTING`**=1): a
+- **Accepted-work auto-heal** (**`SINGULAR_AUTO_ACCEPT_EXISTING`**=1): a
   dispatch against an `accepted` lease re-accepts the stranded packet
   deterministically and enqueues it; a new `accept-pending` trap state means
   a post-acceptance crash never fails the lease.
 
 ### Runners & retries
-- **`GLUERUN_CODEX_TIMEOUT_SEC`** (default 2400; 0 disables) bounds codex
-  runs with a kill-tree, and opt-in **`GLUERUN_CODEX_IDLE_SEC`** kills runs
+- **`SINGULAR_CODEX_TIMEOUT_SEC`** (default 2400; 0 disables) bounds codex
+  runs with a kill-tree, and opt-in **`SINGULAR_CODEX_IDLE_SEC`** kills runs
   whose JSONL output stops growing — field hangs ran 28–380 minutes
   unbounded. rc 124 classifies as timeout/infra everywhere already.
 - **Empty-diff retries reconcile**: a retry whose content was committed by a
   prior attempt (gate green, owned files differ from base) proceeds instead
   of parking fully green work as `no-changes`.
 - **Audit-verdict validation** joins decider-verdict validation
-  (**`GLUERUN_AUDIT_VERDICT_VALIDATE`**=warn; `strict` re-runs the auditor).
+  (**`SINGULAR_AUDIT_VERDICT_VALIDATE`**=warn; `strict` re-runs the auditor).
   Legacy `pmgo.*` schema ids are tolerated-with-warning
-  (**`GLUERUN_LEGACY_SCHEMA_MODE`**=warn; `reject` post-migration) — the
+  (**`SINGULAR_LEGACY_SCHEMA_MODE`**=warn; `reject` post-migration) — the
   0.4.0 hard rejection parked every decision in consumers scaffolded with
   legacy prompts (18.5h halt).
 
 ### Promotion & governance
-- **Auto-promotion actually fires**: **`GLUERUN_AUTO_PROMOTE_GATES`** now
+- **Auto-promotion actually fires**: **`SINGULAR_AUTO_PROMOTE_GATES`** now
   defaults to 1; gates promote at integrate time (`promote-gate --if-ready`)
   the moment a node's last task lands, and the empty-queue reconcile pass no
   longer requires a free dispatch slot. Promotions count as loop progress.
-- **`gluerun promote-gate` honors the config `promoter` key** (new
+- **`singular promote-gate` honors the config `promoter` key** (new
   `engine/promote-gate.sh` wrapper sources lib.sh; explicit env still wins);
   actionable errors; stderr progress heartbeat
-  (**`GLUERUN_PROMOTE_PROGRESS_SECS`**=15).
-- **Terminal-predecessor tolerance** (**`GLUERUN_PROMOTE_TOLERATE_TERMINAL`**=1):
+  (**`SINGULAR_PROMOTE_PROGRESS_SECS`**=15).
+- **Terminal-predecessor tolerance** (**`SINGULAR_PROMOTE_TOLERATE_TERMINAL`**=1):
   superseded/blocked predecessors with an integrated successor count as
   satisfied; `tasks/superseded/` is scanned.
-- **Planner suppression** (**`GLUERUN_SUPPRESS_UNPROMOTED_REPLAN`**=1): nodes
+- **Planner suppression** (**`SINGULAR_SUPPRESS_UNPROMOTED_REPLAN`**=1): nodes
   whose tasks are complete but whose gate is unpublished are not re-planned
   (the field's duplicate-churn source); a published failed gate keeps the
   node plannable.
@@ -1324,7 +1340,7 @@ is a no-op for 0.4.0 consumers.
   opted in — via a valid PASSING **`gate-review.v0`** file at
   `gates/evidence/<node>.review.json` (independent reviewer identity,
   evidence refs, headSha ancestor check,
-  **`GLUERUN_REVIEW_MAX_AGE_HOURS`**=168). The dag schema file drops 0.4.0's
+  **`SINGULAR_REVIEW_MAX_AGE_HOURS`**=168). The dag schema file drops 0.4.0's
   project-specific layer/kind enums to match the engine validator.
 
 ### Recovery becomes verbs
@@ -1333,25 +1349,25 @@ is a no-op for 0.4.0 consumers.
   **`stop [--wait]`**, **`resume`**, **`wake`**, **`gates [--json]`**,
   **`health [--json]`** (sub-2s digest with a stable hash field for cheap
   heartbeats + `attention[]`), **`gc [--dry-run]`**
-  (**`GLUERUN_RUNS_KEEP`**=200 runs-history cap with reference protection,
+  (**`SINGULAR_RUNS_KEEP`**=200 runs-history cap with reference protection,
   integrated-worktree pruning, events rotation at
-  **`GLUERUN_EVENTS_MAX_MB`**=64), plus `lease` and `accept-packet` wiring.
+  **`SINGULAR_EVENTS_MAX_MB`**=64), plus `lease` and `accept-packet` wiring.
 - `next-areas --explain` emits per-node exclusion reasons; a corrupt gate
   file no longer crashes the frontier computation.
 - `recover` reclassifies stale **L1 planning leases**
-  (**`GLUERUN_RECOVER_L1`**=1; report-only before), reports orphaned
+  (**`SINGULAR_RECOVER_L1`**=1; report-only before), reports orphaned
   worktrees **once** (`recover-orphans.json`), and can auto-prune clean
-  integrated worktrees (**`GLUERUN_AUTO_PRUNE`**, default 0).
-- Opt-in **`GLUERUN_INTEGRATE_REBASE`**: rebase-and-regate an audited branch
+  integrated worktrees (**`SINGULAR_AUTO_PRUNE`**, default 0).
+- Opt-in **`SINGULAR_INTEGRATE_REBASE`**: rebase-and-regate an audited branch
   once on merge conflict instead of terminally parking.
 - Detached workers' process groups are killed on supersede `--force`
-  (**`GLUERUN_KILL_ORPHAN_PGROUP`**=1) so gate webservers stop leaking.
+  (**`SINGULAR_KILL_ORPHAN_PGROUP`**=1) so gate webservers stop leaking.
 
 ### Lifecycle & loop
-- **`gluerun auto --detach`**: supported daemonized launch (setsid
-  double-fork, `.gluerun-state/autonomate.log`, post-launch liveness check).
+- **`singular auto --detach`**: supported daemonized launch (setsid
+  double-fork, `.singular-state/autonomate.log`, post-launch liveness check).
 - Interruptible naps: STOP takes effect mid-sleep within
-  **`GLUERUN_SLEEP_POLL_SEC`**=10; `gluerun wake` / `clear-backoff` end naps
+  **`SINGULAR_SLEEP_POLL_SEC`**=10; `singular wake` / `clear-backoff` end naps
   early — killing sleep children (which killed the whole loop in the field)
   is never needed. Quota budget counts only actually-slept seconds.
 
@@ -1362,10 +1378,10 @@ is a no-op for 0.4.0 consumers.
   (`stale`/`computing`/`snapshotAgeSeconds`) is served instantly while a
   refresh runs (`?fresh=1` still blocks). Snapshot keys `gateD0`/`gateD1`
   are replaced by `orchestration.gates {passed,total,byNode}`.
-- `gluerun console --ensure | --status | --stop`; the URL/pid persist at
-  `.gluerun-state/console.url`/`console.pid`; the banner moved to stderr
+- `singular console --ensure | --status | --stop`; the URL/pid persist at
+  `.singular-state/console.url`/`console.pid`; the banner moved to stderr
   (one-shot JSON is pipe-pure); default port **8765** with free-port
-  fallback; `gluerun status` prints the live console URL.
+  fallback; `singular status` prints the live console URL.
 - `origin-state.json` gains `gates{passed,total}`, `completedNodes`,
   per-status `taskCounts`, and writer provenance; STATUS.md states its
   staleness contract.
@@ -1374,7 +1390,7 @@ is a no-op for 0.4.0 consumers.
 - Doctor preflights: model-prefix sanity, `~/.codex/hooks.json` parse (FAIL),
   MCP server fan-out count, legacy `pmgo.*` id scan (FAIL + migrate pointer),
   stale pidfiles, disk floor, `.worktrees` size, console-port availability.
-- Skill rewritten for cheap monitoring: a `gluerun health --json`
+- Skill rewritten for cheap monitoring: a `singular health --json`
   digest-compare heartbeat loop, a full 0.5.0 knob table, six numbered
   recovery recipes, the operator-gate escalation contract, and a new
   `references/artifacts.md` (canonical field names per artifact + jq
@@ -1385,16 +1401,16 @@ is a no-op for 0.4.0 consumers.
 - **No schema migration**: `schemaVersion` stays v1; `authority` and
   `gate-review.v0` are additive.
 - **Behavior flips (opt out in config `env{}` if needed)**:
-  `GLUERUN_AUTO_PROMOTE_GATES=1` (was 0), codex runs bounded at 2400s (set
-  `GLUERUN_CODEX_TIMEOUT_SEC=0` to restore unbounded), exit-2 refusals no
+  `SINGULAR_AUTO_PROMOTE_GATES=1` (was 0), codex runs bounded at 2400s (set
+  `SINGULAR_CODEX_TIMEOUT_SEC=0` to restore unbounded), exit-2 refusals no
   longer feed the breaker, planner suppression of pending-promotion nodes,
-  stale L1 lease reclassification (`GLUERUN_RECOVER_L1=0` restores
+  stale L1 lease reclassification (`SINGULAR_RECOVER_L1=0` restores
   report-only), duplicate guard ignores terminal tasks, legacy `pmgo.*`
-  verdict ids tolerated (`GLUERUN_LEGACY_SCHEMA_MODE=reject` restores strict).
+  verdict ids tolerated (`SINGULAR_LEGACY_SCHEMA_MODE=reject` restores strict).
 - **Console**: default port is 8765; the launch banner moved to stderr —
   update any script that parsed it from stdout; `gateD0`/`gateD1` snapshot
   keys are gone.
-- **New state files**: `.gluerun-state/task-id-counter`, `WAKE`,
+- **New state files**: `.singular-state/task-id-counter`, `WAKE`,
   `console.url`/`console.pid`, `recover-orphans.json`,
   `dispatch/<task>.refusals`. Task-id sequences may show gaps (intentional).
 - **Consumer templates**: add `DAG node: <node-id>` to `tasks/TEMPLATE.md`
@@ -1413,45 +1429,45 @@ the raw engine level; the **shipped config flips five knobs ON per the
 report's per-knob decisions** (see below). Raw-default flips are deferred to
 0.5 with a test-migration slice (OFF-parity tests pin unset == legacy).
 
-- **Context packets + assumption ledger** (`GLUERUN_CTX_PACKET`): planner
+- **Context packets + assumption ledger** (`SINGULAR_CTX_PACKET`): planner
   reasoning residue (decisions / assumptions / rejected alternatives /
   inspected symbols) rides task files into worker, fix, and audit prompts;
   per-run assumption ledger with host-derived status transitions in the
   assumption grammar `[open|validated|violated]`.
-- **Artifact secret scan + quarantine** (`GLUERUN_CTX_ARTIFACT_SCAN`):
+- **Artifact secret scan + quarantine** (`SINGULAR_CTX_ARTIFACT_SCAN`):
   `secret-scan.sh --artifacts` covers capsules, session meta, packets,
   critique and paired-audit records; hits rename to `.quarantined`, emit
   `ctx.artifact_secret`, and are excluded from every prompt-assembly and
   rehydration path without changing task outcomes.
-- **Explicit session routing** (`GLUERUN_CTX_ROUTING`): one dispatcher
-  (`gluerun_ctx_route`) returning `continue|resume|fork|fresh|rehydrate`
+- **Explicit session routing** (`SINGULAR_CTX_ROUTING`): one dispatcher
+  (`singular_ctx_route`) returning `continue|resume|fork|fresh|rehydrate`
   with a reason code; window-pressure and diff-volume refusal gates;
   generalized session leases; structural taint marking makes
   independence-pinned steps (final + paired audits) unreachable by resumed or
   rehydrated sessions; per-role strategy/outcome metrics splits.
-- **Rehydration** (`GLUERUN_REHYDRATE`): deterministic, capped,
+- **Rehydration** (`SINGULAR_REHYDRATE`): deterministic, capped,
   quarantine-aware packets assembled from durable artifacts (packets,
   capsules, ledgers, critiques, decision records) injected on refused-resume
   lineage steps, with the packet manifest recorded in strategy events.
-  Optional authored-knowledge manifest ingestion (`GLUERUN_CTX_MANIFEST` +
+  Optional authored-knowledge manifest ingestion (`SINGULAR_CTX_MANIFEST` +
   additive `contextManifest` config field): select → eligibility
   (`load-when` across role/step/node/task) → compose → inject → record,
   fixture-contract only (singular-brain bridge, no runtime dependency).
-- **Context graph** (`GLUERUN_CTX_GRAPH`): `context-graph.v0` schema
+- **Context graph** (`SINGULAR_CTX_GRAPH`): `context-graph.v0` schema
   (append-only JSONL nodes/edges, full edge taxonomy,
   `evidenceClass: authoritative|claim`, provenance refs) + S0–S5
   event-to-graph mapping; deterministic projector over all record families;
   incremental sync ≡ rebuild; loss-free delete/rebuild; query read API
-  (neighbors, lineage walk, open-contradictions); `gluerun graph
+  (neighbors, lineage walk, open-contradictions); `singular graph
   rebuild|sync|query` CLI. Subgraph-selected rehydration (lineage-walk
   selection, rejected observations excluded, contradictions surfaced first)
   with a flat-vs-subgraph A/B arm.
-- **Experiment toolchain** (`GLUERUN_CTX_EXPERIMENT` /
-  `GLUERUN_CTX_ARMSTATE`): per-arm aggregators (escape-rate, cost, bias,
+- **Experiment toolchain** (`SINGULAR_CTX_EXPERIMENT` /
+  `SINGULAR_CTX_ARMSTATE`): per-arm aggregators (escape-rate, cost, bias,
   attempts-to-accept, findings-per-attempt, resume/rehydrate hit-rates,
   refusal reason mix), treatment-vs-control delta, knob-state provenance
   recording + consistency audit, markdown renderers, composed report body,
-  `gluerun experiment-report` CLI, operator hand-off record.
+  `singular experiment-report` CLI, operator hand-off record.
 - **Shipped-config defaults per the experiment report**: `PLANNER_SESSION`,
   `PLAN_CRITIQUE`, `CTX_PACKET`, `CTX_ROUTING`, `CTX_ARTIFACT_SCAN` ON and
   `PAIRED_AUDIT_PCT=25` in the self-dock config; `REHYDRATE`,
@@ -1470,17 +1486,17 @@ Built by the engine itself under `docs/context-build-plan/` (self-docked, all
 tasks worker-implemented, independently audited, and gate-promoted with hashed
 evidence). Everything below is additive and default-OFF unless noted.
 
-- **Self-measurement**: `gluerun metrics --json` over the attempts index +
-  event log; deterministic per-task A/B arms (`GLUERUN_CTX_AB`); sampled
-  post-acceptance paired fresh audits (`GLUERUN_PAIRED_AUDIT_PCT`).
-- **Planner session persistence and resume** (`GLUERUN_PLANNER_SESSION`):
+- **Self-measurement**: `singular metrics --json` over the attempts index +
+  event log; deterministic per-task A/B arms (`SINGULAR_CTX_AB`); sampled
+  post-acceptance paired fresh audits (`SINGULAR_PAIRED_AUDIT_PCT`).
+- **Planner session persistence and resume** (`SINGULAR_PLANNER_SESSION`):
   per-node session meta, node-lineage + template-sha gates, session leases,
   rc-86 fresh fallback, reason-coded `context.strategy_selected` events.
-- **Plan critique** (`GLUERUN_PLAN_CRITIQUE`): `plan-critique.v0` schema,
+- **Plan critique** (`SINGULAR_PLAN_CRITIQUE`): `plan-critique.v0` schema,
   fresh read-only skeptic critic over staged batches, critique-aware L0
   import (approve/revise/park, fail-closed on missing record, fail-open on
   critic infra).
-- **Plan revision loop** (`GLUERUN_PLAN_REVISE_MAX`): bounded
+- **Plan revision loop** (`SINGULAR_PLAN_REVISE_MAX`): bounded
   revise → (resume|fresh) → re-critique with per-finding dispositions and
   `plan.revised` provenance events; critic re-critique may resume the
   critic's own session (skeptic-only).
@@ -1488,15 +1504,15 @@ evidence). Everything below is additive and default-OFF unless noted.
   never changes a task outcome" is replaced by **evidence invariance** —
   routing never changes what counts as evidence; outcomes may improve with
   continuity and the improvement is measured. Advocate/skeptic line documented.
-- Hermeticity hardening from self-docking: suite scrubs inherited GLUERUN_*
+- Hermeticity hardening from self-docking: suite scrubs inherited SINGULAR_*
   env and runs tests with stdin from /dev/null.
 
 ---
 
-## [0.3.0] — 2026-06-10 — Initial public release of glueRun-go
+## [0.3.0] — 2026-06-10 — Initial public release of singular
 
-This is the first public release of glueRun-go. It ships detached dispatch **ON by
-default** (`GLUERUN_DETACHED_DISPATCH=1`): the reconcile cycle no longer blocks on
+This is the first public release of singular. It ships detached dispatch **ON by
+default** (`SINGULAR_DETACHED_DISPATCH=1`): the reconcile cycle no longer blocks on
 its worker batch. The legacy batch barrier held the origin lock across every worker
 (minutes to hours), freezing packet import, integration of already-finished work,
 recovery, STATUS, and STOP responsiveness until the slowest worker finished. With
@@ -1504,14 +1520,14 @@ detached dispatch on, reconcile pre-leases each frontier task, spawns the worker
 its own session, and returns within seconds; the reaper attributes outcomes on later
 cycles via dispatch records + exit files.
 
-### Detached dispatch (default ON: `GLUERUN_DETACHED_DISPATCH=1`)
+### Detached dispatch (default ON: `SINGULAR_DETACHED_DISPATCH=1`)
 
 - Reconcile pre-leases each frontier task (`status=planned`, scope published) and
   spawns the worker in its own session via `dispatch-wrap.sh`, then returns within
   seconds; the origin lock is held for the cycle's control work only. Set
-  `GLUERUN_DETACHED_DISPATCH=0` to restore the legacy batch wait path.
-- **Dispatch records** (`.gluerun-state/dispatch/<taskId>.json`) + worker exit
-  files; a **reaper** (`gluerun_reap_dispatches`, run at the top of every
+  `SINGULAR_DETACHED_DISPATCH=0` to restore the legacy batch wait path.
+- **Dispatch records** (`.singular-state/dispatch/<taskId>.json`) + worker exit
+  files; a **reaper** (`singular_reap_dispatches`, run at the top of every
   apply/actuate cycle before recovery) attributes completions, failures, and
   crashes (pid + `ps lstart` liveness, defeating pid reuse). Crash detection
   drops from the 60-min stale-lease window to ~one cycle.
@@ -1528,9 +1544,9 @@ cycles via dispatch records + exit files.
 
 ### Concurrency hardening (always on)
 
-- Lease/task state writes (`gluerun_lease_write`, `gluerun_lease_set_status`,
-  `gluerun_lease_bump_retry`, `gluerun_lease_update_owned`,
-  `gluerun_task_set_status`) are now tmp+rename atomic — no torn reads while
+- Lease/task state writes (`singular_lease_write`, `singular_lease_set_status`,
+  `singular_lease_bump_retry`, `singular_lease_update_owned`,
+  `singular_task_set_status`) are now tmp+rename atomic — no torn reads while
   workers and reconcile mutate control state concurrently.
 - `integrate.sh` merge/abort/finalize and reconcile's control-state `add`+`commit`
   now run under the repo-wide git-op lock shared with worker git operations
@@ -1547,7 +1563,7 @@ cycles via dispatch records + exit files.
 - A **findings ledger** (`findings-status.json`) upserted from each audit
   verdict, with stable finding ids (format-insensitive) tracked open/resolved.
 - **Structured fix prompts** carry the authoritative open findings forward on
-  retry, replacing the truncated byte-tail (`GLUERUN_FIX_PROMPT_STRUCTURED=0`
+  retry, replacing the truncated byte-tail (`SINGULAR_FIX_PROMPT_STRUCTURED=0`
   restores the legacy `fix_hints` tail byte-for-byte).
 - **Re-audit delta prompts**: prior findings + fix diff + per-id verification
   targets, requesting an additive `findingsStatus` map
@@ -1561,7 +1577,7 @@ cycles via dispatch records + exit files.
 
 - Optional role-keyed runtime **session resume** (`codex exec resume`,
   `claude -r`) behind 10 staleness gates, defaulting ON
-  (`GLUERUN_SESSION_AFFINITY=1`). Any gate failure — or a runner that refuses the
+  (`SINGULAR_SESSION_AFFINITY=1`). Any gate failure — or a runner that refuses the
   resume — degrades to a fresh run within the same attempt. Session resume is a
   token-cost optimization that **never changes a task outcome**.
 - New event: `context.resume_failed`.
@@ -1570,10 +1586,10 @@ cycles via dispatch records + exit files.
 
 - **Infra-failure isolation**: worker/auditor infrastructure failures (timeouts,
   unparseable verdicts) re-run only the failed role, bounded
-  (`GLUERUN_WORKER_INFRA_MAX=1`, `GLUERUN_AUDIT_INFRA_MAX=2`) and *without*
+  (`SINGULAR_WORKER_INFRA_MAX=1`, `SINGULAR_AUDIT_INFRA_MAX=2`) and *without*
   consuming the review/retry budget; on exhaustion they surface as `worker-infra`
   / `audit-infra`.
-- **Decider fast-path** (`GLUERUN_DECIDER_FAST=1`): a deterministic host policy
+- **Decider fast-path** (`SINGULAR_DECIDER_FAST=1`): a deterministic host policy
   table resolves unambiguous `(failure-class, retries-left)` pairs; ambiguous
   cases still consult the model decider.
 - **Host task preflight**: malformed tasks are blocked before any lease, worktree,
@@ -1584,9 +1600,9 @@ cycles via dispatch records + exit files.
 ### Versioning
 
 - Root `SCHEMA_VERSION` file as the data-contract version (`v1` for this
-  release); `.gluerun-version` is the canonical engine pin.
-- `gluerun doctor` gains schema-mismatch (FAIL) and pin-disagreement (warn) checks;
-  `gluerun migrate` + the `migrations/<from>-to-<to>.sh` contract bring a repo's
+  release); `.singular-version` is the canonical engine pin.
+- `singular doctor` gains schema-mismatch (FAIL) and pin-disagreement (warn) checks;
+  `singular migrate` + the `migrations/<from>-to-<to>.sh` contract bring a repo's
   `schemaVersion` forward (see `migrations/README.md`).
 - Ships the `v0-to-v1` migration that backfills the current scaffold and rewrites
   legacy `pmgo.orchestration.*` namespace references.
@@ -1618,13 +1634,13 @@ installable package.
   source repo, preserving exec bits.
 - Schemas now ship **with** the engine and resolve relative to the install, not the
   consumer repo.
-- Config contract (`gluerun.config.json` + `config.local.sh`) introduced so every
+- Config contract (`singular.config.json` + `config.local.sh`) introduced so every
   per-repo knob lives in the consumer repo, never in engine files.
 - `dag.sh` validator parameterized: layer/kind vocabulary and required nodes come
   from the DAG manifest; the storage-proof regime moved behind a module hook.
 - Test suite abstraction-cleaned: live-state assertions removed; fixtures use a
   generic layer vocabulary.
-- `gluerun` CLI + `install.sh` for install-once / run-anywhere with per-repo
+- `singular` CLI + `install.sh` for install-once / run-anywhere with per-repo
   version pins.
 - Visualization plugin vendored under `plugin/` and decoupled from project
   specifics.

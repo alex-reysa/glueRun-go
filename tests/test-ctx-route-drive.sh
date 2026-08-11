@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # Covers the driver-facing routing adapter engine/ctx-route-drive.sh:
-#   gluerun_ctx_route_decide <role> <step> <meta> <key> <run_id> <runner> \
+#   singular_ctx_route_decide <role> <step> <meta> <key> <run_id> <runner> \
 #                            <prompt_sha> <worktree> <lineage_head>
 #
 # The adapter is the minimal seam the l1-drive.sh implementer (:436) and reviewer
 # (:675) session-decision sites delegate into. It assembles the per-role routing
 # context (session transcript path, generalized session-lease key, diff base sha)
-# and returns the decision by delegating to gluerun_ctx_route. It adds NO new
+# and returns the decision by delegating to singular_ctx_route. It adds NO new
 # decision logic: OFF/ON gating and the wrapped legacy decider already live inside
-# gluerun_ctx_route.
+# singular_ctx_route.
 #
 # Contract asserted here:
-#   - OFF-parity: with GLUERUN_CTX_ROUTING unset/!=1 (default 0) the adapter's line
-#     equals gluerun_session_resume_decide's line for that role byte-for-byte
+#   - OFF-parity: with SINGULAR_CTX_ROUTING unset/!=1 (default 0) the adapter's line
+#     equals singular_session_resume_decide's line for that role byte-for-byte
 #     (resume <id> or fresh <reason>) — even at an independence-required step.
-#   - ON routing: with GLUERUN_CTX_ROUTING=1 the gates assembled by the adapter can
+#   - ON routing: with SINGULAR_CTX_ROUTING=1 the gates assembled by the adapter can
 #     downgrade a would-be `resume` to `fresh <reason>` at the live sites (window
 #     pressure, generalized session lease), and with every gate passing the
 #     decider's `resume <id>` stands.
-#   - Reviewer independence pin: with GLUERUN_CTX_ROUTING=1 the reviewer/auditor
+#   - Reviewer independence pin: with SINGULAR_CTX_ROUTING=1 the reviewer/auditor
 #     decision at an independence-required step resolves to `fresh` regardless of
 #     routing knob values (structural taint pin), never resume/rehydrate.
 #   - Line shape: exactly one `<strategy> <arg-or-reason>` line, exit 0, strategy
@@ -42,24 +42,24 @@ pass() { echo "ok: $*"; }
 # --- Isolated state ----------------------------------------------------------
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-export GLUERUN_TARGET_BRANCH="target"
-mkdir -p "$GLUERUN_STATE_DIR"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+export SINGULAR_TARGET_BRANCH="target"
+mkdir -p "$SINGULAR_STATE_DIR"
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
 
-# The adapter must exist and define gluerun_ctx_route_decide (RED before written).
+# The adapter must exist and define singular_ctx_route_decide (RED before written).
 [[ -f "$CTX_ADAPTER" ]] || fail "adapter not present yet: $CTX_ADAPTER"
 # shellcheck disable=SC1090
 source "$CTX_ADAPTER" || fail "sourcing $CTX_ADAPTER failed"
-[[ "$(type -t gluerun_ctx_route_decide)" == "function" ]] \
-  || fail "gluerun_ctx_route_decide not defined by $CTX_ADAPTER"
+[[ "$(type -t singular_ctx_route_decide)" == "function" ]] \
+  || fail "singular_ctx_route_decide not defined by $CTX_ADAPTER"
 # It delegates into the integrated spine + the wrapped decider.
-[[ "$(type -t gluerun_ctx_route)" == "function" ]] \
-  || fail "gluerun_ctx_route missing (routing spine)"
-[[ "$(type -t gluerun_session_resume_decide)" == "function" ]] \
-  || fail "gluerun_session_resume_decide missing (legacy decider)"
+[[ "$(type -t singular_ctx_route)" == "function" ]] \
+  || fail "singular_ctx_route missing (routing spine)"
+[[ "$(type -t singular_session_resume_decide)" == "function" ]] \
+  || fail "singular_session_resume_decide missing (legacy decider)"
 
 # --- A real worktree so the lineage / diff gates exercise real git -----------
 wt="$tmp/wt"; mkdir -p "$wt"
@@ -71,7 +71,7 @@ echo b > "$wt/b"; git -C "$wt" add b; git -C "$wt" commit -qm c2
 HEAD2="$(git -C "$wt" rev-parse HEAD)"
 
 PROMPT="$tmp/prompt.md"; printf 'base prompt\n' > "$PROMPT"
-PSHA="$(gluerun_prompt_sha "$PROMPT")"
+PSHA="$(singular_prompt_sha "$PROMPT")"
 [[ -n "$PSHA" ]] || fail "prompt sha came back empty"
 
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -84,7 +84,7 @@ forge_meta() { # <path> <role> <sid> [k=v ...]
 import json, sys
 path, role, sid = sys.argv[1], sys.argv[2], sys.argv[3]
 doc = {
-    "schema": "gluerun.orchestration.session-meta.v0",
+    "schema": "singular.orchestration.session-meta.v0",
     "provider": "codex", "sessionId": sid, "model": "m", "effort": "e",
     "cwd": "__WT__", "exitCode": 0, "createdAt": "__NOW__",
     "role": role, "taskId": "TASK-1", "runId": "RUN-1",
@@ -104,10 +104,10 @@ mk_meta() { local p="$1" role="$2" sid="$3"; shift 3; \
 
 # Legacy decider (for OFF-parity byte-equality).
 legacy_decide() { # <meta> <role> <lineage_head>
-  gluerun_session_resume_decide "$1" "$2" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$3"
+  singular_session_resume_decide "$1" "$2" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$3"
 }
 # Adapter call. decide <role> <step> <meta> <key> <run> <runner> <psha> <wt> <lineage>
-decide() { gluerun_ctx_route_decide "$@"; }
+decide() { singular_ctx_route_decide "$@"; }
 
 # =============================================================================
 # 1. OFF-parity — adapter == legacy decider byte-for-byte, no gate/pin applied
@@ -116,7 +116,7 @@ rd="$tmp/run-off"; mkdir -p "$rd"
 m="$rd/session-implementer.json"; mk_meta "$m" implementer SID-T
 want="$(legacy_decide "$m" implementer "$HEAD2")"
 assert_eq "$want" "resume SID-T" "sanity: legacy decider resumes on a good meta"
-got="$(GLUERUN_CTX_ROUTING=0 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+got="$(SINGULAR_CTX_ROUTING=0 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "$want" "OFF-parity: implementer resume byte-for-byte (flag=0)"
 got="$(decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "$want" "OFF-parity: implementer resume with flag unset (default 0)"
@@ -125,7 +125,7 @@ assert_eq "$got" "$want" "OFF-parity: implementer resume with flag unset (defaul
 mf="$rd/session-implementer-fresh.json"; mk_meta "$mf" implementer SID-T "runner=other-run.sh"
 want="$(legacy_decide "$mf" implementer "$HEAD2")"
 assert_eq "$want" "fresh runner-changed" "sanity: legacy decider fresh reason"
-got="$(GLUERUN_CTX_ROUTING=0 decide implementer implement "$mf" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+got="$(SINGULAR_CTX_ROUTING=0 decide implementer implement "$mf" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "$want" "OFF-parity: implementer fresh reason byte-for-byte"
 
 # OFF ignores the independence pin: a would-be resume at final-audit (reviewer)
@@ -134,7 +134,7 @@ mr="$tmp/run-off-rev"; mkdir -p "$mr"
 rev="$mr/session-reviewer.json"; mk_meta "$rev" reviewer SID-R "role=reviewer"
 want="$(legacy_decide "$rev" reviewer "$HEAD2")"
 assert_eq "$want" "resume SID-R" "sanity: legacy decider resumes reviewer meta"
-got="$(GLUERUN_CTX_ROUTING=0 decide reviewer final-audit "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+got="$(SINGULAR_CTX_ROUTING=0 decide reviewer final-audit "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "$want" "OFF-parity: reviewer independence pin NOT applied when flag off"
 pass "OFF-parity: adapter == legacy decider byte-for-byte (implementer+reviewer), no gate/pin"
 
@@ -143,31 +143,31 @@ pass "OFF-parity: adapter == legacy decider byte-for-byte (implementer+reviewer)
 # =============================================================================
 rd="$tmp/run-on"; mkdir -p "$rd"
 m="$rd/session-implementer.json"; mk_meta "$m" implementer SID-T
-lease="$(gluerun_ctx_route_session_lease_path implementer TASK-1)"
+lease="$(singular_ctx_route_session_lease_path implementer TASK-1)"
 rm -f "$lease"
 
 # 2a. All gates pass -> the decider's resume stands. The adapter assembles the
 # implementer transcript path as <run_dir>/worker-codex.log; make it small so the
 # window gate passes.
 printf 'small transcript\n' > "$rd/worker-codex.log"
-got="$(GLUERUN_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+got="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "resume SID-T" "ON implementer: all gates pass -> resume"
 
 # 2b. Window pressure -> fresh window-pressure (transcript missing = fail-closed).
 rm -f "$rd/worker-codex.log"
-got="$(GLUERUN_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+got="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "fresh window-pressure" "ON implementer: missing transcript downgrades to fresh window-pressure"
 
 # 2c. Live generalized session lease -> fresh session-lease (first refusal wins).
 printf 'small transcript\n' > "$rd/worker-codex.log"
 mkdir -p "$(dirname "$lease")"
 printf '{"pid": %s}\n' "$$" > "$lease"
-got="$(GLUERUN_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+got="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "fresh session-lease" "ON implementer: live lease downgrades to fresh session-lease"
 rm -f "$lease"
 
 # 2d. A would-be-fresh decision is NEVER rerouted to resume by any gate.
-got="$(GLUERUN_CTX_ROUTING=1 decide implementer implement "$mf" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+got="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$mf" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "fresh runner-changed" "ON implementer: gates never turn fresh into resume"
 pass "ON routing: pass->resume; window/lease each downgrade to their fresh reason"
 
@@ -179,7 +179,7 @@ rev="$mr/session-reviewer.json"; mk_meta "$rev" reviewer SID-R "role=reviewer"
 sanity="$(legacy_decide "$rev" reviewer "$HEAD2")"
 assert_eq "$sanity" "resume SID-R" "sanity: decider would resume at the reviewer fixture"
 for step in final-audit paired-audit; do
-  got="$(GLUERUN_CTX_ROUTING=1 decide reviewer "$step" "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+  got="$(SINGULAR_CTX_ROUTING=1 decide reviewer "$step" "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
   assert_eq "$got" "fresh tainted" "$step: reviewer pinned to fresh tainted"
   assert_ne "${got%% *}" "resume" "$step: reviewer never resume"
   assert_ne "${got%% *}" "rehydrate" "$step: reviewer never rehydrate"
@@ -187,14 +187,14 @@ done
 
 # No knob relaxes the reviewer pin: permissive routing knobs, still fresh.
 knob_out="$(env \
-    GLUERUN_CTX_ROUTING=1 \
-    GLUERUN_SESSION_AFFINITY=1 \
-    GLUERUN_SESSION_DIFF_MAX_LINES=999999 \
-    GLUERUN_SESSION_WINDOW_MAX_PCT=100 \
+    SINGULAR_CTX_ROUTING=1 \
+    SINGULAR_SESSION_AFFINITY=1 \
+    SINGULAR_SESSION_DIFF_MAX_LINES=999999 \
+    SINGULAR_SESSION_WINDOW_MAX_PCT=100 \
     bash -c '
       source "'"$LIB"'"; source "'"$CTX_ADAPTER"'"
       for step in final-audit paired-audit; do
-        gluerun_ctx_route_decide reviewer "$step" "'"$rev"'" TASK-1 RUN-1 codex-run.sh \
+        singular_ctx_route_decide reviewer "$step" "'"$rev"'" TASK-1 RUN-1 codex-run.sh \
           "'"$PSHA"'" "'"$wt"'" "'"$HEAD2"'"
       done')"
 expected=$'fresh tainted\nfresh tainted'
@@ -216,10 +216,10 @@ check_one_line() { # <output> <label>
 rd="$tmp/run-shape"; mkdir -p "$rd"
 m="$rd/session-implementer.json"; mk_meta "$m" implementer SID-T
 printf 'small transcript\n' > "$rd/worker-codex.log"
-rc=0; out="$(GLUERUN_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")" || rc=$?
+rc=0; out="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")" || rc=$?
 assert_eq "$rc" "0" "adapter exit 0 (resume path)"
 check_one_line "$out" "resume path"
-rc=0; out="$(GLUERUN_CTX_ROUTING=1 decide reviewer final-audit "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")" || rc=$?
+rc=0; out="$(SINGULAR_CTX_ROUTING=1 decide reviewer final-audit "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")" || rc=$?
 assert_eq "$rc" "0" "adapter exit 0 (pinned path)"
 check_one_line "$out" "pinned path"
 pass "line shape: exactly one line, exit 0, strategy in alphabet, reason/id present"

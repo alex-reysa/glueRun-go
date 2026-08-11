@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "plan-revision-loop",
   "status": "passed",
   "authoritative": true,

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# gluerun — machine-level launcher for the orchestration engine.
+# singular — machine-level launcher for the orchestration engine.
 #
 # Resolves the engine version pinned by the current repo, points the engine at
-# the current repo (GLUERUN_ROOT), loads that repo's config, and execs the engine
+# the current repo (SINGULAR_ROOT), loads that repo's config, and execs the engine
 # entrypoint. Same command works in every repo; improvements propagate by
-# bumping the pinned version (`gluerun update`).
+# bumping the pinned version (`singular update`).
 set -euo pipefail
 
 # Interpreter guard — a verbatim embedded copy of engine/bash-guard.sh.
@@ -12,73 +12,85 @@ set -euo pipefail
 #
 # Embedded, not sourced: the CLI must be able to fix its own interpreter
 # before it can resolve an engine home (that resolution itself needs Bash >=
-# 4), so it cannot depend on a file it has not located yet. GLUERUN_BASH_BIN
+# 4), so it cannot depend on a file it has not located yet. SINGULAR_BASH_BIN
 # stays bootstrap-only — available before repo configuration is loaded, and
 # honored by re-exec'ing exactly once so every CLI command and engine
 # entrypoint starts under the requested interpreter without changing PATH (and
-# therefore without changing provider resolution). A bare `/bin/bash gluerun`
+# therefore without changing provider resolution). A bare `/bin/bash singular`
 # on macOS Bash 3.2 with no pin set is the case the fallback probes close.
-if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 || -n "${GLUERUN_BASH_BIN:-}" ]]; then
+if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 || -n "${SINGULAR_BASH_BIN:-}" ]]; then
 
   # Terminal diagnosis: fixed block, optional one-line detail, exit 2.
-  gluerun_bash_guard__fail() {
+  singular_bash_guard__fail() {
     {
-      echo "GLUERUN_BASH_UNSUPPORTED"
+      echo "SINGULAR_BASH_UNSUPPORTED"
       echo "Found: ${BASH:-bash} ${BASH_VERSION%%(*}"
       echo "Required: Bash >= 4"
-      echo "Recovery: brew install bash && GLUERUN_BASH_BIN=/opt/homebrew/bin/bash gluerun setup"
+      echo "Recovery: brew install bash && SINGULAR_BASH_BIN=/opt/homebrew/bin/bash singular setup"
       if [[ -n "${1:-}" ]]; then echo "  detail: $1"; fi
     } >&2
     exit 2
   }
 
   # An executable bit is not proof of a version: ask the candidate itself.
-  gluerun_bash_guard__probe() {
+  singular_bash_guard__probe() {
     [[ -n "${1:-}" && "$1" == /* && -x "$1" ]] || return 1
     "$1" -c '[[ "${BASH_VERSINFO[0]}" -ge 4 ]]' >/dev/null 2>&1 || return 1
     return 0
   }
 
   # (2) Loop guard: we already re-exec'd and are still < 4. Never exec again.
-  if [[ "${GLUERUN_BASH_BOOTSTRAPPED:-0}" == "1" && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-    gluerun_bash_guard__fail "re-exec target did not provide Bash >= 4: ${GLUERUN_BASH_BIN:-<unset>}"
+  if [[ "${SINGULAR_BASH_BOOTSTRAPPED:-0}" == "1" && "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+    singular_bash_guard__fail "re-exec target did not provide Bash >= 4: ${SINGULAR_BASH_BIN:-<unset>}"
   fi
 
   # (3) Explicit pin wins over the running interpreter, exactly once. PATH is
   # deliberately not modified: provider resolution must not shift.
-  if [[ -n "${GLUERUN_BASH_BIN:-}" && "${GLUERUN_BASH_BOOTSTRAPPED:-0}" != "1" ]]; then
-    if [[ "$GLUERUN_BASH_BIN" != /* || ! -x "$GLUERUN_BASH_BIN" ]]; then
-      gluerun_bash_guard__fail "GLUERUN_BASH_BIN must be an absolute executable path: $GLUERUN_BASH_BIN"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" && "${SINGULAR_BASH_BOOTSTRAPPED:-0}" != "1" ]]; then
+    if [[ "$SINGULAR_BASH_BIN" != /* || ! -x "$SINGULAR_BASH_BIN" ]]; then
+      singular_bash_guard__fail "SINGULAR_BASH_BIN must be an absolute executable path: $SINGULAR_BASH_BIN"
     fi
-    if ! gluerun_bash_guard__probe "$GLUERUN_BASH_BIN"; then
-      gluerun_bash_guard__fail "GLUERUN_BASH_BIN must provide Bash >= 4: $GLUERUN_BASH_BIN"
+    if ! singular_bash_guard__probe "$SINGULAR_BASH_BIN"; then
+      singular_bash_guard__fail "SINGULAR_BASH_BIN must provide Bash >= 4: $SINGULAR_BASH_BIN"
     fi
-    export GLUERUN_BASH_BOOTSTRAPPED=1
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+    export SINGULAR_BASH_BOOTSTRAPPED=1
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
 
   # (4) No pin and still < 4: the bare-invocation case. Probe before exec so a
   # broken candidate cannot swallow the diagnosis.
   if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-    gluerun_bash_guard__path="$(command -v bash 2>/dev/null || true)"
-    if [[ "$gluerun_bash_guard__path" == "${BASH:-}" ]]; then gluerun_bash_guard__path=""; fi
-    for gluerun_bash_guard__cand in /opt/homebrew/bin/bash /usr/local/bin/bash "$gluerun_bash_guard__path"; do
-      if gluerun_bash_guard__probe "$gluerun_bash_guard__cand"; then
-        export GLUERUN_BASH_BOOTSTRAPPED=1
-        exec "$gluerun_bash_guard__cand" "$0" "$@"
+    singular_bash_guard__path="$(command -v bash 2>/dev/null || true)"
+    if [[ "$singular_bash_guard__path" == "${BASH:-}" ]]; then singular_bash_guard__path=""; fi
+    for singular_bash_guard__cand in /opt/homebrew/bin/bash /usr/local/bin/bash "$singular_bash_guard__path"; do
+      if singular_bash_guard__probe "$singular_bash_guard__cand"; then
+        export SINGULAR_BASH_BOOTSTRAPPED=1
+        exec "$singular_bash_guard__cand" "$0" "$@"
       fi
     done
-    gluerun_bash_guard__fail "no Bash >= 4 found (checked /opt/homebrew/bin/bash, /usr/local/bin/bash, PATH)"
+    singular_bash_guard__fail "no Bash >= 4 found (checked /opt/homebrew/bin/bash, /usr/local/bin/bash, PATH)"
   fi
 
   # Reached only when the pin was already honored: leave no residue behind.
-  unset -f gluerun_bash_guard__fail gluerun_bash_guard__probe
-  unset gluerun_bash_guard__path gluerun_bash_guard__cand 2>/dev/null || true
+  unset -f singular_bash_guard__fail singular_bash_guard__probe
+  unset singular_bash_guard__path singular_bash_guard__cand 2>/dev/null || true
 fi
 
-GLUERUN_CLI_VERSION="0.1.0"
+SINGULAR_CLI_VERSION="0.1.0"
 
-die() { echo "gluerun: $*" >&2; exit 1; }
+# One machine-install root for every CLI path. Export it because `setup` may
+# install the selected checkout in a child process before an engine exists to
+# source; that installer must resolve and create the same versions directory
+# this process will verify immediately afterwards. A relative machine root
+# would resolve differently after `cd` into a consumer, so reject it up front.
+SINGULAR_HOME="${SINGULAR_HOME:-$HOME/.singular}"
+if [[ "$SINGULAR_HOME" != /* ]]; then
+  echo "singular: SINGULAR_HOME must be an absolute path: $SINGULAR_HOME" >&2
+  exit 1
+fi
+export SINGULAR_HOME
+
+die() { echo "singular: $*" >&2; exit 1; }
 
 # Real directory of this script, following symlinks (for the installed launcher).
 self_dir() {
@@ -93,18 +105,18 @@ self_dir() {
 
 repo_root() { git rev-parse --show-toplevel 2>/dev/null || true; }
 
-# engineVersion from gluerun.config.json (fallback pin; empty if absent).
+# engineVersion from singular.config.json (fallback pin; empty if absent).
 config_engine_version() {
   local root="$1"
-  [[ -n "$root" && -f "$root/gluerun.config.json" ]] || return 0
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("engineVersion","") or "")' "$root/gluerun.config.json" 2>/dev/null || true
+  [[ -n "$root" && -f "$root/singular.config.json" ]] || return 0
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("engineVersion","") or "")' "$root/singular.config.json" 2>/dev/null || true
 }
 
-# schemaVersion from a repo's gluerun.config.json (empty if absent).
+# schemaVersion from a repo's singular.config.json (empty if absent).
 repo_schema_version() {
   local root="$1"
-  [[ -n "$root" && -f "$root/gluerun.config.json" ]] || return 0
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schemaVersion","") or "")' "$root/gluerun.config.json" 2>/dev/null || true
+  [[ -n "$root" && -f "$root/singular.config.json" ]] || return 0
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schemaVersion","") or "")' "$root/singular.config.json" 2>/dev/null || true
 }
 
 # The engine's schema contract version (empty if SCHEMA_VERSION is absent,
@@ -115,9 +127,9 @@ engine_schema_version() {
   tr -d '[:space:]' < "$home/SCHEMA_VERSION"
 }
 
-# Rewrite schemaVersion in a repo's gluerun.config.json (migrate bookkeeping).
+# Rewrite schemaVersion in a repo's singular.config.json (migrate bookkeeping).
 set_repo_schema_version() {
-  python3 - "$1/gluerun.config.json" "$2" <<'PY'
+  python3 - "$1/singular.config.json" "$2" <<'PY'
 import json, sys
 path, ver = sys.argv[1], sys.argv[2]
 with open(path) as f:
@@ -129,42 +141,42 @@ with open(path, "w") as f:
 PY
 }
 
-# Per-repo engine version pin: .gluerun-version file (authoritative), else
-# engineVersion in gluerun.config.json. When both exist and disagree, warn —
-# .gluerun-version still wins; resolution behavior is unchanged.
+# Per-repo engine version pin: .singular-version file (authoritative), else
+# engineVersion in singular.config.json. When both exist and disagree, warn —
+# .singular-version still wins; resolution behavior is unchanged.
 repo_pin() {
   local root="$1" pin="" cfg=""
   [[ -n "$root" ]] || return 0
-  if [[ -f "$root/.gluerun-version" ]]; then
-    pin="$(tr -d '[:space:]' < "$root/.gluerun-version")"
+  if [[ -f "$root/.singular-version" ]]; then
+    pin="$(tr -d '[:space:]' < "$root/.singular-version")"
   fi
   cfg="$(config_engine_version "$root")"
   if [[ -n "$pin" && -n "$cfg" && "$pin" != "$cfg" ]]; then
-    echo "gluerun: warning: .gluerun-version ($pin) and gluerun.config.json engineVersion ($cfg) disagree; using .gluerun-version" >&2
+    echo "singular: warning: .singular-version ($pin) and singular.config.json engineVersion ($cfg) disagree; using .singular-version" >&2
   fi
   [[ -n "$pin" ]] || pin="$cfg"
   printf '%s' "$pin"
 }
 
 # Resolve the engine install dir. Precedence:
-#   1. $GLUERUN_ENGINE_HOME    (explicit override)
-#   2. per-repo pin -> ~/.gluerun/versions/<pin>
-#   3. ~/.gluerun/current      (default installed version)
+#   1. $SINGULAR_ENGINE_HOME    (explicit override)
+#   2. per-repo pin -> $SINGULAR_HOME/versions/<pin>
+#   3. $SINGULAR_HOME/current   (default installed version)
 #   4. dev fallback: this script's own ../  (running from a cloned engine repo)
 resolve_engine_home() {
-  if [[ -n "${GLUERUN_ENGINE_HOME:-}" ]]; then
-    [[ -f "$GLUERUN_ENGINE_HOME/engine/lib.sh" ]] || die "GLUERUN_ENGINE_HOME has no engine/lib.sh: $GLUERUN_ENGINE_HOME"
-    printf '%s' "$GLUERUN_ENGINE_HOME"; return
+  if [[ -n "${SINGULAR_ENGINE_HOME:-}" ]]; then
+    [[ -f "$SINGULAR_ENGINE_HOME/engine/lib.sh" ]] || die "SINGULAR_ENGINE_HOME has no engine/lib.sh: $SINGULAR_ENGINE_HOME"
+    printf '%s' "$SINGULAR_ENGINE_HOME"; return
   fi
   local root pin; root="$(repo_root)"; pin="$(repo_pin "$root")"
   if [[ -n "$pin" ]]; then
-    [[ -d "$HOME/.gluerun/versions/$pin" ]] || die "repo pins engine $pin but it is not installed (~/.gluerun/versions/$pin). Run: gluerun update $pin"
-    printf '%s' "$HOME/.gluerun/versions/$pin"; return
+    [[ -d "$SINGULAR_HOME/versions/$pin" ]] || die "repo pins engine $pin but it is not installed ($SINGULAR_HOME/versions/$pin). Run: singular update $pin"
+    printf '%s' "$SINGULAR_HOME/versions/$pin"; return
   fi
-  if [[ -d "$HOME/.gluerun/current" ]]; then printf '%s' "$HOME/.gluerun/current"; return; fi
+  if [[ -d "$SINGULAR_HOME/current" ]]; then printf '%s' "$SINGULAR_HOME/current"; return; fi
   local sd; sd="$(self_dir)"
   if [[ -f "$sd/../engine/lib.sh" ]]; then (cd "$sd/.." && pwd); return; fi
-  die "no engine found. Install with install.sh or set GLUERUN_ENGINE_HOME."
+  die "no engine found. Install with install.sh or set SINGULAR_ENGINE_HOME."
 }
 
 require_repo() {
@@ -173,18 +185,18 @@ require_repo() {
   printf '%s' "$root"
 }
 
-# Exec an engine script with GLUERUN_ROOT bound to the current repo.
+# Exec an engine script with SINGULAR_ROOT bound to the current repo.
 run_engine() {
   local script="$1"; shift
-  local home root bash_bin="${GLUERUN_BASH_BIN:-bash}"; home="$(resolve_engine_home)"; root="$(require_repo)"
+  local home root bash_bin="${SINGULAR_BASH_BIN:-bash}"; home="$(resolve_engine_home)"; root="$(require_repo)"
   [[ -f "$home/engine/$script" ]] || die "engine $home has no engine/$script"
-  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" exec "$bash_bin" "$home/engine/$script" "$@"
+  SINGULAR_ROOT="$root" SINGULAR_ENGINE_HOME="$home" exec "$bash_bin" "$home/engine/$script" "$@"
 }
 
 cmd_version() {
   # NB: $( ... || true ) does NOT catch `die`'s exit under set -e; capture explicitly.
   local home; home="$(resolve_engine_home 2>/dev/null)" || home=""
-  echo "gluerun CLI    $GLUERUN_CLI_VERSION"
+  echo "singular CLI    $SINGULAR_CLI_VERSION"
   if [[ -n "$home" && -f "$home/VERSION" ]]; then
     echo "engine      $(cat "$home/VERSION")  ($home)"
   else
@@ -198,7 +210,7 @@ cmd_doctor_v1() {
   local home root bash_path
   home="$(resolve_engine_home)"
   root="$(repo_root)"
-  bash_path="${BASH:-${GLUERUN_BASH_BIN:-bash}}"
+  bash_path="${BASH:-${SINGULAR_BASH_BIN:-bash}}"
   [[ -f "$home/engine/doctor.py" ]] \
     || die "engine $home has no structured doctor helper (engine/doctor.py)"
   exec python3 "$home/engine/doctor.py" \
@@ -211,13 +223,13 @@ cmd_doctor_v1() {
 
 cmd_init() {
   local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
-  echo "gluerun init -> $root"
+  echo "singular init -> $root"
   # config
-  if [[ -f "$root/gluerun.config.json" ]]; then
-    echo "  skip  gluerun.config.json (exists)"
+  if [[ -f "$root/singular.config.json" ]]; then
+    echo "  skip  singular.config.json (exists)"
   else
-    cp "$home/templates/gluerun.config.json" "$root/gluerun.config.json"
-    echo "  new   gluerun.config.json (edit: targetBranch, gateCommand, areas)"
+    cp "$home/templates/singular.config.json" "$root/singular.config.json"
+    echo "  new   singular.config.json (edit: targetBranch, gateCommand, areas)"
   fi
   # orchestration skeleton
   mkdir -p "$root/docs/orchestration/"{prompts,tasks,areas,gates}
@@ -228,7 +240,7 @@ cmd_init() {
   if [[ ! -f "$root/docs/orchestration/dag.v0.json" ]]; then
     cat > "$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "layers": ["scaffold", "domain", "api"],
   "kinds": ["build", "test"],
   "nodes": [
@@ -247,39 +259,39 @@ EOF
     chmod +x "$root/docs/orchestration/gates/gate.sh"
     echo "  new   docs/orchestration/gates/gate.sh (optional adapter — read the header)"
   fi
-  GLUERUN_ROOT="$root" GLUERUN_ENGINE_HOME="$home" "${GLUERUN_BASH_BIN:-bash}" "$home/engine/scaffold.sh"
+  SINGULAR_ROOT="$root" SINGULAR_ENGINE_HOME="$home" "${SINGULAR_BASH_BIN:-bash}" "$home/engine/scaffold.sh"
   # One line for what scaffold.sh actually did. There used to be a second line
   # claiming ".gitignore (...)" as a separate init step; init never touched
-  # .gitignore — gluerun_ensure_repo_scaffold appends those entries — so the line
+  # .gitignore — singular_ensure_repo_scaffold appends those entries — so the line
   # reported work by the wrong actor and would have kept printing "ok" even if
   # scaffold had stopped doing it.
-  echo "  ok    docs/orchestration scaffold + schema mirrors + .gitignore entries (.gluerun-state/, .worktrees/, .gluerun-evidence/, .gluerun-cache/)"
+  echo "  ok    docs/orchestration scaffold + schema mirrors + .gitignore entries (.singular-state/, .worktrees/, .singular-evidence/, .singular-cache/)"
   # version pin
-  if [[ ! -f "$root/.gluerun-version" ]]; then
-    cp "$home/VERSION" "$root/.gluerun-version"; echo "  new   .gluerun-version ($(cat "$home/VERSION"))"
+  if [[ ! -f "$root/.singular-version" ]]; then
+    cp "$home/VERSION" "$root/.singular-version"; echo "  new   .singular-version ($(cat "$home/VERSION"))"
   fi
   echo ""
-  echo "Next: edit gluerun.config.json + docs/orchestration/dag.v0.json, then: gluerun doctor"
+  echo "Next: edit singular.config.json + docs/orchestration/dag.v0.json, then: singular doctor"
 }
 
 cmd_update() {
   local want="${1:-}" root; root="$(require_repo)"
   if [[ -z "$want" ]]; then
-    [[ -L "$HOME/.gluerun/current" || -d "$HOME/.gluerun/current" ]] || die "no ~/.gluerun/current; pass a version: gluerun update <version>"
-    want="$(cat "$HOME/.gluerun/current/VERSION" 2>/dev/null || true)"
-    [[ -n "$want" ]] || die "could not read ~/.gluerun/current/VERSION"
+    [[ -L "$SINGULAR_HOME/current" || -d "$SINGULAR_HOME/current" ]] || die "no $SINGULAR_HOME/current; pass a version: singular update <version>"
+    want="$(cat "$SINGULAR_HOME/current/VERSION" 2>/dev/null || true)"
+    [[ -n "$want" ]] || die "could not read $SINGULAR_HOME/current/VERSION"
   fi
-  [[ -d "$HOME/.gluerun/versions/$want" || -n "${GLUERUN_ENGINE_HOME:-}" ]] \
-    || echo "gluerun: warning: engine $want is not installed yet (~/.gluerun/versions/$want)" >&2
-  echo "$want" > "$root/.gluerun-version"
-  echo "gluerun: pinned $root to engine $want (.gluerun-version)"
+  [[ -d "$SINGULAR_HOME/versions/$want" || -n "${SINGULAR_ENGINE_HOME:-}" ]] \
+    || echo "singular: warning: engine $want is not installed yet ($SINGULAR_HOME/versions/$want)" >&2
+  echo "$want" > "$root/.singular-version"
+  echo "singular: pinned $root to engine $want (.singular-version)"
   # Schema drift check against the newly pinned engine (when resolvable).
-  local ehome="${GLUERUN_ENGINE_HOME:-$HOME/.gluerun/versions/$want}"
+  local ehome="${SINGULAR_ENGINE_HOME:-$SINGULAR_HOME/versions/$want}"
   local esv rsv
   esv="$(engine_schema_version "$ehome")"
   rsv="$(repo_schema_version "$root")"
   if [[ -n "$esv" && -n "$rsv" && "$rsv" != "$esv" ]]; then
-    echo "gluerun: warning: repo schema $rsv differs from engine schema $esv — run: gluerun migrate" >&2
+    echo "singular: warning: repo schema $rsv differs from engine schema $esv — run: singular migrate" >&2
   fi
 }
 
@@ -296,15 +308,15 @@ cmd_migrate() {
   local esv rsv
   esv="$(engine_schema_version "$home")"
   [[ -n "$esv" ]] || die "engine $home has no SCHEMA_VERSION file (engine predates schema migrations)"
-  [[ -f "$root/gluerun.config.json" ]] || die "no gluerun.config.json in $root (run: gluerun init)"
+  [[ -f "$root/singular.config.json" ]] || die "no singular.config.json in $root (run: singular init)"
   rsv="$(repo_schema_version "$root")"
-  [[ -n "$rsv" ]] || die "gluerun.config.json has no schemaVersion key; add \"schemaVersion\": \"$esv\" if this repo already matches the engine schema"
+  [[ -n "$rsv" ]] || die "singular.config.json has no schemaVersion key; add \"schemaVersion\": \"$esv\" if this repo already matches the engine schema"
   if [[ "$rsv" == "$esv" ]]; then
-    echo "gluerun migrate: repo schema $rsv matches engine schema — up to date, nothing to do"
+    echo "singular migrate: repo schema $rsv matches engine schema — up to date, nothing to do"
     return 0
   fi
   if [[ "$dry_run" == "1" ]]; then
-    echo "gluerun migrate --dry-run: repo schema $rsv -> engine schema $esv"
+    echo "singular migrate --dry-run: repo schema $rsv -> engine schema $esv"
     local dry_steps=0 dry_script dry_next
     while [[ "$rsv" != "$esv" ]]; do
       dry_script="$(ls "$home/migrations/$rsv-to-"*.sh 2>/dev/null | sort | head -n1 || true)"
@@ -316,10 +328,10 @@ cmd_migrate() {
       dry_steps=$((dry_steps + 1))
       [[ "$dry_steps" -le 64 ]] || die "migration chain exceeded 64 steps without reaching $esv (cycle in migrations/?)"
     done
-    echo "gluerun migrate --dry-run: $dry_steps step(s) would bring the repo to schema $rsv; nothing was changed"
+    echo "singular migrate --dry-run: $dry_steps step(s) would bring the repo to schema $rsv; nothing was changed"
     return 0
   fi
-  echo "gluerun migrate: repo schema $rsv -> engine schema $esv"
+  echo "singular migrate: repo schema $rsv -> engine schema $esv"
   local steps=0 script next
   while [[ "$rsv" != "$esv" ]]; do
     script="$(ls "$home/migrations/$rsv-to-"*.sh 2>/dev/null | sort | head -n1 || true)"
@@ -328,35 +340,35 @@ cmd_migrate() {
     next="$(basename "$script" .sh)"; next="${next#*-to-}"
     echo "  run   $(basename "$script") ($rsv -> $next)"
     "$BASH" "$script" "$root" || die "migration $(basename "$script") failed (repo left at schema $rsv)"
-    set_repo_schema_version "$root" "$next" || die "migration ran but schemaVersion could not be updated in gluerun.config.json"
+    set_repo_schema_version "$root" "$next" || die "migration ran but schemaVersion could not be updated in singular.config.json"
     rsv="$next"
     steps=$((steps + 1))
     [[ "$steps" -le 64 ]] || die "migration chain exceeded 64 steps without reaching $esv (cycle in migrations/?)"
   done
-  echo "gluerun migrate: repo is now at schema $rsv"
+  echo "singular migrate: repo is now at schema $rsv"
 }
 
 # Read-only metrics: delegate into the integrated engine/ctx-metrics.sh
-# extractor (gluerun_ctx_metrics_json). Adds no metric logic of its own —
+# extractor (singular_ctx_metrics_json). Adds no metric logic of its own —
 # it only resolves the engine, sources the extractor, and forwards the runs
-# dir + events file (flags override the GLUERUN_RUNS_DIR/GLUERUN_EVENTS_FILE
+# dir + events file (flags override the SINGULAR_RUNS_DIR/SINGULAR_EVENTS_FILE
 # env defaults). Fixture-scoped and side-effect free: missing/empty inputs
-# fail safe to a zeroed metrics object; no repo or .gluerun-state is required.
+# fail safe to a zeroed metrics object; no repo or .singular-state is required.
 cmd_metrics() {
-  local runs_dir="${GLUERUN_RUNS_DIR:-}" events_file="${GLUERUN_EVENTS_FILE:-}"
+  local runs_dir="${SINGULAR_RUNS_DIR:-}" events_file="${SINGULAR_EVENTS_FILE:-}"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --json)        shift ;;  # JSON is the only output; accepted for clarity
       --runs-dir)    runs_dir="${2:-}"; shift 2 ;;
       --events-file) events_file="${2:-}"; shift 2 ;;
-      *) die "metrics: unknown argument: $1 (usage: gluerun metrics [--json] [--runs-dir DIR] [--events-file FILE])" ;;
+      *) die "metrics: unknown argument: $1 (usage: singular metrics [--json] [--runs-dir DIR] [--events-file FILE])" ;;
     esac
   done
   local home; home="$(resolve_engine_home)"
   [[ -f "$home/engine/ctx-metrics.sh" ]] || die "engine $home has no engine/ctx-metrics.sh"
   # shellcheck disable=SC1090
   source "$home/engine/ctx-metrics.sh"
-  gluerun_ctx_metrics_json "$runs_dir" "$events_file"
+  singular_ctx_metrics_json "$runs_dir" "$events_file"
 }
 
 # Context provenance graph: delegate into the integrated engine/ctx-graph*.sh
@@ -365,8 +377,8 @@ cmd_metrics() {
 # CLI never loads lib.sh). Adds NO projection logic of its own — it resolves the
 # engine, sources the graph modules in the same sorted order as the ctx-loader,
 # resolves sensible stateDir/graphDir defaults, and forwards to
-# gluerun_graph_rebuild / gluerun_graph_sync / gluerun_graph_query_*. Reached
-# only when GLUERUN_CTX_GRAPH=1 (the dispatch arm refuses otherwise, exactly as
+# singular_graph_rebuild / singular_graph_sync / singular_graph_query_*. Reached
+# only when SINGULAR_CTX_GRAPH=1 (the dispatch arm refuses otherwise, exactly as
 # an unknown command did before this hook).
 cmd_graph() {
   local sub="${1:-}"; shift || true
@@ -378,32 +390,32 @@ cmd_graph() {
     # shellcheck disable=SC1090
     source "$g"
   done
-  local state_default="${GLUERUN_STATE_DIR:-.gluerun-state}"
-  local graph_default="${GLUERUN_CTX_GRAPH_DIR:-$state_default/graph}"
+  local state_default="${SINGULAR_STATE_DIR:-.singular-state}"
+  local graph_default="${SINGULAR_CTX_GRAPH_DIR:-$state_default/graph}"
   case "$sub" in
-    rebuild) gluerun_graph_rebuild "${1:-$state_default}" "${2:-$graph_default}" ;;
-    sync)    gluerun_graph_sync    "${1:-$state_default}" "${2:-$graph_default}" ;;
+    rebuild) singular_graph_rebuild "${1:-$state_default}" "${2:-$graph_default}" ;;
+    sync)    singular_graph_sync    "${1:-$state_default}" "${2:-$graph_default}" ;;
     query)
       local reader="${1:-}"; shift || true
       case "$reader" in
-        neighbors)           gluerun_graph_query_neighbors "$graph_default" "$@" ;;
-        lineage)             gluerun_graph_query_lineage "$graph_default" "$@" ;;
-        open-contradictions) gluerun_graph_query_open_contradictions "$graph_default" "$@" ;;
-        *) die "graph query: unknown reader: ${reader:-(none)} (usage: gluerun graph query <neighbors|lineage|open-contradictions> [args])" ;;
+        neighbors)           singular_graph_query_neighbors "$graph_default" "$@" ;;
+        lineage)             singular_graph_query_lineage "$graph_default" "$@" ;;
+        open-contradictions) singular_graph_query_open_contradictions "$graph_default" "$@" ;;
+        *) die "graph query: unknown reader: ${reader:-(none)} (usage: singular graph query <neighbors|lineage|open-contradictions> [args])" ;;
       esac ;;
-    *) die "graph: unknown subcommand: ${sub:-(none)} (usage: gluerun graph <rebuild|sync|query> [args])" ;;
+    *) die "graph: unknown subcommand: ${sub:-(none)} (usage: singular graph <rebuild|sync|query> [args])" ;;
   esac
 }
 
 # Experiment raw-metrics report: delegate into the integrated experiment engine
-# suite (engine/ctx-experiment-*.sh: gluerun_ctx_experiment_summary_json /
+# suite (engine/ctx-experiment-*.sh: singular_ctx_experiment_summary_json /
 # _delta_json / _pipeline_md), auto-sourced by the ctx-loader block when the
 # engine entrypoint runs; here we source the experiment modules directly since
 # the CLI never loads lib.sh. Adds NO metric logic of its own — it resolves the
 # engine, sources the modules in the same sorted order as the ctx-loader (so no
 # definition is shadowed), resolves sensible runs/events/metrics defaults, and
 # forwards to the integrated entry points. Reached only when
-# GLUERUN_CTX_EXPERIMENT=1 (the dispatch arm refuses otherwise, exactly as an
+# SINGULAR_CTX_EXPERIMENT=1 (the dispatch arm refuses otherwise, exactly as an
 # unknown command did before this hook). Mirrors cmd_graph structurally.
 cmd_experiment_report() {
   local sub="${1:-}"; shift || true
@@ -415,14 +427,14 @@ cmd_experiment_report() {
     # shellcheck disable=SC1090
     source "$m"
   done
-  local runs_default="${GLUERUN_RUNS_DIR:-}"
-  local events_default="${GLUERUN_EVENTS_FILE:-}"
-  local metrics_default="${GLUERUN_CTX_EXPERIMENT_METRICS_FILE:-}"
+  local runs_default="${SINGULAR_RUNS_DIR:-}"
+  local events_default="${SINGULAR_EVENTS_FILE:-}"
+  local metrics_default="${SINGULAR_CTX_EXPERIMENT_METRICS_FILE:-}"
   case "$sub" in
-    summary) gluerun_ctx_experiment_summary_json  "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
-    delta)   gluerun_ctx_experiment_delta_json    "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
-    tables)  gluerun_ctx_experiment_pipeline_md   "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
-    *) die "experiment-report: unknown subcommand: ${sub:-(none)} (usage: gluerun experiment-report <summary|delta|tables> [runs_dir] [events_file] [metrics_file])" ;;
+    summary) singular_ctx_experiment_summary_json  "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
+    delta)   singular_ctx_experiment_delta_json    "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
+    tables)  singular_ctx_experiment_pipeline_md   "${1:-$runs_default}" "${2:-$events_default}" "${3:-$metrics_default}" ;;
+    *) die "experiment-report: unknown subcommand: ${sub:-(none)} (usage: singular experiment-report <summary|delta|tables> [runs_dir] [events_file] [metrics_file])" ;;
   esac
 }
 
@@ -430,10 +442,10 @@ cmd_experiment_report() {
 # NB: bash locals are dynamically scoped — these helpers read cmd_console's
 # locals ($server/$root/$home/$url_file/$pid_file/$log_file) when called from it.
 
-# Default port: GLUERUN_CONSOLE_PORT if set; else 8765 when free (stable,
+# Default port: SINGULAR_CONSOLE_PORT if set; else 8765 when free (stable,
 # bookmarkable); else an ephemeral free port.
 console_pick_port() {
-  if [[ -n "${GLUERUN_CONSOLE_PORT:-}" ]]; then printf '%s' "$GLUERUN_CONSOLE_PORT"; return; fi
+  if [[ -n "${SINGULAR_CONSOLE_PORT:-}" ]]; then printf '%s' "$SINGULAR_CONSOLE_PORT"; return; fi
   if python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",8765));s.close()' 2>/dev/null; then
     printf '8765'; return
   fi
@@ -452,7 +464,7 @@ except Exception:
 
 # Idempotent start: reuse a healthy console (print its URL), else clean stale
 # state files and start the server detached (double-fork + setsid, logs to
-# .gluerun-state/console.log), wait for health (<=10s), print the URL.
+# .singular-state/console.log), wait for health (<=10s), print the URL.
 console_ensure() {
   local url=""
   if [[ -f "$url_file" ]]; then
@@ -465,7 +477,7 @@ console_ensure() {
   fi
   mkdir -p "$(dirname "$log_file")"
   local port; port="$(console_pick_port)"
-  GLUERUN_ENGINE_HOME="$home" python3 - "$server" "$root" "$port" "$log_file" <<'PY'
+  SINGULAR_ENGINE_HOME="$home" python3 - "$server" "$root" "$port" "$log_file" <<'PY'
 import os, sys
 server, root, port, log = sys.argv[1:5]
 # Detach: double-fork + setsid so the console outlives this CLI invocation
@@ -492,7 +504,7 @@ PY
     fi
     sleep 0.25
   done
-  echo "gluerun console: server did not become healthy within 10s; last log lines ($log_file):" >&2
+  echo "singular console: server did not become healthy within 10s; last log lines ($log_file):" >&2
   tail -20 "$log_file" >&2 2>/dev/null || true
   return 1
 }
@@ -531,9 +543,9 @@ console_stop() {
       sleep 0.25
     done
     if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
-    echo "gluerun console: stopped (pid $pid)" >&2
+    echo "singular console: stopped (pid $pid)" >&2
   else
-    echo "gluerun console: not running" >&2
+    echo "singular console: not running" >&2
   fi
   rm -f "$url_file" "$pid_file"
   return 0
@@ -541,20 +553,20 @@ console_stop() {
 
 cmd_console() {
   local home root; home="$(resolve_engine_home)"; root="$(require_repo)"
-  local server="$home/plugin/scripts/gluerun_graph_server.py"
+  local server="$home/plugin/scripts/singular_graph_server.py"
   [[ -f "$server" ]] || die "console plugin not present in engine $home (plugin/ not vendored yet)"
-  local state_dir="$root/.gluerun-state"
+  local state_dir="$root/.singular-state"
   local url_file="$state_dir/console.url" pid_file="$state_dir/console.pid"
   local log_file="$state_dir/console.log"
   # One-shot JSON flags: no port selection, no banner — stdout stays pure JSON
-  # so `gluerun console --snapshot | jq` works.
+  # so `singular console --snapshot | jq` works.
   local a
   for a in "$@"; do
     case "$a" in
       --snapshot|--sessions|--events|--overview|--dag|--timeline|--config|--providers|\
       --prompts|--prompt|--prompt=*|--raw|--raw=*|--home|--plans|\
       --task|--task=*|--session|--session=*|--node|--node=*|--area|--area=*)
-        GLUERUN_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" "$@" ;;
+        SINGULAR_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" "$@" ;;
     esac
   done
   case "${1:-}" in
@@ -563,8 +575,8 @@ cmd_console() {
     --stop)   console_stop; return 0 ;;
   esac
   local port; port="$(console_pick_port)"
-  echo "gluerun console -> http://127.0.0.1:$port  (repo: $root)" >&2
-  GLUERUN_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" --host 127.0.0.1 --port "$port" "$@"
+  echo "singular console -> http://127.0.0.1:$port  (repo: $root)" >&2
+  SINGULAR_ENGINE_HOME="$home" exec python3 "$server" --repo "$root" --host 127.0.0.1 --port "$port" "$@"
 }
 
 # --- supervised regression-suite runs (cmd_test) -----------------------------
@@ -575,7 +587,7 @@ cmd_console() {
 # live suite from a dead one — and the safe-looking move (start another) is the
 # expensive wrong one.
 #
-# `gluerun test` turns a run into a supervised, attachable job:
+# `singular test` turns a run into a supervised, attachable job:
 #
 #   * one detached supervisor per run (double-fork + setsid, the same shape
 #     console_ensure uses) holding an exclusive flock on supervisor.lock for its
@@ -589,9 +601,9 @@ cmd_console() {
 #     disappearing.
 #
 # The suite is the ENGINE's own (<engine home>/tests/run.sh, run with cwd there);
-# the state lives in the current repo (.gluerun-state/test-runs/). Inside an
+# the state lives in the current repo (.singular-state/test-runs/). Inside an
 # engine checkout those are the same directory, which is the self-hosting case.
-gluerun_test_py() {
+singular_test_py() {
   python3 - "$@" <<'PY'
 import errno
 import fcntl
@@ -604,7 +616,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
-SCHEMA = "gluerun.test-run.v0"
+SCHEMA = "singular.test-run.v0"
 POLL_SECONDS = 0.5
 
 
@@ -727,7 +739,7 @@ def reap_run_group(state, rid, manifest):
     supervisor plus the tests/run.sh child `subprocess.call` started. Killing
     the supervisor alone (kill -9, a crashed session) orphans that child — it
     keeps running tests and appending to progress.jsonl long after the manifest
-    says `interrupted`, and the next `gluerun test` sees no live run and starts
+    says `interrupted`, and the next `singular test` sees no live run and starts
     a genuinely duplicate ~50-minute suite. Only signalling the group ends it.
 
     Guarded three ways, and the third is the one that matters. pgid must be
@@ -739,7 +751,7 @@ def reap_run_group(state, rid, manifest):
     an identity: once the group is gone the number is recycled, and after a
     reboot pids restart low and come back around within hours. Without this
     bound, a manifest left `running` by a crash or a power cut turns the next
-    `gluerun test --status` — a read-only-looking command — into a SIGKILL
+    `singular test --status` — a read-only-looking command — into a SIGKILL
     aimed at whatever unrelated group inherited that number. An orphan worth
     killing is by definition still producing output, so recent writes are the
     evidence that the pgid still means what the manifest says. Erring long
@@ -796,7 +808,7 @@ def reconcile(state, rid, manifest):
     manifest["counts"] = {"pass": passed, "fail": failed}
     manifest["failed"] = names
     manifest["exitCode"] = None
-    manifest["reconciledBy"] = "gluerun test"
+    manifest["reconciledBy"] = "singular test"
     write_json(os.path.join(run_dir(state, rid), "manifest.json"), manifest)
     return manifest
 
@@ -881,7 +893,7 @@ def cmd_start(args):
         with os.fdopen(read_fd, "rb") as handle:
             note = handle.read()
         if not note.startswith(b"ok"):
-            sys.stderr.write("gluerun test: supervisor failed to start\n")
+            sys.stderr.write("singular test: supervisor failed to start\n")
             if note:
                 sys.stderr.write(note.decode("utf-8", "replace"))
             return 1
@@ -944,7 +956,7 @@ def cmd_start(args):
     code = 1
     try:
         env = dict(os.environ)
-        env["GLUERUN_TEST_RUN_DIR"] = directory
+        env["SINGULAR_TEST_RUN_DIR"] = directory
         # close_fds (the default) matters: the suite must NOT inherit the lock,
         # or killing the supervisor would leave it held and the run would look
         # alive forever.
@@ -969,7 +981,7 @@ def cmd_live(state):
     liveness, alive, _ = probe(state, rid)
     if liveness == "unverified":
         sys.stderr.write(
-            "gluerun test: warning: flock is unavailable here; liveness is "
+            "singular test: warning: flock is unavailable here; liveness is "
             "unverified (falling back to the recorded pid)\n")
     if alive:
         print(rid)
@@ -979,7 +991,7 @@ def cmd_live(state):
 def cmd_attach(state, rid, origin):
     directory = run_dir(state, rid)
     if not os.path.isdir(directory):
-        sys.stderr.write("gluerun test: no such run: %s\n" % rid)
+        sys.stderr.write("singular test: no such run: %s\n" % rid)
         return 1
     log = os.path.join(directory, "suite.log")
     offset = 0
@@ -995,7 +1007,7 @@ def cmd_attach(state, rid, origin):
             break
         if liveness == "unverified":
             sys.stderr.write(
-                "gluerun test: warning: flock is unavailable here; liveness is "
+                "singular test: warning: flock is unavailable here; liveness is "
                 "unverified (falling back to the recorded pid)\n")
         time.sleep(POLL_SECONDS)
     drain(log, offset, sys.stdout)
@@ -1004,7 +1016,7 @@ def cmd_attach(state, rid, origin):
     if isinstance(code, int):
         return code
     sys.stderr.write(
-        "gluerun test: run %s ended without an exit code (status %s)\n"
+        "singular test: run %s ended without an exit code (status %s)\n"
         % (rid, manifest.get("status") or "unknown"))
     return 1
 
@@ -1016,7 +1028,7 @@ def cmd_status(state, as_json):
             print(json.dumps({"runId": None, "status": None, "liveness": "none"},
                              indent=2))
         else:
-            print("test: no run recorded (start one: gluerun test)")
+            print("test: no run recorded (start one: singular test)")
         return 1
     liveness, _, manifest = probe(state, rid)
     if manifest is None:
@@ -1065,14 +1077,14 @@ def cmd_failures(state):
         names = [n for n in (manifest.get("failed") or []) if isinstance(n, str)]
         if not names:
             sys.stderr.write(
-                "gluerun test: last completed run (%s) has no failures to re-run\n"
+                "singular test: last completed run (%s) has no failures to re-run\n"
                 % name)
             return 1
         for entry in names:
             print(entry)
         return 0
     sys.stderr.write(
-        "gluerun test: no completed run recorded yet (start one: gluerun test)\n")
+        "singular test: no completed run recorded yet (start one: singular test)\n")
     return 1
 
 
@@ -1088,7 +1100,7 @@ if MODE == "status":
     sys.exit(cmd_status(ARGS[0], ARGS[1] == "1"))
 if MODE == "failures":
     sys.exit(cmd_failures(ARGS[0]))
-sys.stderr.write("gluerun test: internal mode error: %s\n" % MODE)
+sys.stderr.write("singular test: internal mode error: %s\n" % MODE)
 sys.exit(2)
 PY
 }
@@ -1103,14 +1115,14 @@ cmd_test() {
       --no-wait)        no_wait=1 ;;
       --new-run)        new_run=1 ;;
       --rerun-failures) rerun=1 ;;
-      *) die "test: unknown argument: $1 (usage: gluerun test [--status [--json]|--wait|--no-wait|--new-run|--rerun-failures])" ;;
+      *) die "test: unknown argument: $1 (usage: singular test [--status [--json]|--wait|--no-wait|--new-run|--rerun-failures])" ;;
     esac
     shift
   done
 
   local home root state suite
   home="$(resolve_engine_home)"; root="$(require_repo)"
-  state="$root/.gluerun-state"
+  state="$root/.singular-state"
   suite="$home/tests/run.sh"
 
   # One terminal diagnosis, in the shape of the other engine preflight blocks.
@@ -1118,10 +1130,10 @@ cmd_test() {
   # engine build that does not ship tests/.
   if [[ "$want_status" != "1" && "$wait_only" != "1" && ! -f "$suite" ]]; then
     {
-      echo "GLUERUN_TEST_SUITE_UNAVAILABLE"
+      echo "SINGULAR_TEST_SUITE_UNAVAILABLE"
       echo "Found: no regression suite at $suite"
       echo "Required: <engine home>/tests/run.sh"
-      echo "Recovery: run from an engine checkout, or point GLUERUN_ENGINE_HOME at one"
+      echo "Recovery: run from an engine checkout, or point SINGULAR_ENGINE_HOME at one"
     } >&2
     exit 2
   fi
@@ -1139,22 +1151,22 @@ cmd_test() {
   if [[ "$want_status" != "1" && "$wait_only" != "1" ]] \
      && [[ "$(git -C "$home" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]]; then
     {
-      echo "GLUERUN_TEST_SOURCE_UNSUPPORTED"
+      echo "SINGULAR_TEST_SOURCE_UNSUPPORTED"
       echo "Found: engine home is not a Git working tree: $home"
       echo "Required: an engine checkout — the suite needs history and disposable worktrees"
-      echo "Recovery: run from an engine checkout, or point GLUERUN_ENGINE_HOME at one"
+      echo "Recovery: run from an engine checkout, or point SINGULAR_ENGINE_HOME at one"
     } >&2
     exit 2
   fi
 
   if [[ "$want_status" == "1" ]]; then
-    gluerun_test_py status "$state" "$as_json"
+    singular_test_py status "$state" "$as_json"
     return $?
   fi
 
   local rid=""
   if [[ "$wait_only" == "1" ]]; then
-    rid="$(gluerun_test_py live "$state")"
+    rid="$(singular_test_py live "$state")"
     if [[ -z "$rid" ]]; then
       # A finished run is still something to wait for — attaching to it prints
       # its tail and mirrors its exit code. Nothing recorded at all is an error.
@@ -1163,19 +1175,19 @@ try:
     print(json.load(open(sys.argv[1])).get("runId") or "")
 except Exception:
     print("")' "$state/test-runs/current.json" 2>/dev/null || true)"
-      [[ -n "$rid" ]] || die "test --wait: no test run recorded (start one: gluerun test)"
+      [[ -n "$rid" ]] || die "test --wait: no test run recorded (start one: singular test)"
     fi
     # --wait carries no other context, so say what is being waited on first: for
     # a finished (or interrupted) run that report IS the answer, and the stream
     # below adds nothing. stderr, so stdout stays the suite's output alone.
-    gluerun_test_py status "$state" "0" >&2 || true
-    gluerun_test_py attach "$state" "$rid" now
+    singular_test_py status "$state" "0" >&2 || true
+    singular_test_py attach "$state" "$rid" now
     return $?
   fi
 
   # Identity recorded with every run, so a result is attributable months later.
   local bash_bin version commit
-  bash_bin="${GLUERUN_BASH_BIN:-$BASH}"
+  bash_bin="${SINGULAR_BASH_BIN:-$BASH}"
   version=""; [[ -f "$home/VERSION" ]] && version="$(tr -d '[:space:]' < "$home/VERSION")"
   commit=""
   if [[ -e "$home/.git" ]]; then commit="$(git -C "$home" rev-parse HEAD 2>/dev/null || true)"; fi
@@ -1184,32 +1196,32 @@ except Exception:
   local -a filters=()
   if [[ "$rerun" == "1" ]]; then
     local names=""
-    names="$(gluerun_test_py failures "$state")" || exit 1
+    names="$(singular_test_py failures "$state")" || exit 1
     local line
     while IFS= read -r line; do
       [[ -n "$line" ]] && filters+=("$line")
     done <<<"$names"
     [[ "${#filters[@]}" -gt 0 ]] || die "test --rerun-failures: the last completed run recorded no failures"
-    echo "gluerun test: re-running ${#filters[@]} failed test(s): ${names//$'\n'/ }" >&2
+    echo "singular test: re-running ${#filters[@]} failed test(s): ${names//$'\n'/ }" >&2
   elif [[ "$new_run" == "0" ]]; then
-    rid="$(gluerun_test_py live "$state")"
+    rid="$(singular_test_py live "$state")"
   fi
 
   if [[ -n "$rid" ]]; then
-    echo "gluerun test: attaching to live run $rid (--new-run starts a concurrent one)" >&2
+    echo "singular test: attaching to live run $rid (--new-run starts a concurrent one)" >&2
     origin="now"
   else
-    rid="$(gluerun_test_py start "$state" "$suite" "$home" "$bash_bin" "$BASH_VERSION" \
+    rid="$(singular_test_py start "$state" "$suite" "$home" "$bash_bin" "$BASH_VERSION" \
              "$version" "$commit" ${filters[@]+"${filters[@]}"})" || exit 1
-    echo "gluerun test: started run $rid ($state/test-runs/$rid)" >&2
+    echo "singular test: started run $rid ($state/test-runs/$rid)" >&2
   fi
 
   if [[ "$no_wait" == "1" ]]; then
     echo "$rid"
-    echo "gluerun test: status: gluerun test --status   attach: gluerun test --wait" >&2
+    echo "singular test: status: singular test --status   attach: singular test --wait" >&2
     return 0
   fi
-  gluerun_test_py attach "$state" "$rid" "$origin"
+  singular_test_py attach "$state" "$rid" "$origin"
   return $?
 }
 
@@ -1220,7 +1232,7 @@ except Exception:
 # schema vs engine schema, whether a migration would rewrite authoritative
 # historical gates, which state root owns STOP, what doctor's evidence proves,
 # whether a regression run survived the session that started it, and that
-# "validated" is not "running". `gluerun setup` performs or explains every one of
+# "validated" is not "running". `singular setup` performs or explains every one of
 # those steps, in an order where every prerequisite fails BEFORE anything is
 # written, and it ends by printing exactly one next action.
 #
@@ -1236,7 +1248,7 @@ except Exception:
 #
 # Two shapes it writes that have no schema file of their own, documented here:
 #
-#   .gluerun-state/setup/gates-pre-migrate.json  gluerun.setup.gate-snapshot.v0
+#   .singular-state/setup/gates-pre-migrate.json  singular.setup.gate-snapshot.v0
 #     {schema, generatedAt, headCommit, repoRoot, count,
 #      gates:[{path, sha256, node, status, authoritative, recordedAt,
 #              evidenceClass, parseError}]}
@@ -1244,7 +1256,7 @@ except Exception:
 #     snapshot, never a stale one: a snapshot that predates an unrelated edit
 #     would accuse the wrong migration.
 #
-#   .gluerun-state/setup/state.json              gluerun.setup-state.v0
+#   .singular-state/setup/state.json              singular.setup-state.v0
 #     {schema, state, updatedAt, engineVersion, schemaVersion, lastTestRunId}
 #     state ∈ installed|migrated|validated|stopped-ready, written atomically at
 #     each phase boundary, and only ever set to a state actually reached.
@@ -1252,7 +1264,7 @@ except Exception:
 SETUP_US=$'\x1f'          # array-record separator: never appears in these values
 SETUP_JSON=0
 SETUP_STATE="blocked"
-SETUP_STATE_DIR=""        # <repo>/.gluerun-state once it exists; "" before that
+SETUP_STATE_DIR=""        # <repo>/.singular-state once it exists; "" before that
 SETUP_ENGINE_HOME=""
 SETUP_ENGINE_VERSION=""
 SETUP_SCHEMA_VERSION=""
@@ -1279,7 +1291,7 @@ setup_warn() { # code message
 }
 
 # Serializer for BOTH contract shapes. One implementation, so the object printed
-# on stdout and the copy persisted under .gluerun-state/setup/ are identical by
+# on stdout and the copy persisted under .singular-state/setup/ are identical by
 # construction. Segment lengths are explicit because step details are free text.
 setup_py_emit() { # kind print out n_head head... n_steps steps... n_warn warns...
   python3 - "$@" <<'PY'
@@ -1312,7 +1324,7 @@ warn_list = [{"code": code, "message": message} for code, message in warnings]
 if kind == "report":
     state, engine_version, engine_home, schema, run_id, command, instruction, safe = head
     document = {
-        "schema": "gluerun.setup-report.v0",
+        "schema": "singular.setup-report.v0",
         "state": state,
         "steps": [{"id": i, "status": s, "detail": d} for i, s, d in steps],
         "warnings": warn_list,
@@ -1331,7 +1343,7 @@ else:
     except ValueError:
         cause_obj = {"detail": cause}
     document = {
-        "schema": "gluerun.operator-failure.v0",
+        "schema": "singular.operator-failure.v0",
         "code": code,
         "phase": phase,
         "state": state,
@@ -1385,7 +1397,7 @@ from datetime import datetime, timezone
 
 path, state, engine, schema, run_id = sys.argv[1:6]
 document = {
-    "schema": "gluerun.setup-state.v0",
+    "schema": "singular.setup-state.v0",
     "state": state,
     "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "engineVersion": engine or None,
@@ -1401,7 +1413,7 @@ PY
 }
 
 # Terminal diagnosis. Human output leads with the code; --json prints the same
-# primary failure as one gluerun.operator-failure.v0 object. Both are persisted
+# primary failure as one singular.operator-failure.v0 object. Both are persisted
 # once a state directory exists — a failure before that is stdout/stderr only,
 # because there is nowhere in the repo it could honestly be written.
 setup_fail() { # code phase summary recovery_command recovery_instruction [cause_json]
@@ -1484,7 +1496,7 @@ except OSError:
     head = ""
 
 snapshot = {
-    "schema": "gluerun.setup.gate-snapshot.v0",
+    "schema": "singular.setup.gate-snapshot.v0",
     "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "headCommit": head or None,
     "repoRoot": repo,
@@ -1502,7 +1514,7 @@ PY
 }
 
 # SEMANTIC preservation, not byte equality. migrations/v0-to-v1.sh legitimately
-# rewrites `pmgo.orchestration.*` -> `gluerun.orchestration.*` INSIDE gate files,
+# rewrites `pmgo.orchestration.*` -> `singular.orchestration.*` INSIDE gate files,
 # so a hash comparison would condemn every correct migration. What must not move
 # is the historical verdict: the file still exists, and its node, status,
 # authoritative flag and recordedAt are untouched. Byte changes are reported as
@@ -1539,7 +1551,7 @@ for entry in before:
     # A gate that was readable at snapshot time and is not readable now is a
     # DELTA, not a crash. Unguarded this raised straight out of the script, so
     # an operator saw a raw Python traceback on stderr immediately ahead of the
-    # GLUERUN_GATE_PRESERVATION_FAILED block that the non-zero exit then
+    # SINGULAR_GATE_PRESERVATION_FAILED block that the non-zero exit then
     # produced. Failing closed is preserved — an unverifiable gate is a delta,
     # so verification still refuses — but the diagnosis is the clean block and
     # it now names the file.
@@ -1599,8 +1611,8 @@ PY
 
 # Reduce a doctor report to ONE primary diagnosis. `blocking` (added with the
 # cascade guard) already names it when doctor found a primary incompatibility —
-# and its code, e.g. GLUERUN_SCHEMA_MISMATCH, is passed straight through so the
-# operator sees the same code from `gluerun setup` and `gluerun doctor --json`.
+# and its code, e.g. SINGULAR_SCHEMA_MISMATCH, is passed straight through so the
+# operator sees the same code from `singular setup` and `singular doctor --json`.
 # Otherwise the first FAIL in check order is the primary one. Prints
 #   code US checkId US message US passed US warnings US failed US skipped
 setup_doctor_classify() { # report.json
@@ -1643,7 +1655,7 @@ try:
     with open(sys.argv[1], encoding="utf-8") as handle:
         report = json.load(handle)
 except (OSError, ValueError) as exc:
-    print(US.join(["GLUERUN_DOCTOR_BLOCKED", "", headline("doctor produced no "
+    print(US.join(["SINGULAR_DOCTOR_BLOCKED", "", headline("doctor produced no "
                    "parseable report: %s" % exc), "0", "0", "0", "0"]))
     raise SystemExit(0)
 
@@ -1653,7 +1665,7 @@ if isinstance(blocking, dict) and blocking.get("code"):
     code = str(blocking["code"])
     check_id = str(blocking.get("checkId") or "")
 else:
-    code = "GLUERUN_DOCTOR_BLOCKED"
+    code = "SINGULAR_DOCTOR_BLOCKED"
     check_id = ""
 first_fail = next((item for item in checks if item.get("status") == "fail"), None)
 if not check_id and first_fail:
@@ -1717,7 +1729,7 @@ cmd_setup() {
       --json)        SETUP_JSON=1 ;;
       --no-test)     no_test=1 ;;
       --test-async)  test_async=1 ;;
-      *) die "setup: unknown argument: $1 (usage: gluerun setup [--json] [--no-test] [--test-async])" ;;
+      *) die "setup: unknown argument: $1 (usage: singular setup [--json] [--no-test] [--test-async])" ;;
     esac
     shift
   done
@@ -1725,19 +1737,19 @@ cmd_setup() {
     die "setup: --no-test and --test-async are mutually exclusive"
   fi
 
-  setup_note "gluerun setup"
+  setup_note "singular setup"
 
   # (1) Interpreter. The embedded guard at the top of this file already re-exec'd
-  # or refused; reaching here IS the proof. GLUERUN_BASH_UNSUPPORTED is the
+  # or refused; reaching here IS the proof. SINGULAR_BASH_UNSUPPORTED is the
   # guard's code and is never emitted from down here.
   setup_step interpreter ok "bash ${BASH_VERSION%%(*} (>= 4 required)"
 
   # (2) Repository. Nothing below has a meaningful target without one.
   local root; root="$(repo_root)"
   if [[ -z "$root" ]]; then
-    setup_fail GLUERUN_NOT_A_REPOSITORY repository \
+    setup_fail SINGULAR_NOT_A_REPOSITORY repository \
       "not inside a git repository; setup has no repository to prepare" \
-      "cd <your project> && gluerun setup" \
+      "cd <your project> && singular setup" \
       "Run setup from inside the consumer repository you want prepared." \
       "$(setup_cause cwd "$PWD")"
   fi
@@ -1754,107 +1766,112 @@ cmd_setup() {
     detail="HEAD does not resolve to a commit (no history): $root"
   fi
   if [[ -n "$detail" ]]; then
-    setup_fail GLUERUN_TEST_SOURCE_UNSUPPORTED git-preflight \
+    setup_fail SINGULAR_TEST_SOURCE_UNSUPPORTED git-preflight \
       "$detail" \
-      "git commit --allow-empty -m init && gluerun setup" \
+      "git commit --allow-empty -m init && singular setup" \
       "Setup needs a real Git working tree with history: migrations, gate evidence and worktrees are all committed-state operations." \
       "$(setup_cause repoRoot "$root" detail "$detail")"
   fi
   setup_step git ok "git work tree with history at HEAD"
 
   # (4) Pin resolution, said out loud. Same precedence as repo_pin() —
-  # .gluerun-version is authoritative, gluerun.config.json engineVersion is the
+  # .singular-version is authoritative, singular.config.json engineVersion is the
   # fallback — but setup reports the disagreement itself instead of leaving
   # repo_pin's one-line stderr warning to carry it.
   local pin_file="" pin_cfg="" pin=""
-  [[ -f "$root/.gluerun-version" ]] && pin_file="$(tr -d '[:space:]' < "$root/.gluerun-version")"
+  [[ -f "$root/.singular-version" ]] && pin_file="$(tr -d '[:space:]' < "$root/.singular-version")"
   pin_cfg="$(config_engine_version "$root")"
   pin="$pin_file"; [[ -n "$pin" ]] || pin="$pin_cfg"
   if [[ -z "$pin" ]]; then
-    setup_step pin skip "no engine pin (.gluerun-version absent, no gluerun.config.json engineVersion)"
+    setup_step pin skip "no engine pin (.singular-version absent, no singular.config.json engineVersion)"
   else
-    setup_step pin ok "engine pin $pin (.gluerun-version: ${pin_file:-absent}; gluerun.config.json engineVersion: ${pin_cfg:-absent})"
+    setup_step pin ok "engine pin $pin (.singular-version: ${pin_file:-absent}; singular.config.json engineVersion: ${pin_cfg:-absent})"
   fi
   if [[ -n "$pin_file" && -n "$pin_cfg" && "$pin_file" != "$pin_cfg" ]]; then
-    setup_warn GLUERUN_PIN_CONFLICT \
-      ".gluerun-version ($pin_file) and gluerun.config.json engineVersion ($pin_cfg) disagree; .gluerun-version wins"
+    setup_warn SINGULAR_PIN_CONFLICT \
+      ".singular-version ($pin_file) and singular.config.json engineVersion ($pin_cfg) disagree; .singular-version wins"
   fi
 
   # (5) Engine presence. There is NO registry and no download path: install.sh
   # installs a checkout that is already on this machine, and nothing else can.
   # Saying so is the whole point of the failure below.
-  local home="" checkout="" checkout_version="" self
+  local home="" checkout="" checkout_version="" self install_command="" singular_home_arg=""
+  printf -v singular_home_arg '%q' "$SINGULAR_HOME"
   self="$(self_dir)"
   if [[ -f "$self/../engine/lib.sh" && -f "$self/../VERSION" ]]; then
     checkout="$(cd "$self/.." && pwd)"
     checkout_version="$(tr -d '[:space:]' < "$checkout/VERSION")"
   fi
-  if [[ -n "${GLUERUN_ENGINE_HOME:-}" ]]; then
-    if [[ ! -f "$GLUERUN_ENGINE_HOME/engine/lib.sh" ]]; then
-      setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-resolution \
-        "GLUERUN_ENGINE_HOME is set but has no engine/lib.sh: $GLUERUN_ENGINE_HOME" \
-        "unset GLUERUN_ENGINE_HOME && gluerun setup" \
-        "Point GLUERUN_ENGINE_HOME at an engine checkout or installed version, or unset it and let the repo pin decide." \
-        "$(setup_cause engineHome "$GLUERUN_ENGINE_HOME")"
+  if [[ -n "${SINGULAR_ENGINE_HOME:-}" ]]; then
+    if [[ ! -f "$SINGULAR_ENGINE_HOME/engine/lib.sh" ]]; then
+      setup_fail SINGULAR_ENGINE_NOT_INSTALLED engine-resolution \
+        "SINGULAR_ENGINE_HOME is set but has no engine/lib.sh: $SINGULAR_ENGINE_HOME" \
+        "unset SINGULAR_ENGINE_HOME && singular setup" \
+        "Point SINGULAR_ENGINE_HOME at an engine checkout or installed version, or unset it and let the repo pin decide." \
+        "$(setup_cause engineHome "$SINGULAR_ENGINE_HOME")"
     fi
-    home="$GLUERUN_ENGINE_HOME"
-    setup_step engine ok "engine home overridden by GLUERUN_ENGINE_HOME ($home)"
-  elif [[ -n "$pin" && -d "$HOME/.gluerun/versions/$pin" ]]; then
-    home="$HOME/.gluerun/versions/$pin"
+    home="$SINGULAR_ENGINE_HOME"
+    setup_step engine ok "engine home overridden by SINGULAR_ENGINE_HOME ($home)"
+  elif [[ -n "$pin" && -d "$SINGULAR_HOME/versions/$pin" ]]; then
+    home="$SINGULAR_HOME/versions/$pin"
     setup_step engine ok "engine $pin already installed ($home)"
   elif [[ -n "$pin" && -n "$checkout" && "$checkout_version" == "$pin" ]]; then
     setup_note "  ...   installing engine $pin from $checkout"
-    if ! "${GLUERUN_BASH_BIN:-bash}" "$checkout/install.sh" >&2; then
-      setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-install \
+    printf -v install_command 'SINGULAR_HOME=%q %q %q' \
+      "$SINGULAR_HOME" "${SINGULAR_BASH_BIN:-bash}" "$checkout/install.sh"
+    if ! SINGULAR_HOME="$SINGULAR_HOME" "${SINGULAR_BASH_BIN:-bash}" "$checkout/install.sh" >&2; then
+      setup_fail SINGULAR_ENGINE_NOT_INSTALLED engine-install \
         "install.sh failed for engine $pin from $checkout" \
-        "bash $checkout/install.sh" \
+        "$install_command" \
         "Run the installer directly and read its output; setup cannot continue without an installed engine." \
         "$(setup_cause pin "$pin" checkout "$checkout")"
     fi
-    [[ -d "$HOME/.gluerun/versions/$pin" ]] || setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-install \
-      "install.sh reported success but $HOME/.gluerun/versions/$pin does not exist" \
-      "bash $checkout/install.sh" \
-      "Check GLUERUN_HOME and the installer output; the pinned version was not created." \
+    [[ -d "$SINGULAR_HOME/versions/$pin" ]] || setup_fail SINGULAR_ENGINE_NOT_INSTALLED engine-install \
+      "install.sh reported success but $SINGULAR_HOME/versions/$pin does not exist" \
+      "$install_command" \
+      "Check the installer output; the pinned version was not created under SINGULAR_HOME=$SINGULAR_HOME." \
       "$(setup_cause pin "$pin" checkout "$checkout")"
-    home="$HOME/.gluerun/versions/$pin"
+    home="$SINGULAR_HOME/versions/$pin"
     setup_step engine new "engine $pin installed from $checkout ($home)"
   elif [[ -z "$pin" && -n "$checkout" ]]; then
-    if [[ -d "$HOME/.gluerun/versions/$checkout_version" ]]; then
-      home="$HOME/.gluerun/versions/$checkout_version"
+    if [[ -d "$SINGULAR_HOME/versions/$checkout_version" ]]; then
+      home="$SINGULAR_HOME/versions/$checkout_version"
       setup_step engine ok "no repo pin; engine $checkout_version already installed ($home)"
     else
       setup_note "  ...   installing engine $checkout_version from $checkout"
-      if ! "${GLUERUN_BASH_BIN:-bash}" "$checkout/install.sh" >&2; then
-        setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-install \
+      printf -v install_command 'SINGULAR_HOME=%q %q %q' \
+        "$SINGULAR_HOME" "${SINGULAR_BASH_BIN:-bash}" "$checkout/install.sh"
+      if ! SINGULAR_HOME="$SINGULAR_HOME" "${SINGULAR_BASH_BIN:-bash}" "$checkout/install.sh" >&2; then
+        setup_fail SINGULAR_ENGINE_NOT_INSTALLED engine-install \
           "install.sh failed for engine $checkout_version from $checkout" \
-          "bash $checkout/install.sh" \
+          "$install_command" \
           "Run the installer directly and read its output; setup cannot continue without an installed engine." \
           "$(setup_cause checkout "$checkout")"
       fi
-      home="$HOME/.gluerun/versions/$checkout_version"
-      [[ -d "$home" ]] || setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-install \
+      home="$SINGULAR_HOME/versions/$checkout_version"
+      [[ -d "$home" ]] || setup_fail SINGULAR_ENGINE_NOT_INSTALLED engine-install \
         "install.sh reported success but $home does not exist" \
-        "bash $checkout/install.sh" \
-        "Check GLUERUN_HOME and the installer output; the version was not created." \
+        "$install_command" \
+        "Check the installer output; the version was not created under SINGULAR_HOME=$SINGULAR_HOME." \
         "$(setup_cause checkout "$checkout")"
       setup_step engine new "engine $checkout_version installed from $checkout ($home)"
     fi
-  elif [[ -z "$pin" && -d "$HOME/.gluerun/current" ]]; then
+  elif [[ -z "$pin" && -d "$SINGULAR_HOME/current" ]]; then
     # Not in PMGO-006's list, but refusing here would contradict every other
-    # command: resolve_engine_home falls back to ~/.gluerun/current, and step 7
-    # then pins this repo to whatever that turned out to be.
-    home="$HOME/.gluerun/current"
+    # command: resolve_engine_home falls back to $SINGULAR_HOME/current, and
+    # step 7 then pins this repo to whatever that turned out to be.
+    home="$SINGULAR_HOME/current"
     setup_step engine ok "no repo pin; using the default install ($home)"
   else
-    setup_fail GLUERUN_ENGINE_NOT_INSTALLED engine-resolution \
-      "repo pins engine ${pin:-<none>} but it is not installed (${HOME}/.gluerun/versions/${pin:-<none>})" \
-      "bash <engine checkout>/install.sh" \
-      "There is no download mechanism: gluerun installs ONLY from an engine checkout already on this machine. Clone or fetch the engine at version ${pin:-<any>}, then run install.sh from it (this CLI is at ${checkout:-$self})." \
-      "$(setup_cause pin "${pin:-}" expectedPath "$HOME/.gluerun/versions/${pin:-}" checkoutSeen "${checkout:-none}" checkoutVersion "${checkout_version:-none}")"
+    setup_fail SINGULAR_ENGINE_NOT_INSTALLED engine-resolution \
+      "repo pins engine ${pin:-<none>} but it is not installed ($SINGULAR_HOME/versions/${pin:-<none>})" \
+      "SINGULAR_HOME=$singular_home_arg bash <engine checkout>/install.sh" \
+      "There is no download mechanism: singular installs ONLY from an engine checkout already on this machine. Clone or fetch the engine at version ${pin:-<any>}, then run install.sh with SINGULAR_HOME=$SINGULAR_HOME (this CLI is at ${checkout:-$self})." \
+      "$(setup_cause pin "${pin:-}" expectedPath "$SINGULAR_HOME/versions/${pin:-}" checkoutSeen "${checkout:-none}" checkoutVersion "${checkout_version:-none}")"
   fi
   # Every composed step from here on must use the engine setup just resolved,
   # not re-resolve and possibly pick a different one.
-  export GLUERUN_ENGINE_HOME="$home"
+  export SINGULAR_ENGINE_HOME="$home"
   SETUP_ENGINE_HOME="$home"
   SETUP_ENGINE_VERSION=""
   [[ -f "$home/VERSION" ]] && SETUP_ENGINE_VERSION="$(tr -d '[:space:]' < "$home/VERSION")"
@@ -1862,26 +1879,26 @@ cmd_setup() {
   # (6) STOP is the FIRST thing setup writes into the repository. Everything
   # after this point happens in a repo that cannot dispatch a worker. Setup never
   # removes STOP — lifting it is the separate, explicit actuation step.
-  local state_dir="$root/.gluerun-state"
+  local state_dir="$root/.singular-state"
   if ! mkdir -p "$state_dir/setup" 2>/dev/null; then
-    setup_fail GLUERUN_REPO_UNWRITABLE stop \
+    setup_fail SINGULAR_REPO_UNWRITABLE stop \
       "cannot create $state_dir/setup (repository is not writable)" \
-      "chmod u+w $root && gluerun setup" \
+      "chmod u+w $root && singular setup" \
       "Setup must be able to write STOP and its evidence before it changes anything else." \
       "$(setup_cause path "$state_dir/setup")"
   fi
   SETUP_STATE_DIR="$state_dir"
   if [[ -f "$state_dir/STOP" ]]; then
-    setup_step stop ok "STOP already present (.gluerun-state/STOP) — no workers will be dispatched"
+    setup_step stop ok "STOP already present (.singular-state/STOP) — no workers will be dispatched"
   else
     if ! : > "$state_dir/STOP" 2>/dev/null; then
-      setup_fail GLUERUN_REPO_UNWRITABLE stop \
+      setup_fail SINGULAR_REPO_UNWRITABLE stop \
         "cannot write $state_dir/STOP" \
-        "chmod u+w $state_dir && gluerun setup" \
+        "chmod u+w $state_dir && singular setup" \
         "STOP must exist before setup changes anything else in the repository." \
         "$(setup_cause path "$state_dir/STOP")"
     fi
-    setup_step stop new "STOP written (.gluerun-state/STOP) — no workers will be dispatched"
+    setup_step stop new "STOP written (.singular-state/STOP) — no workers will be dispatched"
   fi
   # A pre-rebrand consumer may still have autonomate loops reading .pmgo-state/.
   # Mirror STOP there so both roots agree — but NEVER create that directory:
@@ -1898,28 +1915,28 @@ cmd_setup() {
 
   # (7) Pin the repo to the engine it was just verified against, if it does not
   # already say. Same write cmd_init performs.
-  if [[ -f "$root/.gluerun-version" ]]; then
-    setup_step version-pin ok ".gluerun-version present ($pin_file)"
+  if [[ -f "$root/.singular-version" ]]; then
+    setup_step version-pin ok ".singular-version present ($pin_file)"
   else
     # Guarded like every other repo write in this command. Unguarded, a read-only
     # repository root got a raw `cp: Permission denied` and exit 1 with no code,
     # no recovery and no `Next:` — and under --json, zero bytes on stdout where
     # the contract promises exactly one operator-failure.v0 object.
-    if ! cp "$home/VERSION" "$root/.gluerun-version" 2>/dev/null; then
-      setup_fail GLUERUN_REPO_UNWRITABLE version-pin \
-        "cannot write $root/.gluerun-version (repository root is not writable)" \
-        "chmod u+w $root && gluerun setup" \
+    if ! cp "$home/VERSION" "$root/.singular-version" 2>/dev/null; then
+      setup_fail SINGULAR_REPO_UNWRITABLE version-pin \
+        "cannot write $root/.singular-version (repository root is not writable)" \
+        "chmod u+w $root && singular setup" \
         "Setup pins the repository to the engine it just verified; it will not report a repository as prepared while that pin is missing." \
-        "$(setup_cause path "$root/.gluerun-version" engineVersion "$SETUP_ENGINE_VERSION")"
+        "$(setup_cause path "$root/.singular-version" engineVersion "$SETUP_ENGINE_VERSION")"
     fi
-    setup_step version-pin new ".gluerun-version ($SETUP_ENGINE_VERSION)"
+    setup_step version-pin new ".singular-version ($SETUP_ENGINE_VERSION)"
   fi
 
   # (8) Scaffold only a repo that has never been scaffolded. cmd_init is
   # idempotent internally (cp -n, [[ -f ]] guards, mkdir -p), but the presence of
-  # gluerun.config.json is the honest signal that this repo is already a consumer.
-  if [[ -f "$root/gluerun.config.json" ]]; then
-    setup_step scaffold skip "gluerun.config.json exists — init not re-run"
+  # singular.config.json is the honest signal that this repo is already a consumer.
+  if [[ -f "$root/singular.config.json" ]]; then
+    setup_step scaffold skip "singular.config.json exists — init not re-run"
   else
     local init_out="" init_rc=0
     set +e
@@ -1938,18 +1955,18 @@ cmd_setup() {
     # returns the status of its LAST command (an echo) no matter how many of
     # its writes were refused — on a read-only root every cp and mkdir failed
     # and init still exited 0, so setup reported "scaffold created", walked on,
-    # and finally blamed the migration for a gluerun.config.json that was never
+    # and finally blamed the migration for a singular.config.json that was never
     # written. The artifact is the evidence; check for it.
     local config_state="absent"
-    [[ -f "$root/gluerun.config.json" ]] && config_state="present"
+    [[ -f "$root/singular.config.json" ]] && config_state="present"
     if [[ "$init_rc" -ne 0 || "$config_state" != "present" ]]; then
-      setup_fail GLUERUN_REPO_UNWRITABLE scaffold \
-        "gluerun init did not scaffold $root (init exit $init_rc; gluerun.config.json $config_state)" \
-        "gluerun init" \
+      setup_fail SINGULAR_REPO_UNWRITABLE scaffold \
+        "singular init did not scaffold $root (init exit $init_rc; singular.config.json $config_state)" \
+        "singular init" \
         "Run init on its own and read its output; setup cannot validate a repository it could not scaffold." \
         "$(setup_cause exitCode "$init_rc" configJson "$config_state" repoRoot "$root")"
     fi
-    setup_step scaffold new "gluerun.config.json + docs/orchestration scaffold created"
+    setup_step scaffold new "singular.config.json + docs/orchestration scaffold created"
   fi
   SETUP_SCHEMA_VERSION="$(repo_schema_version "$root")"
   setup_set_state installed
@@ -1959,14 +1976,14 @@ cmd_setup() {
   # stale one can never be used to bless a rewrite it never saw.
   local snapshot="$state_dir/setup/gates-pre-migrate.json" gate_count=""
   if ! gate_count="$(setup_gate_snapshot "$root" "$snapshot")"; then
-    setup_fail GLUERUN_REPO_UNWRITABLE gate-snapshot \
+    setup_fail SINGULAR_REPO_UNWRITABLE gate-snapshot \
       "could not write the pre-migration gate snapshot ($snapshot)" \
-      "chmod u+w $state_dir && gluerun setup" \
+      "chmod u+w $state_dir && singular setup" \
       "Setup refuses to migrate gates it could not first record." \
       "$(setup_cause path "$snapshot")"
   fi
   setup_step gate-snapshot new \
-    "$gate_count gate-result file(s) hashed -> .gluerun-state/setup/gates-pre-migrate.json"
+    "$gate_count gate-result file(s) hashed -> .singular-state/setup/gates-pre-migrate.json"
 
   # (10) Migration: say what it would do, then do it. The dry run is the same
   # discovery the real chain walks, so it is also the classifier for a chain that
@@ -1978,15 +1995,15 @@ cmd_setup() {
   set -e
   if [[ "$mig_rc" -ne 0 ]]; then
     if [[ "$mig_out" == *"no migration found for"* ]]; then
-      setup_fail GLUERUN_MIGRATION_MISSING migration-plan \
+      setup_fail SINGULAR_MIGRATION_MISSING migration-plan \
         "$(printf '%s' "$mig_out" | tail -n1)" \
-        "gluerun migrate --dry-run" \
+        "singular migrate --dry-run" \
         "This engine ships no migration for the repository's schema. Install the engine version whose migrations cover it, or migrate through an intermediate version; see CHANGELOG.md." \
         "$(setup_cause repoSchema "${SETUP_SCHEMA_VERSION:-unknown}" engineHome "$home" output "$mig_out")"
     fi
-    setup_fail GLUERUN_MIGRATION_FAILED migration-plan \
+    setup_fail SINGULAR_MIGRATION_FAILED migration-plan \
       "$(printf '%s' "$mig_out" | tail -n1)" \
-      "gluerun migrate --dry-run" \
+      "singular migrate --dry-run" \
       "The migration chain could not be planned; nothing was migrated and the repository is unchanged." \
       "$(setup_cause repoSchema "${SETUP_SCHEMA_VERSION:-unknown}" output "$mig_out")"
   fi
@@ -2003,15 +2020,15 @@ cmd_setup() {
     if [[ "$mig_rc" -ne 0 ]]; then
       SETUP_SCHEMA_VERSION="$(repo_schema_version "$root")"
       if [[ "$mig_out" == *"no migration found for"* ]]; then
-        setup_fail GLUERUN_MIGRATION_MISSING migration \
+        setup_fail SINGULAR_MIGRATION_MISSING migration \
           "$(printf '%s' "$mig_out" | tail -n1)" \
-          "gluerun migrate" \
+          "singular migrate" \
           "The repository is left at the last completed schema (${SETUP_SCHEMA_VERSION:-unknown}); no partial migration was recorded." \
           "$(setup_cause repoSchema "${SETUP_SCHEMA_VERSION:-unknown}" output "$mig_out")"
       fi
-      setup_fail GLUERUN_MIGRATION_FAILED migration \
+      setup_fail SINGULAR_MIGRATION_FAILED migration \
         "$(printf '%s' "$mig_out" | tail -n1)" \
-        "gluerun migrate" \
+        "singular migrate" \
         "The repository is left at the last completed schema (${SETUP_SCHEMA_VERSION:-unknown}). Fix the failing migration step, then run setup again — completed steps are not repeated." \
         "$(setup_cause repoSchema "${SETUP_SCHEMA_VERSION:-unknown}" output "$mig_out")"
     fi
@@ -2034,19 +2051,19 @@ cmd_setup() {
   [[ -s "$cause_file.err" ]] && verify_err="$(tail -n1 "$cause_file.err")"
   # "The check did not run" is not "the gates are fine". Refuse either way.
   if [[ "$verify_rc" -ne 0 || -z "$verify" ]]; then
-    setup_fail GLUERUN_GATE_PRESERVATION_FAILED gate-verification \
+    setup_fail SINGULAR_GATE_PRESERVATION_FAILED gate-verification \
       "gate preservation could not be verified (verifier exited $verify_rc)${verify_err:+ — $verify_err}" \
-      "gluerun setup --json" \
-      "Setup will not report gates as preserved on the strength of a check that did not complete. Inspect .gluerun-state/setup/gates-pre-migrate.json by hand; the verifier's own output is at .gluerun-state/setup/gate-verification.json.err." \
-      "$(setup_cause snapshot ".gluerun-state/setup/gates-pre-migrate.json" exitCode "$verify_rc" stderr "$verify_err")"
+      "singular setup --json" \
+      "Setup will not report gates as preserved on the strength of a check that did not complete. Inspect .singular-state/setup/gates-pre-migrate.json by hand; the verifier's own output is at .singular-state/setup/gate-verification.json.err." \
+      "$(setup_cause snapshot ".singular-state/setup/gates-pre-migrate.json" exitCode "$verify_rc" stderr "$verify_err")"
   fi
   rm -f "$cause_file.err"
   IFS="$SETUP_US" read -r verify_ok checked rewritten delta_count first_delta <<<"$verify"
   if [[ "$verify_ok" != "1" ]]; then
-    setup_fail GLUERUN_GATE_PRESERVATION_FAILED gate-verification \
+    setup_fail SINGULAR_GATE_PRESERVATION_FAILED gate-verification \
       "$delta_count historical gate field(s) changed across migration — first: $first_delta" \
-      "gluerun setup --json" \
-      "Compare the repository against .gluerun-state/setup/gates-pre-migrate.json; the full per-file delta is in .gluerun-state/setup/gate-verification.json. Historical gate verdicts (node, status, authoritative, recordedAt) must survive a migration untouched." \
+      "singular setup --json" \
+      "Compare the repository against .singular-state/setup/gates-pre-migrate.json; the full per-file delta is in .singular-state/setup/gate-verification.json. Historical gate verdicts (node, status, authoritative, recordedAt) must survive a migration untouched." \
       "$(cat "$cause_file")"
   fi
   if [[ "$rewritten" != "0" ]]; then
@@ -2061,9 +2078,9 @@ cmd_setup() {
   # evidence rather than printed and lost.
   local doctor_report="$state_dir/setup/doctor.json" doctor_rc=0
   if [[ ! -f "$home/engine/doctor.py" ]]; then
-    setup_fail GLUERUN_DOCTOR_BLOCKED doctor \
+    setup_fail SINGULAR_DOCTOR_BLOCKED doctor \
       "engine $home has no structured doctor helper (engine/doctor.py)" \
-      "gluerun version" \
+      "singular version" \
       "Install an engine build that ships engine/doctor.py; setup cannot validate a repository without it." \
       "$(setup_cause engineHome "$home")"
   fi
@@ -2071,7 +2088,7 @@ cmd_setup() {
   python3 "$home/engine/doctor.py" \
     --engine-home "$home" \
     --repo-root "$root" \
-    --bash "${BASH:-${GLUERUN_BASH_BIN:-bash}}" \
+    --bash "${BASH:-${SINGULAR_BASH_BIN:-bash}}" \
     --bash-version "$BASH_VERSION" \
     --json >"$doctor_report" 2>"$doctor_report.err"
   doctor_rc=$?
@@ -2082,18 +2099,18 @@ cmd_setup() {
   set -e
   IFS="$SETUP_US" read -r d_code d_check d_message d_pass d_warn d_fail d_skip <<<"$classified"
   if [[ "$doctor_rc" -ne 0 ]]; then
-    setup_fail "${d_code:-GLUERUN_DOCTOR_BLOCKED}" doctor \
+    setup_fail "${d_code:-SINGULAR_DOCTOR_BLOCKED}" doctor \
       "${d_message:-doctor reported $d_fail failing check(s)}" \
-      "gluerun doctor --json" \
-      "Fix the primary diagnosis${d_check:+ ($d_check)} and run setup again; the full report is in .gluerun-state/setup/doctor.json." \
-      "$(setup_cause primaryCheck "${d_check:-unknown}" message "$d_message" failed "${d_fail:-0}" report ".gluerun-state/setup/doctor.json")"
+      "singular doctor --json" \
+      "Fix the primary diagnosis${d_check:+ ($d_check)} and run setup again; the full report is in .singular-state/setup/doctor.json." \
+      "$(setup_cause primaryCheck "${d_check:-unknown}" message "$d_message" failed "${d_fail:-0}" report ".singular-state/setup/doctor.json")"
   fi
   rm -f "$doctor_report.err"
   setup_step doctor ok \
-    "doctor passed: $d_pass ok, $d_warn warning(s), $d_skip informational (.gluerun-state/setup/doctor.json)"
+    "doctor passed: $d_pass ok, $d_warn warning(s), $d_skip informational (.singular-state/setup/doctor.json)"
   setup_set_state validated
 
-  # (13) Regression. Evidence lands under .gluerun-state/test-runs/<runId>/ either
+  # (13) Regression. Evidence lands under .singular-state/test-runs/<runId>/ either
   # way, so a failed suite is as attributable as a passing one.
   #
   # The suite is runnable only from an engine CHECKOUT — most tests build
@@ -2108,14 +2125,14 @@ cmd_setup() {
   # through setup_warn/setup_step rather than setup_fail.
   local suite="$home/tests/run.sh" suite_code=""
   if [[ ! -f "$suite" ]]; then
-    suite_code="GLUERUN_TEST_SUITE_UNAVAILABLE"
+    suite_code="SINGULAR_TEST_SUITE_UNAVAILABLE"
   elif [[ "$(git -C "$home" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]]; then
-    suite_code="GLUERUN_TEST_SOURCE_UNSUPPORTED"
+    suite_code="SINGULAR_TEST_SOURCE_UNSUPPORTED"
   fi
   if [[ "$no_test" == "1" ]]; then
     setup_step test skip "regression suite not run (--no-test); stopped-ready needs a passing run"
   elif [[ -n "$suite_code" ]]; then
-    if [[ "$suite_code" == "GLUERUN_TEST_SUITE_UNAVAILABLE" ]]; then
+    if [[ "$suite_code" == "SINGULAR_TEST_SUITE_UNAVAILABLE" ]]; then
       setup_warn "$suite_code" \
         "engine home $home ships no regression suite ($suite); installed engines never do — the suite lives in an engine checkout"
     else
@@ -2128,7 +2145,7 @@ cmd_setup() {
     # cmd_test --no-wait prints the run id on stdout and its narration on stderr,
     # which is already where the human stream lives under --json.
     SETUP_TEST_RUN_ID="$(cmd_test --no-wait)"
-    setup_step test new "regression run ${SETUP_TEST_RUN_ID:-?} started detached (--test-async); attach with: gluerun test --wait"
+    setup_step test new "regression run ${SETUP_TEST_RUN_ID:-?} started detached (--test-async); attach with: singular test --wait"
     # Still `validated` — a started run is not a passed one — but the state file
     # has to carry the run id, or nothing records which run to go and wait on.
     setup_set_state validated
@@ -2164,13 +2181,13 @@ else:
     print(" ".join(str(n) for n in (manifest.get("failed") or [])))
 PY
 )"
-      setup_fail GLUERUN_TEST_RUN_FAILED regression \
+      setup_fail SINGULAR_TEST_RUN_FAILED regression \
         "regression run ${SETUP_TEST_RUN_ID:-unknown} did not pass (exit $test_rc)${names:+ — failed: $names}" \
-        "gluerun test --rerun-failures" \
-        "Evidence is kept at .gluerun-state/test-runs/${SETUP_TEST_RUN_ID:-<runId>}/ (manifest.json, suite.log, logs/). The repository stays at 'validated' and STOP stays in place." \
+        "singular test --rerun-failures" \
+        "Evidence is kept at .singular-state/test-runs/${SETUP_TEST_RUN_ID:-<runId>}/ (manifest.json, suite.log, logs/). The repository stays at 'validated' and STOP stays in place." \
         "$(setup_cause runId "${SETUP_TEST_RUN_ID:-unknown}" exitCode "$test_rc" failed "$names")"
     fi
-    setup_step test ok "regression run $SETUP_TEST_RUN_ID passed (.gluerun-state/test-runs/$SETUP_TEST_RUN_ID/)"
+    setup_step test ok "regression run $SETUP_TEST_RUN_ID passed (.singular-state/test-runs/$SETUP_TEST_RUN_ID/)"
     setup_set_state stopped-ready
   fi
 
@@ -2178,23 +2195,23 @@ PY
   local next_cmd="" next_instr="" gate_id=""
   gate_id="$(setup_pending_human_gate "$root" || true)"
   if [[ -n "$gate_id" ]]; then
-    next_cmd="gluerun human-gate status $gate_id"
+    next_cmd="singular human-gate status $gate_id"
     next_instr="A human gate is waiting on a decision; nothing downstream of it can advance until it is answered."
   elif [[ "$SETUP_STATE" == "stopped-ready" ]]; then
-    next_cmd="gluerun resume"
+    next_cmd="singular resume"
     next_instr="Lifts STOP and lets the loop dispatch workers — the separate, explicit actuation step."
   elif [[ -n "$suite_code" ]]; then
     # Ordered ahead of both remaining branches on purpose: with no runnable suite
-    # nothing was started, so `gluerun test --wait` has nothing to attach to and a
-    # bare `gluerun test` would refuse with the very code just reported. Naming
+    # nothing was started, so `singular test --wait` has nothing to attach to and a
+    # bare `singular test` would refuse with the very code just reported. Naming
     # the checkout is the only next action that can actually record a passing run.
-    next_cmd="GLUERUN_ENGINE_HOME=<engine checkout> gluerun test"
-    next_instr="This engine home cannot run the regression suite ($suite_code). Point GLUERUN_ENGINE_HOME at an engine checkout and run the suite from this repository — the evidence still lands here under .gluerun-state/test-runs/ — then run setup again to reach 'stopped-ready'."
+    next_cmd="SINGULAR_ENGINE_HOME=<engine checkout> singular test"
+    next_instr="This engine home cannot run the regression suite ($suite_code). Point SINGULAR_ENGINE_HOME at an engine checkout and run the suite from this repository — the evidence still lands here under .singular-state/test-runs/ — then run setup again to reach 'stopped-ready'."
   elif [[ "$test_async" == "1" ]]; then
-    next_cmd="gluerun test --wait"
+    next_cmd="singular test --wait"
     next_instr="Attach to the detached regression run; a passing run is the last thing between 'validated' and 'stopped-ready'."
   else
-    next_cmd="gluerun test"
+    next_cmd="singular test"
     next_instr="Record a passing regression run; it is the last thing between 'validated' and 'stopped-ready'."
   fi
 
@@ -2214,9 +2231,9 @@ PY
 
 usage() {
   cat <<'EOF'
-gluerun — orchestration engine launcher
+singular — orchestration engine launcher
 
-Usage: gluerun <command> [args]
+Usage: singular <command> [args]
 
 Run anywhere (operate on the current repo):
   reconcile [--dry-run|--apply|--actuate|--status]   L0 reconciler
@@ -2234,7 +2251,7 @@ Run anywhere (operate on the current repo):
                                                       nodes use hash-bound human gates)
   metrics [--json] [--runs-dir DIR] [--events-file FILE]   read-only ctx metrics
   console [--ensure|--status|--stop]                  visualization console (idempotent start,
-                                                      URL persists at .gluerun-state/console.url)
+                                                      URL persists at .singular-state/console.url)
 
 Operate / recover:
   health [--json]      compact loop-health digest (gates, leases, backoff, breaker, digest hash)
@@ -2256,7 +2273,7 @@ Operate / recover:
 
 Setup / lifecycle:
   plan archive [--name NAME] [--force] [--no-commit]   archive the completed plan as a
-                                                      browsable thread (.gluerun-state/plans/<id>)
+                                                      browsable thread (.singular-state/plans/<id>)
                                                       and reset the live tree to a starter DAG
   plan list [--json]   list archived plan threads (id, name, date, gates, tasks)
   setup [--json] [--no-test] [--test-async]
@@ -2264,30 +2281,30 @@ Setup / lifecycle:
                        pin + engine, STOP first, scaffold, gate snapshot, migrate,
                        gate-preservation check, doctor, regression run. Fails before
                        mutating, prints exactly one next action, never actuates.
-  init                 scaffold gluerun.config.json + docs/orchestration in this repo
+  init                 scaffold singular.config.json + docs/orchestration in this repo
   doctor [--json] [--repair-model-cache]               structured operator preflight
   test [--status [--json]|--wait|--no-wait|--new-run|--rerun-failures]
                        supervised engine regression run — one live run at a time
                        (default: attach to it), durable manifest + per-test logs
-                       under .gluerun-state/test-runs/
-  update [VERSION]     pin this repo to an engine version (.gluerun-version)
+                       under .singular-state/test-runs/
+  update [VERSION]     pin this repo to an engine version (.singular-version)
   migrate [--dry-run]  bring this repo's schemaVersion up to the engine's
                        (--dry-run prints the migration chain and changes nothing)
   version              print CLI + resolved engine version
 EOF
-  # Flag-gated: the graph subcommand line appears ONLY when GLUERUN_CTX_GRAPH=1,
+  # Flag-gated: the graph subcommand line appears ONLY when SINGULAR_CTX_GRAPH=1,
   # keeping help output byte-identical to the pre-hook binary when it is off.
-  if [[ "${GLUERUN_CTX_GRAPH:-0}" == "1" ]]; then
+  if [[ "${SINGULAR_CTX_GRAPH:-0}" == "1" ]]; then
     cat <<'EOF'
-  graph rebuild|sync|query <neighbors|lineage|open-contradictions> [args]   context graph (GLUERUN_CTX_GRAPH)
+  graph rebuild|sync|query <neighbors|lineage|open-contradictions> [args]   context graph (SINGULAR_CTX_GRAPH)
 EOF
   fi
   # Flag-gated: the experiment-report subcommand line appears ONLY when
-  # GLUERUN_CTX_EXPERIMENT=1, keeping help output byte-identical to the pre-hook
+  # SINGULAR_CTX_EXPERIMENT=1, keeping help output byte-identical to the pre-hook
   # binary when it is off.
-  if [[ "${GLUERUN_CTX_EXPERIMENT:-0}" == "1" ]]; then
+  if [[ "${SINGULAR_CTX_EXPERIMENT:-0}" == "1" ]]; then
     cat <<'EOF'
-  experiment-report summary|delta|tables [runs_dir] [events_file] [metrics_file]   experiment raw metrics (GLUERUN_CTX_EXPERIMENT)
+  experiment-report summary|delta|tables [runs_dir] [events_file] [metrics_file]   experiment raw metrics (SINGULAR_CTX_EXPERIMENT)
 EOF
   fi
 }
@@ -2306,13 +2323,13 @@ main() {
     next-areas)    run_engine dag.sh next-areas "$@" ;;
     area-gate)     run_engine dag.sh area-gate "$@" ;;
     gate)
-      # `gluerun gate validate FILE` — report EVERY contract violation in a
+      # `singular gate validate FILE` — report EVERY contract violation in a
       # gate-result at once. dag.sh's validator exits on the first breach, which
       # is right for the loop but made a consumer's promoter surface one
       # violation per run, each hiding the next.
       case "${1:-}" in
         validate) shift; run_engine dag.sh validate-gate-file "$@" ;;
-        *) die "unknown gate subcommand: ${1:-} (try: gluerun gate validate FILE)" ;;
+        *) die "unknown gate subcommand: ${1:-} (try: singular gate validate FILE)" ;;
       esac ;;
     promote-gate)  run_engine promote-gate.sh "$@" ;;   # sources lib.sh -> honors config "promoter"
     human-gate)    run_engine human-gate.sh "$@" ;;
@@ -2332,8 +2349,8 @@ main() {
     lease)         run_engine lease.sh "$@" ;;
     accept-packet) run_engine accept-existing-packet.sh "$@" ;;
     metrics)       cmd_metrics "$@" ;;
-    graph)         [[ "${GLUERUN_CTX_GRAPH:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_graph "$@" ;;
-    experiment-report) [[ "${GLUERUN_CTX_EXPERIMENT:-0}" == "1" ]] || die "unknown command: $cmd (try: gluerun help)"; cmd_experiment_report "$@" ;;
+    graph)         [[ "${SINGULAR_CTX_GRAPH:-0}" == "1" ]] || die "unknown command: $cmd (try: singular help)"; cmd_graph "$@" ;;
+    experiment-report) [[ "${SINGULAR_CTX_EXPERIMENT:-0}" == "1" ]] || die "unknown command: $cmd (try: singular help)"; cmd_experiment_report "$@" ;;
     console)       cmd_console "$@" ;;
     setup)         cmd_setup "$@" ;;
     init)          cmd_init "$@" ;;
@@ -2343,7 +2360,7 @@ main() {
     migrate)       cmd_migrate "$@" ;;
     version|--version|-v) cmd_version ;;
     help|--help|-h|"") usage ;;
-    *) die "unknown command: $cmd (try: gluerun help)" ;;
+    *) die "unknown command: $cmd (try: singular help)" ;;
   esac
 }
 

@@ -7,28 +7,28 @@
 # node `critic-carryover` (stage S3-plan-revision, area plancritic, layer
 # engine_runtime, kind runtime).
 #
-# gluerun_ctx_critic_recheck_resume_decide is the post-acceptance-recheck sibling
-# of the integrated in-loop re-critique decider gluerun_plan_recritic_resume_decide
+# singular_ctx_critic_recheck_resume_decide is the post-acceptance-recheck sibling
+# of the integrated in-loop re-critique decider singular_plan_recritic_resume_decide
 # (TASK-0025): same single-line `resume <sessionId>` / `fresh <reason>` contract,
 # the same ordered fail-closed gates (first failing gate names the reason), reusing
-# the gluerun.orchestration.session-meta.v0 shape the plan-critic driver already
+# the singular.orchestration.session-meta.v0 shape the plan-critic driver already
 # FINALIZES at <state-dir>/sessions/plan-critic/<node>.json (role plan-critic). It
 # is a DIFFERENT engagement — the ACCEPTED diff (not revised candidates), gated by
-# GLUERUN_CRITIC_RECHECK_PCT (not GLUERUN_PLAN_RECRITIC_RESUME) — so it advances the
+# SINGULAR_CRITIC_RECHECK_PCT (not SINGULAR_PLAN_RECRITIC_RESUME) — so it advances the
 # stage rather than duplicating TASK-0025.
 #
 # Gate deltas asserted here:
-#   - Enable gate (default 0 = OFF): GLUERUN_CRITIC_RECHECK_PCT unset / 0 /
+#   - Enable gate (default 0 = OFF): SINGULAR_CRITIC_RECHECK_PCT unset / 0 /
 #     non-numeric -> fresh disabled (the whole recheck feature is OFF, so no session
 #     is ever resumed).
 #   - Skeptic-role gate: role != plan-critic -> fresh role-mismatch (a
 #     planner/implementer/reviewer session is NEVER resumable for a recheck).
 #   - Prompt-template gate keyed on the critic TEMPLATE sha (plan-critic.md).
-#   - Session-lease gate at .gluerun-state/sessions/plan-critic/<node>.lease.
+#   - Session-lease gate at .singular-state/sessions/plan-critic/<node>.lease.
 #   - Kept sibling-decider gates/reasons: no-session, no-session-id, node-mismatch,
 #     head-rewritten, runner-changed, expired, worktree-moved.
 #
-# gluerun_ctx_critic_recheck_record_strategy emits EXACTLY ONE role=plan-critic
+# singular_ctx_critic_recheck_record_strategy emits EXACTLY ONE role=plan-critic
 # context.strategy_selected event carrying node, runId, taskId, strategy, reason,
 # and sessionId on resume; records only (no lease, no runner, no outcome mutation).
 #
@@ -54,12 +54,12 @@ pass() { echo "ok: $*"; }
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-export GLUERUN_ORCH_DIR="$tmp/docs/orchestration"
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-mkdir -p "$GLUERUN_STATE_DIR" "$GLUERUN_ORCH_DIR/prompts"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+export SINGULAR_ORCH_DIR="$tmp/docs/orchestration"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+mkdir -p "$SINGULAR_STATE_DIR" "$SINGULAR_ORCH_DIR/prompts"
+: > "$SINGULAR_EVENTS_FILE"
 
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
@@ -69,7 +69,7 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX" ]] || fail "engine not present yet: $CTX"
 # shellcheck disable=SC1090
 source "$CTX" || fail "sourcing $CTX failed"
-for fn in gluerun_ctx_critic_recheck_resume_decide gluerun_ctx_critic_recheck_record_strategy; do
+for fn in singular_ctx_critic_recheck_resume_decide singular_ctx_critic_recheck_record_strategy; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn not defined by $CTX"
 done
 
@@ -77,12 +77,12 @@ done
 # a fresh subshell that sources ONLY lib.sh and finds the functions defined).
 sub_defined="$(bash -c '
   set -uo pipefail
-  export GLUERUN_ROOT="'"$tmp"'"
-  export GLUERUN_STATE_DIR="'"$tmp"'/state"
-  export GLUERUN_ORCH_DIR="'"$tmp"'/docs/orchestration"
-  export GLUERUN_EVENTS_FILE="'"$tmp"'/events.ndjson"
+  export SINGULAR_ROOT="'"$tmp"'"
+  export SINGULAR_STATE_DIR="'"$tmp"'/state"
+  export SINGULAR_ORCH_DIR="'"$tmp"'/docs/orchestration"
+  export SINGULAR_EVENTS_FILE="'"$tmp"'/events.ndjson"
   source "'"$LIB"'" >/dev/null 2>&1
-  type -t gluerun_ctx_critic_recheck_resume_decide
+  type -t singular_ctx_critic_recheck_resume_decide
 ')"
 assert_eq "$sub_defined" "function" "auto-sourced by lib.sh ctx-loader glob"
 pass "invariance: engine file auto-sourced by the ctx-loader glob in lib.sh"
@@ -96,14 +96,14 @@ touch "$SENTINEL"
 exit 0
 STUBEOF
 chmod +x "$STUB"
-export GLUERUN_RUNNER="$STUB"
+export SINGULAR_RUNNER="$STUB"
 
 # The critic TEMPLATE must live where the plan-critic driver finalizes it from
-# (\${GLUERUN_ORCH_DIR}/prompts/plan-critic.md) so the template-sha gate matches
+# (\${SINGULAR_ORCH_DIR}/prompts/plan-critic.md) so the template-sha gate matches
 # the sha the finalize recorded. Copy the real fixture and derive the sha.
 [[ -f "$REAL_TEMPLATE" ]] || fail "missing critic template fixture source: $REAL_TEMPLATE"
-cp "$REAL_TEMPLATE" "$GLUERUN_ORCH_DIR/prompts/plan-critic.md"
-TPL_SHA="$(gluerun_sha256_file "$GLUERUN_ORCH_DIR/prompts/plan-critic.md")"
+cp "$REAL_TEMPLATE" "$SINGULAR_ORCH_DIR/prompts/plan-critic.md"
+TPL_SHA="$(singular_sha256_file "$SINGULAR_ORCH_DIR/prompts/plan-critic.md")"
 [[ -n "$TPL_SHA" ]] || fail "template sha came back empty"
 
 # A real worktree so the node-lineage gate (git merge-base --is-ancestor) runs
@@ -123,8 +123,8 @@ git -C "$wt" checkout -q master 2>/dev/null || git -C "$wt" checkout -q main 2>/
 
 NODE="critic-carryover"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-META="$GLUERUN_STATE_DIR/sessions/plan-critic/$NODE.json"
-lease_path="$GLUERUN_STATE_DIR/sessions/plan-critic/$NODE.lease"
+META="$SINGULAR_STATE_DIR/sessions/plan-critic/$NODE.json"
+lease_path="$SINGULAR_STATE_DIR/sessions/plan-critic/$NODE.lease"
 rm -f "$lease_path"
 
 # Forge a base-good plan-critic meta (all gates pass) then apply k=v overrides so
@@ -136,7 +136,7 @@ forge_meta() { # <path> [k=v ...]
 import json, sys
 path, cwd, now, node, tpl, head = sys.argv[1:7]
 doc = {
-    "schema": "gluerun.orchestration.session-meta.v0",
+    "schema": "singular.orchestration.session-meta.v0",
     "provider": "codex", "sessionId": "SID-CRITIC", "model": "m", "effort": "e",
     "cwd": cwd, "exitCode": 0, "createdAt": now,
     "role": "plan-critic", "node": node, "runner": "codex-run.sh",
@@ -151,12 +151,12 @@ PY
 }
 
 ev_count() { # <type>
-  [[ -f "$GLUERUN_EVENTS_FILE" ]] || { echo 0; return; }
-  local n; n="$(grep -c "\"type\":\"$1\"" "$GLUERUN_EVENTS_FILE" 2>/dev/null || true)"
+  [[ -f "$SINGULAR_EVENTS_FILE" ]] || { echo 0; return; }
+  local n; n="$(grep -c "\"type\":\"$1\"" "$SINGULAR_EVENTS_FILE" 2>/dev/null || true)"
   echo "${n:-0}"
 }
 last_event() { # <type> -> full event JSON of last matching event ("" if none)
-  python3 - "$GLUERUN_EVENTS_FILE" "$1" <<'PY'
+  python3 - "$SINGULAR_EVENTS_FILE" "$1" <<'PY'
 import json, sys
 path, typ = sys.argv[1:3]
 last = None
@@ -173,8 +173,8 @@ PY
 }
 
 # decide <meta> <node> <runner> <worktree> <lineage_head>. Default: knob ON (100%).
-decide() { GLUERUN_CRITIC_RECHECK_PCT="${GLUERUN_CRITIC_RECHECK_PCT:-100}" \
-  gluerun_ctx_critic_recheck_resume_decide "$@"; }
+decide() { SINGULAR_CRITIC_RECHECK_PCT="${SINGULAR_CRITIC_RECHECK_PCT:-100}" \
+  singular_ctx_critic_recheck_resume_decide "$@"; }
 
 RUNNER="codex-run.sh"
 
@@ -183,16 +183,16 @@ RUNNER="codex-run.sh"
 # The whole recheck feature is OFF, so no session is ever resumed.
 # ---------------------------------------------------------------------------
 m="$tmp/g-dis.json"; forge_meta "$m"
-out="$(GLUERUN_CRITIC_RECHECK_PCT=0 gluerun_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
+out="$(SINGULAR_CRITIC_RECHECK_PCT=0 singular_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
 assert_eq "$out" "fresh disabled" "disabled(=0)"
-out="$(unset GLUERUN_CRITIC_RECHECK_PCT; gluerun_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
+out="$(unset SINGULAR_CRITIC_RECHECK_PCT; singular_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
 assert_eq "$out" "fresh disabled" "disabled(unset)"
-out="$(GLUERUN_CRITIC_RECHECK_PCT=abc gluerun_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
+out="$(SINGULAR_CRITIC_RECHECK_PCT=abc singular_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
 assert_eq "$out" "fresh disabled" "disabled(non-numeric garbage)"
-out="$(GLUERUN_CRITIC_RECHECK_PCT="12x" gluerun_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
+out="$(SINGULAR_CRITIC_RECHECK_PCT="12x" singular_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
 assert_eq "$out" "fresh disabled" "disabled(partly-numeric garbage)"
 [[ "$out" != resume* ]] || fail "disabled must NEVER be upgraded to resume"
-pass "gate: GLUERUN_CRITIC_RECHECK_PCT unset/0/non-numeric -> fresh disabled"
+pass "gate: SINGULAR_CRITIC_RECHECK_PCT unset/0/non-numeric -> fresh disabled"
 
 # ---------------------------------------------------------------------------
 # Gate: no-session (missing + unparseable meta).
@@ -268,12 +268,12 @@ m="$tmp/g-tpl2.json"; forge_meta "$m" "promptSha256=$rendered_sha"
 out="$(decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
 assert_eq "$out" "fresh prompt-template-changed" "rendered-prompt sha"
 # Unreadable template -> empty sha -> fail closed.
-out="$(GLUERUN_PLAN_CRITIC_TEMPLATE=/no/such/template.md decide "$tmp/g-dis.json" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
+out="$(SINGULAR_PLAN_CRITIC_TEMPLATE=/no/such/template.md decide "$tmp/g-dis.json" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
 assert_eq "$out" "fresh prompt-template-changed" "unreadable template"
 pass "gate: stored sha != template sha / unreadable template -> fresh prompt-template-changed"
 
 # ---------------------------------------------------------------------------
-# Gate: expired (age > GLUERUN_SESSION_MAX_AGE_SEC, or missing createdAt).
+# Gate: expired (age > SINGULAR_SESSION_MAX_AGE_SEC, or missing createdAt).
 # ---------------------------------------------------------------------------
 m="$tmp/g-exp.json"; forge_meta "$m" "createdAt=2000-01-01T00:00:00Z"
 out="$(decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
@@ -281,7 +281,7 @@ assert_eq "$out" "fresh expired" "old createdAt"
 m="$tmp/g-exp2.json"; forge_meta "$m" "createdAt="
 out="$(decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")"
 assert_eq "$out" "fresh expired" "missing createdAt"
-pass "gate: age > GLUERUN_SESSION_MAX_AGE_SEC / missing createdAt -> fresh expired"
+pass "gate: age > SINGULAR_SESSION_MAX_AGE_SEC / missing createdAt -> fresh expired"
 
 # ---------------------------------------------------------------------------
 # Gate: worktree-moved.
@@ -320,10 +320,10 @@ lines="$(decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")" || rc=$?
 assert_eq "$rc" "0" "decider exit code is 0 on resume"
 [[ "$(printf '%s\n' "$lines" | grep -c .)" == "1" ]] || fail "decider printed more than one line"
 rc=0
-out="$(GLUERUN_CRITIC_RECHECK_PCT=0 gluerun_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")" || rc=$?
+out="$(SINGULAR_CRITIC_RECHECK_PCT=0 singular_ctx_critic_recheck_resume_decide "$m" "$NODE" "$RUNNER" "$wt" "$HEAD2")" || rc=$?
 assert_eq "$rc" "0" "decider exit code is 0 on fresh"
 # A decide-only run mutates no state (no events, no lease).
-[[ ! -s "$GLUERUN_EVENTS_FILE" ]] || fail "a decide-only run must not write events"
+[[ ! -s "$SINGULAR_EVENTS_FILE" ]] || fail "a decide-only run must not write events"
 [[ ! -e "$lease_path" ]] || fail "decide must not acquire a lease"
 pass "contract: exactly one line, exit 0 on resume and fresh, no ambiguity upgraded to resume, no state mutation"
 
@@ -334,8 +334,8 @@ pass "contract: exactly one line, exit 0 on resume and fresh, no ambiguity upgra
 RUN_ID="RUN-RECHECK-999"
 TASK_ID="TASK-ACCEPTED-777"
 
-: > "$GLUERUN_EVENTS_FILE"
-gluerun_ctx_critic_recheck_record_strategy "$NODE" "$RUN_ID" "$TASK_ID" resume resume SID-CRITIC \
+: > "$SINGULAR_EVENTS_FILE"
+singular_ctx_critic_recheck_record_strategy "$NODE" "$RUN_ID" "$TASK_ID" resume resume SID-CRITIC \
   || fail "record_strategy(resume) must succeed"
 [[ ! -e "$SENTINEL" ]] || fail "record_strategy spawned a runner"
 [[ ! -e "$lease_path" ]] || fail "record_strategy acquired a lease"
@@ -360,8 +360,8 @@ pass "record_strategy(resume): one plan-critic strategy_selected event with task
 # ---------------------------------------------------------------------------
 # record_strategy(fresh): one strategy_selected event, no sessionId, reason kept.
 # ---------------------------------------------------------------------------
-: > "$GLUERUN_EVENTS_FILE"
-gluerun_ctx_critic_recheck_record_strategy "$NODE" "$RUN_ID" "$TASK_ID" fresh role-mismatch \
+: > "$SINGULAR_EVENTS_FILE"
+singular_ctx_critic_recheck_record_strategy "$NODE" "$RUN_ID" "$TASK_ID" fresh role-mismatch \
   || fail "record_strategy(fresh) must succeed"
 [[ "$(ev_count context.strategy_selected)" -eq 1 ]] \
   || fail "record_strategy(fresh) must emit exactly one strategy_selected event"
@@ -383,7 +383,7 @@ pass "record_strategy(fresh): one plan-critic strategy_selected event, reason ke
 # ---------------------------------------------------------------------------
 # present-but-uncalled: no existing engine path invokes the new functions.
 # ---------------------------------------------------------------------------
-for fn in gluerun_ctx_critic_recheck_resume_decide gluerun_ctx_critic_recheck_record_strategy; do
+for fn in singular_ctx_critic_recheck_resume_decide singular_ctx_critic_recheck_record_strategy; do
   callers="$(grep -rl "$fn" "$ENGINE_HOME/engine" 2>/dev/null \
     | grep -v '/ctx-critic-recheck-resume.sh$' || true)"
   [[ -z "$callers" ]] || fail "$fn must be present-but-uncalled; referenced by: $callers"

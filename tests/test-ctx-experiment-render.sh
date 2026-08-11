@@ -2,13 +2,13 @@
 # Covers the read-only experiment-render PRESENTATION capstone tooling
 # engine/ctx-experiment-render.sh. This brick ships NO metric of its own: it
 # RENDERS the already-computed values of the integrated summary bundle
-# (gluerun.orchestration.ctx-experiment-summary.v0) into the deterministic
+# (singular.orchestration.ctx-experiment-summary.v0) into the deterministic
 # markdown metrics tables the operator drops into experiment-report.md.
 #
 # The renderer computes nothing, reclassifies nothing, and writes nothing: it
 # formats the bundle's verbatim numbers to STDOUT ONLY and reads/writes no other
 # file. When no summary source is supplied it obtains the bundle by delegating to
-# gluerun_ctx_experiment_summary_json with the standard env defaults.
+# singular_ctx_experiment_summary_json with the standard env defaults.
 #
 # Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
 #   - verbatim rendering: every rendered cell equals the corresponding bundle
@@ -61,8 +61,8 @@ source "$SIB_ATTEMPTS" || fail "sourcing $SIB_ATTEMPTS failed"
 source "$SIB_SUMMARY"  || fail "sourcing $SIB_SUMMARY failed"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-[[ "$(type -t gluerun_ctx_experiment_render_md)" == "function" ]] \
-  || fail "gluerun_ctx_experiment_render_md is not defined by $TOOL"
+[[ "$(type -t singular_ctx_experiment_render_md)" == "function" ]] \
+  || fail "singular_ctx_experiment_render_md is not defined by $TOOL"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -77,9 +77,9 @@ mkdir -p "$indir"
 fix="$indir/bundle.json"
 cat > "$fix" <<'EOF'
 {
-  "schema": "gluerun.orchestration.ctx-experiment-summary.v0",
+  "schema": "singular.orchestration.ctx-experiment-summary.v0",
   "report": {
-    "schema": "gluerun.orchestration.ctx-experiment-report.v0",
+    "schema": "singular.orchestration.ctx-experiment-report.v0",
     "arms": {
       "A": {"escapeRate": 0.25, "accepted": 4, "flagged": 2,
             "cost": {"tasks": 2, "tokensTotal": 300, "wallClockMsTotal": 4000,
@@ -92,7 +92,7 @@ cat > "$fix" <<'EOF'
              "directionalDisagreementRate": 0.375}
   },
   "strategy": {
-    "schema": "gluerun.orchestration.ctx-experiment-strategy.v0",
+    "schema": "singular.orchestration.ctx-experiment-strategy.v0",
     "hitRates": {
       "overall": {"total": 4, "resume": 2, "rehydrate": 1,
                   "resumeHitRate": 0.5, "rehydrateHitRate": 0.25},
@@ -117,7 +117,7 @@ cat > "$fix" <<'EOF'
     }
   },
   "attempts": {
-    "schema": "gluerun.orchestration.ctx-experiment-attempts.v0",
+    "schema": "singular.orchestration.ctx-experiment-attempts.v0",
     "attemptsToAccept": {
       "A": {"acceptedTasks": 2, "attemptsToAcceptSum": 3, "attemptsToAcceptMean": 1.75},
       "B": {"acceptedTasks": 2, "attemptsToAcceptSum": 5, "attemptsToAcceptMean": 2.25}
@@ -139,7 +139,7 @@ u_before="$(file_hash "$SIB_SUMMARY")"
 report_before="$(report_state)"
 
 # --- Render from a file path --------------------------------------------------
-md="$(gluerun_ctx_experiment_render_md "$fix")" \
+md="$(singular_ctx_experiment_render_md "$fix")" \
   || fail "renderer exited non-zero on a valid fixture"
 printf '%s\n' "$md" > "$tmp/out.md"
 [[ -n "$md" ]] || fail "renderer produced empty output on a valid fixture"
@@ -190,37 +190,37 @@ print("verbatim-ok")
 PY
 
 # --- Determinism: identical input -> byte-identical output -------------------
-md2="$(gluerun_ctx_experiment_render_md "$fix")"
+md2="$(singular_ctx_experiment_render_md "$fix")"
 [[ "$md" == "$md2" ]] || fail "render not deterministic across identical runs"
 
 # --- Stdin ("-") path renders byte-identically to the file path --------------
-md_stdin="$(gluerun_ctx_experiment_render_md - < "$fix")" \
+md_stdin="$(singular_ctx_experiment_render_md - < "$fix")" \
   || fail "renderer exited non-zero reading the bundle from stdin"
 [[ "$md" == "$md_stdin" ]] || fail "stdin render differs from file-path render"
 
 # --- No-source delegation: with no arg, render == rendering the delegated
 # summary bundle produced under the standard env defaults --------------------
-export GLUERUN_RUNS_DIR="$tmp/no-runs"
-export GLUERUN_EVENTS_FILE="$tmp/no-events.ndjson"
-export GLUERUN_CTX_EXPERIMENT_METRICS_FILE="$tmp/no-metrics.json"
-delegated_bundle="$(gluerun_ctx_experiment_summary_json)" \
+export SINGULAR_RUNS_DIR="$tmp/no-runs"
+export SINGULAR_EVENTS_FILE="$tmp/no-events.ndjson"
+export SINGULAR_CTX_EXPERIMENT_METRICS_FILE="$tmp/no-metrics.json"
+delegated_bundle="$(singular_ctx_experiment_summary_json)" \
   || fail "summary delegate exited non-zero"
 printf '%s' "$delegated_bundle" > "$tmp/delegated.json"
-expected_default="$(gluerun_ctx_experiment_render_md "$tmp/delegated.json")" \
+expected_default="$(singular_ctx_experiment_render_md "$tmp/delegated.json")" \
   || fail "renderer exited non-zero on the delegated bundle"
-got_default="$(gluerun_ctx_experiment_render_md)" \
+got_default="$(singular_ctx_experiment_render_md)" \
   || fail "no-arg renderer exited non-zero (should delegate + render)"
 [[ "$got_default" == "$expected_default" ]] \
   || fail "no-arg render does not match rendering the delegated summary bundle"
-unset GLUERUN_RUNS_DIR GLUERUN_EVENTS_FILE GLUERUN_CTX_EXPERIMENT_METRICS_FILE
+unset SINGULAR_RUNS_DIR SINGULAR_EVENTS_FILE SINGULAR_CTX_EXPERIMENT_METRICS_FILE
 
 # --- Fail-safe: a zeroed/empty bundle renders well-formed tables, zero exit ---
 zero="$tmp/zero.json"
 cat > "$zero" <<'EOF'
 {
-  "schema": "gluerun.orchestration.ctx-experiment-summary.v0",
+  "schema": "singular.orchestration.ctx-experiment-summary.v0",
   "report": {
-    "schema": "gluerun.orchestration.ctx-experiment-report.v0",
+    "schema": "singular.orchestration.ctx-experiment-report.v0",
     "arms": {
       "A": {"escapeRate": 0, "accepted": 0, "flagged": 0,
             "cost": {"tasks": 0, "tokensTotal": 0, "wallClockMsTotal": 0,
@@ -233,7 +233,7 @@ cat > "$zero" <<'EOF'
              "directionalDisagreementRate": 0}
   },
   "strategy": {
-    "schema": "gluerun.orchestration.ctx-experiment-strategy.v0",
+    "schema": "singular.orchestration.ctx-experiment-strategy.v0",
     "hitRates": {
       "overall": {"total": 0, "resume": 0, "rehydrate": 0, "resumeHitRate": 0, "rehydrateHitRate": 0},
       "byArm": {
@@ -249,7 +249,7 @@ cat > "$zero" <<'EOF'
     "refusalMix": {"reasonMix": {}, "resumeFailed": 0}
   },
   "attempts": {
-    "schema": "gluerun.orchestration.ctx-experiment-attempts.v0",
+    "schema": "singular.orchestration.ctx-experiment-attempts.v0",
     "attemptsToAccept": {
       "A": {"acceptedTasks": 0, "attemptsToAcceptSum": 0, "attemptsToAcceptMean": 0},
       "B": {"acceptedTasks": 0, "attemptsToAcceptSum": 0, "attemptsToAcceptMean": 0}
@@ -261,7 +261,7 @@ cat > "$zero" <<'EOF'
   }
 }
 EOF
-zero_md="$(gluerun_ctx_experiment_render_md "$zero")" \
+zero_md="$(singular_ctx_experiment_render_md "$zero")" \
   || fail "renderer exited non-zero on a zeroed bundle (should fail safe)"
 [[ -n "$zero_md" ]] || fail "zeroed bundle rendered empty output (not well-formed)"
 # Well-formed tables: each section header + separator + zero-valued rows present.

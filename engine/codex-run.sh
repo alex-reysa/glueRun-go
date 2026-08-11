@@ -16,9 +16,9 @@ allow_prefixes=()
 # invocation path below stays byte-identical to HEAD (no tee, no resume).
 session_meta_path=""
 resume_session_id=""
-runner_role="${GLUERUN_RUNNER_ROLE:-unknown}"
-capability_profile="${GLUERUN_RUNNER_CAPABILITY_PROFILE:-default}"
-result_file="${GLUERUN_RUNNER_RESULT_FILE:-}"
+runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
+capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
+result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
 describe_contract="no"
 
 while [[ $# -gt 0 ]]; do
@@ -89,7 +89,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$describe_contract" == "yes" ]]; then
-  gluerun_runner_describe_contract codex
+  singular_runner_describe_contract codex
   exit 0
 fi
 
@@ -97,32 +97,32 @@ if [[ -z "$run_id" ]]; then
   run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 fi
 if [[ -z "$result_file" ]]; then
-  result_file="$(gluerun_runner_default_result_file "$run_id")"
+  result_file="$(singular_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
 # Pid of the backgrounded provider pipeline while it is un-reaped. It is a
-# SESSION LEADER (see gluerun_codex_spawn_pipeline), which is what licenses the
-# `session` argument to gluerun_kill_tree below; it is cleared the instant it is
+# SESSION LEADER (see singular_codex_spawn_pipeline), which is what licenses the
+# `session` argument to singular_kill_tree below; it is cleared the instant it is
 # waited on, because a reaped pid is no longer a safe kill target.
 child=""
-gluerun_codex_result_on_exit() {
+singular_codex_result_on_exit() {
   local rc=$?
   trap - EXIT
   # An interrupted run leaves codex and its descendants alive, still writing to
   # the worktree. Kill the whole provider session first, then write the result.
   if [[ -n "${child:-}" ]]; then
-    gluerun_kill_tree "$child" 0 session 2>/dev/null || true
+    singular_kill_tree "$child" 0 session 2>/dev/null || true
     wait "$child" 2>/dev/null || true
     child=""
   fi
   if [[ "$runner_result_written" != "yes" ]]; then
-    gluerun_runner_result_write codex "$run_id" "$runner_role" "$capability_profile" \
+    singular_runner_result_write codex "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${jsonl_tmp:-}" "" "$output_last_message" || true
   fi
   [[ -n "${jsonl_tmp:-}" ]] && rm -f "$jsonl_tmp" 2>/dev/null || true
   exit "$rc"
 }
-trap gluerun_codex_result_on_exit EXIT
+trap singular_codex_result_on_exit EXIT
 # The provider now runs in its OWN session, so it no longer receives the
 # terminal's SIGINT along with this script, and ask/supervise/decide SIGTERM
 # this script on their way to a kill. Exiting from a signal handler runs the
@@ -138,9 +138,9 @@ if [[ -z "$worktree" ]]; then
   exit 2
 fi
 
-gluerun_require_target_branch
+singular_require_target_branch
 
-gluerun_validate_codex_sandbox() {
+singular_validate_codex_sandbox() {
   local value="$1" label="$2"
   case "$value" in
     read-only|workspace-write|danger-full-access) return 0 ;;
@@ -151,25 +151,25 @@ gluerun_validate_codex_sandbox() {
   esac
 }
 
-gluerun_codex_reasoning_effort() {
+singular_codex_reasoning_effort() {
   local level="$1" prompt_file="$2" prompt_name
   case "$level" in
     l0|l1)
-      printf '%s\n' "${GLUERUN_CODEX_L1_REASONING_EFFORT:-high}"
+      printf '%s\n' "${SINGULAR_CODEX_L1_REASONING_EFFORT:-high}"
       ;;
     l2)
-      printf '%s\n' "${GLUERUN_CODEX_L2_REASONING_EFFORT:-medium}"
+      printf '%s\n' "${SINGULAR_CODEX_L2_REASONING_EFFORT:-medium}"
       ;;
     readonly|read-only)
       prompt_name="$(basename "$prompt_file")"
       case "$prompt_name" in
-        planner-prompt.md) printf '%s\n' "${GLUERUN_CODEX_PLANNER_REASONING_EFFORT:-high}" ;;
-        auditor.md) printf '%s\n' "${GLUERUN_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
-        auditor-*.md) printf '%s\n' "${GLUERUN_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
-        reviewer.md|reviewer-*.md) printf '%s\n' "${GLUERUN_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
-        decider.md|decider-prompt-*.md) printf '%s\n' "${GLUERUN_CODEX_DECIDER_REASONING_EFFORT:-high}" ;;
-        *critic*.md) printf '%s\n' "${GLUERUN_CODEX_CRITIC_REASONING_EFFORT:-high}" ;;
-        *) printf '%s\n' "${GLUERUN_CODEX_READONLY_REASONING_EFFORT:-high}" ;;
+        planner-prompt.md) printf '%s\n' "${SINGULAR_CODEX_PLANNER_REASONING_EFFORT:-high}" ;;
+        auditor.md) printf '%s\n' "${SINGULAR_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
+        auditor-*.md) printf '%s\n' "${SINGULAR_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
+        reviewer.md|reviewer-*.md) printf '%s\n' "${SINGULAR_CODEX_AUDITOR_REASONING_EFFORT:-high}" ;;
+        decider.md|decider-prompt-*.md) printf '%s\n' "${SINGULAR_CODEX_DECIDER_REASONING_EFFORT:-high}" ;;
+        *critic*.md) printf '%s\n' "${SINGULAR_CODEX_CRITIC_REASONING_EFFORT:-high}" ;;
+        *) printf '%s\n' "${SINGULAR_CODEX_READONLY_REASONING_EFFORT:-high}" ;;
       esac
       ;;
   esac
@@ -183,8 +183,8 @@ case "$level" in
     fi
     ;;
   l2)
-    sandbox="${GLUERUN_L2_SANDBOX:-workspace-write}"
-    gluerun_validate_codex_sandbox "$sandbox" "GLUERUN_L2_SANDBOX"
+    sandbox="${SINGULAR_L2_SANDBOX:-workspace-write}"
+    singular_validate_codex_sandbox "$sandbox" "SINGULAR_L2_SANDBOX"
     ;;
   readonly|read-only)
     sandbox="read-only"
@@ -195,22 +195,22 @@ case "$level" in
     ;;
 esac
 
-codex_bin="$(gluerun_resolve_codex_bin 2>/dev/null || true)"
+codex_bin="$(singular_resolve_codex_bin 2>/dev/null || true)"
 profile_rc=0
-gluerun_runner_capability_prepare codex "$runner_role" "$capability_profile" \
+singular_runner_capability_prepare codex "$runner_role" "$capability_profile" \
   "$worktree" "$codex_bin" || profile_rc=$?
-capability_profile="$GLUERUN_RESOLVED_CAPABILITY_PROFILE"
+capability_profile="$SINGULAR_RESOLVED_CAPABILITY_PROFILE"
 profile_provider_args=()
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
-  profile_provider_args=("${GLUERUN_RESOLVED_PROVIDER_ARGS[@]}")
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  profile_provider_args=("${SINGULAR_RESOLVED_PROVIDER_ARGS[@]}")
 fi
 [[ "$profile_rc" -eq 0 ]] || exit "$profile_rc"
 if [[ -z "$codex_bin" ]]; then
-  gluerun_resolve_codex_bin >/dev/null
+  singular_resolve_codex_bin >/dev/null
   exit $?
 fi
 profile_native_args=()
-if [[ "$GLUERUN_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
+if [[ "$SINGULAR_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
   profile_native_args+=(--ignore-user-config)
 fi
 
@@ -221,16 +221,16 @@ elif [[ "$capture_packet" == "auto" ]]; then
 fi
 
 if [[ "$capture_packet" == "yes" ]]; then
-  run_dir="$GLUERUN_STATE_DIR/runs/$run_id"
+  run_dir="$SINGULAR_STATE_DIR/runs/$run_id"
   mkdir -p "$run_dir"
   if [[ -z "$output_last_message" ]]; then
     output_last_message="$run_dir/last-message.json"
   fi
 fi
 
-codex_model="${GLUERUN_CODEX_MODEL:-gpt-5.5}"
-codex_service_tier="${GLUERUN_CODEX_SERVICE_TIER:-}"
-codex_reasoning_effort="$(gluerun_codex_reasoning_effort "$level" "$prompt_file")"
+codex_model="${SINGULAR_CODEX_MODEL:-gpt-5.5}"
+codex_service_tier="${SINGULAR_CODEX_SERVICE_TIER:-}"
+codex_reasoning_effort="$(singular_codex_reasoning_effort "$level" "$prompt_file")"
 
 # ---- Session affinity: resume-refusal gate (exit 86) ------------------------
 # Model selection lives in the runner. If the host asks us to resume a session
@@ -261,7 +261,7 @@ PY
 fi
 
 if [[ "$level" == "l2" ]]; then
-  export GOCACHE="${GLUERUN_GO_BUILD_CACHE:-/private/tmp/gluerun-go-build-cache}"
+  export GOCACHE="${SINGULAR_GO_BUILD_CACHE:-/private/tmp/singular-build-cache}"
   mkdir -p "$GOCACHE"
 fi
 
@@ -281,7 +281,7 @@ if [[ -n "$resume_session_id" ]]; then
   if [[ ${#profile_native_args[@]} -gt 0 ]]; then
     cmd+=("${profile_native_args[@]}")
   fi
-  if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
     cmd+=("${profile_provider_args[@]}")
   fi
   cmd+=(resume "$resume_session_id" --json)
@@ -297,7 +297,7 @@ else
   if [[ ${#profile_native_args[@]} -gt 0 ]]; then
     cmd+=("${profile_native_args[@]}")
   fi
-  if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
     cmd+=("${profile_provider_args[@]}")
   fi
   cmd+=(-m "$codex_model" --sandbox "$sandbox" -C "$worktree" --json)
@@ -323,21 +323,21 @@ else
 fi
 
 # ---- Run --------------------------------------------------------------------
-# Guard rails (0.5.0): GLUERUN_CODEX_TIMEOUT_SEC (default 2400; 0 disables)
+# Guard rails (0.5.0): SINGULAR_CODEX_TIMEOUT_SEC (default 2400; 0 disables)
 # bounds wall clock — the field audit saw codex planners/auditors/workers hang
 # 28-380 minutes with zero output and no engine-side bound (the claude runner
-# has had GLUERUN_CLAUDE_TIMEOUT_SEC since 0.4.0). GLUERUN_CODEX_IDLE_SEC
+# has had SINGULAR_CLAUDE_TIMEOUT_SEC since 0.4.0). SINGULAR_CODEX_IDLE_SEC
 # (default 0 = off; 600 recommended) additionally kills a run whose JSONL
 # stream stops growing — codex --json emits an event per action, so byte
 # growth is a faithful liveness signal. Both kill the whole process tree and
 # surface exit 124, which every consumer already classifies as timeout/infra.
-# GLUERUN_CODEX_COMPLETION_GRACE_SEC (default 10; 0 disables) recognizes only
+# SINGULAR_CODEX_COMPLETION_GRACE_SEC (default 10; 0 disables) recognizes only
 # parsed, top-level Codex success events. It lets a semantically complete run
 # exit normally, then cleans up a provider process tree that remains alive
 # without converting the completed turn into a timeout.
-codex_timeout="${GLUERUN_CODEX_TIMEOUT_SEC:-2400}"
-codex_idle="${GLUERUN_CODEX_IDLE_SEC:-0}"
-codex_completion_grace="${GLUERUN_CODEX_COMPLETION_GRACE_SEC:-10}"
+codex_timeout="${SINGULAR_CODEX_TIMEOUT_SEC:-2400}"
+codex_idle="${SINGULAR_CODEX_IDLE_SEC:-0}"
+codex_completion_grace="${SINGULAR_CODEX_COMPLETION_GRACE_SEC:-10}"
 [[ "$codex_timeout" =~ ^[0-9]+$ ]] || codex_timeout=2400
 [[ "$codex_idle" =~ ^[0-9]+$ ]] || codex_idle=0
 [[ "$codex_completion_grace" =~ ^[0-9]+$ ]] || codex_completion_grace=10
@@ -346,13 +346,13 @@ exit_code=0
 # Always retain the provider JSONL until the normalized runner result is
 # written. This is the sole status input; the final assistant message and
 # command output are never scanned for quota prose.
-jsonl_tmp="$(mktemp "${TMPDIR:-/tmp}/gluerun-codex-jsonl.XXXXXX")"
+jsonl_tmp="$(mktemp "${TMPDIR:-/tmp}/singular-codex-jsonl.XXXXXX")"
 # Exported because the tee now lives inside a separate `bash -c` (the session
 # leader): the path cannot be interpolated into that script without quoting the
 # whole provider argv through it.
-export GLUERUN_CODEX_JSONL_TMP="$jsonl_tmp"
+export SINGULAR_CODEX_JSONL_TMP="$jsonl_tmp"
 
-gluerun_codex_completion_scan() {
+singular_codex_completion_scan() {
   # Incrementally inspect only complete JSONL records appended since the last
   # scan. A final newline-free record is also parsed, but its offset is retained
   # so a later append cannot hide a previously incomplete record.
@@ -412,9 +412,9 @@ print(consumed, outcome)
 PY
 }
 
-# The provider pipeline as a SESSION LEADER. gluerun_setsid_exec is the last
+# The provider pipeline as a SESSION LEADER. singular_setsid_exec is the last
 # command, so the `&` below makes $! the leader itself (pid == pgid) and
-# gluerun_kill_tree can group-kill codex plus everything it spawned with one
+# singular_kill_tree can group-kill codex plus everything it spawned with one
 # negative pid — no `ps`, which is the whole point (PMGO-004: in a sandbox that
 # denies process enumeration, only the direct child was being signalled and the
 # provider's descendants survived every timeout, invisibly).
@@ -422,10 +422,10 @@ PY
 # The tee stays INSIDE the session so the JSONL liveness signal is unchanged,
 # and the inner shell reproduces the previous subshell's exit contract exactly:
 # `exit "${PIPESTATUS[0]}"` — codex's status wins over tee's.
-gluerun_codex_spawn_pipeline() {
-  gluerun_setsid_exec "$(gluerun_bash_bin)" -c \
-    '"$@" | tee "$GLUERUN_CODEX_JSONL_TMP"; exit "${PIPESTATUS[0]}"' \
-    gluerun-codex-pipeline "${cmd[@]}"
+singular_codex_spawn_pipeline() {
+  singular_setsid_exec "$(singular_bash_bin)" -c \
+    '"$@" | tee "$SINGULAR_CODEX_JSONL_TMP"; exit "${PIPESTATUS[0]}"' \
+    singular-codex-pipeline "${cmd[@]}"
 }
 
 run_codex_guarded() {
@@ -439,15 +439,15 @@ run_codex_guarded() {
   (( codex_idle > 0 )) && idle_deadline=$(( SECONDS + codex_idle ))
   # The stdin redirect binds to the background job, so it survives the exec.
   if [[ -n "$prompt_file" ]]; then
-    gluerun_codex_spawn_pipeline <"$prompt_file" &
+    singular_codex_spawn_pipeline <"$prompt_file" &
   else
-    gluerun_codex_spawn_pipeline &
+    singular_codex_spawn_pipeline &
   fi
   child=$!
   # What this spawner knows about the session, recorded ps-free so a crashed
   # runner leaves behind a signalable group instead of an orphan tree.
   if [[ -n "${run_dir:-}" && -d "${run_dir:-}" ]]; then
-    gluerun_session_record_write "$run_dir/runner-session.json" "$child" 2>/dev/null || true
+    singular_session_record_write "$run_dir/runner-session.json" "$child" 2>/dev/null || true
   fi
   while kill -0 "$child" 2>/dev/null; do
     sleep 1
@@ -459,11 +459,11 @@ run_codex_guarded() {
     if (( codex_completion_grace > 0 )) \
       && [[ "$size" != "$completion_scan_size" ]]; then
       read -r completion_scan_offset completion_outcome \
-        < <(gluerun_codex_completion_scan "$completion_scan_offset")
+        < <(singular_codex_completion_scan "$completion_scan_offset")
       completion_scan_size="$size"
       if [[ "$completion_outcome" == "failed" ]]; then
         echo "codex-run: terminal provider failure observed; terminating process tree" >&2
-        gluerun_kill_tree "$child" "$(gluerun_provider_kill_grace_sec)" session
+        singular_kill_tree "$child" "$(singular_provider_kill_grace_sec)" session
         wait "$child" 2>/dev/null || true
         child=""
         return 1
@@ -476,7 +476,7 @@ run_codex_guarded() {
     if (( completion_deadline > 0 )); then
       if (( now >= completion_deadline )) && kill -0 "$child" 2>/dev/null; then
         echo "codex-run: completion grace expired after ${codex_completion_grace}s; terminating process tree" >&2
-        gluerun_kill_tree "$child" "$(gluerun_provider_kill_grace_sec)" session
+        singular_kill_tree "$child" "$(singular_provider_kill_grace_sec)" session
         wait "$child" 2>/dev/null || true
         child=""
         return 0
@@ -486,7 +486,7 @@ run_codex_guarded() {
 
     if (( deadline > 0 && now >= deadline )); then
       echo "codex-run: TIMED OUT after ${codex_timeout}s; killing process tree" >&2
-      gluerun_kill_tree "$child" "$(gluerun_provider_kill_grace_sec)" session
+      singular_kill_tree "$child" "$(singular_provider_kill_grace_sec)" session
       wait "$child" 2>/dev/null || true
       child=""
       return 124
@@ -497,7 +497,7 @@ run_codex_guarded() {
         idle_deadline=$(( now + codex_idle ))
       elif (( now >= idle_deadline )); then
         echo "codex-run: IDLE (no output for ${codex_idle}s); killing process tree" >&2
-        gluerun_kill_tree "$child" "$(gluerun_provider_kill_grace_sec)" session
+        singular_kill_tree "$child" "$(singular_provider_kill_grace_sec)" session
         wait "$child" 2>/dev/null || true
         child=""
         return 124
@@ -575,7 +575,7 @@ sys.stdout.write(found)
 PY
 )"
   fi
-  gluerun_codex_session_meta_write "$session_meta_path" "$session_id" "$codex_model" \
+  singular_codex_session_meta_write "$session_meta_path" "$session_id" "$codex_model" \
     "$codex_reasoning_effort" "$worktree" "$exit_code" || true
 fi
 # ---- Resume-failure signalling (exit 86) ------------------------------------
@@ -603,7 +603,7 @@ if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
 fi
 
-if gluerun_runner_result_write codex "$run_id" "$runner_role" "$capability_profile" \
+if singular_runner_result_write codex "$run_id" "$runner_role" "$capability_profile" \
   "$result_file" "$exit_code" "$jsonl_tmp" "" "$output_last_message"; then
   runner_result_written="yes"
 fi

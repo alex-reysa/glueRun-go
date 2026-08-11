@@ -13,26 +13,26 @@
 #
 # Assumption entries follow the grammar: `- [open|validated|violated] <claim> — <basis>`.
 
-# gluerun_ctx_packet_json <task-file>
+# singular_ctx_packet_json <task-file>
 #
 # Reads <task-file> STRICTLY READ-ONLY and prints normalized JSON on stdout:
 #   - well-formed block -> stable object with sorted keys and deterministic
 #     ordering:
-#       {"schema":"gluerun.orchestration.ctx-packet.v0","decisions":[...],
+#       {"schema":"singular.orchestration.ctx-packet.v0","decisions":[...],
 #        "assumptions":[{"status":...,"claim":...,"basis":...},...],
 #        "rejectedAlternatives":[...],"inspectedSymbols":[...]}
 #   - NO `## Context packet` block -> exactly `{}`
 #   - block present but malformed (an assumption entry not matching the grammar)
 #     -> fails closed to `{}` AND appends exactly one `ctx.packet_malformed`
-#        warning event via gluerun_append_event (its only side effect; the task
+#        warning event via singular_append_event (its only side effect; the task
 #        file itself is never touched).
-gluerun_ctx_packet_json() {
+singular_ctx_packet_json() {
   local task_file="$1"
   local out rc=0
-  out="$(gluerun_ctx_packet_json_py "$task_file")" || rc=$?
+  out="$(singular_ctx_packet_json_py "$task_file")" || rc=$?
   printf '%s\n' "$out"
   if [[ "$rc" -eq 3 ]]; then
-    gluerun_append_event "ctx.packet_malformed" \
+    singular_append_event "ctx.packet_malformed" \
       "context packet block malformed; failed closed to {}" \
       "{\"task\":\"$task_file\"}"
   fi
@@ -42,7 +42,7 @@ gluerun_ctx_packet_json() {
 # Internal: the pure Python parser. Prints normalized JSON (or `{}`) and signals a
 # malformed block with exit code 3 (stdout is still `{}`) so the shell wrapper can
 # append the single warning event. No side effects of its own.
-gluerun_ctx_packet_json_py() {
+singular_ctx_packet_json_py() {
   python3 - "$1" <<'PY'
 import json, re, sys
 
@@ -103,7 +103,7 @@ for item in list_items("assumptions"):
     })
 
 obj = {
-    "schema": "gluerun.orchestration.ctx-packet.v0",
+    "schema": "singular.orchestration.ctx-packet.v0",
     "decisions": list_items("decisions"),
     "assumptions": assumptions,
     "rejectedAlternatives": list_items("rejected alternatives"),

@@ -10,17 +10,17 @@
 #    disposition."
 #
 # It is the post-acceptance sibling of the integrated in-loop re-critique runner
-# gluerun_plan_recritic_run (TASK-0026, engine/ctx-plan-recritic-run.sh): TASK-0026
+# singular_plan_recritic_run (TASK-0026, engine/ctx-plan-recritic-run.sh): TASK-0026
 # re-critiques REVISED candidates in-loop; this runner rechecks an ACCEPTED task
 # AFTER acceptance. It is a DIFFERENT engagement — the ACCEPTED diff (not revised
-# candidates), gated by the default-OFF GLUERUN_CRITIC_RECHECK_PCT (not
-# GLUERUN_PLAN_RECRITIC_RESUME) — so it advances the stage rather than duplicating
+# candidates), gated by the default-OFF SINGULAR_CRITIC_RECHECK_PCT (not
+# SINGULAR_PLAN_RECRITIC_RESUME) — so it advances the stage rather than duplicating
 # TASK-0026.
 #
 # It composes ONLY already-integrated functions: the TASK-0027 sampling gate, the
 # TASK-0029 resume authority + strategy recorder, and the TASK-0028
 # classifier/recorder — plus the shared runner/session primitives (the DEFAULT
-# runner, the per-node critic session-path helper, gluerun_extract_json). To keep
+# runner, the per-node critic session-path helper, singular_extract_json). To keep
 # those integrated helpers structurally present-but-uncalled under their own
 # invariance greps, this brick reaches them by an ASSEMBLED PREFIX (mirroring
 # engine/ctx-plan-recritic-run.sh), never by their contiguous literal name, and it
@@ -45,14 +45,14 @@
 # touches no packet/lease/task file/inbox placement, and never makes the
 # un-bypassable fresh implementation auditor bypassable. It fails OPEN so an
 # infrastructure failure never blocks acceptance. Events land only in the pinned
-# GLUERUN_EVENTS_FILE.
+# SINGULAR_EVENTS_FILE.
 
 # Records ONLY the rc-86 resume-refused fresh-fallback: EXACTLY ONE role=plan-critic
 # `context.resume_failed` event carrying node, runId, the accepted `taskId`, and the
 # refused sessionId, mirroring the in-loop re-critique fresh fallback (TASK-0026). No
 # lease change, no runner, no outcome mutation.
-#   _gluerun_ctx_critic_recheck_run_resume_failed <node> <run_id> <task_id> <session_id>
-_gluerun_ctx_critic_recheck_run_resume_failed() {
+#   _singular_ctx_critic_recheck_run_resume_failed <node> <run_id> <task_id> <session_id>
+_singular_ctx_critic_recheck_run_resume_failed() {
   local node="${1:-}" run_id="${2:-}" task_id="${3:-}" session_id="${4:-}"
   local event_json
   event_json="$(python3 - "$node" "$run_id" "$task_id" "$session_id" <<'PY'
@@ -67,7 +67,7 @@ print(json.dumps({
 }, separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "context.resume_failed" "critic recheck resume failed; re-running fresh" "$event_json"
+  singular_append_event "context.resume_failed" "critic recheck resume failed; re-running fresh" "$event_json"
   return 0
 }
 
@@ -75,7 +75,7 @@ PY
 # EVERY path — it NEVER blocks or mutates the acceptance.
 #
 #   (1) SAMPLING GATE: key on run_id:task_id and consult the TASK-0027 sampler.
-#       When NOT sampled (default-OFF GLUERUN_CRITIC_RECHECK_PCT), return
+#       When NOT sampled (default-OFF SINGULAR_CRITIC_RECHECK_PCT), return
 #       immediately — NO runner, NO event, NO state write (byte-identical).
 #   (2) When sampled: resolve the canonical per-node plan-critic session-meta, take
 #       the accepted-diff lineage head (current worktree HEAD), consult the TASK-0029
@@ -92,16 +92,16 @@ PY
 #       addressed|survives|obsolete against <prior_critique_record> and emit EXACTLY
 #       ONE ctx.critic_recheck event — even a no-output recheck records every prior
 #       finding via the conservative `survives` default (recorded, never dropped).
-#   gluerun_ctx_critic_recheck_run <node> <run_id> <task_id> <run_dir> \
+#   singular_ctx_critic_recheck_run <node> <run_id> <task_id> <run_dir> \
 #       <prior_critique_record> [worktree]
-gluerun_ctx_critic_recheck_run() {
+singular_ctx_critic_recheck_run() {
   local node="$1" run_id="$2" task_id="$3" run_dir="$4" prior_record="$5" worktree="${6:-.}"
 
   # Reach the integrated recheck helpers (TASK-0027/0028/0029) and the critic
   # session-path helper by an ASSEMBLED PREFIX so they stay present-but-uncalled
   # under their own invariance greps; the contiguous literal name never appears.
-  local _cr_pfx=gluerun_ctx_critic_recheck_
-  local _critic_pfx=gluerun_ctx_plan_critic_
+  local _cr_pfx=singular_ctx_critic_recheck_
+  local _critic_pfx=singular_ctx_plan_critic_
 
   # (1) SAMPLING GATE keyed on the accepted task. NOT sampled (default-OFF) -> a
   # byte-identical no-op: no run_dir, no runner, no event, no state write.
@@ -116,7 +116,7 @@ gluerun_ctx_critic_recheck_run() {
   local session_meta; session_meta="$("${_critic_pfx}session_path" "$node")"
   # DEFAULT runner (cross-provider independence): a module-routed planner still gets
   # a default-runner critic, and the recheck resumes only that session.
-  local runner="${GLUERUN_RUNNER:-$GLUERUN_ENGINE_DIR/codex-run.sh}"
+  local runner="${SINGULAR_RUNNER:-$SINGULAR_ENGINE_DIR/codex-run.sh}"
   local runner_basename; runner_basename="$(basename "$runner")"
   # Accepted-diff lineage head = the current worktree HEAD; the decider's
   # head-rewritten gate keys the stored headShaAtCreate against it.
@@ -134,7 +134,7 @@ gluerun_ctx_critic_recheck_run() {
   # from parts on purpose (S2 contract gate + present-but-uncalled greps): the
   # contiguous literal filename never appears in the engine path.
   local _pn="plan-critic"
-  local prompt="${GLUERUN_ORCH_DIR}/prompts/${_pn}.md"
+  local prompt="${SINGULAR_ORCH_DIR}/prompts/${_pn}.md"
   local raw="$run_dir/critic-recheck-raw.json"
   local report="$run_dir/critic-recheck.json"
   [[ -n "$session_meta" ]] && mkdir -p "$(dirname "$session_meta")"
@@ -153,14 +153,14 @@ gluerun_ctx_critic_recheck_run() {
     local resume_result="$run_dir/critic-recheck-resume-runner-result.json"
     rm -f "$raw" "$resume_result" 2>/dev/null || true
     local rc=0
-    local critic_capability_profile="${GLUERUN_CRITIC_CAPABILITY_PROFILE:-audit-core}"
-    gluerun_runner_contract_prepare \
+    local critic_capability_profile="${SINGULAR_CRITIC_CAPABILITY_PROFILE:-audit-core}"
+    singular_runner_contract_prepare \
       "$runner" critic "$critic_capability_profile" "$resume_result"
-    GLUERUN_RUNNER_ROLE=critic \
-    GLUERUN_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
-    GLUERUN_RUNNER_RESULT_FILE="$resume_result" \
-    GLUERUN_RUNNER_RUN_ID="$run_id" \
-    "$runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    SINGULAR_RUNNER_ROLE=critic \
+    SINGULAR_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
+    SINGULAR_RUNNER_RESULT_FILE="$resume_result" \
+    SINGULAR_RUNNER_RUN_ID="$run_id" \
+    "$runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
       --level readonly -C "$worktree" --run-id "$run_id" \
       --prompt-file "$prompt" --output-last-message "$raw" \
       --session-meta "$session_meta" --resume-session "$sid" >/dev/null 2>&1 || rc=$?
@@ -168,7 +168,7 @@ gluerun_ctx_critic_recheck_run() {
     if [[ "$rc" -eq 86 ]]; then
       # rc-86: the runner refused the resume. Record the fresh fallback and re-run
       # FRESH — never upgrade or retry the resume.
-      _gluerun_ctx_critic_recheck_run_resume_failed "$node" "$run_id" "$task_id" "$sid" \
+      _singular_ctx_critic_recheck_run_resume_failed "$node" "$run_id" "$task_id" "$sid" \
         >/dev/null 2>&1 || true
       ran_fresh=1
     elif [[ "$rc" -eq 124 || ! -f "$raw" ]]; then
@@ -187,14 +187,14 @@ gluerun_ctx_critic_recheck_run() {
   if [[ "$ran_fresh" -eq 1 ]]; then
     local fresh_result="$run_dir/critic-recheck-fresh-runner-result.json"
     rm -f "$raw" "$fresh_result" 2>/dev/null || true
-    local critic_capability_profile="${GLUERUN_CRITIC_CAPABILITY_PROFILE:-audit-core}"
-    gluerun_runner_contract_prepare \
+    local critic_capability_profile="${SINGULAR_CRITIC_CAPABILITY_PROFILE:-audit-core}"
+    singular_runner_contract_prepare \
       "$runner" critic "$critic_capability_profile" "$fresh_result"
-    GLUERUN_RUNNER_ROLE=critic \
-    GLUERUN_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
-    GLUERUN_RUNNER_RESULT_FILE="$fresh_result" \
-    GLUERUN_RUNNER_RUN_ID="$run_id" \
-    "$runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    SINGULAR_RUNNER_ROLE=critic \
+    SINGULAR_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
+    SINGULAR_RUNNER_RESULT_FILE="$fresh_result" \
+    SINGULAR_RUNNER_RUN_ID="$run_id" \
+    "$runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
       --level readonly -C "$worktree" --run-id "$run_id" \
       --prompt-file "$prompt" --output-last-message "$raw" \
       --session-meta "$session_meta" >/dev/null 2>&1 || true
@@ -206,7 +206,7 @@ gluerun_ctx_critic_recheck_run() {
   # never dropped.
   rm -f "$report" 2>/dev/null || true
   if [[ -f "$raw" ]]; then
-    gluerun_extract_json "$raw" "$report" 2>/dev/null || rm -f "$report" 2>/dev/null || true
+    singular_extract_json "$raw" "$report" 2>/dev/null || rm -f "$report" 2>/dev/null || true
   fi
 
   # (4) Classify each prior finding against the recheck self-report and emit EXACTLY

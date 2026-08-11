@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0032",
   "runId": "RUN-20260711T145257Z-92007",
   "branch": "agent/plancritic/TASK-0032-critic-recheck-locate",

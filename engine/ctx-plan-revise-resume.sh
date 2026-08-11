@@ -10,7 +10,7 @@
 # strategy and the resume-refused (rc-86) fresh fallback.
 #
 # It reuses the integrated fail-closed planner-role decider
-# gluerun_planner_resume_decide (TASK-0009) VERBATIM so a revision round resumes
+# singular_planner_resume_decide (TASK-0009) VERBATIM so a revision round resumes
 # ONLY the same persisted node session those ordered gates already trust, and it
 # mirrors the strategy-event convention the integrated generate-tasks.sh
 # planner-resume consult hook (TASK-0011) established: a role=planner
@@ -30,9 +30,9 @@
 # resume gate (the decision is the integrated decider's verbatim verdict — a
 # `fresh <reason>` or decide-error is NEVER upgraded to `resume`), and never make
 # the fresh implementation auditor bypassable. Events land only in the pinned
-# GLUERUN_EVENTS_FILE.
+# SINGULAR_EVENTS_FILE.
 #
-# The single GLUERUN_PLAN_CRITIQUE-gated generate-tasks.sh / l1-plan-node.sh
+# The single SINGULAR_PLAN_CRITIQUE-gated generate-tasks.sh / l1-plan-node.sh
 # driver hook that wires the bounded revise -> (resume|fresh) -> re-critique ->
 # approve -> import loop over a stub runner, and the test-ctx-plan-revision.sh
 # full-walk, are the sanctioned final follow-up slice of this node and are OUT OF
@@ -45,20 +45,20 @@
 # upgraded to `resume` — a revision round resumes ONLY the same persisted planner
 # node session the gates already trust. Prints EXACTLY one line; never exits
 # non-zero (the delegate is fail-closed and always returns 0).
-#   gluerun_plan_revise_resume_decide <session_meta> <node> <runner_basename> \
+#   singular_plan_revise_resume_decide <session_meta> <node> <runner_basename> \
 #                                     <worktree> <lineage_head>
-gluerun_plan_revise_resume_decide() {
-  gluerun_planner_resume_decide "$@"
+singular_plan_revise_resume_decide() {
+  singular_planner_resume_decide "$@"
 }
 
 # Records ONLY. Emits EXACTLY ONE role=planner `context.strategy_selected` event
-# through gluerun_append_event carrying node, runId, `revisesRunId` (= the
+# through singular_append_event carrying node, runId, `revisesRunId` (= the
 # critique run being revised, marking this as the revision round), strategy
 # (`resume` or `fresh`), the exact `reason`, and `sessionId` on resume. No lease
 # change, no runner, no outcome mutation.
-#   gluerun_plan_revise_record_strategy <node> <run_id> <revises_run_id> \
+#   singular_plan_revise_record_strategy <node> <run_id> <revises_run_id> \
 #                                       <strategy> <reason> [session_id]
-gluerun_plan_revise_record_strategy() {
+singular_plan_revise_record_strategy() {
   local node="${1:-}" run_id="${2:-}" revises_run_id="${3:-}" \
         strategy="${4:-}" reason="${5:-}" session_id="${6:-}"
 
@@ -86,7 +86,7 @@ PY
   else
     message="plan-revision fresh-run strategy selected"
   fi
-  gluerun_append_event "context.strategy_selected" "$message" "$event_json"
+  singular_append_event "context.strategy_selected" "$message" "$event_json"
   return 0
 }
 
@@ -95,9 +95,9 @@ PY
 # refused sessionId, so the resume-refused -> fresh transition of a revision round
 # is observable to ctx-metrics.sh. This is the "fresh fallback recorded" predicate
 # of the node requiredCompletion. No lease change, no runner, no outcome mutation.
-#   gluerun_plan_revise_record_resume_failed <node> <run_id> <revises_run_id> \
+#   singular_plan_revise_record_resume_failed <node> <run_id> <revises_run_id> \
 #                                            <session_id>
-gluerun_plan_revise_record_resume_failed() {
+singular_plan_revise_record_resume_failed() {
   local node="${1:-}" run_id="${2:-}" revises_run_id="${3:-}" session_id="${4:-}"
 
   local event_json
@@ -114,6 +114,6 @@ print(json.dumps({
 PY
 )"
 
-  gluerun_append_event "context.resume_failed" "plan-revision planner resume failed; re-running fresh" "$event_json"
+  singular_append_event "context.resume_failed" "plan-revision planner resume failed; re-running fresh" "$event_json"
   return 0
 }

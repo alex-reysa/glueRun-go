@@ -20,7 +20,7 @@ printf 'hello\n' >"$tmp/prompt.md"
 
 run_codex() {
   # args: env-pairs... — invokes codex-run with the fake codex on PATH
-  env PATH="$tmp/bin:$PATH" GLUERUN_ROOT="$tmp/wt" GLUERUN_STATE_DIR="$tmp/state" GLUERUN_TARGET_BRANCH="$target_branch" "$@" \
+  env PATH="$tmp/bin:$PATH" SINGULAR_ROOT="$tmp/wt" SINGULAR_STATE_DIR="$tmp/state" SINGULAR_TARGET_BRANCH="$target_branch" "$@" \
     bash "$SCRIPT_DIR/codex-run.sh" --worktree "$tmp/wt" --level l2 --run-id RUN-T \
       --prompt-file "$tmp/prompt.md" >/dev/null 2>"$tmp/err.log"
 }
@@ -36,7 +36,7 @@ wait "$child"
 SH
 chmod +x "$tmp/bin/codex"
 rc=0
-CODEX_CHILD_FILE="$tmp/child.pid" run_codex env GLUERUN_CODEX_TIMEOUT_SEC=3 GLUERUN_CODEX_IDLE_SEC=0 CODEX_CHILD_FILE="$tmp/child.pid" || rc=$?
+CODEX_CHILD_FILE="$tmp/child.pid" run_codex env SINGULAR_CODEX_TIMEOUT_SEC=3 SINGULAR_CODEX_IDLE_SEC=0 CODEX_CHILD_FILE="$tmp/child.pid" || rc=$?
 assert_eq "124" "$rc" "hung codex times out with rc 124"
 grep -q "TIMED OUT" "$tmp/err.log" || fail "timeout reported on stderr"
 if [[ -s "$tmp/child.pid" ]]; then
@@ -53,7 +53,7 @@ sleep 30
 SH
 chmod +x "$tmp/bin/codex"
 rc=0
-run_codex env GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=3 || rc=$?
+run_codex env SINGULAR_CODEX_TIMEOUT_SEC=60 SINGULAR_CODEX_IDLE_SEC=3 || rc=$?
 assert_eq "124" "$rc" "stalled output is killed by the idle guard"
 grep -q "IDLE" "$tmp/err.log" || fail "idle kill reported on stderr"
 
@@ -63,7 +63,7 @@ for i in 1 2 3 4; do echo "{\"type\":\"tick\",\"n\":$i}"; sleep 1; done
 SH
 chmod +x "$tmp/bin/codex"
 rc=0
-run_codex env GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=3 || rc=$?
+run_codex env SINGULAR_CODEX_TIMEOUT_SEC=60 SINGULAR_CODEX_IDLE_SEC=3 || rc=$?
 assert_eq "0" "$rc" "steadily streaming run is never idle-killed"
 
 # 3. Guards disabled: legacy path, exit propagates.
@@ -74,8 +74,8 @@ exit 7
 SH
 chmod +x "$tmp/bin/codex"
 rc=0
-run_codex env GLUERUN_CODEX_TIMEOUT_SEC=0 GLUERUN_CODEX_IDLE_SEC=0 \
-  GLUERUN_CODEX_COMPLETION_GRACE_SEC=0 || rc=$?
+run_codex env SINGULAR_CODEX_TIMEOUT_SEC=0 SINGULAR_CODEX_IDLE_SEC=0 \
+  SINGULAR_CODEX_COMPLETION_GRACE_SEC=0 || rc=$?
 assert_eq "7" "$rc" "disabled guards propagate the codex exit code"
 
 # 4. A parsed terminal completion event starts a grace period. If Codex remains
@@ -100,8 +100,8 @@ chmod +x "$tmp/bin/codex"
 rc=0
 started="$SECONDS"
 CODEX_CHILD_FILE="$tmp/completed-child.pid" run_codex env \
-  GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=60 \
-  GLUERUN_CODEX_COMPLETION_GRACE_SEC=1 GLUERUN_PROVIDER_KILL_GRACE_SEC=1 \
+  SINGULAR_CODEX_TIMEOUT_SEC=60 SINGULAR_CODEX_IDLE_SEC=60 \
+  SINGULAR_CODEX_COMPLETION_GRACE_SEC=1 SINGULAR_PROVIDER_KILL_GRACE_SEC=1 \
   CODEX_CHILD_FILE="$tmp/completed-child.pid" || rc=$?
 elapsed=$(( SECONDS - started ))
 assert_eq "0" "$rc" "semantically completed hung codex exits successfully"
@@ -132,8 +132,8 @@ sleep 60
 SH
 chmod +x "$tmp/bin/codex"
 rc=0
-run_codex env GLUERUN_CODEX_TIMEOUT_SEC=3 GLUERUN_CODEX_IDLE_SEC=0 \
-  GLUERUN_CODEX_COMPLETION_GRACE_SEC=1 || rc=$?
+run_codex env SINGULAR_CODEX_TIMEOUT_SEC=3 SINGULAR_CODEX_IDLE_SEC=0 \
+  SINGULAR_CODEX_COMPLETION_GRACE_SEC=1 || rc=$?
 assert_eq "124" "$rc" "completion mentions do not bypass wall timeout"
 grep -q "TIMED OUT" "$tmp/err.log" || fail "ordinary timeout was not reported"
 if grep -q "semantic completion observed" "$tmp/err.log"; then
@@ -163,10 +163,10 @@ SH
 chmod +x "$tmp/bin/codex"
 : >"$tmp/psdenied-child.pid"
 rc=0
-env PATH="$tmp/psdeny:$tmp/bin:$PATH" GLUERUN_ROOT="$tmp/wt" GLUERUN_STATE_DIR="$tmp/state" \
-  GLUERUN_TARGET_BRANCH="$target_branch" \
-  GLUERUN_CODEX_TIMEOUT_SEC=3 GLUERUN_CODEX_IDLE_SEC=0 \
-  GLUERUN_PROVIDER_KILL_GRACE_SEC=1 CODEX_CHILD_FILE="$tmp/psdenied-child.pid" \
+env PATH="$tmp/psdeny:$tmp/bin:$PATH" SINGULAR_ROOT="$tmp/wt" SINGULAR_STATE_DIR="$tmp/state" \
+  SINGULAR_TARGET_BRANCH="$target_branch" \
+  SINGULAR_CODEX_TIMEOUT_SEC=3 SINGULAR_CODEX_IDLE_SEC=0 \
+  SINGULAR_PROVIDER_KILL_GRACE_SEC=1 CODEX_CHILD_FILE="$tmp/psdenied-child.pid" \
   bash "$SCRIPT_DIR/codex-run.sh" --worktree "$tmp/wt" --level l2 --run-id RUN-PSDENY \
     --prompt-file "$tmp/prompt.md" >/dev/null 2>"$tmp/err.log" || rc=$?
 assert_eq "124" "$rc" "ps-denied hung codex still times out with rc 124"

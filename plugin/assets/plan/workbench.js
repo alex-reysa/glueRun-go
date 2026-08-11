@@ -25,7 +25,7 @@ const LENS_BY_ID = {
 let curLens = null;          // current lens id
 let mounted = null;          // current lens object (mounted)
 let selectedNodeId = null;   // shared plan-node selection (drives the aside)
-let asideOpen = localStorage.getItem("gluerun.plan.aside") !== "0";
+let asideOpen = localStorage.getItem("singular.plan.aside") !== "0";
 let nodeEnrich = new Map();   // nodeId -> /api/node detail (aside lazy-enrich)
 let started = false;
 
@@ -53,7 +53,7 @@ export function setLens(id, opts) {
   if (id !== curLens || !mounted) {
     if (mounted && mounted.unmount) { try { mounted.unmount(); } catch (e) {} }
     curLens = id;
-    localStorage.setItem("gluerun.plan.lens", id);
+    localStorage.setItem("singular.plan.lens", id);
     mounted = LENS_BY_ID[id];
     if (pane) pane.dataset.lens = id;
     if (mounted && mounted.mount) mounted.mount(pane);
@@ -180,7 +180,7 @@ function wireAside() {
   if (!aside) return;
   aside.addEventListener("click", (e) => {
     const t = e.target.closest("#plan-aside-toggle");
-    if (t) { asideOpen = !asideOpen; localStorage.setItem("gluerun.plan.aside", asideOpen ? "1" : "0"); renderAside(); return; }
+    if (t) { asideOpen = !asideOpen; localStorage.setItem("singular.plan.aside", asideOpen ? "1" : "0"); renderAside(); return; }
     const dep = e.target.closest("[data-plan-node]");
     if (dep) { selectPlanNode(dep.dataset.planNode); return; }
     const task = e.target.closest("[data-plan-task]");
@@ -200,7 +200,7 @@ export function planTick() {
 // ------------------------------------------------------------- init --------
 export function initWorkbench() {
   if (started) return; started = true;
-  curLens = localStorage.getItem("gluerun.plan.lens") || "timeline";
+  curLens = localStorage.getItem("singular.plan.lens") || "timeline";
   if (!isPlanLens(curLens) || !LENS_BY_ID[curLens]) curLens = "timeline";
 
   const nav = document.getElementById("plan-lens-tabs");

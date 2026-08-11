@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0098",
   "runId": "RUN-20260712T222149Z-27519",
   "branch": "agent/eval/TASK-0098-experiment-render-result",
@@ -32,7 +32,7 @@
     "Gate exit 0 (gate-check.json) covering owned tests plus engine-clean regression.",
     "No branch drift: single worker commit atop baseRef eb212f0; worktree clean; headSha matches packet.",
     "No hidden scope expansion: new functions have no external callers \u2014 present-but-uncalled OFF-parity, corroborated by engine-clean pass and the test's sibling-file byte-hash assertions.",
-    "Provenance/consistency intact: renderer formats schema-versioned delta and armaudit artifacts verbatim (no recompute/reclassify), delegates to existing gluerun_ctx_experiment_delta_json / _armaudit_json, and is read-only/STDOUT-only.",
+    "Provenance/consistency intact: renderer formats schema-versioned delta and armaudit artifacts verbatim (no recompute/reclassify), delegates to existing singular_ctx_experiment_delta_json / _armaudit_json, and is read-only/STDOUT-only.",
     "Documented (not a defect): node completion still requires the operator to run the paired-audited A/B experiment and record per-knob defaults in docs/orchestration/decisions.md, per packet nextAction."
   ],
   "requiredFixes": [],

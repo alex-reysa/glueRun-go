@@ -1,14 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://gluerun.local/schemas/orchestration/ctx-experiment-attempts.v0.schema.json",
-  "title": "gluerun.orchestration.ctx-experiment-attempts.v0",
+  "$id": "https://singular.local/schemas/orchestration/ctx-experiment-attempts.v0.schema.json",
+  "title": "singular.orchestration.ctx-experiment-attempts.v0",
   "description": "Secondary raw-metrics artifact the operator's experiment-report.md references at merge alongside the ctx-experiment-report.v0 and ctx-experiment-strategy.v0 artifacts: the LAST remaining stage-7 secondary metrics — per-arm attempts-to-accept and findings-per-attempt. Computed read-only from the runs directory attempts indexes (runs/<runId>/attempts/index.json) joined per arm via ctx.arm_assigned in the events log. An attempt is accepted when its failureClass is one of empty / 'accepted' / 'none' (the ctx-metrics.v0 convention verbatim). Keys are sorted and deterministic for a fixed input set.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "attemptsToAccept", "findingsPerAttempt"],
   "properties": {
     "schema": {
-      "const": "gluerun.orchestration.ctx-experiment-attempts.v0"
+      "const": "singular.orchestration.ctx-experiment-attempts.v0"
     },
     "attemptsToAccept": {
       "type": "object",

@@ -5,11 +5,11 @@ set -euo pipefail
 # in for the real CLI so these run offline, for free, and in CI. They assert the
 # drop-in contract: final-message capture into --output-last-message, the
 # read-only restore guard (untracked + tracked), L2 write-persistence, fenced
-# JSON extraction via gluerun_extract_json, is_error propagation, and L0/L1
+# JSON extraction via singular_extract_json, is_error propagation, and L0/L1
 # scope-check enforcement.
 #
 # Capture files (--output-last-message) are written OUTSIDE the repo, mirroring
-# real usage where they live under gitignored .gluerun-state/runs (which the
+# real usage where they live under gitignored .singular-state/runs (which the
 # read-only restore guard never touches because it excludes ignored files).
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,7 +19,7 @@ CLAUDE_RUN="$SCRIPT_DIR/claude-run.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-claude-test.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-claude-test.XXXXXX")"
 bindir="$workroot/bin"
 mkdir -p "$bindir"
 cleanup() { rm -rf "$workroot"; }
@@ -68,22 +68,22 @@ MOCK
 chmod +x "$bindir/claude"
 
 export PATH="$bindir:$PATH"
-export GLUERUN_TARGET_BRANCH="test-target"
-export GLUERUN_CLAUDE_MAX_BUDGET_USD=0   # omit budget flag in tests
+export SINGULAR_TARGET_BRANCH="test-target"
+export SINGULAR_CLAUDE_MAX_BUDGET_USD=0   # omit budget flag in tests
 
 new_repo() {
   local d="$1"; mkdir -p "$d"
   ( cd "$d" && git init -q && git config user.email t@t && git config user.name t \
-      && printf '.gluerun-state/\n' > .gitignore && git add .gitignore && git commit -qm init \
-      && git branch "$GLUERUN_TARGET_BRANCH" )
+      && printf '.singular-state/\n' > .gitignore && git add .gitignore && git commit -qm init \
+      && git branch "$SINGULAR_TARGET_BRANCH" )
 }
 
 run_claude_run() {
   local repo="$1"; shift
-  ( cd "$repo" && GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$repo/.gluerun-state" "$CLAUDE_RUN" "$@" )
+  ( cd "$repo" && SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$repo/.singular-state" "$CLAUDE_RUN" "$@" )
 }
 
-extract() { # extract a field from a captured message file (mirrors gluerun_extract_json)
+extract() { # extract a field from a captured message file (mirrors singular_extract_json)
   python3 - "$1" "$2" <<'PY'
 import json,sys
 text=open(sys.argv[1]).read()
@@ -186,8 +186,8 @@ pass "c9 L1 scope-check accepts in-prefix write"
 # --- Case 10: wall-clock timeout kills a runaway run + its whole child tree ----
 r="$workroot/c10"; new_repo "$r"; o="$(out)"; marker="$r/completed.marker"; ec=0
 start=$SECONDS
-MOCK_SLEEP=6 MOCK_MARKER="$marker" GLUERUN_CLAUDE_TIMEOUT_SEC=2 \
-  GLUERUN_PROVIDER_KILL_GRACE_SEC=1 \
+MOCK_SLEEP=6 MOCK_MARKER="$marker" SINGULAR_CLAUDE_TIMEOUT_SEC=2 \
+  SINGULAR_PROVIDER_KILL_GRACE_SEC=1 \
   run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" >/dev/null 2>&1 || ec=$?
 elapsed=$((SECONDS - start))
 [[ "$ec" -eq 124 ]] || fail "c10: timeout should exit 124 (got $ec)"
@@ -232,20 +232,20 @@ grep -q -- "-r resume-id-77" "$args" || fail "c14: -r <id> not in argv (got: $(c
 grep -q -- "--fork-session" "$args" && fail "c14: --fork-session present when fork disabled"
 pass "c14 --resume-session adds -r <id> (no fork by default)"
 
-# --- Case 15: --fork-session added when GLUERUN_CLAUDE_FORK_ON_RESUME=1 -----------
+# --- Case 15: --fork-session added when SINGULAR_CLAUDE_FORK_ON_RESUME=1 -----------
 r="$workroot/c15"; new_repo "$r"; o="$(out)"; args="$workroot/c15.args"; meta="$workroot/c15-meta.json"
-MOCK_RESULT='{"status":"x"}' MOCK_SESSION_ID="sess3" MOCK_ARGS_OUT="$args" GLUERUN_CLAUDE_FORK_ON_RESUME=1 \
+MOCK_RESULT='{"status":"x"}' MOCK_SESSION_ID="sess3" MOCK_ARGS_OUT="$args" SINGULAR_CLAUDE_FORK_ON_RESUME=1 \
   run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" \
   --session-meta "$meta" --resume-session "resume-id-88" >/dev/null 2>&1
 grep -q -- "-r resume-id-88" "$args" || fail "c15: -r <id> not in argv"
 grep -q -- "--fork-session" "$args" || fail "c15: --fork-session missing when fork enabled (got: $(cat "$args"))"
-pass "c15 --fork-session added when GLUERUN_CLAUDE_FORK_ON_RESUME=1"
+pass "c15 --fork-session added when SINGULAR_CLAUDE_FORK_ON_RESUME=1"
 
 # --- Case 16: model mismatch vs existing meta -> exit 86 (resume-refused) ------
 r="$workroot/c16"; new_repo "$r"; o="$(out)"; meta="$workroot/c16-meta.json"; ec=0
 # Forge a meta recorded under a DIFFERENT model than the runner derives now.
 cat >"$meta" <<JSON
-{"schema":"gluerun.orchestration.session-meta.v0","provider":"claude","sessionId":"s","model":"claude-some-other","effort":"medium","cwd":"$r","exitCode":0,"createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.session-meta.v0","provider":"claude","sessionId":"s","model":"claude-some-other","effort":"medium","cwd":"$r","exitCode":0,"createdAt":"2026-01-01T00:00:00Z"}
 JSON
 MOCK_RESULT='{"status":"x"}' MOCK_ARGS_OUT="$workroot/c16.args" \
   run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" \
@@ -257,7 +257,7 @@ pass "c16 model mismatch -> exit 86 (resume-refused, no model run)"
 # --- Case 17: matching model -> NOT refused (proceeds, -r in argv) -------------
 r="$workroot/c17"; new_repo "$r"; o="$(out)"; args="$workroot/c17.args"; meta="$workroot/c17-meta.json"; ec=0
 cat >"$meta" <<JSON
-{"schema":"gluerun.orchestration.session-meta.v0","provider":"claude","sessionId":"s","model":"claude-opus-4-8","effort":"medium","cwd":"$r","exitCode":0,"createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.session-meta.v0","provider":"claude","sessionId":"s","model":"claude-opus-4-8","effort":"medium","cwd":"$r","exitCode":0,"createdAt":"2026-01-01T00:00:00Z"}
 JSON
 MOCK_RESULT='{"status":"x"}' MOCK_SESSION_ID="s" MOCK_ARGS_OUT="$args" \
   run_claude_run "$r" --level l2 -C "$r" --output-last-message "$o" \
@@ -269,7 +269,7 @@ pass "c17 matching model/effort -> proceeds with resume"
 # --- Case 18: readonly guard restores a file that was ALREADY dirty -----------
 # The defect that mattered most in the old path-diff guard. A file dirty before
 # the run appeared in its "before" list, so the diff saw no change when the agent
-# overwrote it and the agent's write survived — in $GLUERUN_ROOT, over an
+# overwrote it and the agent's write survived — in $SINGULAR_ROOT, over an
 # operator's uncommitted work.
 r="$workroot/c18"; new_repo "$r"; o="$(out)"
 printf 'committed\n' >"$r/wip.txt"
@@ -293,7 +293,7 @@ printf 'committed\n' >"$r/killed.txt"
 # runner in a subshell, and $! would name the subshell, so the SIGTERM would
 # never reach claude-run.sh's trap at all.
 ( cd "$r" && MOCK_RESULT='{"ok":true}' MOCK_WRITE="$r/killed.txt" MOCK_SLEEP=20 \
-    GLUERUN_CLAUDE_TIMEOUT_SEC=0 GLUERUN_ROOT="$r" GLUERUN_STATE_DIR="$r/.gluerun-state" \
+    SINGULAR_CLAUDE_TIMEOUT_SEC=0 SINGULAR_ROOT="$r" SINGULAR_STATE_DIR="$r/.singular-state" \
     exec "$CLAUDE_RUN" --level readonly -C "$r" --output-last-message "$o" ) \
   >/dev/null 2>&1 &
 kill_pid=$!
@@ -342,9 +342,9 @@ errlog="$workroot/c21.err"
 # Invoked directly (not via run_claude_run) so the ps stub is on PATH for this
 # case alone and never leaks into the rest of the suite.
 ( cd "$r" && PATH="$psdeny:$PATH" MOCK_RESULT='{"ok":true}' MOCK_SLEEP=30 \
-    MOCK_CHILD_OUT="$childf" GLUERUN_CLAUDE_TIMEOUT_SEC=2 \
-    GLUERUN_PROVIDER_KILL_GRACE_SEC=1 \
-    GLUERUN_ROOT="$r" GLUERUN_STATE_DIR="$r/.gluerun-state" \
+    MOCK_CHILD_OUT="$childf" SINGULAR_CLAUDE_TIMEOUT_SEC=2 \
+    SINGULAR_PROVIDER_KILL_GRACE_SEC=1 \
+    SINGULAR_ROOT="$r" SINGULAR_STATE_DIR="$r/.singular-state" \
     exec "$CLAUDE_RUN" --level l2 -C "$r" --output-last-message "$o" ) \
   >/dev/null 2>"$errlog" || ec=$?
 [[ "$ec" -eq 124 ]] || fail "c21: ps-denied timeout should still exit 124 (got $ec)"

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Covers the deterministic rehydration-mode decider engine/ctx-rehydrate-subgraph-arm.sh:
 #
-#   gluerun_ctx_rehydrate_subgraph_arm_mode <task_id> [graphDir]
+#   singular_ctx_rehydrate_subgraph_arm_mode <task_id> [graphDir]
 #
 # prints exactly `subgraph` or `flat`. It picks `subgraph` ONLY when ALL
 # fail-closed preconditions hold, else `flat`:
-#   (1) the dedicated feature knob GLUERUN_CTX_SUBGRAPH_REHYDRATE=1 (default 0);
-#   (2) the task's deterministic A/B arm (via gluerun_ctx_ab_arm_for) is the
+#   (1) the dedicated feature knob SINGULAR_CTX_SUBGRAPH_REHYDRATE=1 (default 0);
+#   (2) the task's deterministic A/B arm (via singular_ctx_ab_arm_for) is the
 #       designated TREATMENT arm B — control arm A stays flat;
-#   (3) the graph corpus at graphDir (default ${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph})
+#   (3) the graph corpus at graphDir (default ${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph})
 #       exists and is non-empty, so the subgraph assembler could render a packet.
 #
 # Asserts:
@@ -22,7 +22,7 @@
 #   (f) Determinism / machine-independence: same id -> same mode across repeated
 #       calls and across a separate bash process.
 #   (g) Evidence invariance: a mode choice never confers independence and never
-#       alters taint — gluerun_ctx_route_strategy_tainted rehydrate stays 1.
+#       alters taint — singular_ctx_route_strategy_tainted rehydrate stays 1.
 #   (h) OFF-parity: with the file sourced but the decider uncalled and the knob at
 #       its default, sourcing emits nothing and defines only the one new function.
 # The events log is pinned to an isolated temp file so the suite never mutates
@@ -40,8 +40,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/state"
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
 
@@ -51,20 +51,20 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$ARM" ]] || fail "engine not present yet: $ARM"
 # shellcheck disable=SC1090
 source "$ARM" || fail "sourcing $ARM failed"
-[[ "$(type -t gluerun_ctx_rehydrate_subgraph_arm_mode)" == "function" ]] \
-  || fail "gluerun_ctx_rehydrate_subgraph_arm_mode is not defined by $ARM"
+[[ "$(type -t singular_ctx_rehydrate_subgraph_arm_mode)" == "function" ]] \
+  || fail "singular_ctx_rehydrate_subgraph_arm_mode is not defined by $ARM"
 # The integrated arm-assignment reader must be available (compose, not reimpl).
-[[ "$(type -t gluerun_ctx_ab_arm_for)" == "function" ]] \
-  || fail "gluerun_ctx_ab_arm_for (engine/ctx-ab.sh) not available"
+[[ "$(type -t singular_ctx_ab_arm_for)" == "function" ]] \
+  || fail "singular_ctx_ab_arm_for (engine/ctx-ab.sh) not available"
 
 # Point the events log at an isolated temp file (lib.sh sets it at source time).
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+: > "$SINGULAR_EVENTS_FILE"
 
 count_events() {
-  [[ -f "$GLUERUN_EVENTS_FILE" ]] || { echo 0; return 0; }
+  [[ -f "$SINGULAR_EVENTS_FILE" ]] || { echo 0; return 0; }
   local c
-  c="$(grep -c '"type":' "$GLUERUN_EVENTS_FILE" 2>/dev/null)" || true
+  c="$(grep -c '"type":' "$SINGULAR_EVENTS_FILE" 2>/dev/null)" || true
   echo "${c:-0}"
 }
 
@@ -74,7 +74,7 @@ treat_id=""
 ctrl_id=""
 for id in TASK-0001 TASK-0002 TASK-0003 TASK-0004 TASK-0005 TASK-0006 \
           TASK-0007 TASK-0008 TASK-0009 TASK-0010 TASK-0011 TASK-0012; do
-  arm="$(gluerun_ctx_ab_arm_for "$id")"
+  arm="$(singular_ctx_ab_arm_for "$id")"
   [[ -z "$treat_id" && "$arm" == "B" ]] && treat_id="$id"
   [[ -z "$ctrl_id" && "$arm" == "A" ]] && ctrl_id="$id"
 done
@@ -96,29 +96,29 @@ mkdir -p "$graph_empty"
 # ---------------------------------------------------------------------------
 # (a) Default OFF -> flat, even with a treatment id + non-empty corpus.
 # ---------------------------------------------------------------------------
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
 before_ev="$(count_events)"
 before_hash="$(find "$graph_full" -type f -exec shasum {} \; | shasum | awk '{print $1}')"
-mode="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")" \
+mode="$(singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")" \
   || fail "OFF(unset): decider exited non-zero"
 [[ "$mode" == "flat" ]] || fail "OFF(unset): expected flat, got [$mode]"
 
-GLUERUN_CTX_SUBGRAPH_REHYDRATE=0
-mode="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")" \
+SINGULAR_CTX_SUBGRAPH_REHYDRATE=0
+mode="$(singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")" \
   || fail "OFF(=0): decider exited non-zero"
 [[ "$mode" == "flat" ]] || fail "OFF(=0): expected flat, got [$mode]"
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
 
 # ---------------------------------------------------------------------------
 # (b) knob=1 + treatment arm + present non-empty corpus -> subgraph.
 # ---------------------------------------------------------------------------
-export GLUERUN_CTX_SUBGRAPH_REHYDRATE=1
-mode="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")" \
+export SINGULAR_CTX_SUBGRAPH_REHYDRATE=1
+mode="$(singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")" \
   || fail "ON+treat+corpus: decider exited non-zero"
 [[ "$mode" == "subgraph" ]] || fail "ON+treat+corpus: expected subgraph, got [$mode]"
 
 # Exactly the token — no trailing/extra lines.
-raw="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")"
+raw="$(singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")"
 [[ "$(printf '%s' "$raw" | wc -l | tr -d ' ')" == "0" || \
    "$(printf '%s\n' "$raw" | wc -l | tr -d ' ')" == "1" ]] \
   || fail "output has extra lines: [$raw]"
@@ -127,18 +127,18 @@ raw="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")"
 # ---------------------------------------------------------------------------
 # (c) Fail-closed to flat: knob=1 + treatment arm but corpus missing or empty.
 # ---------------------------------------------------------------------------
-mode="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_missing")" \
+mode="$(singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_missing")" \
   || fail "ON+treat+missing: decider exited non-zero"
 [[ "$mode" == "flat" ]] || fail "ON+treat+missing corpus: expected flat, got [$mode]"
 
-mode="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_empty")" \
+mode="$(singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_empty")" \
   || fail "ON+treat+empty: decider exited non-zero"
 [[ "$mode" == "flat" ]] || fail "ON+treat+empty corpus: expected flat, got [$mode]"
 
 # ---------------------------------------------------------------------------
 # (d) Control arm (A) stays flat even with knob=1 + non-empty corpus.
 # ---------------------------------------------------------------------------
-mode="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$ctrl_id" "$graph_full")" \
+mode="$(singular_ctx_rehydrate_subgraph_arm_mode "$ctrl_id" "$graph_full")" \
   || fail "ON+control+corpus: decider exited non-zero"
 [[ "$mode" == "flat" ]] || fail "ON+control arm: expected flat, got [$mode]"
 
@@ -158,12 +158,12 @@ after_hash="$(find "$graph_full" -type f -exec shasum {} \; | shasum | awk '{pri
 # (f) Determinism / machine-independence: same id -> same mode across repeated
 #     calls and a separate bash process.
 # ---------------------------------------------------------------------------
-m1="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")"
-m2="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")"
+m1="$(singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")"
+m2="$(singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full")"
 [[ "$m1" == "$m2" ]] || fail "determinism: repeated calls differ ($m1 vs $m2)"
-m3="$(GLUERUN_CTX_SUBGRAPH_REHYDRATE=1 bash -c \
+m3="$(SINGULAR_CTX_SUBGRAPH_REHYDRATE=1 bash -c \
       'source "'"$ENGINE_HOME/engine/ctx-ab.sh"'"; source "'"$ARM"'"; \
-       gluerun_ctx_rehydrate_subgraph_arm_mode "'"$treat_id"'" "'"$graph_full"'"')" \
+       singular_ctx_rehydrate_subgraph_arm_mode "'"$treat_id"'" "'"$graph_full"'"')" \
   || fail "determinism: subprocess invocation failed"
 [[ "$m1" == "$m3" ]] || fail "determinism: cross-process mode differs ($m1 vs $m3)"
 
@@ -171,26 +171,26 @@ m3="$(GLUERUN_CTX_SUBGRAPH_REHYDRATE=1 bash -c \
 # (g) Evidence invariance: the mode choice never alters taint. The rehydrate
 #     strategy stays tainted regardless of which mode was chosen.
 # ---------------------------------------------------------------------------
-taint_before="$(gluerun_ctx_route_strategy_tainted rehydrate)"
-gluerun_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full" >/dev/null
-gluerun_ctx_rehydrate_subgraph_arm_mode "$ctrl_id" "$graph_full" >/dev/null
-taint_after="$(gluerun_ctx_route_strategy_tainted rehydrate)"
+taint_before="$(singular_ctx_route_strategy_tainted rehydrate)"
+singular_ctx_rehydrate_subgraph_arm_mode "$treat_id" "$graph_full" >/dev/null
+singular_ctx_rehydrate_subgraph_arm_mode "$ctrl_id" "$graph_full" >/dev/null
+taint_after="$(singular_ctx_route_strategy_tainted rehydrate)"
 [[ "$taint_before" == "1" ]] || fail "precondition: rehydrate not tainted"
 [[ "$taint_before" == "$taint_after" ]] \
   || fail "evidence invariance: taint changed ($taint_before -> $taint_after)"
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
 
 # ---------------------------------------------------------------------------
 # (h) OFF-parity: sourcing the file in a clean subshell with the knob at default
 #     emits nothing on stdout/stderr and defines the decider.
 # ---------------------------------------------------------------------------
 src_out="$(bash -c 'source "'"$ENGINE_HOME/engine/ctx-ab.sh"'"; source "'"$ARM"'"; \
-                    type -t gluerun_ctx_rehydrate_subgraph_arm_mode' 2>&1)"
+                    type -t singular_ctx_rehydrate_subgraph_arm_mode' 2>&1)"
 [[ "$src_out" == "function" ]] \
   || fail "OFF-parity: sourcing emitted output or failed to define the fn: [$src_out]"
 # Default-off: every fixture id maps to flat when the knob is unset.
 for id in "$treat_id" "$ctrl_id" TASK-0001 TASK-0002 TASK-0003; do
-  m="$(gluerun_ctx_rehydrate_subgraph_arm_mode "$id" "$graph_full")"
+  m="$(singular_ctx_rehydrate_subgraph_arm_mode "$id" "$graph_full")"
   [[ "$m" == "flat" ]] || fail "OFF-parity: id $id did not map to flat ([$m])"
 done
 

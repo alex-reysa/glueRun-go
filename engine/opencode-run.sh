@@ -4,10 +4,10 @@ set -euo pipefail
 # opencode-run.sh — OpenCode drop-in replacement for codex-run.sh / claude-run.sh.
 #
 # Same CLI surface and output contract so orchestration can dispatch the `opencode`
-# CLI by setting GLUERUN_RUNNER to this script. `opencode run --format json` emits a
+# CLI by setting SINGULAR_RUNNER to this script. `opencode run --format json` emits a
 # stream of newline-delimited JSON events; we reassemble the assistant's text parts
-# and write them to --output-last-message so the existing gluerun_extract_json /
-# gluerun_l1_prepare_worker_packet pipeline digs the JSON packet/verdict out exactly
+# and write them to --output-last-message so the existing singular_extract_json /
+# singular_l1_prepare_worker_packet pipeline digs the JSON packet/verdict out exactly
 # as it does for codex/claude output.
 #
 # Session affinity: OpenCode v1 exposes no captured session id here, so --session-meta
@@ -43,9 +43,9 @@ allow_prefixes=()
 # written best-effort (no sessionId); --resume-session is refused (exit 86).
 session_meta_path=""
 resume_session_id=""
-runner_role="${GLUERUN_RUNNER_ROLE:-unknown}"
-capability_profile="${GLUERUN_RUNNER_CAPABILITY_PROFILE:-default}"
-result_file="${GLUERUN_RUNNER_RESULT_FILE:-}"
+runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
+capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
+result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
 describe_contract="no"
 
 while [[ $# -gt 0 ]]; do
@@ -69,7 +69,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$describe_contract" == "yes" ]]; then
-  gluerun_runner_describe_contract opencode
+  singular_runner_describe_contract opencode
   exit 0
 fi
 
@@ -77,18 +77,18 @@ if [[ -z "$run_id" ]]; then
   run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 fi
 if [[ -z "$result_file" ]]; then
-  result_file="$(gluerun_runner_default_result_file "$run_id")"
+  result_file="$(singular_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
 ro_journal=""
-gluerun_opencode_result_on_exit() {
+singular_opencode_result_on_exit() {
   local rc=$?
   trap - EXIT
   # An interrupted run leaves the provider CLI and its descendants alive; they
   # would keep writing to the worktree while the guard restores it, and the
   # restore would lose the race. Kill first, then restore.
   if [[ -n "${oc_pid:-}" ]]; then
-    gluerun_kill_tree "$oc_pid" 0 session 2>/dev/null || true
+    singular_kill_tree "$oc_pid" 0 session 2>/dev/null || true
     wait "$oc_pid" 2>/dev/null || true
     oc_pid=""
   fi
@@ -96,19 +96,19 @@ gluerun_opencode_result_on_exit() {
   # process is the worse outcome. ask/supervise/decide background this runner
   # and kill it on timeout; the old guard was straight-line code after the run,
   # so on every one of those paths it simply never executed.
-  gluerun_readonly_guard_restore "${ro_journal:-}" || true
+  singular_readonly_guard_restore "${ro_journal:-}" || true
   ro_journal=""
   if [[ "$runner_result_written" != "yes" ]]; then
-    gluerun_runner_result_write opencode "$run_id" "$runner_role" "$capability_profile" \
+    singular_runner_result_write opencode "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
   fi
   [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
   exit "$rc"
 }
-trap gluerun_opencode_result_on_exit EXIT
+trap singular_opencode_result_on_exit EXIT
 # Exiting from a signal handler runs the EXIT trap, so these buy the guard a
 # chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
-# itself remains uncoverable; `gluerun_readonly_guard_sweep` is the answer there.
+# itself remains uncoverable; `singular_readonly_guard_sweep` is the answer there.
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -118,7 +118,7 @@ if [[ -z "$worktree" ]]; then
   exit 2
 fi
 
-gluerun_require_target_branch
+singular_require_target_branch
 
 opencode_bin="$(command -v opencode 2>/dev/null || true)"
 
@@ -142,19 +142,19 @@ if [[ -z "$prompt_file" ]]; then
 fi
 
 profile_rc=0
-gluerun_runner_capability_prepare opencode "$runner_role" "$capability_profile" \
+singular_runner_capability_prepare opencode "$runner_role" "$capability_profile" \
   "$worktree" "$opencode_bin" || profile_rc=$?
-capability_profile="$GLUERUN_RESOLVED_CAPABILITY_PROFILE"
+capability_profile="$SINGULAR_RESOLVED_CAPABILITY_PROFILE"
 profile_provider_args=()
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
-  profile_provider_args=("${GLUERUN_RESOLVED_PROVIDER_ARGS[@]}")
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  profile_provider_args=("${SINGULAR_RESOLVED_PROVIDER_ARGS[@]}")
 fi
 [[ "$profile_rc" -eq 0 ]] || exit "$profile_rc"
-gluerun_runner_reject_strict_legacy_extra_args \
-  opencode GLUERUN_OPENCODE_EXTRA_ARGS "${GLUERUN_OPENCODE_EXTRA_ARGS:-}" || exit $?
+singular_runner_reject_strict_legacy_extra_args \
+  opencode SINGULAR_OPENCODE_EXTRA_ARGS "${SINGULAR_OPENCODE_EXTRA_ARGS:-}" || exit $?
 [[ -n "$opencode_bin" ]] || { echo "opencode CLI not found on PATH" >&2; exit 127; }
 profile_native_args=()
-if [[ "$GLUERUN_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
+if [[ "$SINGULAR_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
   profile_native_args+=(--pure)
 fi
 
@@ -172,7 +172,7 @@ fi
 
 run_dir=""
 if [[ "$capture_packet" == "yes" ]]; then
-  run_dir="$GLUERUN_STATE_DIR/runs/$run_id"
+  run_dir="$SINGULAR_STATE_DIR/runs/$run_id"
   mkdir -p "$run_dir"
   if [[ -z "$output_last_message" ]]; then
     output_last_message="$run_dir/last-message.json"
@@ -180,10 +180,10 @@ if [[ "$capture_packet" == "yes" ]]; then
 fi
 
 # --- Model selection ------------------------------------------------------------
-# When GLUERUN_OPENCODE_MODEL is unset, OMIT -m entirely so OpenCode uses its own
+# When SINGULAR_OPENCODE_MODEL is unset, OMIT -m entirely so OpenCode uses its own
 # configured default model (spec 0.9.0). Model refs are `provider/model` strings.
 opencode_model() {
-  printf '%s\n' "${GLUERUN_OPENCODE_MODEL:-}"
+  printf '%s\n' "${SINGULAR_OPENCODE_MODEL:-}"
 }
 oc_model="$(opencode_model)"
 
@@ -194,7 +194,7 @@ cmd=("$opencode_bin" run --format json)
 if [[ ${#profile_native_args[@]} -gt 0 ]]; then
   cmd+=("${profile_native_args[@]}")
 fi
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
   cmd+=("${profile_provider_args[@]}")
 fi
 [[ -n "$oc_model" ]] && cmd+=(-m "$oc_model")
@@ -204,35 +204,35 @@ if [[ "$readonly_run" == "yes" ]]; then
   # the post-run restore guard as the entire enforcement. That made opencode the
   # only provider with no in-run restriction at all: codex takes an OS sandbox,
   # grok --sandbox read-only, gemini --approval-mode plan, cursor --mode ask.
-  cmd+=(--agent "${GLUERUN_OPENCODE_READONLY_AGENT:-plan}")
+  cmd+=(--agent "${SINGULAR_OPENCODE_READONLY_AGENT:-plan}")
 fi
 
-if [[ -n "${GLUERUN_OPENCODE_EXTRA_ARGS:-}" ]]; then
+if [[ -n "${SINGULAR_OPENCODE_EXTRA_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
-  cmd+=(${GLUERUN_OPENCODE_EXTRA_ARGS})
+  cmd+=(${SINGULAR_OPENCODE_EXTRA_ARGS})
 fi
 
 # --- Read-only snapshot (for restore-after) -------------------------------------
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_journal="$(gluerun_readonly_guard_capture "$worktree" "opencode-$run_id")"
+  ro_journal="$(singular_readonly_guard_capture "$worktree" "opencode-$run_id")"
 fi
 
-envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-opencode-env.XXXXXX")"
+envelope="$(mktemp "${TMPDIR:-/tmp}/singular-opencode-env.XXXXXX")"
 envelope_err="$envelope.err"
 
-# The provider as a SESSION LEADER: gluerun_setsid_exec is the LAST command, so
+# The provider as a SESSION LEADER: singular_setsid_exec is the LAST command, so
 # the `&` at the call site makes $! the leader itself (pid == pgid) and
-# gluerun_kill_tree group-kills the whole tree with one negative pid, without
+# singular_kill_tree group-kills the whole tree with one negative pid, without
 # `ps` (PMGO-004). Only ever invoked as a background job, so the `cd` is
 # contained; redirections live on the call site so they bind to the job.
 run_opencode() {
   cd "$worktree" || exit 1
-  gluerun_setsid_exec "${cmd[@]}"
+  singular_setsid_exec "${cmd[@]}"
 }
 
 exit_code=0
 echo "opencode-run: level=$level model=${oc_model:-<default>} worktree=$worktree run_id=$run_id" >&2
-oc_timeout="${GLUERUN_OPENCODE_TIMEOUT_SEC:-1200}"
+oc_timeout="${SINGULAR_OPENCODE_TIMEOUT_SEC:-1200}"
 # The provider always runs in the BACKGROUND, even with the timeout disabled.
 # bash defers a trapped signal until the foreground child finishes, so a
 # foreground run would swallow the SIGTERM that ask/supervise/decide send on
@@ -245,7 +245,7 @@ if [[ "$oc_timeout" =~ ^[0-9]+$ && "$oc_timeout" -gt 0 ]]; then
     if [[ "$SECONDS" -ge "$oc_deadline" ]]; then
       oc_timed_out="yes"
       # TERM the provider session, then KILL what is left.
-      gluerun_kill_tree "$oc_pid" "$(gluerun_provider_kill_grace_sec)" session
+      singular_kill_tree "$oc_pid" "$(singular_provider_kill_grace_sec)" session
       wait "$oc_pid" 2>/dev/null || true
       exit_code=124
       break
@@ -268,7 +268,7 @@ if [[ -n "$run_dir" ]]; then cp "$envelope" "$run_dir/opencode-envelope.json" 2>
 
 # --- Session-meta: no resumable id in v1; record provider + empty sessionId ----
 if [[ -n "$session_meta_path" ]]; then
-  gluerun_session_meta_write_provider "$session_meta_path" "opencode" "" "$oc_model" \
+  singular_session_meta_write_provider "$session_meta_path" "opencode" "" "$oc_model" \
     "" "$worktree" "$exit_code" || true
 fi
 
@@ -368,7 +368,7 @@ fi
 # must see the restored tree. The trap still holds the timeout and signal paths;
 # a second restore of a consumed journal is a no-op.
 if [[ "$readonly_run" == "yes" ]]; then
-  gluerun_readonly_guard_restore "$ro_journal" || true
+  singular_readonly_guard_restore "$ro_journal" || true
   ro_journal=""
 fi
 
@@ -385,7 +385,7 @@ if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
 fi
 
-if gluerun_runner_result_write opencode "$run_id" "$runner_role" "$capability_profile" \
+if singular_runner_result_write opencode "$run_id" "$runner_role" "$capability_profile" \
   "$result_file" "$exit_code" "$envelope" "$envelope_err" "$output_last_message"; then
   runner_result_written="yes"
 fi

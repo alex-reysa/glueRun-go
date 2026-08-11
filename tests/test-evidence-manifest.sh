@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 repo="$tmp/repo"
-run="$repo/.gluerun-state/runs/RUN-evidence"
+run="$repo/.singular-state/runs/RUN-evidence"
 mkdir -p "$repo/src" "$run/worker-evidence"
 git -C "$tmp" init -q repo
 git -C "$repo" config user.email test@example.com
@@ -40,13 +40,13 @@ JSON
 command_sha="$(printf '%s' 'run tests' | shasum -a 256 | awk '{print $1}')"
 cat >"$run/gate-observation.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.gate-observation.v0",
+  "schema": "singular.orchestration.gate-observation.v0",
   "failures": [{"signature": "known"}]
 }
 JSON
 cat >"$run/gate-baseline.json" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-baseline.v0",
+  "schema": "singular.orchestration.gate-baseline.v0",
   "commandSha256": "$command_sha",
   "failures": [{"signature": "known"}],
   "acknowledgedBy": "owner",
@@ -63,17 +63,17 @@ JSON
 python3 "$ROOT/engine/gate_report.py" \
   --task-id TASK-0001 --run-id RUN-evidence --head-sha "$head" \
   --command "run tests" --raw-exit-code 1 \
-  --log-ref ".gluerun-state/runs/RUN-evidence/gate-check.log" \
+  --log-ref ".singular-state/runs/RUN-evidence/gate-check.log" \
   --log-path "$run/gate-check.log" \
   --observation "$run/gate-observation.json" --baseline "$run/gate-baseline.json" \
   --integrity-status verified --phase worker --workspace-kind worker \
   --output "$run/gate-report.json" >/dev/null
-GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$repo/.gluerun-state" \
-  bash -c 'source "$1"; gluerun_check_result_write "$2" scope passed 0 "$3"' \
+SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$repo/.singular-state" \
+  bash -c 'source "$1"; singular_check_result_write "$2" scope passed 0 "$3"' \
   _ "$ROOT/engine/lib.sh" "$run/scope-check-result.json" "$run/scope-check.log"
 cat >"$run/worker-runner-result.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.runner-result.v0",
+  "schema": "singular.orchestration.runner-result.v0",
   "usage": {
     "inputTokens": 4200,
     "cachedInputTokens": 1000,
@@ -83,7 +83,7 @@ cat >"$run/worker-runner-result.json" <<'JSON'
 JSON
 cat >"$run/auditor-attempt-1-try-0-runner-result.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.runner-result.v0",
+  "schema": "singular.orchestration.runner-result.v0",
   "role": "auditor",
   "usage": {
     "inputTokens": 8000,
@@ -94,7 +94,7 @@ cat >"$run/auditor-attempt-1-try-0-runner-result.json" <<'JSON'
 JSON
 
 evidence_config='{"maxComposedBytes":65536,"maxExcerptBytes":128,"retrievalBudgetBytes":200,"auditInputTokenCanary":10000}'
-GLUERUN_EVIDENCE_CONFIG_JSON="$evidence_config" "$ROOT/engine/evidence-manifest.sh" \
+SINGULAR_EVIDENCE_CONFIG_JSON="$evidence_config" "$ROOT/engine/evidence-manifest.sh" \
   --run-dir "$run" --task-id TASK-0001 --worktree "$repo" \
   --base-ref "$base" --head-sha "$head" >/dev/null
 
@@ -102,7 +102,7 @@ python3 - "$run/evidence-manifest.json" <<'PY'
 import hashlib, json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 data = json.loads(path.read_text())
-assert data["schema"] == "gluerun.orchestration.evidence-manifest.v0"
+assert data["schema"] == "singular.orchestration.evidence-manifest.v0"
 assert data["diffSha256"]
 assert data["files"][0]["path"] == "src/value.txt"
 assert data["expectedFailureCount"] == 1
@@ -133,7 +133,7 @@ assert data["providerUsage"] == {
 }
 PY
 
-if GLUERUN_EVIDENCE_CONFIG_JSON='{"auditInputTokenCanary":8000}' \
+if SINGULAR_EVIDENCE_CONFIG_JSON='{"auditInputTokenCanary":8000}' \
   "$ROOT/engine/evidence-manifest.sh" \
     --run-dir "$run" --task-id TASK-0001 --worktree "$repo" \
     --base-ref "$base" --head-sha "$head" >/dev/null 2>&1; then

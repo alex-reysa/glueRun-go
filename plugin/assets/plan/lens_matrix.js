@@ -25,7 +25,7 @@ const PAD = 24;             // horizontal breathing room + scrollbar allowance
 const PAD_V = 20;           // vertical breathing room (fit math)
 const CELL_MIN = 22, CELL_MAX = 44;
 const LG_CELL = 32;         // at/above this the row label stacks title over id
-const FOLLOW_KEY = "gluerun.plan.mx.follow";
+const FOLLOW_KEY = "singular.plan.mx.follow";
 
 const clamp = (lo, hi, v) => Math.max(lo, Math.min(hi, v));
 

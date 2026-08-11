@@ -7,19 +7,19 @@
 # function only; NO existing engine path invokes it, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior (OFF-parity
 # by construction, mirroring engine/ctx-planner-resume.sh). The
-# GLUERUN_CTX_ROUTING wire-in and the engine/ctx-route.sh spine that composes this
-# gate with gluerun_session_resume_decide / gluerun_planner_resume_decide are
+# SINGULAR_CTX_ROUTING wire-in and the engine/ctx-route.sh spine that composes this
+# gate with singular_session_resume_decide / singular_planner_resume_decide are
 # later slices of the routing-module node and are OUT OF SCOPE here.
 #
-# gluerun_ctx_route_diff_gate <role> <worktree> <head-sha-at-create> \
+# singular_ctx_route_diff_gate <role> <worktree> <head-sha-at-create> \
 #                             <lineage-head> [role-relevant-paths...]
 #
 # Wall-clock age alone under-measures staleness — this is the churn axis. The
 # gate measures churn (git numstat added+deleted lines) in the role's relevant
 # files between headShaAtCreate and the current lineage head and refuses when it
-# exceeds GLUERUN_SESSION_DIFF_MAX_LINES:
+# exceeds SINGULAR_SESSION_DIFF_MAX_LINES:
 #
-#   churn > GLUERUN_SESSION_DIFF_MAX_LINES  -> refuse diff-volume
+#   churn > SINGULAR_SESSION_DIFF_MAX_LINES  -> refuse diff-volume
 #   churn <= threshold                      -> pass
 #
 # Role-relevant paths are the gate's scoping input: the trailing arguments are
@@ -37,8 +37,8 @@
 # Prints EXACTLY one line and never exits non-zero.
 #
 # Additive documented knob (default lives here):
-#   GLUERUN_SESSION_DIFF_MAX_LINES  400  max churned lines before refusing resume
-gluerun_ctx_route_diff_gate() {
+#   SINGULAR_SESSION_DIFF_MAX_LINES  400  max churned lines before refusing resume
+singular_ctx_route_diff_gate() {
   local role="$1" worktree="$2" base_sha="$3" head_sha="$4"
   shift 4 || true
   : "$role"  # accepted for per-role dispatch; the caller supplies the pathspec
@@ -59,7 +59,7 @@ gluerun_ctx_route_diff_gate() {
     printf 'refuse diff-volume\n'; return 0
   fi
 
-  local max_lines="${GLUERUN_SESSION_DIFF_MAX_LINES:-400}"
+  local max_lines="${SINGULAR_SESSION_DIFF_MAX_LINES:-400}"
   local verdict
   # numstat is passed as an argv, NOT on stdin: the heredoc that feeds the python
   # program already occupies stdin, so a piped stdin would be discarded.

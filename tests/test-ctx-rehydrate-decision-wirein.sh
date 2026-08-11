@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Drives a task through engine/l1-drive.sh in a hermetic GLUERUN_ROOT and asserts
+# Drives a task through engine/l1-drive.sh in a hermetic SINGULAR_ROOT and asserts
 # this slice's driver wire-in for the CORE durable-artifact class `decision-record`
 # of DAG node `rehydrate-path` (stage S5-routing, layer engine_runtime).
 #
 # The repo-level decision record lives OUTSIDE run_dir, so the pure resolver
-# gluerun_ctx_rehydrate_sources never emits it; it must be supplied by the caller
+# singular_ctx_rehydrate_sources never emits it; it must be supplied by the caller
 # as a class-tagged extra spec. This slice computes that spec via the pure leaf
-# gluerun_ctx_rehydrate_decision_source "$GLUERUN_ROOT" and threads the IDENTICAL
+# singular_ctx_rehydrate_decision_source "$SINGULAR_ROOT" and threads the IDENTICAL
 # spec into BOTH rehydrate sites in the driver:
-#   - the packet-injection hook appends it to gluerun_ctx_rehydrate_sources so the
+#   - the packet-injection hook appends it to singular_ctx_rehydrate_sources so the
 #     decision record is rendered into $active_prompt, and
 #   - the strategy-event record appends it as a trailing extra-id=path to
-#     gluerun_ctx_rehydrate_event_data so the SAME decision record (id + content
+#     singular_ctx_rehydrate_event_data so the SAME decision record (id + content
 #     hash) is recorded in the manifest.
 #
 # The scenario forces the implementer decision to `rehydrate window-pressure` at
 # the non-pinned `implement` step exactly as the sibling inject/event drive tests
 # do (attempt 1 OK but auditor needs-fix -> resumable meta; attempt 2 refuses the
-# resume under window pressure and upgrades to rehydrate behind GLUERUN_REHYDRATE=1,
+# resume under window pressure and upgrades to rehydrate behind SINGULAR_REHYDRATE=1,
 # then emits no packet so run_dir is frozen at its attempt-1 state). A durable
-# decision log is present under GLUERUN_ROOT.
+# decision log is present under SINGULAR_ROOT.
 #
 # Assertions:
 #   (RED core) ON rehydrate: the injected $active_prompt carries a
 #     `=== decision-record ===` section with the decision-log body; the recorded
 #     manifest.sources contains an entry id `decision-record` whose sha256 equals
 #     sha256(decisions.md); and both resolve to the SAME path + content hash.
-#   (OFF-parity) GLUERUN_REHYDRATE unset -> no rehydrate run; neither $active_prompt
+#   (OFF-parity) SINGULAR_REHYDRATE unset -> no rehydrate run; neither $active_prompt
 #     nor the recorded event data introduces a decision-record source.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
@@ -39,36 +39,36 @@ fi
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
-# Hermetic guard: scrub inherited GLUERUN_* so a leaked knob can't poison the sandbox.
-while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+# Hermetic guard: scrub inherited SINGULAR_* so a leaked knob can't poison the sandbox.
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: want '$2' got '$1'"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-rehydrate-decision-wirein.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-rehydrate-decision-wirein.XXXXXX")"
 trap 'rm -rf "$workroot"' EXIT
 
 # Source lib.sh (which auto-sources the ctx-*.sh bricks) so the test can recompute
 # the expected specs with the SAME pure helpers the driver delegates into.
-export GLUERUN_ROOT="$workroot/libroot"
-export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-export GLUERUN_TARGET_BRANCH="target"
-mkdir -p "$GLUERUN_STATE_DIR"
+export SINGULAR_ROOT="$workroot/libroot"
+export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+export SINGULAR_TARGET_BRANCH="target"
+mkdir -p "$SINGULAR_STATE_DIR"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
-[[ "$(type -t gluerun_ctx_rehydrate_decision_source)" == "function" ]] \
-  || fail "gluerun_ctx_rehydrate_decision_source not defined (leaf missing)"
-[[ "$(type -t gluerun_ctx_rehydrate_sources)" == "function" ]] \
-  || fail "gluerun_ctx_rehydrate_sources not defined (resolver missing)"
-[[ "$(type -t gluerun_ctx_rehydrate_packet)" == "function" ]] \
-  || fail "gluerun_ctx_rehydrate_packet not defined (assembler missing)"
+[[ "$(type -t singular_ctx_rehydrate_decision_source)" == "function" ]] \
+  || fail "singular_ctx_rehydrate_decision_source not defined (leaf missing)"
+[[ "$(type -t singular_ctx_rehydrate_sources)" == "function" ]] \
+  || fail "singular_ctx_rehydrate_sources not defined (resolver missing)"
+[[ "$(type -t singular_ctx_rehydrate_packet)" == "function" ]] \
+  || fail "singular_ctx_rehydrate_packet not defined (assembler missing)"
 
 # --- Driver fixture repo -----------------------------------------------------
 drv_root="$workroot/drv"
 mkdir -p "$drv_root/docs/orchestration/prompts" "$drv_root/docs/orchestration/tasks" \
-  "$drv_root/.gluerun-state" "$drv_root/internal/widget"
+  "$drv_root/.singular-state" "$drv_root/internal/widget"
 git -C "$drv_root" init -q
 git -C "$drv_root" config user.email t@t; git -C "$drv_root" config user.name t
 git -C "$drv_root" checkout -q -b target
@@ -110,7 +110,7 @@ git -C "$drv_root" add .
 git -C "$drv_root" commit -qm init
 
 TASK_MD="$drv_root/docs/orchestration/tasks/TASK-0001.md"
-EVENTS="$drv_root/.gluerun-state/events.ndjson"
+EVENTS="$drv_root/.singular-state/events.ndjson"
 DECISION_LOG="$drv_root/docs/orchestration/decisions.md"
 
 # The distinctive decision-log body. A marker string lets us assert the body is
@@ -144,23 +144,23 @@ if [[ "\$level" == "l2" ]]; then
     # record + packet injection for this attempt have already fired, and the next
     # decider append happens only AFTER this worker returns. So this snapshot is the
     # byte-exact decision-record state both rehydrate sites resolved.
-    [[ -n "\${DECISION_SNAPSHOT:-}" && -f "\$GLUERUN_ROOT/docs/orchestration/decisions.md" ]] \
-      && cp "\$GLUERUN_ROOT/docs/orchestration/decisions.md" "\$DECISION_SNAPSHOT"
+    [[ -n "\${DECISION_SNAPSHOT:-}" && -f "\$SINGULAR_ROOT/docs/orchestration/decisions.md" ]] \
+      && cp "\$SINGULAR_ROOT/docs/orchestration/decisions.md" "\$DECISION_SNAPSHOT"
     [[ -n "\$out" ]] && : > "\$out"
     exit 0
   fi
   mkdir -p "\$worktree/internal/widget"
   printf 'package widget\n// attempt %s\n' "\$c" > "\$worktree/internal/widget/parser.go"
   [[ -n "\$out" ]] && cat > "\$out" <<'PKT'
-{"schema":"gluerun.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
 PKT
-  [[ -n "\$meta" ]] && gluerun_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$worktree" 0
+  [[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$worktree" 0
   exit 0
 fi
 # read-only: the auditor.
 ac=0; [[ -f "\${AUDIT_COUNT_FILE:-/dev/null}" ]] && ac="\$(cat "\$AUDIT_COUNT_FILE" 2>/dev/null || echo 0)"
 ac=\$((ac+1)); [[ -n "\${AUDIT_COUNT_FILE:-}" ]] && echo "\$ac" > "\$AUDIT_COUNT_FILE"
-[[ -n "\$meta" ]] && gluerun_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$worktree" 0
+[[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$worktree" 0
 if [[ "\${SCENARIO:-accept}" == "needs-fix-first" && "\$ac" -eq 1 ]]; then
   [[ -n "\$out" ]] && printf '{"verdict":"needs-fix","findings":[{"summary":"fix it"}]}\n' > "\$out"
   exit 0
@@ -172,8 +172,8 @@ chmod +x "$mock_runner"
 
 reset_state() {
   git -C "$drv_root" checkout -q target 2>/dev/null || true
-  rm -rf "$drv_root/.gluerun-state/runs" "$drv_root/.gluerun-state/leases" \
-    "$drv_root/.gluerun-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
+  rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" \
+    "$drv_root/.singular-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
   : > "$EVENTS"
   rm -f "$workroot/l2-count" "$workroot/audit-count" 2>/dev/null || true
   python3 - "$TASK_MD" <<'PY'
@@ -187,16 +187,16 @@ PY
 }
 
 run_drive() {
-  ( cd "$drv_root" && env GLUERUN_ROOT="$drv_root" GLUERUN_STATE_DIR="$drv_root/.gluerun-state" \
-      GLUERUN_ORCH_DIR="$drv_root/docs/orchestration" GLUERUN_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
-      GLUERUN_TARGET_BRANCH=target GLUERUN_RUNNER="$mock_runner" GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+  ( cd "$drv_root" && env SINGULAR_ROOT="$drv_root" SINGULAR_STATE_DIR="$drv_root/.singular-state" \
+      SINGULAR_ORCH_DIR="$drv_root/docs/orchestration" SINGULAR_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
+      SINGULAR_TARGET_BRANCH=target SINGULAR_RUNNER="$mock_runner" SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
       L2_COUNT_FILE="$workroot/l2-count" AUDIT_COUNT_FILE="$workroot/audit-count" \
       DECISION_SNAPSHOT="$workroot/decision-snapshot.md" \
-      GLUERUN_MAX_RETRIES=1 \
+      SINGULAR_MAX_RETRIES=1 \
       "$@" "$SCRIPT_DIR/l1-drive.sh" TASK-0001 ) || true
 }
 
-run_dir_of() { ls -d "$drv_root"/.gluerun-state/runs/RUN-* 2>/dev/null | head -1; }
+run_dir_of() { ls -d "$drv_root"/.singular-state/runs/RUN-* 2>/dev/null | head -1; }
 
 # The LAST implementer context.strategy_selected event's `data` object.
 last_impl_strategy_data() {
@@ -225,7 +225,7 @@ PY
 sha256_of() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 
 # ---------------------------------------------------------------------------
-# (RED core) ON rehydrate with a durable decision log present under GLUERUN_ROOT:
+# (RED core) ON rehydrate with a durable decision log present under SINGULAR_ROOT:
 # the injected packet carries the decision-record body, and the recorded manifest
 # records the decision-record id + content hash; both agree by construction.
 # ---------------------------------------------------------------------------
@@ -233,7 +233,7 @@ reset_state
 rm -f "$workroot/decision-snapshot.md"
 printf '# Orchestration Decisions\n\n%s\n\n- rehydrate closes the last core coverage gap\n' "$DECISION_MARKER" > "$DECISION_LOG"
 
-run_drive GLUERUN_CTX_ROUTING=1 GLUERUN_REHYDRATE=1 GLUERUN_SESSION_WINDOW_MAX_PCT=0 \
+run_drive SINGULAR_CTX_ROUTING=1 SINGULAR_REHYDRATE=1 SINGULAR_SESSION_WINDOW_MAX_PCT=0 \
   SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "ON: no run dir produced"
 active_prompt="$run_dir/l2-active-prompt.md"
@@ -275,13 +275,13 @@ assert_eq "$recorded_sha" "$rehydrate_time_sha" "ON: recorded decision-record sh
 pass "(ON consistency) injected and recorded decision-record share path + content hash"
 
 # ---------------------------------------------------------------------------
-# (OFF-parity) GLUERUN_REHYDRATE unset -> no rehydrate run; neither the active
+# (OFF-parity) SINGULAR_REHYDRATE unset -> no rehydrate run; neither the active
 # prompt nor the recorded event data introduces a decision-record source, even
 # though the decision log is present.
 # ---------------------------------------------------------------------------
 reset_state
 printf '# Orchestration Decisions\n\n%s\n' "$DECISION_MARKER" > "$DECISION_LOG"
-run_drive GLUERUN_CTX_ROUTING=1 GLUERUN_SESSION_WINDOW_MAX_PCT=0 \
+run_drive SINGULAR_CTX_ROUTING=1 SINGULAR_SESSION_WINDOW_MAX_PCT=0 \
   SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "OFF: no run dir produced"
 active_prompt="$run_dir/l2-active-prompt.md"
@@ -291,6 +291,6 @@ grep -qF "=== decision-record ===" "$active_prompt" \
 data="$(last_impl_strategy_data "$EVENTS")" || fail "OFF: no implementer strategy_selected event"
 [[ "$data" != *"decision-record"* ]] \
   || fail "OFF: event data must not introduce a decision-record source"
-pass "(OFF) GLUERUN_REHYDRATE unset: no decision-record injected or recorded"
+pass "(OFF) SINGULAR_REHYDRATE unset: no decision-record injected or recorded"
 
 echo "ALL CTX-REHYDRATE-DECISION-WIREIN TESTS PASSED"

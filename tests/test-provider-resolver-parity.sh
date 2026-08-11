@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# engine/lib.sh's gluerun_resolve_codex_bin and engine/provider_resolver.py must
+# engine/lib.sh's singular_resolve_codex_bin and engine/provider_resolver.py must
 # answer identically. Bash stays authoritative for the runtime hot path (one
 # resolve per provider invocation in codex-run.sh); python serves doctor and the
 # console. Nothing at runtime forces them to agree, so this test does.
 #
 # The invariant that matters most: an explicitly configured but broken
-# GLUERUN_CODEX_BIN NEVER falls back to a working PATH candidate. The console
+# SINGULAR_CODEX_BIN NEVER falls back to a working PATH candidate. The console
 # violated exactly that, and reported a Codex the orchestration was not running.
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,28 +50,28 @@ command -v codex >/dev/null 2>&1 && {
     && fail "a codex on $SYS_PATH would make these fixtures ambiguous"
 }
 
-# Each case: <name> <GLUERUN_CODEX_BIN> <fixture PATH prefix>
+# Each case: <name> <SINGULAR_CODEX_BIN> <fixture PATH prefix>
 run_case() {
   local name="$1" codex_bin="$2" path_val="$3:$SYS_PATH"
 
   local bash_out bash_rc bash_err
   bash_err="$tmp/bash.err"
-  bash_out="$(GLUERUN_CODEX_BIN="$codex_bin" PATH="$path_val" \
-    "$BASH_BIN" -c 'source "$1/engine/lib.sh" >/dev/null 2>&1; gluerun_resolve_codex_bin' \
+  bash_out="$(SINGULAR_CODEX_BIN="$codex_bin" PATH="$path_val" \
+    "$BASH_BIN" -c 'source "$1/engine/lib.sh" >/dev/null 2>&1; singular_resolve_codex_bin' \
       _ "$ENGINE_HOME" 2>"$bash_err")"
   bash_rc=$?
   bash_err="$(head -1 "$tmp/bash.err")"
 
   local py_out
-  py_out="$(GLUERUN_CODEX_BIN="$codex_bin" PATH="$path_val" \
+  py_out="$(SINGULAR_CODEX_BIN="$codex_bin" PATH="$path_val" \
     "$PY3" - "$ENGINE_HOME" <<'PY'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "engine"))
 from provider_resolver import resolve_codex_bin
 # Mirror lib.sh: an unset override is an absent key, not an empty string.
 env = dict(os.environ)
-if not env.get("GLUERUN_CODEX_BIN"):
-    env.pop("GLUERUN_CODEX_BIN", None)
+if not env.get("SINGULAR_CODEX_BIN"):
+    env.pop("SINGULAR_CODEX_BIN", None)
 r = resolve_codex_bin(env)
 # One field per line: a tab-separated form would collapse the leading empty
 # `path` field, because bash treats tab as IFS whitespace.
@@ -118,7 +118,7 @@ run_case "override-absent" "$tmp/does-not-exist" "$tmp/bin"
 
 # The override must be codex-scoped: a codex pin must not steer another
 # provider's resolution.
-other="$(GLUERUN_CODEX_BIN="$tmp/pinned/codex" PATH="$tmp/bin:$SYS_PATH" \
+other="$(SINGULAR_CODEX_BIN="$tmp/pinned/codex" PATH="$tmp/bin:$SYS_PATH" \
   "$PY3" - "$ENGINE_HOME" <<'PY'
 import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "engine"))

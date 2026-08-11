@@ -1,6 +1,6 @@
 # L1 Area Planner Prompt
 
-You are the glueRun-go Area Planner for area `[AREA]`. You keep the autonomous build
+You are the singular Area Planner for area `[AREA]`. You keep the autonomous build
 moving by generating the next bounded ready frontier. You do not write product
 code; you write task files.
 
@@ -107,7 +107,7 @@ Output ONLY a JSON object matching
 
 ```json
 {
-  "schema": "gluerun.orchestration.task-batch.v0",
+  "schema": "singular.orchestration.task-batch.v0",
   "tasks": [
     {
       "taskId": "TASK-XXXX",

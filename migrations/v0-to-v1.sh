@@ -13,7 +13,7 @@ repo="${1:-}"
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-GLUERUN_ROOT="$repo" GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$ENGINE_HOME/engine/scaffold.sh"
+SINGULAR_ROOT="$repo" SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$ENGINE_HOME/engine/scaffold.sh"
 
 python3 - "$repo" <<'PY'
 import os
@@ -22,7 +22,7 @@ import sys
 
 repo = pathlib.Path(sys.argv[1])
 candidates = []
-cfg = repo / "gluerun.config.json"
+cfg = repo / "singular.config.json"
 if cfg.exists():
     candidates.append(cfg)
 orch = repo / "docs" / "orchestration"
@@ -36,7 +36,7 @@ for path in candidates:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         continue
-    updated = text.replace("pmgo.orchestration.", "gluerun.orchestration.")
+    updated = text.replace("pmgo.orchestration.", "singular.orchestration.")
     if updated != text:
         path.write_text(updated, encoding="utf-8")
 PY

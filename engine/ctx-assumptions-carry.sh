@@ -4,7 +4,7 @@
 # lib.sh (it matches the ctx-*.sh glob). Like engine/ctx-assumptions.sh and its siblings,
 # this file defines a PURE helper and is present-but-uncalled by every existing
 # engine/CLI/driver path, so with it sourced the engine stays byte-identical to prior
-# behavior (notably under GLUERUN_CTX_PACKET=0, which no path here consults).
+# behavior (notably under SINGULAR_CTX_PACKET=0, which no path here consults).
 #
 # The seed (engine/ctx-assumptions.sh) emits a fresh per-run ledger for each attempt from
 # the task packet (the per-run source of truth, unchanged between attempts). This slice
@@ -14,15 +14,15 @@
 # STRUCTURAL AUTHORITY for which assumptions exist and what they claim.
 #
 # This is later composed by the wire-in slices (composed per-run assembler, capsule
-# recording, fix/audit prompt injection behind GLUERUN_CTX_PACKET). This slice does NOT
+# recording, fix/audit prompt injection behind SINGULAR_CTX_PACKET). This slice does NOT
 # touch driver files, compose the assembler, record the capsule, inject into any prompt,
 # or add/consult the flag.
 
-# gluerun_ctx_assumptions_carry <prior-ledger-json> <seed-ledger-json>
+# singular_ctx_assumptions_carry <prior-ledger-json> <seed-ledger-json>
 #
 # A PURE ledger->ledger transform. Reads BOTH JSON arguments (no file I/O, no events,
 # reads no flag) and prints the merged ledger JSON on stdout:
-#   {"schema":"gluerun.orchestration.ctx-assumptions.v0",
+#   {"schema":"singular.orchestration.ctx-assumptions.v0",
 #    "assumptions":[{"id":"A1","status":..,"claim":..,"basis":..}, ...]}
 #
 #   - STRUCTURAL AUTHORITY = the seed: the output has EXACTLY the seed's assumption ids in
@@ -36,13 +36,13 @@
 #   - Deterministic + read-only: identical inputs yield byte-identical output; re-carrying
 #     an already-carried ledger against the same prior is a fixed point; neither input JSON
 #     nor any file is mutated.
-gluerun_ctx_assumptions_carry() {
-  gluerun_ctx_assumptions_carry_py "$1" "$2"
+singular_ctx_assumptions_carry() {
+  singular_ctx_assumptions_carry_py "$1" "$2"
 }
 
 # Internal: the pure Python transform. Reads prior + seed ledger JSON on argv and prints
 # the merged ledger. No I/O beyond stdout; no side effects.
-gluerun_ctx_assumptions_carry_py() {
+singular_ctx_assumptions_carry_py() {
   python3 - "$1" "$2" <<'PY'
 import json, sys
 
@@ -89,7 +89,7 @@ for a in _assumptions(seed):
     })
 
 obj = {
-    "schema": "gluerun.orchestration.ctx-assumptions.v0",
+    "schema": "singular.orchestration.ctx-assumptions.v0",
     "assumptions": out,
 }
 sys.stdout.write(json.dumps(obj, sort_keys=True, ensure_ascii=False))

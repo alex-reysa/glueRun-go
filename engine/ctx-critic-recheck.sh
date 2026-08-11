@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ctx-critic-recheck.sh — deterministic post-acceptance sampling gate behind the
-# default-OFF GLUERUN_CRITIC_RECHECK_PCT knob.
+# default-OFF SINGULAR_CRITIC_RECHECK_PCT knob.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
 # functions only; NO existing engine path invokes them, so with this file
@@ -21,7 +21,7 @@
 # and the l1-drive.sh post-acceptance hook are the sanctioned follow-up slices of
 # node critic-carryover and are OUT OF SCOPE here.
 #
-# Knob: GLUERUN_CRITIC_RECHECK_PCT (default 0 = OFF). Sampling is keyed on a
+# Knob: SINGULAR_CRITIC_RECHECK_PCT (default 0 = OFF). Sampling is keyed on a
 # stable content hash of the id reduced modulo 100 — never $RANDOM or any
 # host/process-specific source — so the decision is deterministic, reproducible
 # across repeated calls and separate processes, and machine-independent:
@@ -31,15 +31,15 @@
 #   a non-numeric/garbage -> treated as 0 (fail-safe OFF).
 #
 # Public entry points:
-#   gluerun_ctx_critic_recheck_bucket <id>
+#   singular_ctx_critic_recheck_bucket <id>
 #     Pure: print the id's sampling bucket in 0..99 (stable content hash mod 100).
-#   gluerun_ctx_critic_recheck_should_sample <id>
+#   singular_ctx_critic_recheck_should_sample <id>
 #     Pure: exit 0 iff the id is sampled under the current knob, else exit 1.
 
 # Print the sampling bucket (0..99) for an id via a stable content hash. Uses
 # SHA-256 where available, else shasum, else cksum's CRC — all deterministic and
 # machine-independent. Never $RANDOM or any process/host-specific source.
-gluerun_ctx_critic_recheck_bucket() {
+singular_ctx_critic_recheck_bucket() {
   local id="$1" hash
   if command -v sha256sum >/dev/null 2>&1; then
     hash="$(printf '%s' "$id" | sha256sum | awk '{print $1}')"
@@ -59,16 +59,16 @@ gluerun_ctx_critic_recheck_bucket() {
   fi
 }
 
-# Exit 0 iff the id is sampled under GLUERUN_CRITIC_RECHECK_PCT, else 1. Pure /
+# Exit 0 iff the id is sampled under SINGULAR_CRITIC_RECHECK_PCT, else 1. Pure /
 # no side effects. Default 0 (OFF) never samples; 100 always; a mid value P
 # samples the reproducible subset whose bucket < P; a non-numeric/garbage value
 # is treated as 0 (fail-safe OFF).
-gluerun_ctx_critic_recheck_should_sample() {
-  local id="$1" pct="${GLUERUN_CRITIC_RECHECK_PCT:-0}" bucket
+singular_ctx_critic_recheck_should_sample() {
+  local id="$1" pct="${SINGULAR_CRITIC_RECHECK_PCT:-0}" bucket
   [[ "$pct" =~ ^[0-9]+$ ]] || pct=0
   (( pct <= 0 )) && return 1
   (( pct >= 100 )) && return 0
-  bucket="$(gluerun_ctx_critic_recheck_bucket "$id")"
+  bucket="$(singular_ctx_critic_recheck_bucket "$id")"
   (( bucket < pct )) && return 0
   return 1
 }

@@ -3,13 +3,13 @@
 # (stage S5-routing, layer engine_runtime): the pure, read-only durable-source
 # resolver `engine/ctx-rehydrate-sources.sh`.
 #
-#   gluerun_ctx_rehydrate_sources <run_dir> [extra-id=path ...]
+#   singular_ctx_rehydrate_sources <run_dir> [extra-id=path ...]
 #
 # Enumerates the class-tagged durable rehydration sources that EXIST under
 # <run_dir>, one `<id>=<path>` spec per line, in the assembler's fixed
 # source-class order, deterministically (independent of on-disk enumeration).
-# Its stdout composes directly as arguments to gluerun_ctx_rehydrate_packet /
-# gluerun_ctx_rehydrate_manifest.
+# Its stdout composes directly as arguments to singular_ctx_rehydrate_packet /
+# singular_ctx_rehydrate_manifest.
 #
 #   - Class -> run_dir file mapping (single-sourced in the resolver):
 #       task-packet          -> packet.json
@@ -35,7 +35,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export GLUERUN_ROOT="$tmp"
+export SINGULAR_ROOT="$tmp"
 
 run_dir="$tmp/run-state/RUN-REHYDRATE-SOURCES"
 mkdir -p "$run_dir"
@@ -43,13 +43,13 @@ mkdir -p "$run_dir"
 sources() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_sources "$@"
+    singular_ctx_rehydrate_sources "$@"
   ' _ "$@"
 }
 manifest() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_manifest "$@"
+    singular_ctx_rehydrate_manifest "$@"
   ' _ "$@"
 }
 manifest_ids() {
@@ -144,7 +144,7 @@ empty="$(sources "$tmp/empty-run")" || fail "case6: empty run_dir exited non-zer
 [[ -z "$empty" ]] || fail "case6: empty run_dir yielded specs: [$empty]"
 
 # grants no independence: rehydrate strategy stays tainted
-tainted="$(bash -c 'source "'"$LIB"'"; gluerun_ctx_route_strategy_tainted rehydrate')" \
+tainted="$(bash -c 'source "'"$LIB"'"; singular_ctx_route_strategy_tainted rehydrate')" \
   || fail "case6: taint query exited non-zero"
 [[ "$tainted" == "1" ]] || fail "case6: rehydrate strategy no longer tainted (got [$tainted])"
 

@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0081",
   "runId": "RUN-20260712T165929Z-17142",
   "branch": "agent/eval/TASK-0081-experiment-attempts-metrics",
@@ -34,7 +34,7 @@
     "Gate passes: gate-check.json exitCode 0; independently re-ran green suite and the gate regression command, both exit 0.",
     "Schema/type/provenance consistent: emitted artifact carries const schema id, additionalProperties:false, all required keys; test validates artifact (and zeroed fail-safe artifact) against the shipped v0 schema; sorted-key/deterministic output verified.",
     "Correctness verified against fixture math: attempts-to-accept A={2,3,1.5}/B={1,1,1.0}, findings-per-attempt A={3,3,1.0}/B={4,4,1.0}; first-accepted-ordinal, arm join (last-wins, unassigned excluded), and findings-length (absent=0) logic all match; no divide-by-zero (0.0 when empty).",
-    "Read-only + foundation clean: test proves input fixture tree and sibling engine files (ctx-metrics/report/strategy, all confirmed present) are byte-unchanged; test-engine-clean passes (engine/ + schemas/ free of GLUERUN-specific symbols); secret-scan clean.",
+    "Read-only + foundation clean: test proves input fixture tree and sibling engine files (ctx-metrics/report/strategy, all confirmed present) are byte-unchanged; test-engine-clean passes (engine/ + schemas/ free of consumer-specific symbols); secret-scan clean.",
     "No hidden scope expansion: functions are defined-but-uncalled (intrinsic OFF-parity, measurement-only); nextAction honestly states this is a secondary-metrics gate candidate that does NOT itself complete the experiment-run node.",
     "Informational (non-blocking, no fix required): the 'auto-sourced by lib.sh ctx-loader glob' claim in the header is asserted but not directly exercised by the test; acceptable since functions are inert-when-present and engine-clean passes, so no behavior change is possible."
   ],

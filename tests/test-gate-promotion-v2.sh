@@ -16,12 +16,12 @@ mkdir -p \
   "$root/docs/orchestration/tasks" \
   "$root/internal/storage" \
   "$root/internal/workflow" \
-  "$root/.gluerun-state"
+  "$root/.singular-state"
 
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 
-cat >"$root/gluerun.config.json" <<'EOF'
+cat >"$root/singular.config.json" <<'EOF'
 {
   "schemaVersion": "v2",
   "targetBranch": "target",
@@ -30,7 +30,7 @@ cat >"$root/gluerun.config.json" <<'EOF'
 EOF
 cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     {
       "id": "D0.contract",
@@ -64,7 +64,7 @@ cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 EOF
 cat >"$root/docs/orchestration/gates/D0.contract.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D0.contract",
   "status": "passed",
   "authoritative": true,
@@ -99,11 +99,11 @@ git -C "$root" -c user.name=test -c user.email=test@example.local \
 out="$(
   cd "$root"
   env \
-    GLUERUN_ROOT="$root" \
-    GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
-    GLUERUN_PROMOTE_GATE_COMMAND='printf "%s\n" "{\"schema\":\"gluerun.orchestration.gate-observation.v0\",\"failures\":[]}" >"$GLUERUN_GATE_REPORT_FILE"; printf "%s\n" promotion-ok' \
-    bash "$ENGINE_HOME/gluerun-ext/promote-gate.sh" S0.storage_substrate_base 2>&1
+    SINGULAR_ROOT="$root" \
+    SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
+    SINGULAR_PROMOTE_GATE_COMMAND='printf "%s\n" "{\"schema\":\"singular.orchestration.gate-observation.v0\",\"failures\":[]}" >"$SINGULAR_GATE_REPORT_FILE"; printf "%s\n" promotion-ok' \
+    bash "$ENGINE_HOME/singular-ext/promote-gate.sh" S0.storage_substrate_base 2>&1
 )" || fail "schema-v2 promotion failed: $out"
 [[ "$out" == *"promoted node=S0.storage_substrate_base"* ]] \
   || fail "schema-v2 promotion did not report success: $out"
@@ -120,7 +120,7 @@ import sys
 gate_path, root_raw = sys.argv[1:3]
 root = pathlib.Path(root_raw)
 gate = json.load(open(gate_path, encoding="utf-8"))
-assert gate["schema"] == "gluerun.orchestration.gate-result.v1", gate
+assert gate["schema"] == "singular.orchestration.gate-result.v1", gate
 assert gate["status"] == "passed"
 assert gate["authoritative"] is True
 assert gate["verificationClassification"] == "passed"
@@ -166,9 +166,9 @@ assert report["evidenceBindingSha256"] == expected_binding
 PY
 
 env \
-  GLUERUN_ROOT="$root" \
-  GLUERUN_STATE_DIR="$root/.gluerun-state" \
-  GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+  SINGULAR_ROOT="$root" \
+  SINGULAR_STATE_DIR="$root/.singular-state" \
+  SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
   bash "$ENGINE_HOME/engine/dag.sh" area-gate S0.storage_substrate_base >/dev/null
 
 # Frontier evaluation re-hashes every v1 evidence class. Preserve a known-good
@@ -184,9 +184,9 @@ cp "$root/internal/storage/source.txt" "$tmp/source.valid.txt"
 assert_gate_rejected() {
   local label="$1"
   if env \
-    GLUERUN_ROOT="$root" \
-    GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+    SINGULAR_ROOT="$root" \
+    SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
     bash "$ENGINE_HOME/engine/dag.sh" area-gate S0.storage_substrate_base \
       >"$tmp/rejected.out" 2>&1
   then
@@ -280,10 +280,10 @@ cp "$tmp/gate.valid.json" "$gate"
 blocked_out="$(
   cd "$root"
   env \
-    GLUERUN_ROOT="$root" \
-    GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
-    bash "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.contract 2>&1
+    SINGULAR_ROOT="$root" \
+    SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
+    bash "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.contract 2>&1
 )" || fail "schema-v2 blocked disposition failed: $blocked_out"
 [[ "$blocked_out" == *"blocked node=D2.contract"* ]] \
   || fail "schema-v2 blocked disposition did not report the block: $blocked_out"
@@ -293,7 +293,7 @@ import re
 import sys
 
 gate = json.load(open(sys.argv[1], encoding="utf-8"))
-assert gate["schema"] == "gluerun.orchestration.gate-result.v1", gate
+assert gate["schema"] == "singular.orchestration.gate-result.v1", gate
 assert gate["status"] == "blocked"
 assert gate["authoritative"] is True
 assert {item["kind"] for item in gate["evidence"]} == {"source-path", "task-set"}

@@ -8,12 +8,12 @@ cmd="${1:-}"
 [[ -n "$cmd" ]] || { echo "usage: $0 validate-dag|next-area|next-areas|area-gate|node-fields [NODE] | validate-gate-file PATH" >&2; exit 2; }
 shift || true
 
-dag_file="${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}"
-gates_dir="${GLUERUN_GATES_DIR:-$GLUERUN_ORCH_DIR/gates}"
-gate_schema_v1="${GLUERUN_GATE_SCHEMA_V1:-$GLUERUN_SCHEMA_DIR/gate-result.v1.schema.json}"
-gate_report_schema="${GLUERUN_GATE_REPORT_SCHEMA:-$GLUERUN_SCHEMA_DIR/gate-report.v0.schema.json}"
+dag_file="${SINGULAR_DAG_FILE:-$SINGULAR_ORCH_DIR/dag.v0.json}"
+gates_dir="${SINGULAR_GATES_DIR:-$SINGULAR_ORCH_DIR/gates}"
+gate_schema_v1="${SINGULAR_GATE_SCHEMA_V1:-$SINGULAR_SCHEMA_DIR/gate-result.v1.schema.json}"
+gate_report_schema="${SINGULAR_GATE_REPORT_SCHEMA:-$SINGULAR_SCHEMA_DIR/gate-report.v0.schema.json}"
 
-python3 - "$cmd" "$dag_file" "$gates_dir" "$GLUERUN_GATE_SCHEMA" "$gate_schema_v1" "$gate_report_schema" "$GLUERUN_ROOT" "$SCRIPT_DIR" "$@" <<'PY'
+python3 - "$cmd" "$dag_file" "$gates_dir" "$SINGULAR_GATE_SCHEMA" "$gate_schema_v1" "$gate_report_schema" "$SINGULAR_ROOT" "$SCRIPT_DIR" "$@" <<'PY'
 import hashlib
 import json
 import os
@@ -39,8 +39,8 @@ from human_gate import validate_gate as validate_human_gate  # noqa: E402
 
 # Proof-layer regime (generic, opt-in). A project lists its proof layers and any
 # grandfathered node ids in its config; the generic engine leaves both empty.
-proof_layers = set(filter(None, os.environ.get("GLUERUN_PROOF_LAYERS", "").split(",")))
-proof_grandfather = set(filter(None, os.environ.get("GLUERUN_PROOF_GRANDFATHER", "").split(",")))
+proof_layers = set(filter(None, os.environ.get("SINGULAR_PROOF_LAYERS", "").split(",")))
+proof_grandfather = set(filter(None, os.environ.get("SINGULAR_PROOF_GRANDFATHER", "").split(",")))
 
 # Layer/kind vocabularies and required nodes are OPTIONAL manifest allowlists
 # (top-level "layers", "kinds", "requiredNodes"). When absent, any non-empty
@@ -58,7 +58,7 @@ class Violation(Exception):
         self.code = code
 
 
-# Collecting mode exists for `gluerun gate validate`. fail() normally prints and
+# Collecting mode exists for `singular gate validate`. fail() normally prints and
 # exits, which is right for the loop -- the frontier read must stop at the first
 # breach -- but it means a promoter learns about exactly ONE violation per run.
 # A consumer hit four in a row, each hiding the next, each costing a loop
@@ -97,7 +97,7 @@ def load_dag():
 
 
 def validate_dag(data):
-    if data.get("schema") != "gluerun.orchestration.dag.v0":
+    if data.get("schema") != "singular.orchestration.dag.v0":
         fail("unsupported DAG schema")
     nodes = data.get("nodes")
     if not isinstance(nodes, list) or not nodes:
@@ -183,8 +183,8 @@ def gate_path(node_id):
 
 def load_gate_schema(schema_id):
     paths = {
-        "gluerun.orchestration.gate-result.v0": gate_schema_v0,
-        "gluerun.orchestration.gate-result.v1": gate_schema_v1,
+        "singular.orchestration.gate-result.v0": gate_schema_v0,
+        "singular.orchestration.gate-result.v1": gate_schema_v1,
     }
     path = paths.get(schema_id)
     if path is None:
@@ -322,14 +322,14 @@ def source_artifact_sha256(ref, label):
         return file_digest(target).hex()
     if stat.S_ISLNK(mode):
         digest = hashlib.sha256()
-        digest.update(b"gluerun-symlink.v0\0")
+        digest.update(b"singular-symlink.v0\0")
         digest.update(os.fsencode(os.readlink(target)))
         return digest.hexdigest()
     if not stat.S_ISDIR(mode):
         fail(f"{label} has unsupported artifact type: {ref}")
 
     digest = hashlib.sha256()
-    digest.update(b"gluerun-tree.v0\0")
+    digest.update(b"singular-tree.v0\0")
 
     def frame(kind, relative, payload=b""):
         body = kind + b"\0" + os.fsencode(relative) + b"\0" + payload
@@ -376,7 +376,7 @@ def task_set_sha256(evidence):
 
 
 def validate_v1_evidence_hashes(data, node_id):
-    if data.get("schema") != "gluerun.orchestration.gate-result.v1":
+    if data.get("schema") != "singular.orchestration.gate-result.v1":
         return
 
     def check(idx, evidence):
@@ -523,7 +523,7 @@ def validate_strict_gate_report(data, node_id):
             baseline = load_json_object(
                 baseline_path, f"gate baseline for {node_id}"
             )
-            if baseline.get("schema") != "gluerun.orchestration.gate-baseline.v0":
+            if baseline.get("schema") != "singular.orchestration.gate-baseline.v0":
                 fail(f"gate baseline for {node_id} has unsupported schema")
             if baseline.get("commandSha256") != command_sha:
                 fail(f"gate baseline for {node_id} commandSha256 mismatch")
@@ -600,7 +600,7 @@ def validate_strict_gate_report(data, node_id):
 
 
 def validate_v1_verification(data, node_id):
-    if data.get("schema") != "gluerun.orchestration.gate-result.v1":
+    if data.get("schema") != "singular.orchestration.gate-result.v1":
         return
     passing = (
         data.get("status") in ("passed", "passed-with-acknowledged-baseline")
@@ -625,11 +625,11 @@ def validate_v1_verification(data, node_id):
 
 
 def validate_deterministic_proof_gate(data, node_id):
-    # A "proof layer" (declared via GLUERUN_PROOF_LAYERS) is a node class whose
+    # A "proof layer" (declared via SINGULAR_PROOF_LAYERS) is a node class whose
     # passing gate must carry BOTH a green command-log AND an expected-FAIL "red"
     # skip-guard log proving the proof is not vacuous (it fails when its real
     # dependency is stripped). The GENERIC engine declares no proof layers: with
-    # GLUERUN_PROOF_LAYERS empty, is_proof is always False and this enforces only the
+    # SINGULAR_PROOF_LAYERS empty, is_proof is always False and this enforces only the
     # standard deterministic-proof rule (every command-log exits 0, hash matches,
     # logRef exists). A project re-enables the red/green regime by listing its
     # proof layers (and any grandfathered node ids) in its own config.

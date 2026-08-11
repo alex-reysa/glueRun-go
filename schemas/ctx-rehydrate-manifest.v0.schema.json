@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.ctx-rehydrate-manifest.v0",
-  "title": "gluerun Rehydrate Core Manifest",
-  "description": "Additive contract for the core durable-source manifest emitted by gluerun_ctx_rehydrate_manifest and recorded (nested) into the context.strategy_selected event by gluerun_ctx_rehydrate_event_data. Records which surviving durable artifacts, at which content hashes, a rehydrate run reads from. `authored` is an OPTIONAL additive key (TASK-0063): a payload without it (durable-only) and one carrying it both validate.",
+  "$id": "singular.orchestration.ctx-rehydrate-manifest.v0",
+  "title": "singular Rehydrate Core Manifest",
+  "description": "Additive contract for the core durable-source manifest emitted by singular_ctx_rehydrate_manifest and recorded (nested) into the context.strategy_selected event by singular_ctx_rehydrate_event_data. Records which surviving durable artifacts, at which content hashes, a rehydrate run reads from. `authored` is an OPTIONAL additive key (TASK-0063): a payload without it (durable-only) and one carrying it both validate.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "sources"],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.ctx-rehydrate-manifest.v0" },
+    "schema": { "const": "singular.orchestration.ctx-rehydrate-manifest.v0" },
     "sources": {
       "type": "array",
       "items": {
@@ -25,7 +25,7 @@
       "additionalProperties": false,
       "required": ["schema", "sources"],
       "properties": {
-        "schema": { "const": "gluerun.orchestration.ctx-rehydrate-authored-manifest.v0" },
+        "schema": { "const": "singular.orchestration.ctx-rehydrate-authored-manifest.v0" },
         "sources": {
           "type": "array",
           "items": {

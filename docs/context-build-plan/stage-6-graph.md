@@ -17,7 +17,7 @@ evidence.
 Design task — operator reviews the diff before integration.
 
 - `schemas/context-graph.v0.schema.json`: append-only JSONL under
-  `.gluerun-state/graph/` — `nodes.jsonl` + `edges.jsonl`.
+  `.singular-state/graph/` — `nodes.jsonl` + `edges.jsonl`.
   - Node types: goal, plan-batch, plan-version, critique, finding, assumption,
     task, attempt, commit, gate-result, audit, decision, capsule.
   - Edge types: `depends_on`, `derived_from`, `revises`, `critiques`,
@@ -36,17 +36,17 @@ used by Stages 0–5; suite green.
 ## Node `graph-projector` (area: graph, layer: engine_runtime)
 
 - `engine/ctx-graph.sh`: idempotent projector — full rebuild
-  (`gluerun graph rebuild`) and incremental append (`gluerun graph sync`,
-  cursor over the event log). `cli/gluerun` hook chains behind
+  (`singular graph rebuild`) and incremental append (`singular graph sync`,
+  cursor over the event log). `cli/singular` hook chains behind
   `metrics-extract` for that file.
 - Determinism: same inputs → byte-identical graph (stable ids: hash of source
   record identity).
-- `gluerun graph query` minimal read API: neighbors, lineage walk
+- `singular graph query` minimal read API: neighbors, lineage walk
   (task → plan-version → critiques → findings → dispositions), and
   `open-contradictions` (contradicts/invalidates edges with no superseding
   resolution).
 - Graph files covered by `artifact-secret-scan`.
-- Behind `GLUERUN_CTX_GRAPH=0`.
+- Behind `SINGULAR_CTX_GRAPH=0`.
 - Tests `tests/test-ctx-graph.sh`: rebuild determinism; sync≡rebuild on
   fixtures; query outputs; authoritative/claim separation preserved.
 

@@ -6,7 +6,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 repo="$tmp/repo"
 mkdir -p "$repo/schemas/orchestration" "$repo/docs/orchestration"
-cat >"$repo/gluerun.config.json" <<'JSON'
+cat >"$repo/singular.config.json" <<'JSON'
 {
   "schemaVersion": "v1",
   "targetBranch": "custom/integration",
@@ -49,7 +49,7 @@ cmp -s "$tmp/acme-extension.before.json" \
 }
 [[ -d "$repo/docs/orchestration/human-gates" ]]
 [[ -d "$repo/docs/orchestration/gate-baselines" ]]
-python3 - "$repo/gluerun.config.json" <<'PY'
+python3 - "$repo/singular.config.json" <<'PY'
 import json
 import sys
 
@@ -78,9 +78,9 @@ assert config["bootstrap"]["commands"] == []
 assert config["bootstrap"]["lockfiles"] == []
 PY
 
-cp "$repo/gluerun.config.json" "$tmp/config.after-first.json"
+cp "$repo/singular.config.json" "$tmp/config.after-first.json"
 bash "$ROOT/migrations/v1-to-v2.sh" "$repo" >/dev/null
-cmp -s "$tmp/config.after-first.json" "$repo/gluerun.config.json" || {
+cmp -s "$tmp/config.after-first.json" "$repo/singular.config.json" || {
   echo "migration is not idempotent" >&2
   exit 1
 }

@@ -15,8 +15,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$worktree" ]] || { echo "bootstrap-worktree: --worktree is required" >&2; exit 2; }
-config="${GLUERUN_BOOTSTRAP_JSON:-}"
+config="${SINGULAR_BOOTSTRAP_JSON:-}"
 [[ -n "$config" ]] || config='{}'
 exec python3 "$SCRIPT_DIR/bootstrap_worktree.py" \
-  --repo "$GLUERUN_ROOT" --worktree "$worktree" \
-  --config-json "$config" --state-dir "$GLUERUN_STATE_DIR" "${dry[@]}"
+  --repo "$SINGULAR_ROOT" --worktree "$worktree" \
+  --config-json "$config" --state-dir "$SINGULAR_STATE_DIR" "${dry[@]}"

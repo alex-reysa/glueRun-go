@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.gate-report.v0",
-  "title": "gluerun Structured Gate Report",
+  "$id": "singular.orchestration.gate-report.v0",
+  "title": "singular Structured Gate Report",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -23,7 +23,7 @@
     "recordedAt"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.gate-report.v0" },
+    "schema": { "const": "singular.orchestration.gate-report.v0" },
     "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
     "runId": { "type": "string", "minLength": 1 },
     "headSha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },

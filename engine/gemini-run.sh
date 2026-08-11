@@ -4,9 +4,9 @@ set -euo pipefail
 # gemini-run.sh — Gemini CLI drop-in replacement for codex-run.sh / claude-run.sh.
 #
 # Same CLI surface and output contract so orchestration can dispatch the `gemini`
-# CLI by setting GLUERUN_RUNNER to this script. Parses the headless JSON output
+# CLI by setting SINGULAR_RUNNER to this script. Parses the headless JSON output
 # (.response field of `gemini -o json`) into --output-last-message so the existing
-# gluerun_extract_json / gluerun_l1_prepare_worker_packet pipeline digs the JSON
+# singular_extract_json / singular_l1_prepare_worker_packet pipeline digs the JSON
 # packet/verdict out of it exactly as it does for codex/claude output.
 #
 # Session affinity: Gemini v1 has no captured session id, so --session-meta is
@@ -39,9 +39,9 @@ allow_prefixes=()
 # written best-effort (no sessionId); --resume-session is refused (exit 86).
 session_meta_path=""
 resume_session_id=""
-runner_role="${GLUERUN_RUNNER_ROLE:-unknown}"
-capability_profile="${GLUERUN_RUNNER_CAPABILITY_PROFILE:-default}"
-result_file="${GLUERUN_RUNNER_RESULT_FILE:-}"
+runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
+capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
+result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
 describe_contract="no"
 
 while [[ $# -gt 0 ]]; do
@@ -65,7 +65,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$describe_contract" == "yes" ]]; then
-  gluerun_runner_describe_contract gemini
+  singular_runner_describe_contract gemini
   exit 0
 fi
 
@@ -73,18 +73,18 @@ if [[ -z "$run_id" ]]; then
   run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 fi
 if [[ -z "$result_file" ]]; then
-  result_file="$(gluerun_runner_default_result_file "$run_id")"
+  result_file="$(singular_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
 ro_journal=""
-gluerun_gemini_result_on_exit() {
+singular_gemini_result_on_exit() {
   local rc=$?
   trap - EXIT
   # An interrupted run leaves the provider CLI and its descendants alive; they
   # would keep writing to the worktree while the guard restores it, and the
   # restore would lose the race. Kill first, then restore.
   if [[ -n "${gem_pid:-}" ]]; then
-    gluerun_kill_tree "$gem_pid" 0 session 2>/dev/null || true
+    singular_kill_tree "$gem_pid" 0 session 2>/dev/null || true
     wait "$gem_pid" 2>/dev/null || true
     gem_pid=""
   fi
@@ -92,19 +92,19 @@ gluerun_gemini_result_on_exit() {
   # process is the worse outcome. ask/supervise/decide background this runner
   # and kill it on timeout; the old guard was straight-line code after the run,
   # so on every one of those paths it simply never executed.
-  gluerun_readonly_guard_restore "${ro_journal:-}" || true
+  singular_readonly_guard_restore "${ro_journal:-}" || true
   ro_journal=""
   if [[ "$runner_result_written" != "yes" ]]; then
-    gluerun_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
+    singular_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
   fi
   [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
   exit "$rc"
 }
-trap gluerun_gemini_result_on_exit EXIT
+trap singular_gemini_result_on_exit EXIT
 # Exiting from a signal handler runs the EXIT trap, so these buy the guard a
 # chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
-# itself remains uncoverable; `gluerun_readonly_guard_sweep` is the answer there.
+# itself remains uncoverable; `singular_readonly_guard_sweep` is the answer there.
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -114,7 +114,7 @@ if [[ -z "$worktree" ]]; then
   exit 2
 fi
 
-gluerun_require_target_branch
+singular_require_target_branch
 
 gemini_bin="$(command -v gemini 2>/dev/null || true)"
 
@@ -138,19 +138,19 @@ if [[ -z "$prompt_file" ]]; then
 fi
 
 profile_rc=0
-gluerun_runner_capability_prepare gemini "$runner_role" "$capability_profile" \
+singular_runner_capability_prepare gemini "$runner_role" "$capability_profile" \
   "$worktree" "$gemini_bin" || profile_rc=$?
-capability_profile="$GLUERUN_RESOLVED_CAPABILITY_PROFILE"
+capability_profile="$SINGULAR_RESOLVED_CAPABILITY_PROFILE"
 profile_provider_args=()
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
-  profile_provider_args=("${GLUERUN_RESOLVED_PROVIDER_ARGS[@]}")
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  profile_provider_args=("${SINGULAR_RESOLVED_PROVIDER_ARGS[@]}")
 fi
 [[ "$profile_rc" -eq 0 ]] || exit "$profile_rc"
-gluerun_runner_reject_strict_legacy_extra_args \
-  gemini GLUERUN_GEMINI_EXTRA_ARGS "${GLUERUN_GEMINI_EXTRA_ARGS:-}" || exit $?
+singular_runner_reject_strict_legacy_extra_args \
+  gemini SINGULAR_GEMINI_EXTRA_ARGS "${SINGULAR_GEMINI_EXTRA_ARGS:-}" || exit $?
 [[ -n "$gemini_bin" ]] || { echo "gemini CLI not found on PATH" >&2; exit 127; }
 profile_native_args=()
-if [[ "$GLUERUN_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
+if [[ "$SINGULAR_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
   # An empty MCP allowlist plus the documented `none` extension selector keeps
   # strict runs from inheriting user-configured MCP servers or extensions.
   profile_native_args+=(--allowed-mcp-server-names "" --extensions none)
@@ -172,7 +172,7 @@ fi
 
 run_dir=""
 if [[ "$capture_packet" == "yes" ]]; then
-  run_dir="$GLUERUN_STATE_DIR/runs/$run_id"
+  run_dir="$SINGULAR_STATE_DIR/runs/$run_id"
   mkdir -p "$run_dir"
   if [[ -z "$output_last_message" ]]; then
     output_last_message="$run_dir/last-message.json"
@@ -180,10 +180,10 @@ if [[ "$capture_packet" == "yes" ]]; then
 fi
 
 # --- Model selection ------------------------------------------------------------
-# When GLUERUN_GEMINI_MODEL is unset, OMIT -m entirely so the CLI uses its own
+# When SINGULAR_GEMINI_MODEL is unset, OMIT -m entirely so the CLI uses its own
 # default/auto routing (spec 0.9.0). No per-role/effort mapping in v1.
 gemini_model() {
-  printf '%s\n' "${GLUERUN_GEMINI_MODEL:-}"
+  printf '%s\n' "${SINGULAR_GEMINI_MODEL:-}"
 }
 gem_model="$(gemini_model)"
 
@@ -195,7 +195,7 @@ cmd=("$gemini_bin" -p "" -o json --skip-trust)
 if [[ ${#profile_native_args[@]} -gt 0 ]]; then
   cmd+=("${profile_native_args[@]}")
 fi
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
   cmd+=("${profile_provider_args[@]}")
 fi
 [[ -n "$gem_model" ]] && cmd+=(-m "$gem_model")
@@ -205,36 +205,36 @@ else
   cmd+=(--yolo)
 fi
 
-if [[ -n "${GLUERUN_GEMINI_EXTRA_ARGS:-}" ]]; then
+if [[ -n "${SINGULAR_GEMINI_EXTRA_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
-  cmd+=(${GLUERUN_GEMINI_EXTRA_ARGS})
+  cmd+=(${SINGULAR_GEMINI_EXTRA_ARGS})
 fi
 
 # --- Read-only snapshot (for restore-after) -------------------------------------
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_journal="$(gluerun_readonly_guard_capture "$worktree" "gemini-$run_id")"
+  ro_journal="$(singular_readonly_guard_capture "$worktree" "gemini-$run_id")"
 fi
 
 # stdout (the -o json envelope) and stderr (gemini's copious notices) are captured
 # to SEPARATE files so a stray stderr line never corrupts the JSON parse.
-envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-gemini-env.XXXXXX")"
+envelope="$(mktemp "${TMPDIR:-/tmp}/singular-gemini-env.XXXXXX")"
 envelope_err="$envelope.err"
 
-# The provider as a SESSION LEADER: gluerun_setsid_exec is the LAST command, so
+# The provider as a SESSION LEADER: singular_setsid_exec is the LAST command, so
 # the `&` at the call site makes $! the leader itself (pid == pgid) and
-# gluerun_kill_tree group-kills the whole tree with one negative pid, without
+# singular_kill_tree group-kills the whole tree with one negative pid, without
 # `ps` (PMGO-004). Only ever invoked as a background job, so the `cd` is
 # contained; redirections live on the call site so they bind to the job.
 run_gemini() {
   cd "$worktree" || exit 1
-  gluerun_setsid_exec "${cmd[@]}"
+  singular_setsid_exec "${cmd[@]}"
 }
 
 exit_code=0
 echo "gemini-run: level=$level model=${gem_model:-<default>} worktree=$worktree run_id=$run_id" >&2
 # Wall-clock guard (default 1200s; 0 disables). Kill the whole process tree on
 # timeout so a stuck run never holds a worker slot; surface exit 124.
-gem_timeout="${GLUERUN_GEMINI_TIMEOUT_SEC:-1200}"
+gem_timeout="${SINGULAR_GEMINI_TIMEOUT_SEC:-1200}"
 # The provider always runs in the BACKGROUND, even with the timeout disabled.
 # bash defers a trapped signal until the foreground child finishes, so a
 # foreground run would swallow the SIGTERM that ask/supervise/decide send on
@@ -247,7 +247,7 @@ if [[ "$gem_timeout" =~ ^[0-9]+$ && "$gem_timeout" -gt 0 ]]; then
     if [[ "$SECONDS" -ge "$gem_deadline" ]]; then
       gem_timed_out="yes"
       # TERM the provider session, then KILL what is left.
-      gluerun_kill_tree "$gem_pid" "$(gluerun_provider_kill_grace_sec)" session
+      singular_kill_tree "$gem_pid" "$(singular_provider_kill_grace_sec)" session
       wait "$gem_pid" 2>/dev/null || true
       exit_code=124
       break
@@ -270,7 +270,7 @@ if [[ -n "$run_dir" ]]; then cp "$envelope" "$run_dir/gemini-envelope.json" 2>/d
 
 # --- Session-meta: no resumable id in v1; record provider + empty sessionId ----
 if [[ -n "$session_meta_path" ]]; then
-  gluerun_session_meta_write_provider "$session_meta_path" "gemini" "" "$gem_model" \
+  singular_session_meta_write_provider "$session_meta_path" "gemini" "" "$gem_model" \
     "" "$worktree" "$exit_code" || true
 fi
 
@@ -344,7 +344,7 @@ fi
 # must see the restored tree. The trap still holds the timeout and signal paths;
 # a second restore of a consumed journal is a no-op.
 if [[ "$readonly_run" == "yes" ]]; then
-  gluerun_readonly_guard_restore "$ro_journal" || true
+  singular_readonly_guard_restore "$ro_journal" || true
   ro_journal=""
 fi
 
@@ -361,7 +361,7 @@ if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
 fi
 
-if gluerun_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
+if singular_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
   "$result_file" "$exit_code" "$envelope" "$envelope_err" "$output_last_message"; then
   runner_result_written="yes"
 fi

@@ -35,21 +35,21 @@
 # exit, never an error or partial output.
 #
 # Public entry points:
-#   gluerun_ctx_experiment_escape_rates [events_file]
+#   singular_ctx_experiment_escape_rates [events_file]
 #     Prints {"A":{accepted,flagged,escapeRate}, "B":{...}} (events only).
-#   gluerun_ctx_experiment_bias_rate [events_file]
+#   singular_ctx_experiment_bias_rate [events_file]
 #     Prints {flaggedFindings,directionalDisagreements,directionalDisagreementRate}.
-#   gluerun_ctx_experiment_report_json [events_file] [metrics_file]
+#   singular_ctx_experiment_report_json [events_file] [metrics_file]
 #     Emits ONE deterministic, sorted-key JSON object conforming to
-#     gluerun.orchestration.ctx-experiment-report.v0, merging both arms' escape
+#     singular.orchestration.ctx-experiment-report.v0, merging both arms' escape
 #     rates, a per-arm cost rollup (tokens + wall-clock per accepted task), and
-#     the bias rate. Defaults: events_file=$GLUERUN_EVENTS_FILE,
-#     metrics_file=$GLUERUN_CTX_EXPERIMENT_METRICS_FILE.
+#     the bias rate. Defaults: events_file=$SINGULAR_EVENTS_FILE,
+#     metrics_file=$SINGULAR_CTX_EXPERIMENT_METRICS_FILE.
 
 # --- shared read-only parser -------------------------------------------------
 # Prints, on stdout, a compact JSON object with the two arm keys A/B each mapping
 # to {accepted, flagged, auditedTasks:[taskId,...]} plus the bias tallies. Pure.
-_gluerun_ctx_experiment_events_py() {
+_singular_ctx_experiment_events_py() {
   cat <<'PY'
 import json
 
@@ -116,11 +116,11 @@ PY
 }
 
 # Per-arm escape rate (events only). Fail-safe / always exit 0.
-gluerun_ctx_experiment_escape_rates() {
-  local events_file="${1:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_escape_rates() {
+  local events_file="${1:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_events_py)
+$(_singular_ctx_experiment_events_py)
 
 events_file = sys.argv[1]
 arm_of, audited, _ = load_events(events_file)
@@ -143,11 +143,11 @@ PY
 }
 
 # Bias directional-disagreement rate (events only). Fail-safe / always exit 0.
-gluerun_ctx_experiment_bias_rate() {
-  local events_file="${1:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_bias_rate() {
+  local events_file="${1:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_events_py)
+$(_singular_ctx_experiment_events_py)
 
 events_file = sys.argv[1]
 _, audited, rechecks = load_events(events_file)
@@ -175,12 +175,12 @@ PY
 
 # Composed raw-metrics artifact. Merges escape rates, per-arm cost rollup, and
 # the bias rate into one deterministic sorted-key JSON object. Fail-safe.
-gluerun_ctx_experiment_report_json() {
-  local events_file="${1:-${GLUERUN_EVENTS_FILE:-}}"
-  local metrics_file="${2:-${GLUERUN_CTX_EXPERIMENT_METRICS_FILE:-}}"
+singular_ctx_experiment_report_json() {
+  local events_file="${1:-${SINGULAR_EVENTS_FILE:-}}"
+  local metrics_file="${2:-${SINGULAR_CTX_EXPERIMENT_METRICS_FILE:-}}"
   python3 - "$events_file" "$metrics_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_events_py)
+$(_singular_ctx_experiment_events_py)
 
 events_file, metrics_file = sys.argv[1], sys.argv[2]
 arm_of, audited, rechecks = load_events(events_file)
@@ -261,7 +261,7 @@ for tid, is_flagged in audited.items():
             directional += 1
 
 artifact = {
-    "schema": "gluerun.orchestration.ctx-experiment-report.v0",
+    "schema": "singular.orchestration.ctx-experiment-report.v0",
     "arms": arms,
     "bias": {
         "flaggedFindings": flagged_findings,

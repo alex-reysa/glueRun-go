@@ -27,11 +27,11 @@
 # context is byte-stable across runs for a fixed input set.
 #
 # Public entry points:
-#   gluerun_ctx_plan_critic_stage_file <node>
+#   singular_ctx_plan_critic_stage_file <node>
 #     Pure: print the node's stage file path under docs/context-build-plan/
-#     (GLUERUN_PLAN_DIR), or empty when no stage file declares the node. Read-only;
+#     (SINGULAR_PLAN_DIR), or empty when no stage file declares the node. Read-only;
 #     depends on no network or mutable run state.
-#   gluerun_ctx_plan_critic_context <node> <stage_dir> <out_file> [summary_file]
+#   singular_ctx_plan_critic_context <node> <stage_dir> <out_file> [summary_file]
 #     Pure: compose the read-only critic context — every `*.candidate.md` body in
 #     <stage_dir> (sorted), the existing-task summary (summary_file, else
 #     <stage_dir>/existing-tasks.md), and the node's stage-file content — into
@@ -42,10 +42,10 @@
 # backtick-wrapped mention of its name (e.g. "## Node `plan-critic-driver`").
 # Files are scanned in sorted glob order and the first match wins, so resolution
 # is deterministic. No side effects.
-gluerun_ctx_plan_critic_stage_file() {
+singular_ctx_plan_critic_stage_file() {
   local node="$1"
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
-  local plan_dir="${GLUERUN_PLAN_DIR:-$GLUERUN_ROOT/docs/context-build-plan}"
+  local plan_dir="${SINGULAR_PLAN_DIR:-$SINGULAR_ROOT/docs/context-build-plan}"
   [[ -d "$plan_dir" ]] || { printf '%s' ""; return 0; }
   local bt='`' pat f
   pat="${bt}${node}${bt}"
@@ -64,14 +64,14 @@ gluerun_ctx_plan_critic_stage_file() {
 # writes ONLY the named output file and mutates nothing else. Deterministic: the
 # `*.candidate.md` glob expands in sorted order, so the output is byte-stable
 # across runs for a fixed input set.
-gluerun_ctx_plan_critic_context() {
+singular_ctx_plan_critic_context() {
   local node="$1" stage_dir="$2" out_file="$3" summary_file="${4:-}"
   [[ -n "$out_file" ]] || return 2
   local candidate_batch_dir
-  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
+  candidate_batch_dir="$(singular_task_batch_candidate_dir "$stage_dir")" || return 2
 
   [[ -n "$summary_file" ]] || summary_file="$stage_dir/existing-tasks.md"
-  local stage_file; stage_file="$(gluerun_ctx_plan_critic_stage_file "$node")"
+  local stage_file; stage_file="$(singular_ctx_plan_critic_stage_file "$node")"
 
   mkdir -p "$(dirname "$out_file")"
 

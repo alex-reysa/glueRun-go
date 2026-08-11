@@ -23,7 +23,7 @@ import time
 from typing import Any
 
 
-POINTER_SCHEMA = "gluerun.orchestration.candidate-batch-pointer.v0"
+POINTER_SCHEMA = "singular.orchestration.candidate-batch-pointer.v0"
 POINTER_NAME = ".candidate-current.json"
 FORMAT_MARKER = ".candidate-generation-format"
 GENERATIONS_NAME = ".candidate-generations"
@@ -189,8 +189,8 @@ def write_generation(
 def wait_at_test_barrier() -> None:
     """Permit a regression to kill publication immediately before pointer swap."""
 
-    ready_raw = os.environ.get("GLUERUN_TEST_BATCH_PUBLISH_READY", "")
-    release_raw = os.environ.get("GLUERUN_TEST_BATCH_PUBLISH_RELEASE", "")
+    ready_raw = os.environ.get("SINGULAR_TEST_BATCH_PUBLISH_READY", "")
+    release_raw = os.environ.get("SINGULAR_TEST_BATCH_PUBLISH_RELEASE", "")
     if not ready_raw:
         return
     ready = Path(ready_raw)

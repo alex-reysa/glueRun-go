@@ -40,7 +40,7 @@ source content; stable ids (`n-…` / `e-…`) are hashes of source-record ident
 | `plan-batch` | `claim` | A planner batch — planner `session-meta` (S1) + the staged candidate task set. |
 | `plan-version` | `claim` | Each planner revision — `plan.revised` event (S3), `revisesRunId` links versions. |
 | `critique` | `claim` | A `plan-critique` record + `plan.critiqued` event (S2). |
-| `finding` | `claim` | A `findings[]` entry inside a `plan-critique` record (S2), keyed by `gluerun_finding_id`. |
+| `finding` | `claim` | A `findings[]` entry inside a `plan-critique` record (S2), keyed by `singular_finding_id`. |
 | `assumption` | `claim` | An assumption ledger entry / `context packet` `Assumptions` line (S4). |
 | `task` | `claim` | An imported task record (`docs/orchestration/tasks/TASK-*.md`). |
 | `attempt` | `claim` | A worker attempt row in `attempts/index.json` (S0 instrumentation). |
@@ -123,5 +123,5 @@ strings is named in this document, so no S0–S5 source is left unprojected.
 Projection never changes what counts as evidence. An `authoritative` node exists
 only where the host verified the fact (`commit`, `gate-result`, `secret-scan` /
 `scope-check`); every model-authored record — including every `audit-verdict` —
-is a `claim`. Deleting `.gluerun-state/graph/` and rebuilding from S0–S5 sources
+is a `claim`. Deleting `.singular-state/graph/` and rebuilding from S0–S5 sources
 must reproduce a byte-identical corpus.

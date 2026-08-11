@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and verify hash-bound Gluerun gate reports."""
+"""Create and verify hash-bound Singular gate reports."""
 
 from __future__ import annotations
 
@@ -137,7 +137,7 @@ def command_create(args: argparse.Namespace) -> int:
         signature, title = normalized_signature(text)
         unexpected.append({"signature": signature, "title": title})
     report: dict[str, Any] = {
-        "schema": "gluerun.orchestration.gate-report.v0",
+        "schema": "singular.orchestration.gate-report.v0",
         "taskId": args.task_id,
         "runId": args.run_id,
         "headSha": valid_head(args.head_sha),
@@ -192,7 +192,7 @@ def load_verified_evidence(
     missing = sorted(required - set(report))
     if missing:
         return None, "gate report missing: " + ", ".join(missing)
-    if report.get("schema") != "gluerun.orchestration.gate-report.v0":
+    if report.get("schema") != "singular.orchestration.gate-report.v0":
         return None, "unsupported gate report schema"
     if report.get("headSha") != valid_head(expected_head):
         return None, "gate report head mismatch"
@@ -231,7 +231,7 @@ def load_verified_evidence(
     # REPOSITORY-relative citation for dag.sh, and this resolver anchors a
     # relative ref at the REPORT'S OWN DIRECTORY -- a third, incompatible base.
     # Reading logRef here would look for
-    # .gluerun-state/runs/RUN-x/.gluerun-state/runs/RUN-x/gate-check.log,
+    # .singular-state/runs/RUN-x/.singular-state/runs/RUN-x/gate-check.log,
     # fail, and surface as an unreadable gate log -> audit-infra -> a parked
     # task, for a gate that actually passed.
     log = pathlib.Path(str(report.get("logPath") or report.get("logRef", "")))
@@ -262,7 +262,7 @@ def load_verified_evidence(
             return None, "gate baseline hash mismatch"
         if (
             not isinstance(baseline, dict)
-            or baseline.get("schema") != "gluerun.orchestration.gate-baseline.v0"
+            or baseline.get("schema") != "singular.orchestration.gate-baseline.v0"
         ):
             return None, "gate baseline schema mismatch"
         if baseline.get("commandSha256") != report.get("commandSha256"):

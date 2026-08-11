@@ -4,7 +4,7 @@
 # read-only, deterministic SUBGRAPH SELECTION reader in
 # engine/ctx-rehydrate-subgraph.sh.
 #
-#   gluerun_ctx_rehydrate_subgraph_select <graphDir> <taskNodeId>
+#   singular_ctx_rehydrate_subgraph_select <graphDir> <taskNodeId>
 #       Walk the provenance lineage of <taskNodeId> and emit the DETERMINISTIC,
 #       ORDERED set of SELECTED node records, where
 #         (1) rejected observations — nodes reached ONLY across a
@@ -14,8 +14,8 @@
 #             are surfaced FIRST, then the remaining selected lineage nodes in a
 #             deterministic (by node id) order.
 #
-# It COMPOSES the integrated graph read API — gluerun_graph_query_lineage and
-# gluerun_graph_query_open_contradictions in engine/ctx-graph-query.sh — over the
+# It COMPOSES the integrated graph read API — singular_graph_query_lineage and
+# singular_graph_query_open_contradictions in engine/ctx-graph-query.sh — over the
 # materialized corpus <graphDir>/nodes.jsonl + edges.jsonl. It SELECTS only: it
 # does NOT resolve node records to durable artifact paths, assemble a packet,
 # touch section caps, or record any manifest.
@@ -56,7 +56,7 @@ trap 'rm -rf "$work_root" "$snap_dir"' EXIT
 
 # --- OFF-parity / no-writes on source: sourcing invokes nothing, writes nothing.
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$snap_dir" && source "$GRAPH" && source "$CORPUS" && source "$QUERY" && source "$SUBGRAPH" ) \
   || fail "sourcing $SUBGRAPH failed"
@@ -72,8 +72,8 @@ source "$QUERY"    || fail "sourcing $QUERY failed"
 # shellcheck disable=SC1090
 source "$SUBGRAPH" || fail "sourcing $SUBGRAPH failed"
 
-[[ "$(type -t gluerun_ctx_rehydrate_subgraph_select)" == "function" ]] \
-  || fail "gluerun_ctx_rehydrate_subgraph_select is not defined by $SUBGRAPH"
+[[ "$(type -t singular_ctx_rehydrate_subgraph_select)" == "function" ]] \
+  || fail "singular_ctx_rehydrate_subgraph_select is not defined by $SUBGRAPH"
 
 # --- small parsing helpers ----------------------------------------------------
 # Print the `id` of each JSONL record on stdin whose `kind` matches $1 (or all
@@ -81,9 +81,9 @@ source "$SUBGRAPH" || fail "sourcing $SUBGRAPH failed"
 # assertions are meaningful).
 kind_ids_in_order() {
   local want="${1:-}"
-  GLUERUN_TQ_KIND="$want" python3 -c '
+  SINGULAR_TQ_KIND="$want" python3 -c '
 import json, os, sys
-want = os.environ["GLUERUN_TQ_KIND"]
+want = os.environ["SINGULAR_TQ_KIND"]
 for line in sys.stdin:
     line = line.rstrip("\n")
     if not line.strip():
@@ -117,48 +117,48 @@ GDIR="$work_root/graph"
 NODES_IN="$work_root/nodes.in"
 EDGES_IN="$work_root/edges.in"
 
-T="$(gluerun_graph_node_id 'task:T')"
-A="$(gluerun_graph_node_id 'attempt:A')"
-P="$(gluerun_graph_node_id 'pv:P')"
-C="$(gluerun_graph_node_id 'crit:C')"
-AS="$(gluerun_graph_node_id 'assume:AS')"
-F="$(gluerun_graph_node_id 'find:F')"
-F2="$(gluerun_graph_node_id 'find:F2')"
-RO="$(gluerun_graph_node_id 'find:RO')"
-D="$(gluerun_graph_node_id 'disp:D')"
-G="$(gluerun_graph_node_id 'pv:G')"
+T="$(singular_graph_node_id 'task:T')"
+A="$(singular_graph_node_id 'attempt:A')"
+P="$(singular_graph_node_id 'pv:P')"
+C="$(singular_graph_node_id 'crit:C')"
+AS="$(singular_graph_node_id 'assume:AS')"
+F="$(singular_graph_node_id 'find:F')"
+F2="$(singular_graph_node_id 'find:F2')"
+RO="$(singular_graph_node_id 'find:RO')"
+D="$(singular_graph_node_id 'disp:D')"
+G="$(singular_graph_node_id 'pv:G')"
 
 {
-  gluerun_graph_emit_node task         'task:T'     'src/T'  'cT'
-  gluerun_graph_emit_node attempt      'attempt:A'  'src/A'  'cA'
-  gluerun_graph_emit_node plan-version 'pv:P'       'src/P'  'cP'
-  gluerun_graph_emit_node critique     'crit:C'     'src/C'  'cC'
-  gluerun_graph_emit_node assumption   'assume:AS'  'src/AS' 'cAS'
-  gluerun_graph_emit_node finding      'find:F'     'src/F'  'cF'
-  gluerun_graph_emit_node finding      'find:F2'    'src/F2' 'cF2'
-  gluerun_graph_emit_node finding      'find:RO'    'src/RO' 'cRO'
-  gluerun_graph_emit_node decision     'disp:D'     'src/D'  'cD'
-  gluerun_graph_emit_node plan-version 'pv:G'       'src/G'  'cG'
+  singular_graph_emit_node task         'task:T'     'src/T'  'cT'
+  singular_graph_emit_node attempt      'attempt:A'  'src/A'  'cA'
+  singular_graph_emit_node plan-version 'pv:P'       'src/P'  'cP'
+  singular_graph_emit_node critique     'crit:C'     'src/C'  'cC'
+  singular_graph_emit_node assumption   'assume:AS'  'src/AS' 'cAS'
+  singular_graph_emit_node finding      'find:F'     'src/F'  'cF'
+  singular_graph_emit_node finding      'find:F2'    'src/F2' 'cF2'
+  singular_graph_emit_node finding      'find:RO'    'src/RO' 'cRO'
+  singular_graph_emit_node decision     'disp:D'     'src/D'  'cD'
+  singular_graph_emit_node plan-version 'pv:G'       'src/G'  'cG'
 } > "$NODES_IN"
 
 {
-  gluerun_graph_emit_edge implements          "$A" "$T"  'src/e1'  'c1'
-  gluerun_graph_emit_edge derived_from        "$P" "$A"  'src/e2'  'c2'
-  gluerun_graph_emit_edge critiques           "$C" "$P"  'src/e3'  'c3'
-  gluerun_graph_emit_edge derived_from        "$AS" "$P" 'src/e4'  'c4'
-  gluerun_graph_emit_edge derived_from        "$F" "$C"  'src/e5'  'c5'
-  gluerun_graph_emit_edge accepts_observation "$D" "$F"  'src/e6'  'c6'
-  gluerun_graph_emit_edge derived_from        "$F2" "$C" 'src/e7'  'c7'
-  gluerun_graph_emit_edge rejects_observation "$D" "$F2" 'src/e8'  'c8'
-  gluerun_graph_emit_edge rejects_observation "$D" "$RO" 'src/e9'  'c9'
-  gluerun_graph_emit_edge revises             "$D" "$T"  'src/e10' 'c10'
-  gluerun_graph_emit_edge contradicts         "$G" "$AS" 'src/e11' 'c11'
+  singular_graph_emit_edge implements          "$A" "$T"  'src/e1'  'c1'
+  singular_graph_emit_edge derived_from        "$P" "$A"  'src/e2'  'c2'
+  singular_graph_emit_edge critiques           "$C" "$P"  'src/e3'  'c3'
+  singular_graph_emit_edge derived_from        "$AS" "$P" 'src/e4'  'c4'
+  singular_graph_emit_edge derived_from        "$F" "$C"  'src/e5'  'c5'
+  singular_graph_emit_edge accepts_observation "$D" "$F"  'src/e6'  'c6'
+  singular_graph_emit_edge derived_from        "$F2" "$C" 'src/e7'  'c7'
+  singular_graph_emit_edge rejects_observation "$D" "$F2" 'src/e8'  'c8'
+  singular_graph_emit_edge rejects_observation "$D" "$RO" 'src/e9'  'c9'
+  singular_graph_emit_edge revises             "$D" "$T"  'src/e10' 'c10'
+  singular_graph_emit_edge contradicts         "$G" "$AS" 'src/e11' 'c11'
 } > "$EDGES_IN"
 
-gluerun_graph_write_corpus "$GDIR" "$NODES_IN" "$EDGES_IN" || fail "write_corpus failed"
+singular_graph_write_corpus "$GDIR" "$NODES_IN" "$EDGES_IN" || fail "write_corpus failed"
 
 # --- Selection from T ---------------------------------------------------------
-sel="$(gluerun_ctx_rehydrate_subgraph_select "$GDIR" "$T")" \
+sel="$(singular_ctx_rehydrate_subgraph_select "$GDIR" "$T")" \
   || fail "subgraph_select(T) nonzero exit"
 
 # Only node records are emitted (SELECTS only — no edges, no manifest lines).
@@ -206,14 +206,14 @@ want_rest="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
 expect_eq "remaining selection sorted by id" "$rest_ordered" "$want_rest"
 
 # --- Determinism: byte-identical on repeat.
-sel2="$(gluerun_ctx_rehydrate_subgraph_select "$GDIR" "$T")" \
+sel2="$(singular_ctx_rehydrate_subgraph_select "$GDIR" "$T")" \
   || fail "subgraph_select(T) repeat nonzero exit"
 [[ "$sel" == "$sel2" ]] || fail "subgraph_select(T) not byte-identical on repeat"
 
 # --- Read-only: the corpus is byte-identical and no files were created.
 snap_before="$(cd "$GDIR" && find . | LC_ALL=C sort)"
 sum_before="$(cat "$GDIR/nodes.jsonl" "$GDIR/edges.jsonl" | shasum | awk '{print $1}')"
-gluerun_ctx_rehydrate_subgraph_select "$GDIR" "$T" >/dev/null \
+singular_ctx_rehydrate_subgraph_select "$GDIR" "$T" >/dev/null \
   || fail "read-only selection failed"
 snap_after="$(cd "$GDIR" && find . | LC_ALL=C sort)"
 sum_after="$(cat "$GDIR/nodes.jsonl" "$GDIR/edges.jsonl" | shasum | awk '{print $1}')"
@@ -222,13 +222,13 @@ sum_after="$(cat "$GDIR/nodes.jsonl" "$GDIR/edges.jsonl" | shasum | awk '{print 
 
 # --- Unknown task node -> empty result, zero exit (fail-safe).
 unknown="n-000000000000"
-u_sel="$(gluerun_ctx_rehydrate_subgraph_select "$GDIR" "$unknown")" \
+u_sel="$(singular_ctx_rehydrate_subgraph_select "$GDIR" "$unknown")" \
   || fail "subgraph_select(unknown) must exit zero (fail-safe)"
 [[ -z "$u_sel" ]] || fail "subgraph_select(unknown) must be empty, got [$u_sel]"
 
 # --- Missing corpus -> well-formed empty result, zero exit; nothing created.
 GDIR_MISSING="$work_root/graph-missing"
-m_sel="$(gluerun_ctx_rehydrate_subgraph_select "$GDIR_MISSING" "$T")" \
+m_sel="$(singular_ctx_rehydrate_subgraph_select "$GDIR_MISSING" "$T")" \
   || fail "subgraph_select on missing corpus must exit zero"
 [[ -z "$m_sel" ]] || fail "subgraph_select on missing corpus must be empty"
 [[ ! -e "$GDIR_MISSING" ]] || fail "querying a missing corpus created <graphDir> (must be read-only)"
@@ -238,7 +238,7 @@ GDIR_EMPTY="$work_root/graph-empty"
 mkdir -p "$GDIR_EMPTY"
 : > "$GDIR_EMPTY/nodes.jsonl"
 : > "$GDIR_EMPTY/edges.jsonl"
-e_sel="$(gluerun_ctx_rehydrate_subgraph_select "$GDIR_EMPTY" "$T")" \
+e_sel="$(singular_ctx_rehydrate_subgraph_select "$GDIR_EMPTY" "$T")" \
   || fail "subgraph_select on empty corpus must exit zero"
 [[ -z "$e_sel" ]] || fail "subgraph_select on empty corpus must be empty"
 

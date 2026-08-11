@@ -3,16 +3,16 @@
 # engine/ctx-experiment-delta.sh. This brick computes the A-vs-B CONTRAST the
 # per-arm aggregators do not: arm B (treatment) minus arm A (control / M0 knob
 # state) for each headline metric. It ships NO base metric of its own — it reads
-# ONLY the summary bundle (delegating to gluerun_ctx_experiment_summary_json, or
+# ONLY the summary bundle (delegating to singular_ctx_experiment_summary_json, or
 # a supplied bundle source) and DIFFERENCES the already-computed per-arm values.
 #
 # Three chained slices, all inside engine/ctx-experiment-delta.sh:
-#   1. gluerun_ctx_experiment_delta_record  — pure helper: two arm sub-objects +
+#   1. singular_ctx_experiment_delta_record  — pure helper: two arm sub-objects +
 #      a value path -> {a, b, delta=b-a, direction in {lower,higher,equal}};
 #      a missing arm value is treated as zero.
-#   2. gluerun_ctx_experiment_delta_metrics — applies the helper across the
+#   2. singular_ctx_experiment_delta_metrics — applies the helper across the
 #      headline metric set read from the summary bundle.
-#   3. gluerun_ctx_experiment_delta_json    — public entry: obtain bundle, emit
+#   3. singular_ctx_experiment_delta_json    — public entry: obtain bundle, emit
 #      ONE deterministic sorted-key JSON object under the v0 schema.
 #
 # Guarantees pinned BEHAVIORALLY over a fixture (no absence greps, planner rule 9):
@@ -66,9 +66,9 @@ source "$SIB_ATTEMPTS" || fail "sourcing $SIB_ATTEMPTS failed"
 source "$SIB_SUMMARY"  || fail "sourcing $SIB_SUMMARY failed"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-for fn in gluerun_ctx_experiment_delta_record \
-          gluerun_ctx_experiment_delta_metrics \
-          gluerun_ctx_experiment_delta_json; do
+for fn in singular_ctx_experiment_delta_record \
+          singular_ctx_experiment_delta_metrics \
+          singular_ctx_experiment_delta_json; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $TOOL"
 done
 
@@ -134,21 +134,21 @@ trap 'rm -rf "$tmp" "$VALIDATOR"' EXIT
 # ============================================================================
 # Slice 1: pure helper — {a, b, delta=b-a, direction}, missing arm value -> 0.
 # ============================================================================
-rec="$(gluerun_ctx_experiment_delta_record '{"x":5}' '{"x":3}' x)"
+rec="$(singular_ctx_experiment_delta_record '{"x":5}' '{"x":3}' x)"
 python3 - <<PY || fail "helper record wrong for b<a"
 import json
 r = json.loads('''$rec''')
 assert r == {"a":5,"b":3,"delta":-2,"direction":"lower"}, r
 PY
 
-rec="$(gluerun_ctx_experiment_delta_record '{}' '{"x":3}' x)"
+rec="$(singular_ctx_experiment_delta_record '{}' '{"x":3}' x)"
 python3 - <<PY || fail "helper did not treat missing arm A value as zero"
 import json
 r = json.loads('''$rec''')
 assert r == {"a":0,"b":3,"delta":3,"direction":"higher"}, r
 PY
 
-rec="$(gluerun_ctx_experiment_delta_record '{"c":{"v":7}}' '{"c":{"v":7}}' c v)"
+rec="$(singular_ctx_experiment_delta_record '{"c":{"v":7}}' '{"c":{"v":7}}' c v)"
 python3 - <<PY || fail "helper did not resolve nested path / equal direction"
 import json
 r = json.loads('''$rec''')
@@ -162,7 +162,7 @@ PY
 bundle_file="$tmp/bundle.json"
 cat > "$bundle_file" <<'EOF'
 {
-  "schema": "gluerun.orchestration.ctx-experiment-summary.v0",
+  "schema": "singular.orchestration.ctx-experiment-summary.v0",
   "report": {
     "arms": {
       "A": {"escapeRate": 0.5, "cost": {"tokensPerTask": 100, "wallClockMsPerTask": 1000}},
@@ -191,7 +191,7 @@ cat > "$bundle_file" <<'EOF'
 }
 EOF
 
-out="$(GLUERUN_CTX_EXPERIMENT_DELTA_BUNDLE="$bundle_file" gluerun_ctx_experiment_delta_json)" \
+out="$(SINGULAR_CTX_EXPERIMENT_DELTA_BUNDLE="$bundle_file" singular_ctx_experiment_delta_json)" \
   || fail "delta aggregator exited non-zero on a supplied bundle"
 printf '%s' "$out" > "$tmp/out.json"
 printf '%s' "$out" | validates "$SCHEMA" || fail "delta output did not validate against $SCHEMA"
@@ -211,7 +211,7 @@ python3 - "$tmp/out.json" "$bundle_file" <<'PY' || fail "delta records do not ma
 import json, sys
 out = json.load(open(sys.argv[1]))
 bundle = json.load(open(sys.argv[2]))
-assert out["schema"] == "gluerun.orchestration.ctx-experiment-delta.v0", out["schema"]
+assert out["schema"] == "singular.orchestration.ctx-experiment-delta.v0", out["schema"]
 d = out["deltas"]
 
 want_keys = {
@@ -257,7 +257,7 @@ print("fixture-ok")
 PY
 
 # Determinism: identical input -> byte-identical output.
-out2="$(GLUERUN_CTX_EXPERIMENT_DELTA_BUNDLE="$bundle_file" gluerun_ctx_experiment_delta_json)"
+out2="$(SINGULAR_CTX_EXPERIMENT_DELTA_BUNDLE="$bundle_file" singular_ctx_experiment_delta_json)"
 [[ "$out" == "$out2" ]] || fail "delta output not deterministic across identical runs"
 
 # ============================================================================
@@ -317,11 +317,11 @@ s_before="$(file_hash "$SIB_STRATEGY")"
 a_before="$(file_hash "$SIB_ATTEMPTS")"
 u_before="$(file_hash "$SIB_SUMMARY")"
 
-direct_bundle="$(gluerun_ctx_experiment_summary_json "$runs" "$events" "$metrics")" \
+direct_bundle="$(singular_ctx_experiment_summary_json "$runs" "$events" "$metrics")" \
   || fail "summary composer exited non-zero"
 printf '%s' "$direct_bundle" > "$tmp/direct_bundle.json"
 
-delegated="$(gluerun_ctx_experiment_delta_json "$runs" "$events" "$metrics")" \
+delegated="$(singular_ctx_experiment_delta_json "$runs" "$events" "$metrics")" \
   || fail "delta aggregator exited non-zero on threaded corpus args"
 printf '%s' "$delegated" > "$tmp/delegated.json"
 printf '%s' "$delegated" | validates "$SCHEMA" || fail "delegated delta did not validate"
@@ -368,14 +368,14 @@ after="$(tree_hash "$fix")"
 # ============================================================================
 # Fail-safe: missing inputs -> well-formed zeroed deltas, schema-valid, exit 0.
 # ============================================================================
-empty="$(gluerun_ctx_experiment_delta_json "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")" \
+empty="$(singular_ctx_experiment_delta_json "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")" \
   || fail "delta aggregator crashed on missing input (should fail safe)"
 printf '%s' "$empty" > "$tmp/empty.json"
 printf '%s' "$empty" | validates "$SCHEMA" || fail "zeroed delta did not validate against schema"
 python3 - "$tmp/empty.json" <<'PY' || fail "empty-input delta not well-formed / not fully zeroed"
 import json, sys
 out = json.load(open(sys.argv[1]))
-assert out["schema"] == "gluerun.orchestration.ctx-experiment-delta.v0"
+assert out["schema"] == "singular.orchestration.ctx-experiment-delta.v0"
 d = out["deltas"]
 assert len(d) == 8, list(d)
 for k, r in d.items():
@@ -384,15 +384,15 @@ print("fail-safe-ok")
 PY
 
 # A supplied-but-unreadable bundle source is also fail-safe.
-empty2="$(GLUERUN_CTX_EXPERIMENT_DELTA_BUNDLE="$tmp/nope.json" gluerun_ctx_experiment_delta_json)" \
+empty2="$(SINGULAR_CTX_EXPERIMENT_DELTA_BUNDLE="$tmp/nope.json" singular_ctx_experiment_delta_json)" \
   || fail "delta aggregator crashed on unreadable bundle source (should fail safe)"
 printf '%s' "$empty2" | validates "$SCHEMA" || fail "unreadable-source delta did not validate"
 
 # No-arg default invocation is also fail-safe.
-GLUERUN_RUNS_DIR="$tmp/no-runs" \
-GLUERUN_EVENTS_FILE="$tmp/no-events.ndjson" \
-GLUERUN_CTX_EXPERIMENT_METRICS_FILE="$tmp/no-metrics.json" \
-  gluerun_ctx_experiment_delta_json >/dev/null \
+SINGULAR_RUNS_DIR="$tmp/no-runs" \
+SINGULAR_EVENTS_FILE="$tmp/no-events.ndjson" \
+SINGULAR_CTX_EXPERIMENT_METRICS_FILE="$tmp/no-metrics.json" \
+  singular_ctx_experiment_delta_json >/dev/null \
   || fail "no-arg default invocation crashed instead of failing safe"
 
 echo "ctx-experiment-delta tests passed"

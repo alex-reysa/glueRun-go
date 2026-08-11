@@ -42,9 +42,9 @@ tree_hash() {
 [[ -f "$SCHEMA" ]] || fail "schema not present yet: $SCHEMA"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-for fn in gluerun_ctx_experiment_escape_rates \
-          gluerun_ctx_experiment_bias_rate \
-          gluerun_ctx_experiment_report_json; do
+for fn in singular_ctx_experiment_escape_rates \
+          singular_ctx_experiment_bias_rate \
+          singular_ctx_experiment_report_json; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $TOOL"
 done
 
@@ -158,7 +158,7 @@ EOF
 before="$(tree_hash "$fix")"
 
 # --- Slice 1: per-arm escape rate --------------------------------------------
-esc="$(gluerun_ctx_experiment_escape_rates "$events")" \
+esc="$(singular_ctx_experiment_escape_rates "$events")" \
   || fail "escape-rate aggregator exited non-zero on a valid fixture"
 printf '%s' "$esc" > "$tmp/esc.json"
 python3 - "$tmp/esc.json" <<'PY' || fail "escape rates did not match expected"
@@ -176,7 +176,7 @@ print("escape-ok")
 PY
 
 # --- Slice 2: bias directional-disagreement rate -----------------------------
-bias="$(gluerun_ctx_experiment_bias_rate "$events")" \
+bias="$(singular_ctx_experiment_bias_rate "$events")" \
   || fail "bias aggregator exited non-zero on a valid fixture"
 printf '%s' "$bias" > "$tmp/bias.json"
 python3 - "$tmp/bias.json" <<'PY' || fail "bias rate did not match expected"
@@ -191,7 +191,7 @@ print("bias-ok")
 PY
 
 # --- Slice 3: composed, schema-valid, deterministic artifact -----------------
-art="$(gluerun_ctx_experiment_report_json "$events" "$metrics")" \
+art="$(singular_ctx_experiment_report_json "$events" "$metrics")" \
   || fail "report aggregator exited non-zero on a valid fixture"
 printf '%s' "$art" > "$tmp/art.json"
 printf '%s' "$art" | validates "$SCHEMA" || fail "artifact did not validate against $SCHEMA"
@@ -211,7 +211,7 @@ python3 - "$tmp/art.json" <<'PY' || fail "composed artifact fields did not match
 import json, sys
 m = json.load(open(sys.argv[1]))
 def close(a, b): return abs(a - b) < 1e-9
-assert m["schema"] == "gluerun.orchestration.ctx-experiment-report.v0", m["schema"]
+assert m["schema"] == "singular.orchestration.ctx-experiment-report.v0", m["schema"]
 A, B = m["arms"]["A"], m["arms"]["B"]
 assert close(A["escapeRate"], 2/3) and A["accepted"] == 3 and A["flagged"] == 2, A
 assert close(B["escapeRate"], 1/2) and B["accepted"] == 2 and B["flagged"] == 1, B
@@ -228,7 +228,7 @@ print("composed-ok")
 PY
 
 # --- Determinism: identical inputs -> byte-identical output ------------------
-art2="$(gluerun_ctx_experiment_report_json "$events" "$metrics")"
+art2="$(singular_ctx_experiment_report_json "$events" "$metrics")"
 [[ "$art" == "$art2" ]] || fail "composed artifact not deterministic across identical runs"
 
 # --- Read-only: input fixture tree byte-unchanged after every call -----------
@@ -238,7 +238,7 @@ after="$(tree_hash "$fix")"
 # --- Fail-safe: missing / empty inputs -> well-formed zeroed artifact --------
 missing_events="$tmp/no-such-events.ndjson"
 missing_metrics="$tmp/no-such-metrics.json"
-out_empty="$(gluerun_ctx_experiment_report_json "$missing_events" "$missing_metrics")" \
+out_empty="$(singular_ctx_experiment_report_json "$missing_events" "$missing_metrics")" \
   || fail "report aggregator crashed on missing inputs (should fail safe)"
 printf '%s' "$out_empty" > "$tmp/empty.json"
 printf '%s' "$out_empty" | validates "$SCHEMA" || fail "zeroed artifact did not validate against schema"
@@ -259,14 +259,14 @@ PY
 
 # empty events file (present but zero records) is also fail-safe.
 : > "$tmp/empty-events.ndjson"
-gluerun_ctx_experiment_escape_rates "$tmp/empty-events.ndjson" >/dev/null \
+singular_ctx_experiment_escape_rates "$tmp/empty-events.ndjson" >/dev/null \
   || fail "escape aggregator crashed on an empty events file"
-gluerun_ctx_experiment_bias_rate "$tmp/empty-events.ndjson" >/dev/null \
+singular_ctx_experiment_bias_rate "$tmp/empty-events.ndjson" >/dev/null \
   || fail "bias aggregator crashed on an empty events file"
 
 # --- No-arg default invocation is also fail-safe -----------------------------
-GLUERUN_EVENTS_FILE="$missing_events" GLUERUN_CTX_EXPERIMENT_METRICS_FILE="$missing_metrics" \
-  gluerun_ctx_experiment_report_json >/dev/null \
+SINGULAR_EVENTS_FILE="$missing_events" SINGULAR_CTX_EXPERIMENT_METRICS_FILE="$missing_metrics" \
+  singular_ctx_experiment_report_json >/dev/null \
   || fail "no-arg default invocation crashed instead of failing safe"
 
 echo "ctx-experiment-report tests passed"

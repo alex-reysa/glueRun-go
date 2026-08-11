@@ -7,12 +7,12 @@
 # escape-rate / cost / bias to; it neither declares nor gates node completion.
 #
 # Three chained slices, all inside engine/ctx-experiment-armstate.sh:
-#   1. gluerun_ctx_experiment_armstate_read <knob>  -> {knob,value,active} for one
+#   1. singular_ctx_experiment_armstate_read <knob>  -> {knob,value,active} for one
 #      canonical continuity knob, read from the environment with the knob's
 #      documented default and the engine's own active interpretation.
-#   2. gluerun_ctx_experiment_armstate_snapshot     -> the {knob,value,active}
+#   2. singular_ctx_experiment_armstate_snapshot     -> the {knob,value,active}
 #      record for EVERY continuity knob, keyed by canonical knob name.
-#   3. gluerun_ctx_experiment_armstate_json         -> ONE deterministic, sorted-key
+#   3. singular_ctx_experiment_armstate_json         -> ONE deterministic, sorted-key
 #      JSON object composing the snapshot; validates against the shipped v0 schema.
 #
 # Guarantees pinned BEHAVIORALLY over environment fixtures (no absence greps, no
@@ -49,16 +49,16 @@ tree_hash() {
 [[ -f "$SCHEMA" ]] || fail "schema not present yet: $SCHEMA"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-for fn in gluerun_ctx_experiment_armstate_read \
-          gluerun_ctx_experiment_armstate_snapshot \
-          gluerun_ctx_experiment_armstate_json; do
+for fn in singular_ctx_experiment_armstate_read \
+          singular_ctx_experiment_armstate_snapshot \
+          singular_ctx_experiment_armstate_json; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $TOOL"
 done
 
 # The canonical continuity knobs that distinguish treatment from the M0 control.
-KNOBS=(GLUERUN_CTX_PACKET GLUERUN_CTX_ROUTING GLUERUN_REHYDRATE \
-       GLUERUN_PAIRED_AUDIT_PCT GLUERUN_CRITIC_RECHECK_PCT \
-       GLUERUN_CTX_ARTIFACT_SCAN GLUERUN_CTX_MANIFEST)
+KNOBS=(SINGULAR_CTX_PACKET SINGULAR_CTX_ROUTING SINGULAR_REHYDRATE \
+       SINGULAR_PAIRED_AUDIT_PCT SINGULAR_CRITIC_RECHECK_PCT \
+       SINGULAR_CTX_ARTIFACT_SCAN SINGULAR_CTX_MANIFEST)
 # Clear the whole slate so the default-arm assertions see a pristine environment.
 unset "${KNOBS[@]}"
 
@@ -141,18 +141,18 @@ printf '{"taskId":"TASK-0093"}\n'            > "$fix/tasks/task.json"
 before="$(tree_hash "$fix")"
 
 # --- Slice 3 default arm: all continuity knobs UNSET -> M0 control knob-state --
-ctrl="$(gluerun_ctx_experiment_armstate_json)" \
+ctrl="$(singular_ctx_experiment_armstate_json)" \
   || fail "emitter exited non-zero with a pristine (control) environment"
 printf '%s' "$ctrl" > "$tmp/ctrl.json"
 printf '%s' "$ctrl" | validates "$SCHEMA" || fail "control artifact did not validate against $SCHEMA"
 python3 - "$tmp/ctrl.json" <<'PY' || fail "control-arm knob-state not all-inactive at defaults"
 import json, sys
 m = json.load(open(sys.argv[1]))
-assert m["schema"] == "gluerun.orchestration.ctx-experiment-armstate.v0", m["schema"]
+assert m["schema"] == "singular.orchestration.ctx-experiment-armstate.v0", m["schema"]
 knobs = m["knobs"]
-expected = {"GLUERUN_CTX_PACKET","GLUERUN_CTX_ROUTING","GLUERUN_REHYDRATE",
-            "GLUERUN_PAIRED_AUDIT_PCT","GLUERUN_CRITIC_RECHECK_PCT",
-            "GLUERUN_CTX_ARTIFACT_SCAN","GLUERUN_CTX_MANIFEST"}
+expected = {"SINGULAR_CTX_PACKET","SINGULAR_CTX_ROUTING","SINGULAR_REHYDRATE",
+            "SINGULAR_PAIRED_AUDIT_PCT","SINGULAR_CRITIC_RECHECK_PCT",
+            "SINGULAR_CTX_ARTIFACT_SCAN","SINGULAR_CTX_MANIFEST"}
 assert set(knobs.keys()) == expected, set(knobs.keys())
 for name, rec in knobs.items():
     assert rec["knob"] == name, rec
@@ -173,19 +173,19 @@ print("sorted-ok")
 PY
 
 # determinism: identical (empty) environment -> byte-identical output.
-ctrl2="$(gluerun_ctx_experiment_armstate_json)"
+ctrl2="$(singular_ctx_experiment_armstate_json)"
 [[ "$ctrl" == "$ctrl2" ]] || fail "control artifact not deterministic across identical runs"
 
 # --- Slice 1 helper: a single knob record, read from the environment ----------
-GLUERUN_CTX_PACKET= gluerun_ctx_experiment_armstate_read GLUERUN_CTX_PACKET > "$tmp/rec_off.json"
+SINGULAR_CTX_PACKET= singular_ctx_experiment_armstate_read SINGULAR_CTX_PACKET > "$tmp/rec_off.json"
 python3 - "$tmp/rec_off.json" <<'PY' || fail "read helper (unset knob) not inactive at default"
 import json, sys
 r = json.load(open(sys.argv[1]))
-assert r["knob"] == "GLUERUN_CTX_PACKET", r
+assert r["knob"] == "SINGULAR_CTX_PACKET", r
 assert r["active"] is False, r
 print("read-off-ok")
 PY
-(export GLUERUN_CTX_PACKET=1; gluerun_ctx_experiment_armstate_read GLUERUN_CTX_PACKET) > "$tmp/rec_on.json"
+(export SINGULAR_CTX_PACKET=1; singular_ctx_experiment_armstate_read SINGULAR_CTX_PACKET) > "$tmp/rec_on.json"
 python3 - "$tmp/rec_on.json" <<'PY' || fail "read helper (set knob) not active with observed value"
 import json, sys
 r = json.load(open(sys.argv[1]))
@@ -195,13 +195,13 @@ print("read-on-ok")
 PY
 
 # --- Slice 2 snapshot: every continuity knob keyed by canonical name ----------
-gluerun_ctx_experiment_armstate_snapshot > "$tmp/snap.json"
+singular_ctx_experiment_armstate_snapshot > "$tmp/snap.json"
 python3 - "$tmp/snap.json" <<'PY' || fail "snapshot did not cover every canonical continuity knob"
 import json, sys
 s = json.load(open(sys.argv[1]))
-expected = {"GLUERUN_CTX_PACKET","GLUERUN_CTX_ROUTING","GLUERUN_REHYDRATE",
-            "GLUERUN_PAIRED_AUDIT_PCT","GLUERUN_CRITIC_RECHECK_PCT",
-            "GLUERUN_CTX_ARTIFACT_SCAN","GLUERUN_CTX_MANIFEST"}
+expected = {"SINGULAR_CTX_PACKET","SINGULAR_CTX_ROUTING","SINGULAR_REHYDRATE",
+            "SINGULAR_PAIRED_AUDIT_PCT","SINGULAR_CRITIC_RECHECK_PCT",
+            "SINGULAR_CTX_ARTIFACT_SCAN","SINGULAR_CTX_MANIFEST"}
 assert set(s.keys()) == expected, set(s.keys())
 for name, rec in s.items():
     assert set(rec.keys()) == {"knob","value","active"}, rec
@@ -209,10 +209,10 @@ print("snapshot-ok")
 PY
 
 # --- Treatment arm: the continuity knobs SET -> treatment knob-state ----------
-treat="$(export GLUERUN_CTX_PACKET=1 GLUERUN_CTX_ROUTING=1 GLUERUN_REHYDRATE=1 \
-                GLUERUN_PAIRED_AUDIT_PCT=25 GLUERUN_CRITIC_RECHECK_PCT=25 \
-                GLUERUN_CTX_ARTIFACT_SCAN=1 GLUERUN_CTX_MANIFEST=1
-         gluerun_ctx_experiment_armstate_json)" \
+treat="$(export SINGULAR_CTX_PACKET=1 SINGULAR_CTX_ROUTING=1 SINGULAR_REHYDRATE=1 \
+                SINGULAR_PAIRED_AUDIT_PCT=25 SINGULAR_CRITIC_RECHECK_PCT=25 \
+                SINGULAR_CTX_ARTIFACT_SCAN=1 SINGULAR_CTX_MANIFEST=1
+         singular_ctx_experiment_armstate_json)" \
   || fail "emitter exited non-zero with the treatment environment"
 printf '%s' "$treat" > "$tmp/treat.json"
 printf '%s' "$treat" | validates "$SCHEMA" || fail "treatment artifact did not validate against $SCHEMA"
@@ -220,9 +220,9 @@ python3 - "$tmp/treat.json" <<'PY' || fail "treatment-arm knob-state not all-act
 import json, sys
 m = json.load(open(sys.argv[1]))
 knobs = m["knobs"]
-obs = {"GLUERUN_CTX_PACKET":"1","GLUERUN_CTX_ROUTING":"1","GLUERUN_REHYDRATE":"1",
-       "GLUERUN_PAIRED_AUDIT_PCT":"25","GLUERUN_CRITIC_RECHECK_PCT":"25",
-       "GLUERUN_CTX_ARTIFACT_SCAN":"1","GLUERUN_CTX_MANIFEST":"1"}
+obs = {"SINGULAR_CTX_PACKET":"1","SINGULAR_CTX_ROUTING":"1","SINGULAR_REHYDRATE":"1",
+       "SINGULAR_PAIRED_AUDIT_PCT":"25","SINGULAR_CRITIC_RECHECK_PCT":"25",
+       "SINGULAR_CTX_ARTIFACT_SCAN":"1","SINGULAR_CTX_MANIFEST":"1"}
 for name, want in obs.items():
     rec = knobs[name]
     assert rec["value"] == want, (name, rec)   # observed value carried verbatim
@@ -235,8 +235,8 @@ PY
 [[ "$ctrl" != "$treat" ]] || fail "control and treatment emitted identical knob-state"
 
 # --- Fail-safe: partial / non-enabling values reported verbatim, active=false --
-fs="$(export GLUERUN_CRITIC_RECHECK_PCT=abc GLUERUN_PAIRED_AUDIT_PCT= GLUERUN_CTX_PACKET=0
-      gluerun_ctx_experiment_armstate_json)" \
+fs="$(export SINGULAR_CRITIC_RECHECK_PCT=abc SINGULAR_PAIRED_AUDIT_PCT= SINGULAR_CTX_PACKET=0
+      singular_ctx_experiment_armstate_json)" \
   || fail "emitter exited non-zero on partial / non-enabling values (should fail safe)"
 printf '%s' "$fs" > "$tmp/fs.json"
 printf '%s' "$fs" | validates "$SCHEMA" || fail "fail-safe artifact did not validate against schema"
@@ -245,14 +245,14 @@ import json, sys
 m = json.load(open(sys.argv[1]))
 k = m["knobs"]
 # non-numeric percent -> verbatim, inactive
-assert k["GLUERUN_CRITIC_RECHECK_PCT"]["value"] == "abc", k["GLUERUN_CRITIC_RECHECK_PCT"]
-assert k["GLUERUN_CRITIC_RECHECK_PCT"]["active"] is False, k["GLUERUN_CRITIC_RECHECK_PCT"]
+assert k["SINGULAR_CRITIC_RECHECK_PCT"]["value"] == "abc", k["SINGULAR_CRITIC_RECHECK_PCT"]
+assert k["SINGULAR_CRITIC_RECHECK_PCT"]["active"] is False, k["SINGULAR_CRITIC_RECHECK_PCT"]
 # empty string -> verbatim, inactive
-assert k["GLUERUN_PAIRED_AUDIT_PCT"]["value"] == "", k["GLUERUN_PAIRED_AUDIT_PCT"]
-assert k["GLUERUN_PAIRED_AUDIT_PCT"]["active"] is False, k["GLUERUN_PAIRED_AUDIT_PCT"]
+assert k["SINGULAR_PAIRED_AUDIT_PCT"]["value"] == "", k["SINGULAR_PAIRED_AUDIT_PCT"]
+assert k["SINGULAR_PAIRED_AUDIT_PCT"]["active"] is False, k["SINGULAR_PAIRED_AUDIT_PCT"]
 # explicit "0" -> verbatim, inactive
-assert k["GLUERUN_CTX_PACKET"]["value"] == "0", k["GLUERUN_CTX_PACKET"]
-assert k["GLUERUN_CTX_PACKET"]["active"] is False, k["GLUERUN_CTX_PACKET"]
+assert k["SINGULAR_CTX_PACKET"]["value"] == "0", k["SINGULAR_CTX_PACKET"]
+assert k["SINGULAR_CTX_PACKET"]["active"] is False, k["SINGULAR_CTX_PACKET"]
 print("fail-safe-ok")
 PY
 

@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "requiredNodes": [
     "loc-00-contract",
     "loc-25-release-approval"

@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.state-packet.v0",
+  "schema": "singular.orchestration.state-packet.v0",
   "packetId": "PKT-TASK-0100-20260712T225335Z",
   "runId": "RUN-20260712T225335Z-23899",
   "taskId": "TASK-0100",
@@ -22,17 +22,17 @@
     {
       "cmd": "bash tests/test-ctx-experiment-report-body.sh",
       "exitCode": 1,
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "cmd": "bash tests/test-ctx-experiment-report-body.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "cmd": "bash tests/test-ctx-experiment-report-body.sh && bash tests/test-engine-clean.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "tests": [
@@ -40,33 +40,33 @@
       "name": "tests/test-ctx-experiment-report-body.sh",
       "phase": "red",
       "status": "fail",
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "name": "tests/test-ctx-experiment-report-body.sh",
       "phase": "green",
       "status": "pass",
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "name": "tests/test-engine-clean.sh",
       "phase": "regression",
       "status": "pass",
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "evidence": [
     {
       "kind": "log",
-      "ref": ".gluerun-evidence/red.log"
+      "ref": ".singular-evidence/red.log"
     },
     {
       "kind": "log",
-      "ref": ".gluerun-evidence/green.log"
+      "ref": ".singular-evidence/green.log"
     },
     {
       "kind": "log",
-      "ref": ".gluerun-evidence/regression.log"
+      "ref": ".singular-evidence/regression.log"
     },
     {
       "kind": "gate-check",

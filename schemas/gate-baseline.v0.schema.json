@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.gate-baseline.v0",
-  "title": "gluerun Acknowledged Gate Baseline",
+  "$id": "singular.orchestration.gate-baseline.v0",
+  "title": "singular Acknowledged Gate Baseline",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
     "recordedAt"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.gate-baseline.v0" },
+    "schema": { "const": "singular.orchestration.gate-baseline.v0" },
     "commandSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "failures": {
       "type": "array",

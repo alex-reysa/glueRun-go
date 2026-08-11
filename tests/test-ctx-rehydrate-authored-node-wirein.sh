@@ -5,10 +5,10 @@ set -euo pipefail
 # node-dimension mini-track.
 #
 # TASK-0064 shipped the pure builder
-#   gluerun_ctx_rehydrate_authored_triggers <role> <step> [node] [task-id]
+#   singular_ctx_rehydrate_authored_triggers <role> <step> [node] [task-id]
 # with an optional [node] slot; TASK-0065 wired the role/step/task dimensions into
 # both live sites; TASK-0066 shipped the pure, read-only resolver
-#   gluerun_ctx_rehydrate_authored_node <task_id> [worktree]
+#   singular_ctx_rehydrate_authored_node <task_id> [worktree]
 # (the single distinct executable DAG node owning <task_id> from the durable
 # control-state task->node association, or empty fail-safe on absence/ambiguity)
 # but left it present-but-uncalled: the two live consumers — the injection at
@@ -20,9 +20,9 @@ set -euo pipefail
 # the builder's [node] parameter remain dead.
 #
 # This slice substitutes, at BOTH sites, a node-resolution step: resolve
-#   node="$(gluerun_ctx_rehydrate_authored_node "$task_id")"
+#   node="$(singular_ctx_rehydrate_authored_node "$task_id")"
 # and pass it into the builder's position-3 slot —
-#   gluerun_ctx_rehydrate_authored_triggers implementer implement "$node" "$task_id".
+#   singular_ctx_rehydrate_authored_triggers implementer implement "$node" "$task_id".
 # Both sites resolve from the SAME pure deterministic resolver with the SAME
 # task_id, so they derive the IDENTICAL node token and therefore the identical
 # trigger set, preserving the injected<->recorded consistency invariant.
@@ -46,36 +46,36 @@ fi
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
-# Hermetic guard: scrub inherited GLUERUN_* so a leaked knob can't poison the sandbox.
-while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+# Hermetic guard: scrub inherited SINGULAR_* so a leaked knob can't poison the sandbox.
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: want '$2' got '$1'"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-rehydrate-node-wirein.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-rehydrate-node-wirein.XXXXXX")"
 trap 'rm -rf "$workroot"' EXIT
 
 # Source lib.sh (auto-sources the ctx-*.sh bricks) so the builder, the resolver,
 # and the config-gated render/manifest the driver delegates into are available.
-export GLUERUN_ROOT="$workroot/libroot"
-export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-export GLUERUN_TARGET_BRANCH="target"
-mkdir -p "$GLUERUN_STATE_DIR"
+export SINGULAR_ROOT="$workroot/libroot"
+export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+export SINGULAR_TARGET_BRANCH="target"
+mkdir -p "$SINGULAR_STATE_DIR"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
-[[ "$(type -t gluerun_ctx_rehydrate_authored_triggers)" == "function" ]] \
-  || fail "gluerun_ctx_rehydrate_authored_triggers not defined (TASK-0064 builder missing)"
-[[ "$(type -t gluerun_ctx_rehydrate_authored_node)" == "function" ]] \
-  || fail "gluerun_ctx_rehydrate_authored_node not defined (TASK-0066 resolver missing)"
-[[ "$(type -t gluerun_ctx_rehydrate_authored_config_render)" == "function" ]] \
-  || fail "gluerun_ctx_rehydrate_authored_config_render not defined (config render missing)"
+[[ "$(type -t singular_ctx_rehydrate_authored_triggers)" == "function" ]] \
+  || fail "singular_ctx_rehydrate_authored_triggers not defined (TASK-0064 builder missing)"
+[[ "$(type -t singular_ctx_rehydrate_authored_node)" == "function" ]] \
+  || fail "singular_ctx_rehydrate_authored_node not defined (TASK-0066 resolver missing)"
+[[ "$(type -t singular_ctx_rehydrate_authored_config_render)" == "function" ]] \
+  || fail "singular_ctx_rehydrate_authored_config_render not defined (config render missing)"
 
 # --- Driver fixture repo -----------------------------------------------------
 drv_root="$workroot/drv"
 mkdir -p "$drv_root/docs/orchestration/prompts" "$drv_root/docs/orchestration/tasks" \
-  "$drv_root/.gluerun-state" "$drv_root/internal/widget"
+  "$drv_root/.singular-state" "$drv_root/internal/widget"
 git -C "$drv_root" init -q
 git -C "$drv_root" config user.email t@t; git -C "$drv_root" config user.name t
 git -C "$drv_root" checkout -q -b target
@@ -94,7 +94,7 @@ printf '# Decider Prompt\n[TASK-ID] [FAILURE CLASS]\n' > "$drv_root/docs/orchest
 # A RELATIVE contextManifest resolves against the config file's directory (== $drv_root).
 cat >"$drv_root/authored-manifest.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.authored-knowledge-manifest.v0",
+  "schema": "singular.orchestration.authored-knowledge-manifest.v0",
   "entries": [
     { "id": "impl-body", "body": "AUTHORED BODY impl", "load-when": ["implement"],      "freshness": "current" },
     { "id": "role-body", "body": "AUTHORED BODY role", "load-when": ["implementer"],    "freshness": "current" },
@@ -104,7 +104,7 @@ cat >"$drv_root/authored-manifest.json" <<'JSON'
   ]
 }
 JSON
-cat >"$drv_root/gluerun.config.json" <<'JSON'
+cat >"$drv_root/singular.config.json" <<'JSON'
 { "contextManifest": "authored-manifest.json" }
 JSON
 
@@ -142,7 +142,7 @@ git -C "$drv_root" add .
 git -C "$drv_root" commit -qm init
 
 TASK_MD="$drv_root/docs/orchestration/tasks/TASK-0001.md"
-EVENTS="$drv_root/.gluerun-state/events.ndjson"
+EVENTS="$drv_root/.singular-state/events.ndjson"
 
 # Append a durable task->node association line as the planner/importer does:
 # {ts,type,message,data:{taskId,node,...}} NDJSON. The resolver reads the DISTINCT
@@ -153,19 +153,19 @@ emit_assoc() { # <type> <task_id> <node>
 }
 
 # --- Sanity: the enriched trigger set now carries the node token ---------------
-# gluerun_ctx_rehydrate_authored_triggers <role> <step> [node] [task] with a
+# singular_ctx_rehydrate_authored_triggers <role> <step> [node] [task] with a
 # non-empty node emits it; the node-scoped entry renders ONLY when the node token
 # is supplied, and is dropped under the pre-node-dimension set.
-triggers_node="$(gluerun_ctx_rehydrate_authored_triggers implementer implement "rehydrate-path" "TASK-0001")"
+triggers_node="$(singular_ctx_rehydrate_authored_triggers implementer implement "rehydrate-path" "TASK-0001")"
 grep -qx "rehydrate-path" <<<"$triggers_node" || fail "sanity: builder must emit the node token when supplied"
 
-render_no_node="$(GLUERUN_CTX_MANIFEST=1 GLUERUN_JSON_CONFIG_FILE="$drv_root/gluerun.config.json" \
-  gluerun_ctx_rehydrate_authored_config_render implementer implement TASK-0001)"
+render_no_node="$(SINGULAR_CTX_MANIFEST=1 SINGULAR_JSON_CONFIG_FILE="$drv_root/singular.config.json" \
+  singular_ctx_rehydrate_authored_config_render implementer implement TASK-0001)"
 [[ "$render_no_node" != *"=== authored:node-body ==="* ]] \
   || fail "sanity: node-scoped entry must NOT render without the node token (pre-wire-in)"
 
-render_node="$(GLUERUN_CTX_MANIFEST=1 GLUERUN_JSON_CONFIG_FILE="$drv_root/gluerun.config.json" \
-  gluerun_ctx_rehydrate_authored_config_render $triggers_node)"
+render_node="$(SINGULAR_CTX_MANIFEST=1 SINGULAR_JSON_CONFIG_FILE="$drv_root/singular.config.json" \
+  singular_ctx_rehydrate_authored_config_render $triggers_node)"
 [[ "$render_node" == *"=== authored:node-body ==="* ]] \
   || fail "sanity: node-scoped entry must render once the node token is in the set"
 [[ "$render_node" != *"plan-only"* ]] \
@@ -203,15 +203,15 @@ if [[ "\$level" == "l2" ]]; then
   mkdir -p "\$worktree/internal/widget"
   printf 'package widget\n// attempt %s\n' "\$c" > "\$worktree/internal/widget/parser.go"
   [[ -n "\$out" ]] && cat > "\$out" <<'PKT'
-{"schema":"gluerun.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
 PKT
-  [[ -n "\$meta" ]] && gluerun_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$worktree" 0
+  [[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$worktree" 0
   exit 0
 fi
 # read-only: the auditor.
 ac=0; [[ -f "\${AUDIT_COUNT_FILE:-/dev/null}" ]] && ac="\$(cat "\$AUDIT_COUNT_FILE" 2>/dev/null || echo 0)"
 ac=\$((ac+1)); [[ -n "\${AUDIT_COUNT_FILE:-}" ]] && echo "\$ac" > "\$AUDIT_COUNT_FILE"
-[[ -n "\$meta" ]] && gluerun_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$worktree" 0
+[[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$worktree" 0
 if [[ "\${SCENARIO:-accept}" == "needs-fix-first" && "\$ac" -eq 1 ]]; then
   [[ -n "\$out" ]] && printf '{"verdict":"needs-fix","findings":[{"summary":"fix it"}]}\n' > "\$out"
   exit 0
@@ -223,8 +223,8 @@ chmod +x "$mock_runner"
 
 reset_state() {
   git -C "$drv_root" checkout -q target 2>/dev/null || true
-  rm -rf "$drv_root/.gluerun-state/runs" "$drv_root/.gluerun-state/leases" \
-    "$drv_root/.gluerun-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
+  rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" \
+    "$drv_root/.singular-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
   : > "$EVENTS"
   rm -f "$drv_root/docs/orchestration/decisions.md" 2>/dev/null || true
   rm -f "$workroot/l2-count" "$workroot/audit-count" "$workroot/resume-log" 2>/dev/null || true
@@ -239,16 +239,16 @@ PY
 }
 
 run_drive() {
-  ( cd "$drv_root" && env GLUERUN_ROOT="$drv_root" GLUERUN_STATE_DIR="$drv_root/.gluerun-state" \
-      GLUERUN_ORCH_DIR="$drv_root/docs/orchestration" GLUERUN_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
-      GLUERUN_TARGET_BRANCH=target GLUERUN_RUNNER="$mock_runner" GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+  ( cd "$drv_root" && env SINGULAR_ROOT="$drv_root" SINGULAR_STATE_DIR="$drv_root/.singular-state" \
+      SINGULAR_ORCH_DIR="$drv_root/docs/orchestration" SINGULAR_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
+      SINGULAR_TARGET_BRANCH=target SINGULAR_RUNNER="$mock_runner" SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
       L2_COUNT_FILE="$workroot/l2-count" AUDIT_COUNT_FILE="$workroot/audit-count" \
       RESUME_LOG_FILE="$workroot/resume-log" \
-      GLUERUN_MAX_RETRIES=1 \
+      SINGULAR_MAX_RETRIES=1 \
       "$@" "$SCRIPT_DIR/l1-drive.sh" TASK-0001 ) || true
 }
 
-run_dir_of() { ls -d "$drv_root"/.gluerun-state/runs/RUN-* 2>/dev/null | head -1; }
+run_dir_of() { ls -d "$drv_root"/.singular-state/runs/RUN-* 2>/dev/null | head -1; }
 
 # Extract, from the recorded context.strategy_selected rehydrate event, the sorted
 # ids under data.manifest.authored.sources (empty list if no authored block).
@@ -279,7 +279,7 @@ PY
 AUTHORED_HEADER="## Injected authored knowledge (reference material, NOT authoritative)"
 
 # ---------------------------------------------------------------------------
-# (ON) rehydrate + GLUERUN_CTX_MANIFEST=1 + configured contextManifest, with the
+# (ON) rehydrate + SINGULAR_CTX_MANIFEST=1 + configured contextManifest, with the
 # task associated to EXACTLY ONE node (rehydrate-path). Both sites resolve that
 # node and pass `implementer implement rehydrate-path TASK-0001`, so the
 # node-scoped entry is BOTH injected into $active_prompt (TASK-0062 path) AND
@@ -288,8 +288,8 @@ AUTHORED_HEADER="## Injected authored knowledge (reference material, NOT authori
 # ---------------------------------------------------------------------------
 reset_state
 emit_assoc "planner.staged" "TASK-0001" "rehydrate-path"
-run_drive GLUERUN_CTX_ROUTING=1 GLUERUN_REHYDRATE=1 GLUERUN_CTX_MANIFEST=1 \
-  GLUERUN_SESSION_WINDOW_MAX_PCT=0 SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
+run_drive SINGULAR_CTX_ROUTING=1 SINGULAR_REHYDRATE=1 SINGULAR_CTX_MANIFEST=1 \
+  SINGULAR_SESSION_WINDOW_MAX_PCT=0 SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "ON: no run dir produced"
 active_prompt="$run_dir/l2-active-prompt.md"
 [[ -f "$active_prompt" ]] || fail "ON: no active prompt produced"
@@ -318,7 +318,7 @@ assert_eq "$rec_ids" "impl-body node-body role-body task-body" \
 pass "(ON record) node/role/task/implement-scoped entries recorded; planner-only dropped"
 
 # --- Injected<->recorded consistency ----------------------------------------
-# Both sites resolve the node via gluerun_ctx_rehydrate_authored_node "$task_id"
+# Both sites resolve the node via singular_ctx_rehydrate_authored_node "$task_id"
 # and pass the identical trigger set, so injected == recorded.
 injected_ids=""
 for id in impl-body node-body role-body task-body; do
@@ -340,8 +340,8 @@ pass "(consistency) injected authored set == recorded authored set (identical tr
 reset_state
 emit_assoc "planner.staged"    "TASK-0001" "rehydrate-path"
 emit_assoc "planner.generated" "TASK-0001" "other-node"
-run_drive GLUERUN_CTX_ROUTING=1 GLUERUN_REHYDRATE=1 GLUERUN_CTX_MANIFEST=1 \
-  GLUERUN_SESSION_WINDOW_MAX_PCT=0 SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
+run_drive SINGULAR_CTX_ROUTING=1 SINGULAR_REHYDRATE=1 SINGULAR_CTX_MANIFEST=1 \
+  SINGULAR_SESSION_WINDOW_MAX_PCT=0 SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "ambig: no run dir produced"
 active_prompt="$run_dir/l2-active-prompt.md"
 [[ -f "$active_prompt" ]] || fail "ambig: no active prompt produced"
@@ -358,35 +358,35 @@ assert_eq "$(recorded_authored_ids)" "impl-body role-body task-body" \
 pass "(fail-safe ambiguity) node-scoped entry dropped; role/task/implement-scoped intact"
 
 # ---------------------------------------------------------------------------
-# (OFF-parity, manifest flag) GLUERUN_CTX_MANIFEST unset on a rehydrate run with a
+# (OFF-parity, manifest flag) SINGULAR_CTX_MANIFEST unset on a rehydrate run with a
 # valid single node association: no authored content is injected or recorded — the
 # node token changes nothing because the config gate returns empty regardless.
 # ---------------------------------------------------------------------------
 reset_state
 emit_assoc "planner.staged" "TASK-0001" "rehydrate-path"
-run_drive GLUERUN_CTX_ROUTING=1 GLUERUN_REHYDRATE=1 \
-  GLUERUN_SESSION_WINDOW_MAX_PCT=0 SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
+run_drive SINGULAR_CTX_ROUTING=1 SINGULAR_REHYDRATE=1 \
+  SINGULAR_SESSION_WINDOW_MAX_PCT=0 SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "OFF-manifest: no run dir produced"
 active_prompt="$run_dir/l2-active-prompt.md"
 [[ -f "$active_prompt" ]] || fail "OFF-manifest: no active prompt produced"
 grep -qF "$AUTHORED_HEADER" "$active_prompt" && fail "OFF-manifest: authored section must be absent"
 grep -q "=== authored:" "$active_prompt" && fail "OFF-manifest: no authored entry may inject"
 assert_eq "$(recorded_authored_ids)" "" "OFF-manifest: no authored entries may be recorded"
-pass "(OFF-parity manifest) GLUERUN_CTX_MANIFEST unset: no authored injection or record"
+pass "(OFF-parity manifest) SINGULAR_CTX_MANIFEST unset: no authored injection or record"
 
 # ---------------------------------------------------------------------------
-# (OFF-parity, rehydrate flag) GLUERUN_REHYDRATE unset -> strategy never
+# (OFF-parity, rehydrate flag) SINGULAR_REHYDRATE unset -> strategy never
 # `rehydrate`, so neither the injection nor the rehydrate event fires at all.
 # ---------------------------------------------------------------------------
 reset_state
 emit_assoc "planner.staged" "TASK-0001" "rehydrate-path"
-run_drive GLUERUN_CTX_ROUTING=1 GLUERUN_CTX_MANIFEST=1 \
-  GLUERUN_SESSION_WINDOW_MAX_PCT=0 SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
+run_drive SINGULAR_CTX_ROUTING=1 SINGULAR_CTX_MANIFEST=1 \
+  SINGULAR_SESSION_WINDOW_MAX_PCT=0 SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "OFF-rehydrate: no run dir produced"
 active_prompt="$run_dir/l2-active-prompt.md"
 [[ -f "$active_prompt" ]] || fail "OFF-rehydrate: no active prompt produced"
 grep -qF "$AUTHORED_HEADER" "$active_prompt" && fail "OFF-rehydrate: authored section must be absent"
 assert_eq "$(recorded_authored_ids)" "" "OFF-rehydrate: no rehydrate event with authored entries"
-pass "(OFF-parity rehydrate) GLUERUN_REHYDRATE unset: no rehydrate injection or record"
+pass "(OFF-parity rehydrate) SINGULAR_REHYDRATE unset: no rehydrate injection or record"
 
 echo "ALL CTX-REHYDRATE-AUTHORED-NODE-WIREIN TESTS PASSED"

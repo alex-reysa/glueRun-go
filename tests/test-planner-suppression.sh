@@ -22,7 +22,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/repo"
 mkdir -p "$root/docs/orchestration/gates" "$root/docs/orchestration/prompts" \
-  "$root/docs/orchestration/tasks" "$root/schemas/orchestration" "$root/.gluerun-state"
+  "$root/docs/orchestration/tasks" "$root/schemas/orchestration" "$root/.singular-state"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$root/docs/orchestration/prompts/"
@@ -31,7 +31,7 @@ cp "$ENGINE_HOME/schemas/dag.v0.schema.json" "$root/schemas/orchestration/"
 cp "$ENGINE_HOME/schemas/gate-result.v0.schema.json" "$root/schemas/orchestration/"
 cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     { "id": "S0.base", "stage": "S0", "area": "storage", "layer": "substrate", "kind": "substrate", "dependsOn": [], "requiredCompletion": "ready" }
   ]
@@ -65,18 +65,18 @@ marker="$tmp/codex-called"
 cat >"$stub" <<SH
 #!/usr/bin/env bash
 touch "$marker"
-echo '{"schema":"gluerun.orchestration.task-batch.v0","tasks":[]}'
+echo '{"schema":"singular.orchestration.task-batch.v0","tasks":[]}'
 SH
 chmod +x "$stub"
 
 gen_env() {
-  env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ORCH_DIR="$root/docs/orchestration" GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
-    GLUERUN_RUNS_DIR="$root/.gluerun-state/runs" \
-    GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" \
-    GLUERUN_TARGET_BRANCH=target \
-    GLUERUN_TASKBATCH_SCHEMA="$root/schemas/orchestration/task-batch.v0.schema.json" \
-    GLUERUN_CODEX_RUNNER="$stub" "$@"
+  env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ORCH_DIR="$root/docs/orchestration" SINGULAR_TASKS_DIR="$root/docs/orchestration/tasks" \
+    SINGULAR_RUNS_DIR="$root/.singular-state/runs" \
+    SINGULAR_EVENTS_FILE="$root/.singular-state/events.ndjson" \
+    SINGULAR_TARGET_BRANCH=target \
+    SINGULAR_TASKBATCH_SCHEMA="$root/schemas/orchestration/task-batch.v0.schema.json" \
+    SINGULAR_CODEX_RUNNER="$stub" "$@"
 }
 
 # 1. Suppressed: exit 0, no codex call, distinct event.
@@ -85,14 +85,14 @@ out="$(gen_env "$SCRIPT_DIR/generate-tasks.sh" --node S0.base --count 1 2>&1)" |
 assert_contains "$out" "planner-suppressed (pending-promotion node=S0.base)" "suppression reported ($out)"
 [[ "$rc" -eq 0 ]] || fail "suppression must exit 0 (rc=$rc)"
 [[ -f "$marker" ]] && fail "codex must not be called for a pending-promotion node"
-assert_contains "$(cat "$root/.gluerun-state/events.ndjson")" '"type":"planner.suppressed_pending_promotion"' "suppression event"
+assert_contains "$(cat "$root/.singular-state/events.ndjson")" '"type":"planner.suppressed_pending_promotion"' "suppression event"
 assert_not_contains "$out" "planner-failed" "not a failure"
 
 # 2. A published FAILED gate means promotion was attempted and refused: the
 #    node needs more work and must be plannable again (suppressing here would
 #    deadlock an all-integrated node behind a red gate).
 cat >"$root/docs/orchestration/gates/S0.base.gate-result.json" <<'EOF'
-{"schema":"gluerun.orchestration.gate-result.v0","node":"S0.base","status":"failed","authoritative":true,"evidenceClass":"grandfathered","evidence":[{"kind":"source-path","ref":"internal/storage","description":"t"}],"decidedBy":"test","recordedAt":"2026-06-01T00:00:00Z"}
+{"schema":"singular.orchestration.gate-result.v0","node":"S0.base","status":"failed","authoritative":true,"evidenceClass":"grandfathered","evidence":[{"kind":"source-path","ref":"internal/storage","description":"t"}],"decidedBy":"test","recordedAt":"2026-06-01T00:00:00Z"}
 EOF
 rc=0
 out="$(gen_env "$SCRIPT_DIR/generate-tasks.sh" --node S0.base --count 1 2>&1)" || rc=$?
@@ -101,7 +101,7 @@ rm -f "$marker" "$root/docs/orchestration/gates/S0.base.gate-result.json"
 
 # 3. Knob off: planning proceeds even while pending promotion.
 rc=0
-out="$(gen_env env GLUERUN_SUPPRESS_UNPROMOTED_REPLAN=0 "$SCRIPT_DIR/generate-tasks.sh" --node S0.base --count 1 2>&1)" || rc=$?
+out="$(gen_env env SINGULAR_SUPPRESS_UNPROMOTED_REPLAN=0 "$SCRIPT_DIR/generate-tasks.sh" --node S0.base --count 1 2>&1)" || rc=$?
 [[ -f "$marker" ]] || fail "knob off must restore planning ($out)"
 
 echo "PASS: test-planner-suppression"

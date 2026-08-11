@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0095",
   "runId": "RUN-20260712T203946Z-72368",
   "branch": "agent/eval/TASK-0095-armstate-drive-hook",
@@ -14,16 +14,16 @@
     "scope-check.log ('2 changed path(s), all allowed')",
     "secret-scan.log ('secret-scan: clean')",
     "git diff f58b7e7..HEAD (M engine/l1-drive.sh +22, A tests/test-l1-drive-armstate.sh +248; no other paths)",
-    "engine/l1-drive.sh hook (lines 1309-1329) placed in finalize region beside GLUERUN_CTX_ARTIFACT_SCAN/paired-audit/critic-recheck sibling blocks",
-    "engine/ctx-experiment-armstate.sh:127 gluerun_ctx_experiment_armstate_json (pure python3 stdout JSON emitter, read-only)",
+    "engine/l1-drive.sh hook (lines 1309-1329) placed in finalize region beside SINGULAR_CTX_ARTIFACT_SCAN/paired-audit/critic-recheck sibling blocks",
+    "engine/ctx-experiment-armstate.sh:127 singular_ctx_experiment_armstate_json (pure python3 stdout JSON emitter, read-only)",
     "engine/lib.sh:3857-3862 ctx-*.sh auto-load loop (makes emitter available at l1-drive.sh runtime); run_dir assigned engine/l1-drive.sh:110 (in scope at hook)"
   ],
   "commandsRun": [
     "git rev-parse --abbrev-ref HEAD / rev-parse HEAD (branch + head 4324ad1 match packet)",
     "git diff --stat --name-status f58b7e7..HEAD (scope = 2 owned files only)",
     "git diff f58b7e7..HEAD -- engine/l1-drive.sh (reviewed hook)",
-    "ls -laR .gluerun-state/runs/RUN-20260712T203946Z-72368/worker-evidence/",
-    "grep -rn gluerun_ctx_experiment_armstate_json engine/ ; grep -n run_dir= engine/l1-drive.sh ; grep sourcing in lib.sh",
+    "ls -laR .singular-state/runs/RUN-20260712T203946Z-72368/worker-evidence/",
+    "grep -rn singular_ctx_experiment_armstate_json engine/ ; grep -n run_dir= engine/l1-drive.sh ; grep sourcing in lib.sh",
     "sed -n hook context 1280-1332 engine/l1-drive.sh",
     "cat schemas/orchestration/audit-verdict.v0.schema.json"
   ],
@@ -31,7 +31,7 @@
     "Diff is confined to the two owned files (engine/l1-drive.sh, tests/test-l1-drive-armstate.sh); no forbidden file touched; scope-check + secret-scan clean.",
     "Test-first honored: red.log fails EXIT=1 precisely because the write is absent pre-hook; green.log EXIT=0 after hook \u2014 legitimate red\u2192green, not a tautology (asserts byte-identity to the emitter and activeCount).",
     "Hook is default-OFF (unset or =0 => no-op, no file/event/state), non-fatal (|| true), evidence-invariant (does not gate acceptance or alter exit status \u2014 asserted behaviorally in cases a/b/c).",
-    "Pure delegation: hook forwards to the existing read-only emitter gluerun_ctx_experiment_armstate_json (TASK-0093) and inlines no knob-state logic; emitter is auto-loaded via lib.sh's ctx-*.sh loop and run_dir is in scope (l1-drive.sh:110).",
+    "Pure delegation: hook forwards to the existing read-only emitter singular_ctx_experiment_armstate_json (TASK-0093) and inlines no knob-state logic; emitter is auto-loaded via lib.sh's ctx-*.sh loop and run_dir is in scope (l1-drive.sh:110).",
     "Placement matches the described finalize region beside the ARTIFACT_SCAN/paired-audit/critic-recheck sibling provenance blocks.",
     "Regression + gate both green (115 passed / 0 failed, EXIT=0); no failing or skipped commands.",
     "Minor (non-blocking): emitter stderr is suppressed (2>/dev/null) and failure is swallowed by || true, so an unavailable/failing emitter would silently yield no/empty file \u2014 but green + full regression prove it resolves at runtime; behavior is consistent with sibling non-fatal provenance blocks."

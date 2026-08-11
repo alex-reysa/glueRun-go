@@ -6,8 +6,8 @@
 # context-capsule record) into projected context-graph.v0 JSONL node lines by
 # composing the integrated identity convention + emitters (engine/ctx-graph.sh,
 # engine/ctx-graph-project.sh):
-#   gluerun_graph_project_assumptions <taskFilePath>          -> assumption nodes (claim)
-#   gluerun_graph_project_capsules    <capsuleRecordPath>     -> one capsule node (claim)
+#   singular_graph_project_assumptions <taskFilePath>          -> assumption nodes (claim)
+#   singular_graph_project_capsules    <capsuleRecordPath>     -> one capsule node (claim)
 #
 # Asserts: each `### Assumptions` entry (grammar `- [open|validated|violated]
 # <claim> — <basis>`) yields exactly one claim `assumption` node keyed
@@ -20,7 +20,7 @@
 # against the SHIPPED schema; evidence invariance (fail-closed — both families
 # are model-authored, so no input path mints an authoritative node);
 # determinism/idempotence (re-running emits byte-identical lines, so
-# gluerun_graph_canonicalize collapses to the same canonical set); no edges; and
+# singular_graph_canonicalize collapses to the same canonical set); no edges; and
 # OFF-parity/no-writes — sourcing the file invokes nothing and the mappers touch
 # NO filesystem.
 set -uo pipefail
@@ -42,14 +42,14 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ -f "$CONTEXT" ]] || fail "impl not present yet: $CONTEXT (strict-test-first RED)"
 
 # OFF-parity / no-writes: sourcing the file must invoke nothing and write no
-# file. Snapshot an empty cwd around the source; confirm GLUERUN_CTX_GRAPH is
+# file. Snapshot an empty cwd around the source; confirm SINGULAR_CTX_GRAPH is
 # not required (default OFF).
 snap_dir="$(mktemp -d)"
 VALIDATOR="$(mktemp)"
 work_root="$(mktemp -d)"
 trap 'rm -rf "$snap_dir" "$VALIDATOR" "$work_root"' EXIT
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$snap_dir" && source "$GRAPH" && source "$PROJECT" && source "$CONTEXT" ) \
   || fail "sourcing $CONTEXT failed"
@@ -64,7 +64,7 @@ source "$PROJECT" || fail "sourcing $PROJECT failed"
 source "$CORPUS"  || fail "sourcing $CORPUS failed"
 # shellcheck disable=SC1090
 source "$CONTEXT" || fail "sourcing $CONTEXT failed"
-for fn in gluerun_graph_project_assumptions gluerun_graph_project_capsules; do
+for fn in singular_graph_project_assumptions singular_graph_project_capsules; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $CONTEXT"
 done
 
@@ -189,7 +189,7 @@ Status: in-progress
 - Editing an existing mapper in place — rejected: breaks OFF-parity.
 MD
 
-as_out="$(gluerun_graph_project_assumptions "$task_md")" || fail "project_assumptions failed"
+as_out="$(singular_graph_project_assumptions "$task_md")" || fail "project_assumptions failed"
 [[ -n "$as_out" ]] || fail "project_assumptions produced no output"
 printf '%s\n' "$as_out" | validates || fail "an assumption line failed schema validation:
 $as_out"
@@ -225,13 +225,13 @@ while IFS= read -r l; do
   id="$(printf '%s' "$l" | jq_field id)"
   ok=0
   for k in 1 2 3; do
-    want="$(gluerun_graph_node_id "$(gluerun_graph_identity assumption "$NODE" "$k")")"
+    want="$(singular_graph_node_id "$(singular_graph_identity assumption "$NODE" "$k")")"
     [[ "$id" == "$want" ]] && ok=1 && break
   done
   [[ "$ok" == "1" ]] || fail "assumption node id $id != node_id(identity('assumption', taskId, entryKey))"
 done <<< "$as_out"
 # Idempotence.
-as_out_b="$(gluerun_graph_project_assumptions "$task_md")" || fail "second project_assumptions failed"
+as_out_b="$(singular_graph_project_assumptions "$task_md")" || fail "second project_assumptions failed"
 [[ "$as_out" == "$as_out_b" ]] || fail "project_assumptions is not idempotent"
 
 # A task with NO Context packet emits nothing (empty, not an error).
@@ -241,7 +241,7 @@ cat > "$task_nopacket" <<'MD'
 
 Just an objective, no context packet section at all.
 MD
-np_out="$(gluerun_graph_project_assumptions "$task_nopacket")" || fail "project_assumptions (no packet) errored"
+np_out="$(singular_graph_project_assumptions "$task_nopacket")" || fail "project_assumptions (no packet) errored"
 [[ -z "$np_out" ]] || fail "a task with no Context packet must emit nothing (got: $np_out)"
 
 # A task with a packet but NO Assumptions entries emits nothing.
@@ -255,14 +255,14 @@ cat > "$task_noassume" <<'MD'
 
 - A decision with no assumptions block following it.
 MD
-na_out="$(gluerun_graph_project_assumptions "$task_noassume")" || fail "project_assumptions (no assumptions) errored"
+na_out="$(singular_graph_project_assumptions "$task_noassume")" || fail "project_assumptions (no assumptions) errored"
 [[ -z "$na_out" ]] || fail "a task with no Assumptions entries must emit nothing (got: $na_out)"
 
 # --- Slice 2: capsule mapper -------------------------------------------------
 impl_cap="$work_root/implementer-capsule.json"
 cat > "$impl_cap" <<JSON
 {
-  "schema": "gluerun.orchestration.context-capsule.v0",
+  "schema": "singular.orchestration.context-capsule.v0",
   "role": "implementer",
   "taskId": "$NODE",
   "runId": "$RUN_A",
@@ -275,7 +275,7 @@ JSON
 rev_cap="$work_root/reviewer-capsule.json"
 cat > "$rev_cap" <<JSON
 {
-  "schema": "gluerun.orchestration.context-capsule.v0",
+  "schema": "singular.orchestration.context-capsule.v0",
   "role": "reviewer",
   "taskId": "$NODE",
   "runId": "$RUN_A",
@@ -285,7 +285,7 @@ cat > "$rev_cap" <<JSON
 }
 JSON
 
-impl_out="$(gluerun_graph_project_capsules "$impl_cap")" || fail "project_capsules (implementer) failed"
+impl_out="$(singular_graph_project_capsules "$impl_cap")" || fail "project_capsules (implementer) failed"
 [[ -n "$impl_out" ]] || fail "project_capsules produced no output"
 printf '%s\n' "$impl_out" | validates || fail "the implementer capsule line failed schema validation:
 $impl_out"
@@ -298,7 +298,7 @@ $impl_out"
 [[ "$(count_where "$impl_out" evidenceClass authoritative)" == "0" ]] \
   || fail "capsule mapper must not mint an authoritative node"
 # Keyed identity('capsule', runId, role).
-impl_node="$(gluerun_graph_node_id "$(gluerun_graph_identity capsule "$RUN_A" implementer)")"
+impl_node="$(singular_graph_node_id "$(singular_graph_identity capsule "$RUN_A" implementer)")"
 [[ "$(printf '%s' "$impl_out" | jq_field id)" == "$impl_node" ]] \
   || fail "capsule node id != node_id(identity('capsule', runId, role))"
 # attributes.role projected.
@@ -310,37 +310,37 @@ impl_node="$(gluerun_graph_node_id "$(gluerun_graph_identity capsule "$RUN_A" im
 ch="$(printf '%s' "$impl_out" | prov_field contentHash)"
 [[ "$ch" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "capsule node provenance.contentHash must be sha256:<64hex> (got $ch)"
 # Idempotence.
-impl_out_b="$(gluerun_graph_project_capsules "$impl_cap")" || fail "second project_capsules failed"
+impl_out_b="$(singular_graph_project_capsules "$impl_cap")" || fail "second project_capsules failed"
 [[ "$impl_out" == "$impl_out_b" ]] || fail "project_capsules is not idempotent"
 
 # Reviewer capsule: same shape, distinct identity via role.
-rev_out="$(gluerun_graph_project_capsules "$rev_cap")" || fail "project_capsules (reviewer) failed"
+rev_out="$(singular_graph_project_capsules "$rev_cap")" || fail "project_capsules (reviewer) failed"
 printf '%s\n' "$rev_out" | validates || fail "the reviewer capsule line failed schema validation:
 $rev_out"
 [[ "$(count_where "$rev_out" type capsule)" == "1" ]] || fail "reviewer capsule node must be type capsule"
 [[ "$(printf '%s' "$rev_out" | attr_field role)" == "reviewer" ]] \
   || fail "reviewer capsule node must project attributes.role=reviewer"
-rev_node="$(gluerun_graph_node_id "$(gluerun_graph_identity capsule "$RUN_A" reviewer)")"
+rev_node="$(singular_graph_node_id "$(singular_graph_identity capsule "$RUN_A" reviewer)")"
 [[ "$(printf '%s' "$rev_out" | jq_field id)" == "$rev_node" ]] \
   || fail "reviewer capsule node id != node_id(identity('capsule', runId, role))"
 [[ "$impl_node" != "$rev_node" ]] \
   || fail "implementer and reviewer capsules of one run must have distinct node ids (role keys identity)"
 
 # --- Determinism through the canonicalizer: same set collapses identically ----
-canon_a="$(printf '%s\n' "$as_out" | gluerun_graph_canonicalize)"
-canon_b="$(printf '%s\n' "$as_out_b" | gluerun_graph_canonicalize)"
+canon_a="$(printf '%s\n' "$as_out" | singular_graph_canonicalize)"
+canon_b="$(printf '%s\n' "$as_out_b" | singular_graph_canonicalize)"
 [[ "$canon_a" == "$canon_b" ]] || fail "canonicalize over repeated assumption projection is not stable"
-cap_canon_a="$(printf '%s\n' "$impl_out" | gluerun_graph_canonicalize)"
-cap_canon_b="$(printf '%s\n' "$impl_out_b" | gluerun_graph_canonicalize)"
+cap_canon_a="$(printf '%s\n' "$impl_out" | singular_graph_canonicalize)"
+cap_canon_b="$(printf '%s\n' "$impl_out_b" | singular_graph_canonicalize)"
 [[ "$cap_canon_a" == "$cap_canon_b" ]] || fail "canonicalize over repeated capsule projection is not stable"
 
 # --- No-writes: mappers print JSONL and touch NO filesystem -------------------
 w="$work_root/nowrite"; mkdir -p "$w"
 w_before="$(cd "$w" && find . | LC_ALL=C sort)"
 ( cd "$w" \
-  && gluerun_graph_project_assumptions "$task_md" >/dev/null \
-  && gluerun_graph_project_capsules "$impl_cap" >/dev/null \
-  && gluerun_graph_project_capsules "$rev_cap" >/dev/null )
+  && singular_graph_project_assumptions "$task_md" >/dev/null \
+  && singular_graph_project_capsules "$impl_cap" >/dev/null \
+  && singular_graph_project_capsules "$rev_cap" >/dev/null )
 w_after="$(cd "$w" && find . | LC_ALL=C sort)"
 [[ "$w_before" == "$w_after" ]] || fail "a mapper wrote filesystem artifacts (must be pure stdout)"
 

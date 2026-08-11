@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Covers the continue/resume classifier leaf brick engine/ctx-route-strategy.sh:
-#   gluerun_ctx_route_strategy_classify <role> <step>
+#   singular_ctx_route_strategy_classify <role> <step>
 #
 # The stage-distinct split of a would-be `resume` verdict into two strategies:
 #   continue = "same session, same lineage, next phase" — the actor re-engaging
@@ -22,7 +22,7 @@
 #       (A primary-lineage role with a non-continuation step is still resume; a
 #        specialist role is resume regardless of step.)
 #   - Taint consistency (behavioral pin, planner-contract rule 9): feeding the
-#       classifier's output into gluerun_ctx_route_strategy_tainted yields 0 for
+#       classifier's output into singular_ctx_route_strategy_tainted yields 0 for
 #       every `continue` and 1 for every `resume`.
 # The predicate is defined only; NO existing engine path invokes it, so with the
 # file present-but-uncalled the engine is byte-identical to prior behavior.
@@ -41,9 +41,9 @@ pass() { echo "ok: $*"; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-mkdir -p "$GLUERUN_STATE_DIR"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+mkdir -p "$SINGULAR_STATE_DIR"
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
 
@@ -52,54 +52,54 @@ source "$LIB" || fail "sourcing lib.sh failed"
 source "$CTX_S" || fail "sourcing $CTX_S failed"
 # shellcheck disable=SC1090
 source "$CTX_T" || fail "sourcing $CTX_T failed"
-[[ "$(type -t gluerun_ctx_route_strategy_classify)" == "function" ]] \
-  || fail "gluerun_ctx_route_strategy_classify not defined by $CTX_S"
+[[ "$(type -t singular_ctx_route_strategy_classify)" == "function" ]] \
+  || fail "singular_ctx_route_strategy_classify not defined by $CTX_S"
 
 # --- Primary-lineage continuation -> continue --------------------------------
 # The actor re-engaging its OWN lineage's next phase.
-assert_eq "$(gluerun_ctx_route_strategy_classify planner revise)" \
+assert_eq "$(singular_ctx_route_strategy_classify planner revise)" \
   "continue" "planner revising its node plan -> continue"
-assert_eq "$(gluerun_ctx_route_strategy_classify planner revise-plan)" \
+assert_eq "$(singular_ctx_route_strategy_classify planner revise-plan)" \
   "continue" "planner revise-plan -> continue"
-assert_eq "$(gluerun_ctx_route_strategy_classify implementer retry-resume)" \
+assert_eq "$(singular_ctx_route_strategy_classify implementer retry-resume)" \
   "continue" "implementer retry-resuming its own task -> continue"
-assert_eq "$(gluerun_ctx_route_strategy_classify implementer retry)" \
+assert_eq "$(singular_ctx_route_strategy_classify implementer retry)" \
   "continue" "implementer retry -> continue"
-assert_eq "$(gluerun_ctx_route_strategy_classify worker retry-resume)" \
+assert_eq "$(singular_ctx_route_strategy_classify worker retry-resume)" \
   "continue" "worker retry-resuming its own task -> continue"
-assert_eq "$(gluerun_ctx_route_strategy_classify worker retry)" \
+assert_eq "$(singular_ctx_route_strategy_classify worker retry)" \
   "continue" "worker retry -> continue"
 pass "primary-lineage continuation (planner revise / implementer|worker retry) -> continue"
 
 # --- Specialist re-engagement -> resume --------------------------------------
 # A persisted specialist re-invoked over accepted work.
-assert_eq "$(gluerun_ctx_route_strategy_classify critic recheck)" \
+assert_eq "$(singular_ctx_route_strategy_classify critic recheck)" \
   "resume" "critic recheck -> resume"
-assert_eq "$(gluerun_ctx_route_strategy_classify reviewer re-audit)" \
+assert_eq "$(singular_ctx_route_strategy_classify reviewer re-audit)" \
   "resume" "reviewer re-audit -> resume"
-assert_eq "$(gluerun_ctx_route_strategy_classify skeptic audit)" \
+assert_eq "$(singular_ctx_route_strategy_classify skeptic audit)" \
   "resume" "skeptic re-invoked as auditor -> resume"
-assert_eq "$(gluerun_ctx_route_strategy_classify advocate audit)" \
+assert_eq "$(singular_ctx_route_strategy_classify advocate audit)" \
   "resume" "advocate re-invoked as auditor -> resume"
-assert_eq "$(gluerun_ctx_route_strategy_classify auditor re-audit)" \
+assert_eq "$(singular_ctx_route_strategy_classify auditor re-audit)" \
   "resume" "auditor re-audit -> resume"
 # A specialist role is resume regardless of a continuation-looking step.
-assert_eq "$(gluerun_ctx_route_strategy_classify critic retry-resume)" \
+assert_eq "$(singular_ctx_route_strategy_classify critic retry-resume)" \
   "resume" "specialist critic never continues even with a retry-resume step -> resume"
 pass "specialist re-engagement (critic/reviewer/skeptic/advocate/auditor) -> resume"
 
 # --- Fail closed: unrecognized/empty role or step -> resume ------------------
 # A primary-lineage role with a non-continuation step is still resume.
-assert_eq "$(gluerun_ctx_route_strategy_classify planner audit)" \
+assert_eq "$(singular_ctx_route_strategy_classify planner audit)" \
   "resume" "primary role planner with non-continuation step audit -> resume (fail closed)"
 # Empty step, empty role, both empty, and fully unknown -> resume.
-assert_eq "$(gluerun_ctx_route_strategy_classify planner '')" \
+assert_eq "$(singular_ctx_route_strategy_classify planner '')" \
   "resume" "empty step -> resume (fail closed)"
-assert_eq "$(gluerun_ctx_route_strategy_classify '' revise)" \
+assert_eq "$(singular_ctx_route_strategy_classify '' revise)" \
   "resume" "empty role -> resume (fail closed)"
-assert_eq "$(gluerun_ctx_route_strategy_classify '' '')" \
+assert_eq "$(singular_ctx_route_strategy_classify '' '')" \
   "resume" "empty role and step -> resume (fail closed)"
-assert_eq "$(gluerun_ctx_route_strategy_classify bogus bogus)" \
+assert_eq "$(singular_ctx_route_strategy_classify bogus bogus)" \
   "resume" "unknown role and step -> resume (fail closed)"
 pass "fail closed: unrecognized/empty role or step -> resume, never continue"
 
@@ -108,8 +108,8 @@ pass "fail closed: unrecognized/empty role or step -> resume, never continue"
 # 0 for continue and 1 for resume (planner-contract rule 9, behavioral pin).
 taint_check() { # <role> <step>
   local strat tainted
-  strat="$(gluerun_ctx_route_strategy_classify "$1" "$2")"
-  tainted="$(gluerun_ctx_route_strategy_tainted "$strat")"
+  strat="$(singular_ctx_route_strategy_classify "$1" "$2")"
+  tainted="$(singular_ctx_route_strategy_tainted "$strat")"
   case "$strat" in
     continue) assert_eq "$tainted" "0" "continue is untainted [$1/$2]" ;;
     resume)   assert_eq "$tainted" "1" "resume is tainted [$1/$2]" ;;
@@ -136,11 +136,11 @@ taint_check bogus bogus
 pass "taint consistency: continue->tainted 0, resume->tainted 1 for every fixture"
 
 # --- Pure predicate: exactly one token/line, exit 0, writes no files ----------
-before="$(find "$GLUERUN_STATE_DIR" -type f | sort)"
+before="$(find "$SINGULAR_STATE_DIR" -type f | sort)"
 for pair in "planner revise" "critic recheck" "bogus bogus" "'' ''"; do
   # shellcheck disable=SC2086
   set -- $pair
-  rc=0; line="$(gluerun_ctx_route_strategy_classify "${1:-}" "${2:-}")" || rc=$?
+  rc=0; line="$(singular_ctx_route_strategy_classify "${1:-}" "${2:-}")" || rc=$?
   assert_eq "$rc" "0" "classify exit 0 for [$pair]"
   [[ "$(printf '%s\n' "$line" | wc -l | tr -d ' ')" == "1" ]] \
     || fail "classify printed more than one line for [$pair]"
@@ -149,7 +149,7 @@ for pair in "planner revise" "critic recheck" "bogus bogus" "'' ''"; do
     *) fail "classify printed a non-{continue,resume} token [$line] for [$pair]" ;;
   esac
 done
-after="$(find "$GLUERUN_STATE_DIR" -type f | sort)"
+after="$(find "$SINGULAR_STATE_DIR" -type f | sort)"
 assert_eq "$after" "$before" "predicate writes no files"
 pass "contract: pure predicate prints one {continue,resume} token, exit 0, writes no files"
 

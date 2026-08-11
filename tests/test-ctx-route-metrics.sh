@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Covers the read-only route-metrics extractor engine/ctx-route-metrics.sh: given a
-# runs directory of gluerun.orchestration.attempts-index.v0 indexes and an events
-# log, gluerun_ctx_route_metrics_json emits stable per-role, per-strategy
+# runs directory of singular.orchestration.attempts-index.v0 indexes and an events
+# log, singular_ctx_route_metrics_json emits stable per-role, per-strategy
 # outcome-split JSON (accepted vs rejected) WITHOUT mutating any input. The
 # accepted/rejected classification MUST match engine/ctx-metrics.sh: a per-attempt
 # failureClass that is "" / "accepted" / "none" counts as accepted, anything else
@@ -27,8 +27,8 @@ tree_hash() {
 [[ -f "$EXTRACTOR" ]] || fail "extractor not present yet: $EXTRACTOR"
 # shellcheck disable=SC1090
 source "$EXTRACTOR" || fail "sourcing $EXTRACTOR failed"
-[[ "$(type -t gluerun_ctx_route_metrics_json)" == "function" ]] \
-  || fail "gluerun_ctx_route_metrics_json is not defined by $EXTRACTOR"
+[[ "$(type -t singular_ctx_route_metrics_json)" == "function" ]] \
+  || fail "singular_ctx_route_metrics_json is not defined by $EXTRACTOR"
 
 # --- Fixture: two runs' attempts indexes with varied (role strategy, outcome) --
 tmp="$(mktemp -d)"
@@ -42,7 +42,7 @@ mkdir -p "$runs/RUN-A/attempts" "$runs/RUN-B/attempts"
 #  #2 worker=resume reviewer=resume failureClass=""    -> ACCEPTED
 cat > "$runs/RUN-A/attempts/index.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.attempts-index.v0",
+  "schema": "singular.orchestration.attempts-index.v0",
   "runId": "RUN-A",
   "taskId": "TASK-0002",
   "attempts": [
@@ -61,7 +61,7 @@ EOF
 #  #3 worker=resume reviewer=fresh         failureClass=accepted -> ACCEPTED
 cat > "$runs/RUN-B/attempts/index.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.attempts-index.v0",
+  "schema": "singular.orchestration.attempts-index.v0",
   "runId": "RUN-B",
   "taskId": "TASK-0003",
   "attempts": [
@@ -84,7 +84,7 @@ EOF
 before="$(tree_hash "$runs")"
 before_events="$(shasum "$events" | awk '{print $1}')"
 
-out="$(gluerun_ctx_route_metrics_json "$runs" "$events")" \
+out="$(singular_ctx_route_metrics_json "$runs" "$events")" \
   || fail "extractor exited non-zero on a valid fixture"
 printf '%s' "$out" > "$tmp/out.json"
 
@@ -100,7 +100,7 @@ after_events="$(shasum "$events" | awk '{print $1}')"
 
 # --- Trailing newline so bytes can be pinned ---------------------------------
 # (Capture raw, unstripped, since command substitution eats trailing newlines.)
-gluerun_ctx_route_metrics_json "$runs" "$events" > "$tmp/raw.json"
+singular_ctx_route_metrics_json "$runs" "$events" > "$tmp/raw.json"
 [[ "$(tail -c1 "$tmp/raw.json" | od -An -tx1 | tr -d ' \n')" == "0a" ]] \
   || fail "output missing trailing newline"
 
@@ -115,7 +115,7 @@ def eq(got, want, label):
         print(f"MISMATCH {label}: got={got!r} want={want!r}", file=sys.stderr)
         sys.exit(1)
 
-eq(m.get("schema"), "gluerun.orchestration.ctx-route-metrics.v0", "schema")
+eq(m.get("schema"), "singular.orchestration.ctx-route-metrics.v0", "schema")
 
 splits = m.get("roleStrategyOutcomeSplits")
 assert isinstance(splits, dict), "roleStrategyOutcomeSplits must be an object"
@@ -146,7 +146,7 @@ METRICS="$ENGINE_HOME/engine/ctx-metrics.sh"
 [[ -f "$METRICS" ]] || fail "sibling extractor missing: $METRICS"
 # shellcheck disable=SC1090
 source "$METRICS" || fail "sourcing $METRICS failed"
-metrics_out="$(gluerun_ctx_metrics_json "$runs" "$events")" \
+metrics_out="$(singular_ctx_metrics_json "$runs" "$events")" \
   || fail "ctx-metrics extractor failed on fixture"
 printf '%s' "$metrics_out" > "$tmp/metrics.json"
 python3 - "$tmp/out.json" "$tmp/metrics.json" <<'PY' || fail "classification not consistent with ctx-metrics.sh"
@@ -167,19 +167,19 @@ print("parity-ok")
 PY
 
 # --- Determinism: identical inputs -> byte-identical output ------------------
-out2="$(gluerun_ctx_route_metrics_json "$runs" "$events")"
+out2="$(singular_ctx_route_metrics_json "$runs" "$events")"
 [[ "$out" == "$out2" ]] || fail "output not deterministic across identical runs"
 
 # --- Empty / missing runs dir -> empty splits, still well-formed -------------
 empty_runs="$tmp/no-such-runs"
 missing_events="$tmp/no-such-events.ndjson"
-out_empty="$(gluerun_ctx_route_metrics_json "$empty_runs" "$missing_events")" \
+out_empty="$(singular_ctx_route_metrics_json "$empty_runs" "$missing_events")" \
   || fail "extractor crashed on missing inputs (should fail safe)"
 printf '%s' "$out_empty" > "$tmp/empty.json"
 python3 - "$tmp/empty.json" <<'PY' || fail "empty-input route-metrics not well-formed/empty"
 import json, sys
 m = json.load(open(sys.argv[1]))
-eq_schema = m.get("schema") == "gluerun.orchestration.ctx-route-metrics.v0"
+eq_schema = m.get("schema") == "singular.orchestration.ctx-route-metrics.v0"
 assert eq_schema, "schema wrong on empty input"
 assert m["roleStrategyOutcomeSplits"] == {"worker": {}, "reviewer": {}}, \
     "empty input must yield empty per-role splits"
@@ -189,12 +189,12 @@ PY
 # --- Malformed index -> degrades to empty, never non-zero exit ---------------
 mkdir -p "$tmp/bad/BAD/attempts"
 printf 'not json at all' > "$tmp/bad/BAD/attempts/index.json"
-gluerun_ctx_route_metrics_json "$tmp/bad" "$missing_events" >/dev/null \
+singular_ctx_route_metrics_json "$tmp/bad" "$missing_events" >/dev/null \
   || fail "extractor exited non-zero on malformed index (should degrade)"
 
 # --- No-arg default is also fail-safe ----------------------------------------
-GLUERUN_RUNS_DIR="$empty_runs" GLUERUN_EVENTS_FILE="$missing_events" \
-  gluerun_ctx_route_metrics_json >/dev/null \
+SINGULAR_RUNS_DIR="$empty_runs" SINGULAR_EVENTS_FILE="$missing_events" \
+  singular_ctx_route_metrics_json >/dev/null \
   || fail "no-arg default invocation crashed instead of failing safe"
 
 echo "ctx-route-metrics tests passed"

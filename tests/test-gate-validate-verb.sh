@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `gluerun gate validate` must report EVERY contract violation in one pass.
+# `singular gate validate` must report EVERY contract violation in one pass.
 #
 # dag.sh's fail() prints and exits, which is right for the loop -- a frontier
 # read must stop at the first breach -- but it means a promoter learns about
@@ -24,10 +24,10 @@ mkdir -p "$repo/docs/orchestration/gates" "$repo/docs/orchestration/tasks"
 git -C "$tmp" init -q repo
 git -C "$repo" config user.email test@example.com
 git -C "$repo" config user.name test
-printf '{"schemaVersion":"v2","targetBranch":"main"}\n' >"$repo/gluerun.config.json"
-printf '.gluerun-state/\n' >"$repo/.gitignore"
+printf '{"schemaVersion":"v2","targetBranch":"main"}\n' >"$repo/singular.config.json"
+printf '.singular-state/\n' >"$repo/.gitignore"
 cat >"$repo/docs/orchestration/dag.v0.json" <<'JSON'
-{"schema": "gluerun.orchestration.dag.v0", "nodes": [
+{"schema": "singular.orchestration.dag.v0", "nodes": [
   {"id": "loc-00-contract", "stage": "loc", "area": "loc", "layer": "contract",
    "kind": "build", "dependsOn": [], "requiredCompletion": "done"}]}
 JSON
@@ -40,7 +40,7 @@ zero="0000000000000000000000000000000000000000000000000000000000000000"
 # The field shape: several independent breaches at once.
 cat >"$gate" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-result.v1",
+  "schema": "singular.orchestration.gate-result.v1",
   "node": "loc-00-contract",
   "status": "passed",
   "authoritative": true,
@@ -61,7 +61,7 @@ cat >"$gate" <<JSON
 JSON
 
 run_validate() {
-  GLUERUN_ROOT="$repo" GLUERUN_ENGINE_HOME="$ROOT" \
+  SINGULAR_ROOT="$repo" SINGULAR_ENGINE_HOME="$ROOT" \
     bash "$ROOT/engine/dag.sh" validate-gate-file "$1" 2>&1
 }
 
@@ -92,7 +92,7 @@ pass "absolute refs and a mis-hashed task-set are each reported independently"
 # subcommand must still short-circuit exactly as before.
 loop_out=""
 loop_rc=0
-loop_out="$(GLUERUN_ROOT="$repo" GLUERUN_ENGINE_HOME="$ROOT" \
+loop_out="$(SINGULAR_ROOT="$repo" SINGULAR_ENGINE_HOME="$ROOT" \
   bash "$ROOT/engine/dag.sh" next-areas 2>&1)" || loop_rc=$?
 [[ "$loop_rc" -ne 0 ]] || fail "the frontier read should still fail on this gate"
 loop_lines="$(printf '%s\n' "$loop_out" | grep -c . || true)"
@@ -104,10 +104,10 @@ pass "next-areas still exits on the first violation (collecting mode is opt-in)"
 # --- 3. a valid gate validates cleanly --------------------------------------
 # Built from a report engine/gate-check.sh actually wrote, so this doubles as a
 # check that the two commands agree about what "valid" means.
-GLUERUN_ROOT="$repo" GLUERUN_ENGINE_HOME="$ROOT" \
+SINGULAR_ROOT="$repo" SINGULAR_ENGINE_HOME="$ROOT" \
   bash "$ROOT/engine/gate-check.sh" RUN-VALIDATE --task-id TASK-0001 -- true >/dev/null 2>&1 \
   || fail "gate-check.sh failed"
-python3 - "$repo" "$repo/.gluerun-state/runs/RUN-VALIDATE/gate-report.json" "$gate" <<'PY'
+python3 - "$repo" "$repo/.singular-state/runs/RUN-VALIDATE/gate-report.json" "$gate" <<'PY'
 import hashlib
 import json
 import os
@@ -125,7 +125,7 @@ task_ev["sha256"] = hashlib.sha256(json.dumps(
 ).encode("utf-8")).hexdigest()
 
 json.dump({
-    "schema": "gluerun.orchestration.gate-result.v1",
+    "schema": "singular.orchestration.gate-result.v1",
     "node": "loc-00-contract",
     "status": "passed",
     "authoritative": True,

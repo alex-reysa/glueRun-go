@@ -4,7 +4,7 @@
 # integration point 3). `engine/ctx-rehydrate-authored.sh` ships a PURE,
 # read-only, present-but-uncalled selector
 #
-#   gluerun_ctx_rehydrate_authored_select <manifest-json-path>
+#   singular_ctx_rehydrate_authored_select <manifest-json-path>
 #
 # that parses a FIXTURE authored-knowledge manifest and selects the injectable
 # entries under the AUTHORED-KNOWLEDGE class rules:
@@ -13,7 +13,7 @@
 #     and is NEVER marked authoritative / host-verified / tainted.
 #   - An entry flagged `description_unverified` is NEVER emitted as current.
 #   - A quarantined path-backed entry is excluded by composing the integrated
-#     gluerun_ctx_artifact_exclude (a `*.quarantined` path, or an original whose
+#     singular_ctx_artifact_exclude (a `*.quarantined` path, or an original whose
 #     `.quarantined` sibling exists on disk, never survives).
 #   - Deterministic: identical manifest bytes yield byte-identical output in a
 #     fixed (id-sorted) order.
@@ -46,7 +46,7 @@ printf '{"leak":"x"}\n'      >"$run_dir/big.md.quarantined"
 manifest="$tmp/authored-manifest.json"
 cat >"$manifest" <<JSON
 {
-  "schema": "gluerun.orchestration.authored-knowledge-manifest.v0",
+  "schema": "singular.orchestration.authored-knowledge-manifest.v0",
   "entries": [
     {
       "id": "zeta-guide",
@@ -86,7 +86,7 @@ before_hash="$(tree_hash)"
 select_authored() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_authored_select "$1"
+    singular_ctx_rehydrate_authored_select "$1"
   ' _ "$1"
 }
 

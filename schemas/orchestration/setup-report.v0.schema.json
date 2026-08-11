@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.setup-report.v0",
-  "title": "gluerun Setup Report v0",
-  "description": "The success half of the `gluerun setup` contract: what each step did, what was warned about, the state actually reached, and EXACTLY ONE next action. `state` is the highest state truthfully reached — 'stopped-ready' requires migration complete, historical gates verified, doctor passing, and a recorded PASSING regression run. Reaching 'validated' never implies the loop is running, and nothing here authorizes actuation.",
+  "$id": "singular.setup-report.v0",
+  "title": "singular Setup Report v0",
+  "description": "The success half of the `singular setup` contract: what each step did, what was warned about, the state actually reached, and EXACTLY ONE next action. `state` is the highest state truthfully reached — 'stopped-ready' requires migration complete, historical gates verified, doctor passing, and a recorded PASSING regression run. Reaching 'validated' never implies the loop is running, and nothing here authorizes actuation.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "state", "steps", "warnings", "nextAction"],
   "properties": {
-    "schema": { "const": "gluerun.setup-report.v0" },
+    "schema": { "const": "singular.setup-report.v0" },
     "state": {
       "type": "string",
       "enum": ["installed", "migrated", "validated", "stopped-ready"]
@@ -37,7 +37,7 @@
         "additionalProperties": false,
         "required": ["code", "message"],
         "properties": {
-          "code": { "type": "string", "pattern": "^GLUERUN_[A-Z0-9_]+$" },
+          "code": { "type": "string", "pattern": "^SINGULAR_[A-Z0-9_]+$" },
           "message": { "type": "string", "minLength": 1 }
         }
       }

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.operator-failure.v0",
-  "title": "gluerun Operator Failure v0",
-  "description": "The machine-readable recovery contract: one stable code, one phase, one bounded next action. Emitted on stdout by preflight/setup commands run with --json when they refuse to continue, and persisted as the last outcome under .gluerun-state/setup/. `safeToActuate` is always false here — a command that failed cannot have proved the repository safe to run. The human-readable block and this object must name the SAME primary failure.",
+  "$id": "singular.operator-failure.v0",
+  "title": "singular Operator Failure v0",
+  "description": "The machine-readable recovery contract: one stable code, one phase, one bounded next action. Emitted on stdout by preflight/setup commands run with --json when they refuse to continue, and persisted as the last outcome under .singular-state/setup/. `safeToActuate` is always false here — a command that failed cannot have proved the repository safe to run. The human-readable block and this object must name the SAME primary failure.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,11 +15,11 @@
     "recovery"
   ],
   "properties": {
-    "schema": { "const": "gluerun.operator-failure.v0" },
+    "schema": { "const": "singular.operator-failure.v0" },
     "code": {
-      "description": "Stable diagnosis code, e.g. GLUERUN_ENGINE_NOT_INSTALLED. Deliberately NOT an enum: codes are additive, and a consumer pinned to an older bundle must still be able to validate a report carrying a code it has never seen.",
+      "description": "Stable diagnosis code, e.g. SINGULAR_ENGINE_NOT_INSTALLED. Deliberately NOT an enum: codes are additive, and a consumer pinned to an older bundle must still be able to validate a report carrying a code it has never seen.",
       "type": "string",
-      "pattern": "^GLUERUN_[A-Z0-9_]+$"
+      "pattern": "^SINGULAR_[A-Z0-9_]+$"
     },
     "phase": {
       "description": "The step that refused, e.g. engine-resolution, gate-verification, doctor.",
@@ -54,7 +54,7 @@
         "additionalProperties": false,
         "required": ["code", "message"],
         "properties": {
-          "code": { "type": "string", "pattern": "^GLUERUN_[A-Z0-9_]+$" },
+          "code": { "type": "string", "pattern": "^SINGULAR_[A-Z0-9_]+$" },
           "message": { "type": "string", "minLength": 1 }
         }
       }

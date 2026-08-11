@@ -27,7 +27,7 @@ root="$tmp/repo"
 
 mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates" \
   "$root/docs/orchestration/areas/core" "$root/docs/orchestration/packets/imported" \
-  "$root/docs/orchestration/prompts" "$root/schemas/orchestration" "$root/.gluerun-state"
+  "$root/docs/orchestration/prompts" "$root/schemas/orchestration" "$root/.singular-state"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 for s in dag task-batch state-packet audit-verdict decider-verdict gate-result; do
@@ -35,7 +35,7 @@ for s in dag task-batch state-packet audit-verdict decider-verdict gate-result; 
 done
 cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$root/docs/orchestration/prompts/" 2>/dev/null || true
 cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
-{"schema":"gluerun.orchestration.dag.v0","nodes":[
+{"schema":"singular.orchestration.dag.v0","nodes":[
  {"id":"D0.contract","stage":"D0","area":"core","layer":"contract","kind":"contract",
   "dependsOn":[],"requiredCompletion":"contract_complete"}]}
 EOF
@@ -88,29 +88,29 @@ SH
 chmod +x "$tmp/driver.sh" "$tmp/promoter.sh"
 
 run_reconcile() {
-  env GLUERUN_ROOT="$root" \
-    GLUERUN_ORCH_DIR="$root/docs/orchestration" \
-    GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
-    GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_LEASES_DIR="$root/.gluerun-state/leases" \
-    GLUERUN_INBOX_DIR="$root/.gluerun-state/inbox" \
-    GLUERUN_RUNS_DIR="$root/.gluerun-state/runs" \
-    GLUERUN_WORKTREES_DIR="$root/.worktrees" \
-    GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" \
-    GLUERUN_ORIGIN_STATE_FILE="$root/.gluerun-state/origin-state.json" \
-    GLUERUN_SCHEMA_DIR="$root/schemas/orchestration" \
-    GLUERUN_TARGET_BRANCH=target \
-    GLUERUN_L1_DRIVER="$tmp/driver.sh" \
-    GLUERUN_PROMOTER="$tmp/promoter.sh" \
-    GLUERUN_GENERATE=0 \
-    GLUERUN_AUTO_INTEGRATE=0 \
+  env SINGULAR_ROOT="$root" \
+    SINGULAR_ORCH_DIR="$root/docs/orchestration" \
+    SINGULAR_TASKS_DIR="$root/docs/orchestration/tasks" \
+    SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_LEASES_DIR="$root/.singular-state/leases" \
+    SINGULAR_INBOX_DIR="$root/.singular-state/inbox" \
+    SINGULAR_RUNS_DIR="$root/.singular-state/runs" \
+    SINGULAR_WORKTREES_DIR="$root/.worktrees" \
+    SINGULAR_EVENTS_FILE="$root/.singular-state/events.ndjson" \
+    SINGULAR_ORIGIN_STATE_FILE="$root/.singular-state/origin-state.json" \
+    SINGULAR_SCHEMA_DIR="$root/schemas/orchestration" \
+    SINGULAR_TARGET_BRANCH=target \
+    SINGULAR_L1_DRIVER="$tmp/driver.sh" \
+    SINGULAR_PROMOTER="$tmp/promoter.sh" \
+    SINGULAR_GENERATE=0 \
+    SINGULAR_AUTO_INTEGRATE=0 \
     "$@"
 }
 
 # --- 1. degraded: an absurd reserve makes every slot unaffordable ------------
 # Reserve 4 EiB rather than filling the disk, so the test is hermetic.
-out="$(run_reconcile GLUERUN_DISK_RESERVE_BYTES=4611686018427387904 \
-  GLUERUN_MAX_CONCURRENT=3 \
+out="$(run_reconcile SINGULAR_DISK_RESERVE_BYTES=4611686018427387904 \
+  SINGULAR_MAX_CONCURRENT=3 \
   bash "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)" || true
 
 [[ "$(field "$out" effective_slots)" == "0" ]] || fail "expected zero effective slots: $(field "$out" effective_slots)"
@@ -118,7 +118,7 @@ out="$(run_reconcile GLUERUN_DISK_RESERVE_BYTES=4611686018427387904 \
 assert_contains "$out" "LOW DISK" "degraded banner"
 assert_contains "$out" "insufficient-disk-after-reserve" "capacity reason"
 [[ ! -f "$tmp/driver-ran" ]] || fail "a worker was dispatched while degraded"
-grep -q '"type":"origin.degraded_low_disk"' "$root/.gluerun-state/events.ndjson" \
+grep -q '"type":"origin.degraded_low_disk"' "$root/.singular-state/events.ndjson" \
   || fail "degraded mode must emit origin.degraded_low_disk (a silent stall is the bug)"
 echo "  ok  degraded: dispatch suspended, event emitted"
 
@@ -126,9 +126,9 @@ echo "  ok  degraded: dispatch suspended, event emitted"
 # If someone reshapes this as mode="apply", these all disappear and the mode
 # loses its own exit path.
 assert_contains "$out" "actuation:" "actuate block still executed"
-grep -q '"type":"origin.reconcile_completed"' "$root/.gluerun-state/events.ndjson" \
+grep -q '"type":"origin.reconcile_completed"' "$root/.singular-state/events.ndjson" \
   || fail "reconcile must still complete a cycle while degraded"
-[[ -f "$root/.gluerun-state/origin-state.json" ]] || fail "origin state must still be written"
+[[ -f "$root/.singular-state/origin-state.json" ]] || fail "origin state must still be written"
 echo "  ok  cycle completes and snapshots while degraded"
 
 # (Gate promotion is checked last — see case 5 — because proving it requires an
@@ -142,8 +142,8 @@ echo "  ok  GC retry attempted"
 
 # --- 4. recovery: a sane reserve reopens the gate ---------------------------
 rm -f "$tmp/driver-ran"
-out2="$(run_reconcile GLUERUN_DISK_RESERVE_BYTES=1024 \
-  GLUERUN_ESTIMATED_WORKTREE_BYTES=1024 GLUERUN_MAX_CONCURRENT=3 \
+out2="$(run_reconcile SINGULAR_DISK_RESERVE_BYTES=1024 \
+  SINGULAR_ESTIMATED_WORKTREE_BYTES=1024 SINGULAR_MAX_CONCURRENT=3 \
   bash "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)" || true
 [[ "$(field "$out2" dispatch_gate)" == "open" ]] || fail "gate should reopen with capacity: '$(field "$out2" dispatch_gate)'"
 assert_not_contains "$out2" "LOW DISK" "no degraded banner once capacity returns"
@@ -158,8 +158,8 @@ echo "  ok  recovery: dispatch resumes"
 sed -i.bak 's/^Status: ready$/Status: integrated/' "$root/docs/orchestration/tasks/TASK-0001.md"
 rm -f "$root/docs/orchestration/tasks/TASK-0001.md.bak"
 rm -f "$tmp/promoter-ran"
-out3="$(run_reconcile GLUERUN_DISK_RESERVE_BYTES=4611686018427387904 \
-  GLUERUN_MAX_CONCURRENT=3 \
+out3="$(run_reconcile SINGULAR_DISK_RESERVE_BYTES=4611686018427387904 \
+  SINGULAR_MAX_CONCURRENT=3 \
   bash "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)" || true
 [[ "$(field "$out3" dispatch_gate)" == "low-disk" ]] || fail "expected the low-disk gate again"
 # Promotion is completion authority: it costs no worktree and can unblock the

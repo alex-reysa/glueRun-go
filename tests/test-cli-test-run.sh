@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# PMGO-009: `gluerun test` is the supervised, attachable form of the engine's
+# PMGO-009: `singular test` is the supervised, attachable form of the engine's
 # own regression suite. What that has to be true of:
 #
 #   a  --no-wait starts a detached run and returns: manifest published, current
 #      run repointed, and the supervisor's flock HELD (the liveness proof)
-#   b  plain `gluerun test` while one is live ATTACHES to it — no second run —
+#   b  plain `singular test` while one is live ATTACHES to it — no second run —
 #      and exits with the suite's own exit code once it finishes
 #   c  --status --json parses, and reports liveness after completion
 #   d  --rerun-failures starts a new run filtered to the last completed run's
@@ -32,7 +32,7 @@ if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
 fi
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-unset GLUERUN_TEST_RUN_DIR GLUERUN_ENGINE_HOME 2>/dev/null || true
+unset SINGULAR_TEST_RUN_DIR SINGULAR_ENGINE_HOME 2>/dev/null || true
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: expected [$2], got [$1]"; }
@@ -70,7 +70,7 @@ trap 'reap; rm -rf "$tmp"' EXIT
 make_engine() {
   local d="$1"
   mkdir -p "$d/engine" "$d/cli" "$d/tests"
-  cp "$ENGINE_HOME/cli/gluerun" "$d/cli/gluerun"
+  cp "$ENGINE_HOME/cli/singular" "$d/cli/singular"
   cp "$ENGINE_HOME/engine/bash-guard.sh" "$d/engine/bash-guard.sh"
   cp "$ENGINE_HOME/engine/git-preflight.sh" "$d/engine/git-preflight.sh"
   : >"$d/engine/lib.sh"
@@ -83,29 +83,29 @@ make_engine() {
   # run.sh's git preflight needs real history and disposable worktrees.
   git -C "$d" init -q -b main 2>/dev/null || git -C "$d" init -q
   git -C "$d" add -A
-  git -C "$d" -c user.email=gluerun@gluerun.local -c user.name=gluerun commit -q -m fixture
+  git -C "$d" -c user.email=singular@singular.local -c user.name=singular commit -q -m fixture
 }
 
-# A consumer repo: this is where .gluerun-state/test-runs/ lives.
+# A consumer repo: this is where .singular-state/test-runs/ lives.
 make_consumer() {
   local d="$1"
   mkdir -p "$d"
   git -C "$d" init -q -b main 2>/dev/null || git -C "$d" init -q
   echo consumer >"$d/README"
   git -C "$d" add -A
-  git -C "$d" -c user.email=gluerun@gluerun.local -c user.name=gluerun commit -q -m init
+  git -C "$d" -c user.email=singular@singular.local -c user.name=singular commit -q -m init
 }
 
 eng="$tmp/engine"
 make_engine "$eng"
 
-# gluerun <args> run from a consumer repo against the fixture engine.
+# singular <args> run from a consumer repo against the fixture engine.
 G() {
   local consumer="$1"; shift
-  ( cd "$consumer" && GLUERUN_ENGINE_HOME="$eng" "$BASH" "$eng/cli/gluerun" "$@" )
+  ( cd "$consumer" && SINGULAR_ENGINE_HOME="$eng" "$BASH" "$eng/cli/singular" "$@" )
 }
 
-runs_of() { printf '%s' "$1/.gluerun-state/test-runs"; }
+runs_of() { printf '%s' "$1/.singular-state/test-runs"; }
 mget() {
   python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])).get(sys.argv[2])))' "$1" "$2"
 }
@@ -135,7 +135,7 @@ assert_eq "$(mget "$(runs_of "$c1")/current.json" runId)" "\"$rid\"" "a: current
 assert_eq "$(lock_state "$run1/supervisor.lock")" "HELD" "a: supervisor.lock is held for the run's life"
 assert_contains "$(cat "$tmp/a.err")" "started run $rid" "a: start is reported on stderr"
 
-# --- b) plain `gluerun test` attaches to the live run -----------------------
+# --- b) plain `singular test` attaches to the live run -----------------------
 
 # If this fixture ever gets slow enough that the run finished during a), say so
 # instead of failing as "started a second run".
@@ -210,7 +210,7 @@ printf '#!/usr/bin/env bash\necho orphan start\nsleep 600\necho orphan end\n' \
 chmod +x "$eng_slow/tests/test-orphan.sh"
 
 c3="$tmp/consumer3"; make_consumer "$c3"
-Gs() { ( cd "$c3" && GLUERUN_ENGINE_HOME="$eng_slow" "$BASH" "$eng_slow/cli/gluerun" "$@" ); }
+Gs() { ( cd "$c3" && SINGULAR_ENGINE_HOME="$eng_slow" "$BASH" "$eng_slow/cli/singular" "$@" ); }
 rid_f="$(Gs test --no-wait 2>/dev/null)" || fail "f: run must start"
 run_f="$(runs_of "$c3")/$rid_f"
 pid_f="$(mget "$run_f/manifest.json" pid)"
@@ -229,7 +229,7 @@ assert_eq "$(mget "$run_f/manifest.json" status)" '"interrupted"' "f: manifest r
 assert_contains "$(cat "$tmp/f.out")" "status interrupted" "f: --status says so out loud"
 # Reconciling to "interrupted" ends the RUN, not merely the supervisor. Left
 # alive, the orphaned suite keeps writing results into a run already declared
-# dead, and the next `gluerun test` — seeing no live run — starts a genuinely
+# dead, and the next `singular test` — seeing no live run — starts a genuinely
 # duplicate ~50-minute one. The supervisor is setsid'd, so the recorded pgid
 # names exactly this run and nothing else.
 for _ in $(seq 1 20); do kill -0 -"$pgid_f" 2>/dev/null || break; sleep 0.25; done
@@ -263,7 +263,7 @@ innocent="$(head -n1 "$tmp/f2.pid" | tr -d '[:space:]')"
 kill -0 -"$innocent" 2>/dev/null || fail "f2: precondition — bystander group must be alive"
 
 cst="$tmp/consumer-stale"; make_consumer "$cst"
-Gst() { ( cd "$cst" && GLUERUN_ENGINE_HOME="$eng" "$BASH" "$eng/cli/gluerun" "$@" ); }
+Gst() { ( cd "$cst" && SINGULAR_ENGINE_HOME="$eng" "$BASH" "$eng/cli/singular" "$@" ); }
 rid_f2="$(Gst test --no-wait 2>/dev/null)" || fail "f2: run must start"
 run_f2="$(runs_of "$cst")/$rid_f2"
 for _ in $(seq 1 80); do
@@ -299,9 +299,9 @@ reap
 
 mkdir -p "$tmp/nosuite/engine"; : >"$tmp/nosuite/engine/lib.sh"
 rc=0
-out="$( cd "$c3" && GLUERUN_ENGINE_HOME="$tmp/nosuite" "$BASH" "$eng/cli/gluerun" test --no-wait 2>&1 )" || rc=$?
+out="$( cd "$c3" && SINGULAR_ENGINE_HOME="$tmp/nosuite" "$BASH" "$eng/cli/singular" test --no-wait 2>&1 )" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "g: a missing suite must not exit 0"
-assert_contains "$out" "GLUERUN_TEST_SUITE_UNAVAILABLE" "g: diagnosis header"
+assert_contains "$out" "SINGULAR_TEST_SUITE_UNAVAILABLE" "g: diagnosis header"
 assert_contains "$out" "run from an engine checkout" "g: recovery line"
 
 # --- g2) an engine home that is not a Git checkout refuses BEFORE writing -----
@@ -320,9 +320,9 @@ rm -rf "$nogit/.git"
 
 c5="$tmp/consumer5"; make_consumer "$c5"
 rc=0
-out="$( cd "$c5" && GLUERUN_ENGINE_HOME="$nogit" "$BASH" "$nogit/cli/gluerun" test 2>&1 )" || rc=$?
+out="$( cd "$c5" && SINGULAR_ENGINE_HOME="$nogit" "$BASH" "$nogit/cli/singular" test 2>&1 )" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "g2: a non-checkout engine home must not exit 0"
-assert_contains "$out" "GLUERUN_TEST_SOURCE_UNSUPPORTED" "g2: diagnosis header"
+assert_contains "$out" "SINGULAR_TEST_SOURCE_UNSUPPORTED" "g2: diagnosis header"
 assert_contains "$out" "run from an engine checkout" "g2: recovery line"
 # The old failure said this from INSIDE a supervised run; the new one never
 # starts one, so run.sh's own wording must be absent.
@@ -330,24 +330,24 @@ assert_not_contains "$out" "started run " "g2: no run may be started"
 # Nothing was written. This is the whole point of the case.
 [[ ! -e "$(runs_of "$c5")" ]] || fail \
   "g2: a refused run created $(runs_of "$c5"): $(find "$(runs_of "$c5")" | tr '\n' ' ')"
-[[ ! -e "$c5/.gluerun-state/test-runs/current.json" ]] || fail "g2: current.json was written"
+[[ ! -e "$c5/.singular-state/test-runs/current.json" ]] || fail "g2: current.json was written"
 [[ -z "$(find "$c5" -name 'manifest.json' 2>/dev/null)" ]] || fail "g2: a manifest was written"
 
-# --no-wait takes the same refusal (it is the path `gluerun setup --test-async`
+# --no-wait takes the same refusal (it is the path `singular setup --test-async`
 # uses, and the one that would otherwise leak a detached supervisor).
 rc=0
-out="$( cd "$c5" && GLUERUN_ENGINE_HOME="$nogit" "$BASH" "$nogit/cli/gluerun" test --no-wait 2>&1 )" || rc=$?
+out="$( cd "$c5" && SINGULAR_ENGINE_HOME="$nogit" "$BASH" "$nogit/cli/singular" test --no-wait 2>&1 )" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "g2: --no-wait must refuse too"
-assert_contains "$out" "GLUERUN_TEST_SOURCE_UNSUPPORTED" "g2: --no-wait diagnosis"
+assert_contains "$out" "SINGULAR_TEST_SOURCE_UNSUPPORTED" "g2: --no-wait diagnosis"
 [[ ! -e "$(runs_of "$c5")" ]] || fail "g2: --no-wait created run state"
 
 # ...and the carve-out holds: reporting on a PAST run needs no runnable suite,
 # so --status still answers from a repo that has one recorded (c3, from f).
 rc=0
-out="$( cd "$c3" && GLUERUN_ENGINE_HOME="$nogit" "$BASH" "$nogit/cli/gluerun" test --status 2>&1 )" || rc=$?
+out="$( cd "$c3" && SINGULAR_ENGINE_HOME="$nogit" "$BASH" "$nogit/cli/singular" test --status 2>&1 )" || rc=$?
 assert_eq "$rc" "0" "g2: --status must still report on a past run"
 assert_contains "$out" "status interrupted" "g2: --status reads the recorded run"
-assert_not_contains "$out" "GLUERUN_TEST_SOURCE_UNSUPPORTED" "g2: --status is not gated on the suite"
+assert_not_contains "$out" "SINGULAR_TEST_SOURCE_UNSUPPORTED" "g2: --status is not gated on the suite"
 
 # --- h) tests/run.sh's own hooks, standalone --------------------------------
 
@@ -355,7 +355,7 @@ assert_not_contains "$out" "GLUERUN_TEST_SOURCE_UNSUPPORTED" "g2: --status is no
 # filter selects exactly what was named.
 hd="$tmp/hookrun"
 rc=0
-out="$( cd "$tmp" && GLUERUN_TEST_RUN_DIR="$hd" "$BASH" "$eng/tests/run.sh" \
+out="$( cd "$tmp" && SINGULAR_TEST_RUN_DIR="$hd" "$BASH" "$eng/tests/run.sh" \
         test-quick-pass.sh test-always-fail.sh 2>&1 )" || rc=$?
 assert_eq "$rc" "1" "h: the filtered run reports the failing test"
 assert_contains "$out" "SUMMARY: 1 passed, 1 failed" "h: only the two named tests ran"

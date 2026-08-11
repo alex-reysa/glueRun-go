@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PMGO-006: `gluerun setup` — one idempotent path from "a repository" to a
+# PMGO-006: `singular setup` — one idempotent path from "a repository" to a
 # verified, STOPPED repository.
 #
 # What is actually being pinned here is the safety ordering, not the happy path:
@@ -17,13 +17,13 @@
 #
 # Doctor is host-sensitive (it probes the selected provider's real executable),
 # so fixtures that must reach `validated` pin a stub provider through
-# .gluerun-state/config.local.sh — the operator override lib.sh sources last.
+# .singular-state/config.local.sh — the operator override lib.sh sources last.
 # Nothing here ever starts the real full suite: every run passes --no-test
 # except where the absence of a run is the thing being asserted.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CLI="$ROOT/cli/gluerun"
+CLI="$ROOT/cli/singular"
 ENGINE_VERSION="$(tr -d '[:space:]' <"$ROOT/VERSION")"
 ENGINE_SCHEMA="$(tr -d '[:space:]' <"$ROOT/SCHEMA_VERSION")"
 
@@ -81,13 +81,13 @@ new_repo() { # dir
   git -C "$1" -c user.name=test -c user.email=test@example.local commit -q -m init
 }
 
-# .gluerun-state/config.local.sh is sourced after gluerun.config.json, so it is
+# .singular-state/config.local.sh is sourced after singular.config.json, so it is
 # the one place a fixture can pin the provider a migrated config will select.
 pin_stub_provider() { # repo
-  mkdir -p "$1/.gluerun-state"
-  cat >"$1/.gluerun-state/config.local.sh" <<SH
-export GLUERUN_RUNNER="$ROOT/engine/codex-run.sh"
-export GLUERUN_CODEX_BIN="$stub_bin/codex"
+  mkdir -p "$1/.singular-state"
+  cat >"$1/.singular-state/config.local.sh" <<SH
+export SINGULAR_RUNNER="$ROOT/engine/codex-run.sh"
+export SINGULAR_CODEX_BIN="$stub_bin/codex"
 SH
 }
 
@@ -122,7 +122,7 @@ PY
 }
 
 write_gate() { # repo node status [schemaNamespace]
-  local ns="${4:-gluerun}"
+  local ns="${4:-singular}"
   mkdir -p "$1/docs/orchestration/gates/logs"
   printf 'fixture gate log\n' >"$1/docs/orchestration/gates/logs/$2.log"
   python3 - "$1/docs/orchestration/gates/$2.gate-result.json" "$2" "$3" "$ns" \
@@ -182,7 +182,7 @@ nodes = [
     for node in sys.argv[2:]
 ]
 with open(path, "w", encoding="utf-8") as handle:
-    json.dump({"schema": "gluerun.orchestration.dag.v0", "nodes": nodes},
+    json.dump({"schema": "singular.orchestration.dag.v0", "nodes": nodes},
               handle, indent=2)
     handle.write("\n")
 PY
@@ -191,7 +191,7 @@ PY
 setup() { # repo [args...]
   local repo="$1"; shift
   (
-    cd "$repo" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$ROOT" \
+    cd "$repo" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$ROOT" \
       bash "$CLI" setup "$@" 2>&1
   )
 }
@@ -204,13 +204,13 @@ pin_stub_provider "$repo_a"
 out="$(setup "$repo_a" --no-test)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "(a) setup --no-test should exit 0 (rc=$rc)\n$out"
-[[ -f "$repo_a/.gluerun-state/STOP" ]] || fail "(a) STOP was not written"
-assert_eq "$(tr -d '[:space:]' <"$repo_a/.gluerun-version")" "$ENGINE_VERSION" "(a) .gluerun-version"
-[[ -f "$repo_a/gluerun.config.json" ]] || fail "(a) scaffold did not write gluerun.config.json"
+[[ -f "$repo_a/.singular-state/STOP" ]] || fail "(a) STOP was not written"
+assert_eq "$(tr -d '[:space:]' <"$repo_a/.singular-version")" "$ENGINE_VERSION" "(a) .singular-version"
+[[ -f "$repo_a/singular.config.json" ]] || fail "(a) scaffold did not write singular.config.json"
 [[ -f "$repo_a/docs/orchestration/dag.v0.json" ]] || fail "(a) scaffold did not write the starter DAG"
 [[ -d "$repo_a/schemas/orchestration" ]] || fail "(a) scaffold did not mirror schemas"
-assert_eq "$(json_field "$repo_a/.gluerun-state/setup/state.json" state)" "validated" "(a) setup state"
-assert_eq "$(json_field "$repo_a/.gluerun-state/setup/state.json" schema)" "gluerun.setup-state.v0" "(a) state schema"
+assert_eq "$(json_field "$repo_a/.singular-state/setup/state.json" state)" "validated" "(a) setup state"
+assert_eq "$(json_field "$repo_a/.singular-state/setup/state.json" schema)" "singular.setup-state.v0" "(a) state schema"
 next_lines="$(printf '%s\n' "$out" | grep -c '^Next: ')"
 assert_eq "$next_lines" "1" "(a) exactly one Next: line (got: $(printf '%s\n' "$out" | grep '^Next: '))"
 assert_contains "$out" "STOP written" "(a) STOP reported as created"
@@ -228,7 +228,7 @@ assert_not_contains "$out" "State: stopped-ready" "(a) --no-test cannot reach st
 repo_b="$tmp/b"
 new_repo "$repo_b"
 pin_stub_provider "$repo_b"
-write_config "$repo_b/gluerun.config.json" v0
+write_config "$repo_b/singular.config.json" v0
 write_dag "$repo_b" alpha beta
 write_gate "$repo_b" alpha passed pmgo
 write_gate "$repo_b" beta failed pmgo
@@ -241,13 +241,13 @@ rc=$?
 [[ "$rc" -eq 0 ]] || fail "(b) setup on a v0 repo should exit 0 (rc=$rc)\n$out"
 assert_contains "$out" "2 gate-result file(s) hashed" "(b) snapshot covers both gates"
 assert_contains "$out" "repository migrated to schema $ENGINE_SCHEMA" "(b) migration reached the engine schema"
-assert_eq "$(json_field "$repo_b/gluerun.config.json" schemaVersion)" "$ENGINE_SCHEMA" "(b) config schemaVersion"
+assert_eq "$(json_field "$repo_b/singular.config.json" schemaVersion)" "$ENGINE_SCHEMA" "(b) config schemaVersion"
 assert_contains "$out" "2 gate(s) semantically preserved" "(b) semantic verification passed"
 assert_contains "$out" "byte-rewritten (namespace rebrand — informational)" "(b) byte deltas are informational"
 
-snapshot="$repo_b/.gluerun-state/setup/gates-pre-migrate.json"
+snapshot="$repo_b/.singular-state/setup/gates-pre-migrate.json"
 [[ -f "$snapshot" ]] || fail "(b) no gate snapshot was written"
-assert_eq "$(json_field "$snapshot" schema)" "gluerun.setup.gate-snapshot.v0" "(b) snapshot schema"
+assert_eq "$(json_field "$snapshot" schema)" "singular.setup.gate-snapshot.v0" "(b) snapshot schema"
 python3 - "$snapshot" "$gate_alpha_before" <<'PY' || fail "(b) snapshot did not record hashes and verdicts"
 import json
 import sys
@@ -268,7 +268,7 @@ PY
   || fail "(b) fixture did not exercise a byte-level gate rewrite"
 grep -q '"status": "passed"' "$repo_b/docs/orchestration/gates/alpha.gate-result.json" \
   || fail "(b) migration changed a historical verdict"
-verification="$repo_b/.gluerun-state/setup/gate-verification.json"
+verification="$repo_b/.singular-state/setup/gate-verification.json"
 python3 - "$verification" <<'PY' || fail "(b) gate verification evidence is wrong"
 import json
 import sys
@@ -283,7 +283,7 @@ PY
 # --- (c) a migration that flips a historical verdict is caught and named ------
 repo_c="$tmp/c"
 new_repo "$repo_c"
-write_config "$repo_c/gluerun.config.json" v0
+write_config "$repo_c/singular.config.json" v0
 write_gate "$repo_c" alpha failed
 engine_c="$tmp/engine-tamper"
 make_engine "$engine_c" "9.0.0" v1
@@ -303,40 +303,40 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 SH
 chmod +x "$engine_c/migrations/v0-to-v1.sh"
-out="$(cd "$repo_c" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$engine_c" bash "$CLI" setup --no-test 2>&1)"
+out="$(cd "$repo_c" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$engine_c" bash "$CLI" setup --no-test 2>&1)"
 rc=$?
 [[ "$rc" -ne 0 ]] || fail "(c) a rewritten gate verdict must fail setup\n$out"
-assert_contains "$out" "GLUERUN_GATE_PRESERVATION_FAILED" "(c) stable code"
+assert_contains "$out" "SINGULAR_GATE_PRESERVATION_FAILED" "(c) stable code"
 assert_contains "$out" "alpha.gate-result.json" "(c) the offending file is named"
 assert_contains "$out" "status" "(c) the offending field is named"
 assert_contains "$out" "gates-pre-migrate.json" "(c) recovery points at the snapshot"
-assert_eq "$(json_field "$repo_c/.gluerun-state/setup/last-result.json" code)" \
-  "GLUERUN_GATE_PRESERVATION_FAILED" "(c) persisted failure code"
-assert_eq "$(json_field "$repo_c/.gluerun-state/setup/last-result.json" schema)" \
-  "gluerun.operator-failure.v0" "(c) persisted failure schema"
-assert_eq "$(json_field "$repo_c/.gluerun-state/setup/state.json" state)" "installed" \
+assert_eq "$(json_field "$repo_c/.singular-state/setup/last-result.json" code)" \
+  "SINGULAR_GATE_PRESERVATION_FAILED" "(c) persisted failure code"
+assert_eq "$(json_field "$repo_c/.singular-state/setup/last-result.json" schema)" \
+  "singular.operator-failure.v0" "(c) persisted failure schema"
+assert_eq "$(json_field "$repo_c/.singular-state/setup/state.json" state)" "installed" \
   "(c) the ladder stops where it truthfully got to"
-[[ -f "$repo_c/.gluerun-state/STOP" ]] || fail "(c) STOP must exist even on a failed run"
+[[ -f "$repo_c/.singular-state/STOP" ]] || fail "(c) STOP must exist even on a failed run"
 
 # --- (d) a second run repeats nothing ----------------------------------------
-config_before="$(sha "$repo_b/gluerun.config.json")"
+config_before="$(sha "$repo_b/singular.config.json")"
 gate_before="$(sha "$repo_b/docs/orchestration/gates/alpha.gate-result.json")"
 out="$(setup "$repo_b" --no-test)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "(d) rerun should exit 0 (rc=$rc)\n$out"
 assert_contains "$out" "STOP already present" "(d) STOP is not rewritten"
-assert_contains "$out" "gluerun.config.json exists — init not re-run" "(d) scaffold is skipped"
+assert_contains "$out" "singular.config.json exists — init not re-run" "(d) scaffold is skipped"
 assert_contains "$out" "matches engine schema — nothing to migrate" "(d) no duplicate migration"
 assert_not_contains "$out" "repository migrated to schema" "(d) migration did not run twice"
-assert_eq "$(sha "$repo_b/gluerun.config.json")" "$config_before" "(d) config is byte-identical"
+assert_eq "$(sha "$repo_b/singular.config.json")" "$config_before" "(d) config is byte-identical"
 assert_eq "$(sha "$repo_b/docs/orchestration/gates/alpha.gate-result.json")" "$gate_before" \
   "(d) gate files are byte-identical"
-[[ -f "$repo_b/.gluerun-state/STOP" ]] || fail "(d) STOP disappeared across a rerun"
-assert_eq "$(json_field "$repo_b/.gluerun-state/setup/state.json" state)" "validated" "(d) state stays coherent"
+[[ -f "$repo_b/.singular-state/STOP" ]] || fail "(d) STOP disappeared across a rerun"
+assert_eq "$(json_field "$repo_b/.singular-state/setup/state.json" state)" "validated" "(d) state stays coherent"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "(d) still exactly one Next: line"
 
 # --- (h) --json success: one object, on stdout, with a next action ------------
-stdout_only="$(cd "$repo_b" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$ROOT" \
+stdout_only="$(cd "$repo_b" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$ROOT" \
   bash "$CLI" setup --no-test --json 2>/dev/null)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "(h) setup --json should exit 0 (rc=$rc)"
@@ -345,7 +345,7 @@ import json
 import sys
 
 report = json.loads(sys.argv[1])   # json.loads rejects a second object outright
-assert report["schema"] == "gluerun.setup-report.v0", report["schema"]
+assert report["schema"] == "singular.setup-report.v0", report["schema"]
 assert report["state"] == "validated", report["state"]
 assert report["steps"], "steps must not be empty"
 assert {"id", "status", "detail"} == set(report["steps"][0]), report["steps"][0]
@@ -358,10 +358,10 @@ PY
 # --- (e) a pin that is not installed, and cannot be downloaded ----------------
 repo_e="$tmp/e"
 new_repo "$repo_e"
-echo "9.9.9" >"$repo_e/.gluerun-version"
+echo "9.9.9" >"$repo_e/.singular-version"
 scoped_home="$tmp/home-empty"
 mkdir -p "$scoped_home"
-stdout_only="$(cd "$repo_e" && env -u GLUERUN_ENGINE_HOME HOME="$scoped_home" \
+stdout_only="$(cd "$repo_e" && env -u SINGULAR_ENGINE_HOME HOME="$scoped_home" \
   bash "$CLI" setup --no-test --json 2>/dev/null)"
 rc=$?
 [[ "$rc" -ne 0 ]] || fail "(e) an uninstallable pin must fail"
@@ -370,8 +370,8 @@ import json
 import sys
 
 failure = json.loads(sys.argv[1])
-assert failure["schema"] == "gluerun.operator-failure.v0", failure["schema"]
-assert failure["code"] == "GLUERUN_ENGINE_NOT_INSTALLED", failure["code"]
+assert failure["schema"] == "singular.operator-failure.v0", failure["schema"]
+assert failure["code"] == "SINGULAR_ENGINE_NOT_INSTALLED", failure["code"]
 assert failure["safeToActuate"] is False, failure
 assert failure["phase"] and failure["state"], failure
 assert failure["recovery"]["command"] and failure["recovery"]["instruction"], failure
@@ -379,22 +379,22 @@ assert "no download mechanism" in failure["recovery"]["instruction"], failure["r
 assert "install.sh" in failure["recovery"]["instruction"], failure["recovery"]
 PY
 # Nothing was written: engine resolution fails before the first repo write.
-[[ ! -e "$repo_e/.gluerun-state" ]] || fail "(e) a prerequisite failure mutated the repository"
+[[ ! -e "$repo_e/.singular-state" ]] || fail "(e) a prerequisite failure mutated the repository"
 
 # --- (f) a schema this engine has no migration for ---------------------------
 repo_f="$tmp/f"
 new_repo "$repo_f"
-write_config "$repo_f/gluerun.config.json" v9
+write_config "$repo_f/singular.config.json" v9
 engine_f="$tmp/engine-nomig"
 make_engine "$engine_f" "9.0.0" "$ENGINE_SCHEMA"
-out="$(cd "$repo_f" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$engine_f" bash "$CLI" setup --no-test 2>&1)"
+out="$(cd "$repo_f" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$engine_f" bash "$CLI" setup --no-test 2>&1)"
 rc=$?
 [[ "$rc" -ne 0 ]] || fail "(f) a missing migration must fail setup\n$out"
-assert_contains "$out" "GLUERUN_MIGRATION_MISSING" "(f) stable code"
+assert_contains "$out" "SINGULAR_MIGRATION_MISSING" "(f) stable code"
 assert_contains "$out" "no migration found for v9" "(f) names the unreachable step"
-assert_eq "$(json_field "$repo_f/.gluerun-state/setup/last-result.json" code)" \
-  "GLUERUN_MIGRATION_MISSING" "(f) persisted failure code"
-assert_eq "$(json_field "$repo_f/gluerun.config.json" schemaVersion)" "v9" \
+assert_eq "$(json_field "$repo_f/.singular-state/setup/last-result.json" code)" \
+  "SINGULAR_MIGRATION_MISSING" "(f) persisted failure code"
+assert_eq "$(json_field "$repo_f/singular.config.json" schemaVersion)" "v9" \
   "(f) a refused migration must not advance schemaVersion"
 
 # --- (g) the legacy state root is mirrored, never created --------------------
@@ -428,7 +428,7 @@ out="$(setup "$repo_i" --no-test)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "(i) setup should exit 0 (rc=$rc)\n$out"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "(i) exactly one Next: line"
-assert_contains "$out" "Next: gluerun human-gate status G100" "(i) the pending gate is the next action"
+assert_contains "$out" "Next: singular human-gate status G100" "(i) the pending gate is the next action"
 assert_not_contains "$out" "approve-actuation" "(i) no invented verb"
 
 # An answered request goes back to being nobody's next action.
@@ -449,12 +449,12 @@ assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "(i) still exactly o
 # the repository being prepared, so setup reports it with its stable code and
 # stops the ladder at the state it truthfully reached (`validated`) rather than
 # failing a repository whose every own step passed. The next action must be one
-# that can actually record a passing run: pointing at a bare `gluerun test` here
+# that can actually record a passing run: pointing at a bare `singular test` here
 # would send the operator at a command that refuses.
 #
 # Both shapes are covered, because they are different codes:
-#   j1  an installed engine (no tests/ at all)   -> GLUERUN_TEST_SUITE_UNAVAILABLE
-#   j2  a suite present in a non-checkout tree   -> GLUERUN_TEST_SOURCE_UNSUPPORTED
+#   j1  an installed engine (no tests/ at all)   -> SINGULAR_TEST_SUITE_UNAVAILABLE
+#   j2  a suite present in a non-checkout tree   -> SINGULAR_TEST_SOURCE_UNSUPPORTED
 
 # install.sh's payload list, reproduced. Copying it (rather than running the
 # installer) keeps this hermetic: install.sh also links into /usr/local/bin when
@@ -462,7 +462,7 @@ assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "(i) still exactly o
 install_like() { # dest
   mkdir -p "$1"
   local item
-  for item in engine schemas promoters templates plugin gluerun-ext cli migrations \
+  for item in engine schemas promoters templates plugin singular-ext cli migrations \
               VERSION SCHEMA_VERSION CHANGELOG.md; do
     [[ -e "$ROOT/$item" ]] || continue
     cp -Rp "$ROOT/$item" "$1/"
@@ -472,7 +472,7 @@ install_like() { # dest
 # ...and the list itself is the thing under test, so pin it: `tests` shipping
 # again would put the failure back where the auditor found it (a run dir, a
 # manifest and a supervisor created before run.sh's own preflight refuses).
-grep -q '^for item in engine schemas promoters templates plugin gluerun-ext cli migrations VERSION SCHEMA_VERSION CHANGELOG.md; do$' \
+grep -q '^for item in engine schemas promoters templates plugin singular-ext cli migrations VERSION SCHEMA_VERSION CHANGELOG.md; do$' \
   "$ROOT/install.sh" \
   || fail "(j) install.sh's payload list changed; an installed engine must not ship tests/"
 
@@ -485,25 +485,25 @@ repo_j="$tmp/j"
 new_repo "$repo_j"
 pin_stub_provider "$repo_j"
 # NOT --no-test: the default path is the one that used to die at step 13.
-out="$(cd "$repo_j" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$engine_installed" \
+out="$(cd "$repo_j" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$engine_installed" \
   bash "$CLI" setup 2>&1)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "(j1) an engine that cannot self-test must not fail a good repo (rc=$rc)\n$out"
-assert_contains "$out" "GLUERUN_TEST_SUITE_UNAVAILABLE" "(j1) the stable code is still reported"
+assert_contains "$out" "SINGULAR_TEST_SUITE_UNAVAILABLE" "(j1) the stable code is still reported"
 assert_contains "$out" "State: validated" "(j1) the ladder stops at the state actually reached"
 assert_not_contains "$out" "State: stopped-ready" "(j1) no passing run means no stopped-ready"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "(j1) exactly one Next: line"
-assert_contains "$out" "Next: GLUERUN_ENGINE_HOME=<engine checkout> gluerun test" \
+assert_contains "$out" "Next: SINGULAR_ENGINE_HOME=<engine checkout> singular test" \
   "(j1) the next action names the checkout, not a command that would refuse"
-assert_eq "$(json_field "$repo_j/.gluerun-state/setup/state.json" state)" "validated" "(j1) persisted state"
-[[ -f "$repo_j/.gluerun-state/STOP" ]] || fail "(j1) STOP must still be in place"
+assert_eq "$(json_field "$repo_j/.singular-state/setup/state.json" state)" "validated" "(j1) persisted state"
+[[ -f "$repo_j/.singular-state/STOP" ]] || fail "(j1) STOP must still be in place"
 # Nothing was started, so nothing may have been recorded.
-[[ ! -e "$repo_j/.gluerun-state/test-runs" ]] || fail "(j1) a refused suite created run state"
+[[ ! -e "$repo_j/.singular-state/test-runs" ]] || fail "(j1) a refused suite created run state"
 
 # The code also has to survive into the machine-readable report, as a warning —
 # a consumer reading only --json must be able to see why stopped-ready was not
 # reached without parsing the human stream.
-stdout_only="$(cd "$repo_j" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$engine_installed" \
+stdout_only="$(cd "$repo_j" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$engine_installed" \
   bash "$CLI" setup --json 2>/dev/null)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "(j1) setup --json should exit 0 (rc=$rc)"
@@ -515,7 +515,7 @@ report = json.loads(sys.argv[1])
 assert report["state"] == "validated", report["state"]
 assert report["safeToActuate"] is False, report
 codes = [w["code"] for w in report["warnings"]]
-assert "GLUERUN_TEST_SUITE_UNAVAILABLE" in codes, codes
+assert "SINGULAR_TEST_SUITE_UNAVAILABLE" in codes, codes
 assert report["lastTestRunId"] is None, report["lastTestRunId"]
 step = next(s for s in report["steps"] if s["id"] == "test")
 assert step["status"] == "skip", step
@@ -532,14 +532,14 @@ cp -Rp "$ROOT/tests" "$engine_nogit/tests"
 repo_j2="$tmp/j2"
 new_repo "$repo_j2"
 pin_stub_provider "$repo_j2"
-out="$(cd "$repo_j2" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$engine_nogit" \
+out="$(cd "$repo_j2" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$engine_nogit" \
   bash "$CLI" setup 2>&1)"
 rc=$?
 [[ "$rc" -eq 0 ]] || fail "(j2) a non-checkout engine must not fail a good repo (rc=$rc)\n$out"
-assert_contains "$out" "GLUERUN_TEST_SOURCE_UNSUPPORTED" "(j2) the source code is reported"
+assert_contains "$out" "SINGULAR_TEST_SOURCE_UNSUPPORTED" "(j2) the source code is reported"
 assert_contains "$out" "State: validated" "(j2) the ladder stops at validated"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "(j2) exactly one Next: line"
-[[ ! -e "$repo_j2/.gluerun-state/test-runs" ]] || fail "(j2) a refused suite created run state"
+[[ ! -e "$repo_j2/.singular-state/test-runs" ]] || fail "(j2) a refused suite created run state"
 
 # --- (k) STOP is written BEFORE anything else, proved by ORDER not presence ---
 #
@@ -555,13 +555,13 @@ assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "(j2) exactly one Ne
 # write MUST fail and the STOP write MUST succeed, run setup, and look at what
 # exists afterwards:
 #
-#   .gluerun-state/  created, left writable   -> STOP can always be written
+#   .singular-state/  created, left writable   -> STOP can always be written
 #   repository root  chmod a-w                -> cmd_init's first cp cannot be
-#   .gluerun-version pre-written              -> step 7 writes nothing, so the
+#   .singular-version pre-written              -> step 7 writes nothing, so the
 #                                                pin guard does not fire first
 #                                                and the run reaches the scaffold
 #
-#   STOP first     => STOP exists, gluerun.config.json does not.  (asserted)
+#   STOP first     => STOP exists, singular.config.json does not.  (asserted)
 #   Scaffold first => the scaffold fails before STOP is ever written, so STOP
 #                     does not exist and this case fails.
 #
@@ -570,40 +570,40 @@ if [[ "$(id -u)" -ne 0 ]]; then
   repo_k="$tmp/k"
   new_repo "$repo_k"
   pin_stub_provider "$repo_k"
-  mkdir -p "$repo_k/.gluerun-state/setup"
-  printf '%s\n' "$ENGINE_VERSION" >"$repo_k/.gluerun-version"
-  [[ ! -e "$repo_k/gluerun.config.json" ]] || fail "(k) fixture must be unscaffolded"
-  [[ ! -e "$repo_k/.gluerun-state/STOP" ]] || fail "(k) fixture must not pre-create STOP"
+  mkdir -p "$repo_k/.singular-state/setup"
+  printf '%s\n' "$ENGINE_VERSION" >"$repo_k/.singular-version"
+  [[ ! -e "$repo_k/singular.config.json" ]] || fail "(k) fixture must be unscaffolded"
+  [[ ! -e "$repo_k/.singular-state/STOP" ]] || fail "(k) fixture must not pre-create STOP"
   chmod a-w "$repo_k"
-  out="$(cd "$repo_k" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$ROOT" \
+  out="$(cd "$repo_k" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$ROOT" \
     bash "$CLI" setup --no-test 2>&1)"
   rc=$?
   chmod u+w "$repo_k"
 
   [[ "$rc" -ne 0 ]] || fail "(k) an unscaffoldable repository must fail setup\n$out"
-  assert_contains "$out" "GLUERUN_REPO_UNWRITABLE" "(k) the scaffold refusal is coded"
+  assert_contains "$out" "SINGULAR_REPO_UNWRITABLE" "(k) the scaffold refusal is coded"
   assert_contains "$out" "Phase: scaffold" "(k) the run really did reach the scaffold step"
   # The ordering claim itself.
-  [[ -f "$repo_k/.gluerun-state/STOP" ]] \
+  [[ -f "$repo_k/.singular-state/STOP" ]] \
     || fail "(k) STOP is not written FIRST: setup failed at the scaffold having never written it"
   assert_contains "$out" "STOP written" "(k) and this run wrote it, rather than inheriting one"
   # ...and the step it must precede genuinely did not happen, so the fixture
   # measured an order rather than a coincidence.
-  [[ ! -e "$repo_k/gluerun.config.json" ]] || fail "(k) fixture did not actually block the scaffold"
+  [[ ! -e "$repo_k/singular.config.json" ]] || fail "(k) fixture did not actually block the scaffold"
   [[ ! -e "$repo_k/docs" ]] || fail "(k) fixture did not actually block the scaffold"
 fi
 
 # --- (l) every repo write is guarded, including the version pin --------------
 #
-# The pin write was the one `cp` in setup with no GLUERUN_REPO_UNWRITABLE guard:
+# The pin write was the one `cp` in setup with no SINGULAR_REPO_UNWRITABLE guard:
 # on a read-only repository root it printed a raw `cp: Permission denied` and
 # exited 1 with no code, no recovery and no Next: line — and under --json it
 # emitted ZERO bytes, where the contract is exactly one operator-failure.v0
 # object.
 #
 # The fixture makes the pin write the FIRST failing write, deterministically:
-# .gluerun-state/ is created (and stays writable) before the root is sealed, so
-# step 6 can still create its setup/ dir and write STOP, and .gluerun-version is
+# .singular-state/ is created (and stays writable) before the root is sealed, so
+# step 6 can still create its setup/ dir and write STOP, and .singular-version is
 # absent so step 7 must write into the read-only root.
 #
 # Ordered AFTER (k) on purpose: both fixtures seal the repository root, so a
@@ -613,13 +613,13 @@ if [[ "$(id -u)" -ne 0 ]]; then
   repo_l="$tmp/l"
   new_repo "$repo_l"
   pin_stub_provider "$repo_l"
-  mkdir -p "$repo_l/.gluerun-state/setup"
-  [[ ! -e "$repo_l/.gluerun-version" ]] || fail "(l) fixture must not already carry a pin"
+  mkdir -p "$repo_l/.singular-state/setup"
+  [[ ! -e "$repo_l/.singular-version" ]] || fail "(l) fixture must not already carry a pin"
   chmod a-w "$repo_l"
-  stdout_only="$(cd "$repo_l" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$ROOT" \
+  stdout_only="$(cd "$repo_l" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$ROOT" \
     bash "$CLI" setup --no-test --json 2>/dev/null)"
   rc=$?
-  stderr_only="$(cd "$repo_l" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$ROOT" \
+  stderr_only="$(cd "$repo_l" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$ROOT" \
     bash "$CLI" setup --no-test 2>&1 >/dev/null)"
   chmod u+w "$repo_l"
 
@@ -632,22 +632,22 @@ import sys
 # json.loads rejects trailing content outright, so this also proves "exactly
 # one object" rather than merely "starts with one".
 failure = json.loads(sys.argv[1])
-assert failure["schema"] == "gluerun.operator-failure.v0", failure["schema"]
-assert failure["code"] == "GLUERUN_REPO_UNWRITABLE", failure["code"]
+assert failure["schema"] == "singular.operator-failure.v0", failure["schema"]
+assert failure["code"] == "SINGULAR_REPO_UNWRITABLE", failure["code"]
 assert failure["phase"] == "version-pin", failure["phase"]
 assert failure["safeToActuate"] is False, failure
 assert failure["recovery"]["command"] and failure["recovery"]["instruction"], failure
-assert ".gluerun-version" in failure["summary"], failure["summary"]
+assert ".singular-version" in failure["summary"], failure["summary"]
 PY
   # The human stream leads with the code, exactly like every other refusal —
   # never a raw `cp:` diagnostic from the shell.
-  assert_contains "$stderr_only" "GLUERUN_REPO_UNWRITABLE" "(l) human output leads with the code"
+  assert_contains "$stderr_only" "SINGULAR_REPO_UNWRITABLE" "(l) human output leads with the code"
   assert_contains "$stderr_only" "Recovery: " "(l) human output carries one recovery action"
   assert_not_contains "$stderr_only" "Permission denied" "(l) the raw cp error must not leak"
-  assert_eq "$(json_field "$repo_l/.gluerun-state/setup/last-result.json" code)" \
-    "GLUERUN_REPO_UNWRITABLE" "(l) persisted failure code"
+  assert_eq "$(json_field "$repo_l/.singular-state/setup/last-result.json" code)" \
+    "SINGULAR_REPO_UNWRITABLE" "(l) persisted failure code"
   # STOP was written before the refusal — the repository is stopped, not half-set-up.
-  [[ -f "$repo_l/.gluerun-state/STOP" ]] || fail "(l) STOP must exist even on a failed run"
+  [[ -f "$repo_l/.singular-state/STOP" ]] || fail "(l) STOP must exist even on a failed run"
 fi
 
 # --- (m) a refusal is the ONLY thing on the failure path ---------------------
@@ -657,13 +657,13 @@ fi
 
 # m1: a gate that became unreadable between snapshot and verification raised
 # straight out of the verifier, so a Python traceback printed on stderr
-# immediately BEFORE the GLUERUN_GATE_PRESERVATION_FAILED block. It must fail
+# immediately BEFORE the SINGULAR_GATE_PRESERVATION_FAILED block. It must fail
 # closed — an unverifiable gate is never a preserved gate — but say so once, in
 # the contract's own shape.
 if [[ "$(id -u)" -ne 0 ]]; then
   repo_m="$tmp/m"
   new_repo "$repo_m"
-  write_config "$repo_m/gluerun.config.json" v0
+  write_config "$repo_m/singular.config.json" v0
   write_gate "$repo_m" alpha passed
   engine_m="$tmp/engine-unreadable"
   make_engine "$engine_m" "9.0.0" v1
@@ -673,17 +673,17 @@ set -euo pipefail
 chmod 000 "$1/docs/orchestration/gates/alpha.gate-result.json"
 SH
   chmod +x "$engine_m/migrations/v0-to-v1.sh"
-  out="$(cd "$repo_m" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$engine_m" \
+  out="$(cd "$repo_m" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$engine_m" \
     bash "$CLI" setup --no-test 2>&1)"
   rc=$?
   chmod u+r "$repo_m/docs/orchestration/gates/alpha.gate-result.json" 2>/dev/null || true
 
   [[ "$rc" -ne 0 ]] || fail "(m1) an unverifiable gate must fail setup\n$out"
-  assert_contains "$out" "GLUERUN_GATE_PRESERVATION_FAILED" "(m1) fails closed, with the code"
+  assert_contains "$out" "SINGULAR_GATE_PRESERVATION_FAILED" "(m1) fails closed, with the code"
   assert_contains "$out" "alpha.gate-result.json" "(m1) the unreadable gate is named"
   assert_not_contains "$out" "Traceback (most recent call last)" "(m1) no interpreter traceback may leak"
   assert_not_contains "$out" 'File "<stdin>"' "(m1) no interpreter frame may leak"
-  python3 - "$repo_m/.gluerun-state/setup/gate-verification.json" <<'PY' \
+  python3 - "$repo_m/.singular-state/setup/gate-verification.json" <<'PY' \
     || fail "(m1) the unreadable gate is not recorded as a delta"
 import json
 import sys
@@ -709,16 +709,16 @@ chmod +x "$broken_bin/codex"
 
 repo_m2="$tmp/m2"
 new_repo "$repo_m2"
-mkdir -p "$repo_m2/.gluerun-state"
-cat >"$repo_m2/.gluerun-state/config.local.sh" <<SH
-export GLUERUN_RUNNER="$ROOT/engine/codex-run.sh"
-export GLUERUN_CODEX_BIN="$broken_bin/codex"
+mkdir -p "$repo_m2/.singular-state"
+cat >"$repo_m2/.singular-state/config.local.sh" <<SH
+export SINGULAR_RUNNER="$ROOT/engine/codex-run.sh"
+export SINGULAR_CODEX_BIN="$broken_bin/codex"
 SH
-stdout_only="$(cd "$repo_m2" && env HOME="$tmp/home" GLUERUN_ENGINE_HOME="$ROOT" \
+stdout_only="$(cd "$repo_m2" && env HOME="$tmp/home" SINGULAR_ENGINE_HOME="$ROOT" \
   bash "$CLI" setup --no-test --json 2>/dev/null)"
 rc=$?
 [[ "$rc" -ne 0 ]] || fail "(m2) a broken selected provider must fail setup"
-python3 - "$stdout_only" "$repo_m2/.gluerun-state/setup/doctor.json" <<'PY' \
+python3 - "$stdout_only" "$repo_m2/.singular-state/setup/doctor.json" <<'PY' \
   || fail "(m2) the operator summary still carries a raw fragment"
 import json
 import sys

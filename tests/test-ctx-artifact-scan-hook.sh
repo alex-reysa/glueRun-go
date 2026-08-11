@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Drives a task through l1-drive.sh's acceptance path in a hermetic GLUERUN_ROOT
-# (isolated events log, stub GLUERUN_RUNNER yielding an accepted verdict, default
+# Drives a task through l1-drive.sh's acceptance path in a hermetic SINGULAR_ROOT
+# (isolated events log, stub SINGULAR_RUNNER yielding an accepted verdict, default
 # provisioning) and asserts the post-acceptance artifact-secret-scan finalize
 # hook this node owns (DAG node artifact-secret-scan, layer engine_runtime): a
 # call site placed STRICTLY AFTER acceptance is finalized (packet status
 # accepted, lease/task status accepted, accept decision recorded, inbox packet
 # written, l1.task_accepted appended) and BEFORE the post-acceptance paired-audit
 # fresh-audit prompt is assembled from durable artifacts, behind the default-OFF
-# GLUERUN_CTX_ARTIFACT_SCAN knob (default 0). The hook delegates into the already
-# integrated containment bricks (gluerun_ctx_artifact_quarantine +
-# gluerun_ctx_artifact_exclude) and adds no scan/exclude logic of its own.
+# SINGULAR_CTX_ARTIFACT_SCAN knob (default 0). The hook delegates into the already
+# integrated containment bricks (singular_ctx_artifact_quarantine +
+# singular_ctx_artifact_exclude) and adds no scan/exclude logic of its own.
 #
-#   (a) default-OFF (GLUERUN_CTX_ARTIFACT_SCAN unset AND =0): the accepted path is
+#   (a) default-OFF (SINGULAR_CTX_ARTIFACT_SCAN unset AND =0): the accepted path is
 #       byte-identical to pre-hook behavior — the seeded secret-bearing durable
 #       artifact is left in place untouched (not renamed), NO ctx.artifact_secret
 #       event, and NO durable-artifacts manifest is written.
@@ -41,22 +41,22 @@ fi
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
-# Hermetic guard: scrub any inherited GLUERUN_* env (a leaked GLUERUN_DISPATCH_*
-# or GLUERUN_RUNNER from a real drive would otherwise poison the sandbox). run.sh
+# Hermetic guard: scrub any inherited SINGULAR_* env (a leaked SINGULAR_DISPATCH_*
+# or SINGULAR_RUNNER from a real drive would otherwise poison the sandbox). run.sh
 # does this for the suite; do it here so a direct invocation is hermetic too.
-while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: want '$2' got '$1'"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-artifact-scan-hook.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-artifact-scan-hook.XXXXXX")"
 trap 'rm -rf "$workroot"' EXIT
 
 drv_root="$workroot/drv"
 mkdir -p "$drv_root/docs/orchestration/prompts" "$drv_root/docs/orchestration/tasks" \
-  "$drv_root/.gluerun-state" "$drv_root/internal/widget"
+  "$drv_root/.singular-state" "$drv_root/internal/widget"
 git -C "$drv_root" init -q
 git -C "$drv_root" config user.email t@t; git -C "$drv_root" config user.name t
 git -C "$drv_root" checkout -q -b target
@@ -134,7 +134,7 @@ if [[ "$level" == "l2" ]]; then
         > "$run_dir/session-planner.json"
     fi
     cat > "$out" <<'PKT'
-{"schema":"gluerun.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
 PKT
   fi
   exit 0
@@ -145,12 +145,12 @@ exit 0
 MOCK
 chmod +x "$mock_runner"
 
-EVENTS="$drv_root/.gluerun-state/events.ndjson"
+EVENTS="$drv_root/.singular-state/events.ndjson"
 
 reset_state() {
   git -C "$drv_root" checkout -q target 2>/dev/null || true
-  rm -rf "$drv_root/.gluerun-state/runs" "$drv_root/.gluerun-state/leases" \
-    "$drv_root/.gluerun-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
+  rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" \
+    "$drv_root/.singular-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
   : > "$EVENTS"
   rm -f "$drv_root/docs/orchestration/decisions.md" 2>/dev/null || true
   python3 - "$TASK_MD" <<'PY'
@@ -165,14 +165,14 @@ PY
 
 # Drive TASK-0001. Leading VAR=val args are passed to the drive's env.
 run_drive() {
-  ( cd "$drv_root" && env GLUERUN_ROOT="$drv_root" GLUERUN_STATE_DIR="$drv_root/.gluerun-state" \
-      GLUERUN_ORCH_DIR="$drv_root/docs/orchestration" GLUERUN_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
-      GLUERUN_TARGET_BRANCH=target GLUERUN_RUNNER="$mock_runner" GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
-      GLUERUN_MAX_RETRIES=0 SEED_SECRET="$SEED_SECRET" \
+  ( cd "$drv_root" && env SINGULAR_ROOT="$drv_root" SINGULAR_STATE_DIR="$drv_root/.singular-state" \
+      SINGULAR_ORCH_DIR="$drv_root/docs/orchestration" SINGULAR_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
+      SINGULAR_TARGET_BRANCH=target SINGULAR_RUNNER="$mock_runner" SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
+      SINGULAR_MAX_RETRIES=0 SEED_SECRET="$SEED_SECRET" \
       "$@" "$SCRIPT_DIR/l1-drive.sh" TASK-0001 )
 }
 
-run_dir_of() { ls -d "$drv_root"/.gluerun-state/runs/RUN-* 2>/dev/null | head -1; }
+run_dir_of() { ls -d "$drv_root"/.singular-state/runs/RUN-* 2>/dev/null | head -1; }
 secret_event_count() {
   [[ -f "$EVENTS" ]] || { echo 0; return 0; }
   local c; c="$(grep -c '"type":"ctx.artifact_secret"' "$EVENTS" 2>/dev/null)" || true
@@ -184,11 +184,11 @@ json_field() { python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).ge
 assert_accepted() {
   local run_dir="$1"
   local run_id; run_id="$(basename "$run_dir")"
-  local inbox="$drv_root/.gluerun-state/inbox/$run_id.json"
+  local inbox="$drv_root/.singular-state/inbox/$run_id.json"
   [[ -f "$inbox" ]] || fail "accepted: no inbox packet at $inbox"
   assert_eq "$(json_field "$inbox" status)" "accepted" "accepted: inbox packet status"
-  assert_eq "$(GLUERUN_ROOT="$drv_root" GLUERUN_STATE_DIR="$drv_root/.gluerun-state" \
-    bash -c 'source "'"$SCRIPT_DIR"'/lib.sh"; gluerun_lease_status TASK-0001')" "accepted" "accepted: lease status"
+  assert_eq "$(SINGULAR_ROOT="$drv_root" SINGULAR_STATE_DIR="$drv_root/.singular-state" \
+    bash -c 'source "'"$SCRIPT_DIR"'/lib.sh"; singular_lease_status TASK-0001')" "accepted" "accepted: lease status"
   grep -q 'Status: accepted' "$TASK_MD" || fail "accepted: task md not set to accepted"
   grep -q 'accept' "$drv_root/docs/orchestration/decisions.md" || fail "accepted: no accept decision recorded"
   grep -q '"type":"l1.task_accepted"' "$EVENTS" || fail "accepted: no l1.task_accepted event"
@@ -213,7 +213,7 @@ pass "(a) default-OFF (unset): accepted, artifact untouched, no event/manifest"
 
 # default-OFF: explicit =0.
 reset_state
-out="$(run_drive GLUERUN_CTX_ARTIFACT_SCAN=0 2>&1)" || { echo "$out" | tail -20; fail "OFF (=0): drive failed"; }
+out="$(run_drive SINGULAR_CTX_ARTIFACT_SCAN=0 2>&1)" || { echo "$out" | tail -20; fail "OFF (=0): drive failed"; }
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "OFF (=0): no run dir"
 assert_accepted "$run_dir"
 art="$(seeded_artifact "$run_dir")"
@@ -230,7 +230,7 @@ pass "(a) default-OFF (=0): accepted, artifact untouched, no event/manifest"
 # ---------------------------------------------------------------------------
 reset_state
 ec=0
-out="$(run_drive GLUERUN_CTX_ARTIFACT_SCAN=1 2>&1)" || ec=$?
+out="$(run_drive SINGULAR_CTX_ARTIFACT_SCAN=1 2>&1)" || ec=$?
 assert_eq "$ec" "0" "ON: drive exit status unchanged (accepted)"
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "ON: no run dir"
 assert_accepted "$run_dir"
@@ -268,7 +268,7 @@ pass "(c) ON: manifest excludes the quarantined artifact, keeps clean artifacts"
 # ---------------------------------------------------------------------------
 reset_state
 # Shim engine dir: symlink every real ctx-*.sh EXCEPT ctx-artifact-quarantine.sh
-# so gluerun_ctx_artifact_quarantine is undefined at hook time (a genuine error).
+# so singular_ctx_artifact_quarantine is undefined at hook time (a genuine error).
 ctxdir="$workroot/ctx-noquar"
 rm -rf "$ctxdir"; mkdir -p "$ctxdir"
 for f in "$SCRIPT_DIR"/ctx-*.sh; do
@@ -276,7 +276,7 @@ for f in "$SCRIPT_DIR"/ctx-*.sh; do
   ln -s "$f" "$ctxdir/$(basename "$f")"
 done
 ec=0
-out="$(run_drive GLUERUN_CTX_ARTIFACT_SCAN=1 GLUERUN_ENGINE_DIR="$ctxdir" 2>&1)" || ec=$?
+out="$(run_drive SINGULAR_CTX_ARTIFACT_SCAN=1 SINGULAR_ENGINE_DIR="$ctxdir" 2>&1)" || ec=$?
 assert_eq "$ec" "0" "(d) quarantine unavailable: drive still accepts (non-fatal)"
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "(d): no run dir"
 assert_accepted "$run_dir"

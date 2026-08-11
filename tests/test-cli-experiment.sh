@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Covers the sanctioned `cli/gluerun experiment-report` subcommand: a thin
+# Covers the sanctioned `cli/singular experiment-report` subcommand: a thin
 # driver-hook that DELEGATES into the already-integrated experiment raw-metrics
-# engine suite (gluerun_ctx_experiment_summary_json / _delta_json /
-# _pipeline_md), behind GLUERUN_CTX_EXPERIMENT (default 0). It mirrors the
-# `gluerun graph` / GLUERUN_CTX_GRAPH hook EXACTLY. Asserts:
+# engine suite (singular_ctx_experiment_summary_json / _delta_json /
+# _pipeline_md), behind SINGULAR_CTX_EXPERIMENT (default 0). It mirrors the
+# `singular graph` / SINGULAR_CTX_GRAPH hook EXACTLY. Asserts:
 #   * with the flag ON, `experiment-report summary|delta|tables ...` produce
 #     byte-identical output to the underlying engine functions over the same
 #     resolved inputs (delegation adds no metric logic of its own);
-#   * defaults resolve from GLUERUN_RUNS_DIR / GLUERUN_EVENTS_FILE /
-#     GLUERUN_CTX_EXPERIMENT_METRICS_FILE when positionals are omitted;
-#   * with the flag OFF (unset or 0), `gluerun experiment-report ...` refuses
+#   * defaults resolve from SINGULAR_RUNS_DIR / SINGULAR_EVENTS_FILE /
+#     SINGULAR_CTX_EXPERIMENT_METRICS_FILE when positionals are omitted;
+#   * with the flag OFF (unset or 0), `singular experiment-report ...` refuses
 #     exactly as an unknown command did, and help output is byte-identical to
 #     the pre-hook binary (no `experiment-report` line leaks) — OFF-parity is
 #     asserted behaviorally, never by grepping the source (planner rule 9);
@@ -20,11 +20,11 @@
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GLUERUN_SRC="$ENGINE_HOME/cli/gluerun"
+SINGULAR_SRC="$ENGINE_HOME/cli/singular"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-[[ -f "$GLUERUN_SRC" ]] || fail "cli/gluerun not present: $GLUERUN_SRC"
+[[ -f "$SINGULAR_SRC" ]] || fail "cli/singular not present: $SINGULAR_SRC"
 for m in "$ENGINE_HOME"/engine/ctx-experiment-*.sh; do
   [[ -f "$m" ]] || fail "integrated experiment module missing: $m"
 done
@@ -34,14 +34,14 @@ trap 'rm -rf "$tmp"' EXIT
 
 # Hermetic engine home: only engine/lib.sh (resolver needs it present) + the
 # integrated experiment modules + the CLI under test. Keeps the delegation
-# assertions independent of whatever .gluerun-state the suite host carries.
+# assertions independent of whatever .singular-state the suite host carries.
 EHOME="$tmp/engine-home"
 mkdir -p "$EHOME/engine" "$EHOME/cli"
 : > "$EHOME/engine/lib.sh"
 cp "$ENGINE_HOME"/engine/ctx-experiment-*.sh "$EHOME/engine/"
-cp "$GLUERUN_SRC" "$EHOME/cli/gluerun"
-GLUERUN="$EHOME/cli/gluerun"
-export GLUERUN_ENGINE_HOME="$EHOME"
+cp "$SINGULAR_SRC" "$EHOME/cli/singular"
+SINGULAR="$EHOME/cli/singular"
+export SINGULAR_ENGINE_HOME="$EHOME"
 
 # --- Fixture: runs/<runId>/attempts/index.json + events.ndjson + metrics.json -
 # Exercises all three metric families across BOTH arms in one input set (mirrors
@@ -107,53 +107,53 @@ before="$(tree_hash "$STATE")"
 # FLAG ON: summary|delta|tables delegate byte-identically to the entry points.
 # ---------------------------------------------------------------------------
 declare -A FN=(
-  [summary]=gluerun_ctx_experiment_summary_json
-  [delta]=gluerun_ctx_experiment_delta_json
-  [tables]=gluerun_ctx_experiment_pipeline_md
+  [summary]=singular_ctx_experiment_summary_json
+  [delta]=singular_ctx_experiment_delta_json
+  [tables]=singular_ctx_experiment_pipeline_md
 )
 for sub in summary delta tables; do
   fn="${FN[$sub]}"
   ( set -uo pipefail; eval "$source_exp"; "$fn" "$runs" "$events" "$metrics" ) \
     > "$tmp/gt-$sub.out" 2>/dev/null || fail "ground-truth $fn failed"
-  GLUERUN_CTX_EXPERIMENT=1 "$GLUERUN" experiment-report "$sub" "$runs" "$events" "$metrics" \
+  SINGULAR_CTX_EXPERIMENT=1 "$SINGULAR" experiment-report "$sub" "$runs" "$events" "$metrics" \
     > "$tmp/cli-$sub.out" 2>"$tmp/cli-$sub.err" \
-    || fail "gluerun experiment-report $sub exited non-zero: $(cat "$tmp/cli-$sub.err")"
+    || fail "singular experiment-report $sub exited non-zero: $(cat "$tmp/cli-$sub.err")"
   cmp -s "$tmp/gt-$sub.out" "$tmp/cli-$sub.out" \
     || fail "experiment-report $sub output not byte-identical to $fn"
 done
 
 # ---------------------------------------------------------------------------
 # FLAG ON: positionals omitted -> defaults resolve from the metrics-file env
-# trio (GLUERUN_RUNS_DIR / GLUERUN_EVENTS_FILE / GLUERUN_CTX_EXPERIMENT_METRICS_FILE),
+# trio (SINGULAR_RUNS_DIR / SINGULAR_EVENTS_FILE / SINGULAR_CTX_EXPERIMENT_METRICS_FILE),
 # still byte-identical to the direct entry point on the same resolved inputs.
 # ---------------------------------------------------------------------------
-GLUERUN_CTX_EXPERIMENT=1 \
-GLUERUN_RUNS_DIR="$runs" \
-GLUERUN_EVENTS_FILE="$events" \
-GLUERUN_CTX_EXPERIMENT_METRICS_FILE="$metrics" \
-  "$GLUERUN" experiment-report summary \
+SINGULAR_CTX_EXPERIMENT=1 \
+SINGULAR_RUNS_DIR="$runs" \
+SINGULAR_EVENTS_FILE="$events" \
+SINGULAR_CTX_EXPERIMENT_METRICS_FILE="$metrics" \
+  "$SINGULAR" experiment-report summary \
   > "$tmp/cli-summary-envdefault.out" 2>"$tmp/cli-summary-envdefault.err" \
-  || fail "gluerun experiment-report summary (env defaults) exited non-zero: $(cat "$tmp/cli-summary-envdefault.err")"
+  || fail "singular experiment-report summary (env defaults) exited non-zero: $(cat "$tmp/cli-summary-envdefault.err")"
 cmp -s "$tmp/gt-summary.out" "$tmp/cli-summary-envdefault.out" \
   || fail "experiment-report summary via env defaults not byte-identical to summary via positionals"
 
 # ---------------------------------------------------------------------------
 # FLAG ON: usage() lists an experiment-report line.
 # ---------------------------------------------------------------------------
-GLUERUN_CTX_EXPERIMENT=1 "$GLUERUN" help > "$tmp/help-on.txt" 2>&1 \
-  || fail "gluerun help (flag on) exited non-zero"
+SINGULAR_CTX_EXPERIMENT=1 "$SINGULAR" help > "$tmp/help-on.txt" 2>&1 \
+  || fail "singular help (flag on) exited non-zero"
 grep -q 'experiment-report' "$tmp/help-on.txt" \
-  || fail "experiment-report line not listed in usage() when GLUERUN_CTX_EXPERIMENT=1"
+  || fail "experiment-report line not listed in usage() when SINGULAR_CTX_EXPERIMENT=1"
 
 # ---------------------------------------------------------------------------
 # FLAG ON: bad/missing sub-subcommand -> clear usage error, non-zero exit.
 # ---------------------------------------------------------------------------
-if GLUERUN_CTX_EXPERIMENT=1 "$GLUERUN" experiment-report bogus-sub >/dev/null 2>"$tmp/badsub.err"; then
+if SINGULAR_CTX_EXPERIMENT=1 "$SINGULAR" experiment-report bogus-sub >/dev/null 2>"$tmp/badsub.err"; then
   fail "experiment-report with an unknown sub-subcommand should exit non-zero"
 fi
 grep -qi 'usage' "$tmp/badsub.err" || fail "unknown experiment-report sub-subcommand gave no usage hint"
 
-if GLUERUN_CTX_EXPERIMENT=1 "$GLUERUN" experiment-report >/dev/null 2>&1; then
+if SINGULAR_CTX_EXPERIMENT=1 "$SINGULAR" experiment-report >/dev/null 2>&1; then
   fail "bare 'experiment-report' (no sub-subcommand) should exit non-zero"
 fi
 
@@ -174,22 +174,22 @@ after="$(tree_hash "$STATE")"
 # ---------------------------------------------------------------------------
 for flag in "unset" "0"; do
   if [[ "$flag" == "unset" ]]; then
-    env -u GLUERUN_CTX_EXPERIMENT "$GLUERUN" help > "$tmp/help-off.txt" 2>&1 \
-      || fail "gluerun help (flag $flag) exited non-zero"
-    env -u GLUERUN_CTX_EXPERIMENT "$GLUERUN" experiment-report summary "$runs" "$events" "$metrics" \
+    env -u SINGULAR_CTX_EXPERIMENT "$SINGULAR" help > "$tmp/help-off.txt" 2>&1 \
+      || fail "singular help (flag $flag) exited non-zero"
+    env -u SINGULAR_CTX_EXPERIMENT "$SINGULAR" experiment-report summary "$runs" "$events" "$metrics" \
       >/dev/null 2>"$tmp/off-exp.err" && fail "experiment-report must refuse when flag $flag"
-    env -u GLUERUN_CTX_EXPERIMENT "$GLUERUN" totally-unknown-xyz \
+    env -u SINGULAR_CTX_EXPERIMENT "$SINGULAR" totally-unknown-xyz \
       >/dev/null 2>"$tmp/off-unknown.err" && fail "control unknown command should be non-zero"
   else
-    GLUERUN_CTX_EXPERIMENT=0 "$GLUERUN" help > "$tmp/help-off.txt" 2>&1 \
-      || fail "gluerun help (flag $flag) exited non-zero"
-    GLUERUN_CTX_EXPERIMENT=0 "$GLUERUN" experiment-report summary "$runs" "$events" "$metrics" \
+    SINGULAR_CTX_EXPERIMENT=0 "$SINGULAR" help > "$tmp/help-off.txt" 2>&1 \
+      || fail "singular help (flag $flag) exited non-zero"
+    SINGULAR_CTX_EXPERIMENT=0 "$SINGULAR" experiment-report summary "$runs" "$events" "$metrics" \
       >/dev/null 2>"$tmp/off-exp.err" && fail "experiment-report must refuse when flag $flag"
-    GLUERUN_CTX_EXPERIMENT=0 "$GLUERUN" totally-unknown-xyz \
+    SINGULAR_CTX_EXPERIMENT=0 "$SINGULAR" totally-unknown-xyz \
       >/dev/null 2>"$tmp/off-unknown.err" && fail "control unknown command should be non-zero"
   fi
   grep -q 'experiment-report' "$tmp/help-off.txt" \
-    && fail "usage() leaked an experiment-report line when GLUERUN_CTX_EXPERIMENT=$flag (OFF-parity broken)"
+    && fail "usage() leaked an experiment-report line when SINGULAR_CTX_EXPERIMENT=$flag (OFF-parity broken)"
   # experiment-report's refusal must read exactly like an unknown command's,
   # modulo the command token (experiment-report vs totally-unknown-xyz).
   off_exp="$(sed 's/experiment-report/CMD/' "$tmp/off-exp.err")"

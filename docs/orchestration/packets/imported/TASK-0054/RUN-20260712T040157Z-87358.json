@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.state-packet.v0",
+  "schema": "singular.orchestration.state-packet.v0",
   "packetId": "PKT-TASK-0054-rehydrate-route-wirein",
   "runId": "RUN-20260712T040157Z-87358",
   "taskId": "TASK-0054",
@@ -22,17 +22,17 @@
     {
       "cmd": "bash tests/test-ctx-rehydrate-route.sh",
       "exitCode": 1,
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "cmd": "bash tests/test-ctx-rehydrate-route.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "cmd": "bash tests/run.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "tests": [
@@ -40,33 +40,33 @@
       "name": "test-ctx-rehydrate-route.sh",
       "phase": "red",
       "status": "fail",
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "name": "test-ctx-rehydrate-route.sh",
       "phase": "green",
       "status": "pass",
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "name": "tests/run.sh (full suite)",
       "phase": "regression",
       "status": "pass",
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "evidence": [
     {
       "kind": "red-log",
-      "ref": ".gluerun-evidence/red.log"
+      "ref": ".singular-evidence/red.log"
     },
     {
       "kind": "green-log",
-      "ref": ".gluerun-evidence/green.log"
+      "ref": ".singular-evidence/green.log"
     },
     {
       "kind": "regression-log",
-      "ref": ".gluerun-evidence/regression.log"
+      "ref": ".singular-evidence/regression.log"
     },
     {
       "kind": "gate-check",

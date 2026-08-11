@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-AUDIT_V1 = "gluerun.orchestration.audit-verdict.v1"
+AUDIT_V1 = "singular.orchestration.audit-verdict.v1"
 CLASSIFICATIONS = {
     "passed",
     "failed-product",

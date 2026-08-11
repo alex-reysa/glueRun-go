@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0100",
   "runId": "RUN-20260712T225335Z-23899",
   "branch": "agent/eval/TASK-0100-experiment-report-body",
@@ -14,7 +14,7 @@
     "secret-scan.log (clean)",
     "worker-packet-validation.log (ok)",
     "git diff f89fdf6..b8dc6ed --name-status (A engine/ctx-experiment-report-body.sh, A tests/test-ctx-experiment-report-body.sh)",
-    "engine/ctx-experiment-report-body.sh (87 lines; defines only gluerun_ctx_experiment_report_body_compose + _md; STDOUT-only verbatim compose)",
+    "engine/ctx-experiment-report-body.sh (87 lines; defines only singular_ctx_experiment_report_body_compose + _md; STDOUT-only verbatim compose)",
     "tests/test-ctx-experiment-report-body.sh (314 lines; behavioral corpus tests, read-only fingerprints, no absence greps)",
     "l2-prompt.md acceptance criteria",
     "schemas/orchestration/audit-verdict.v0.schema.json"
@@ -27,8 +27,8 @@
     "cat packet.json / gate-check.json / worker-evidence logs",
     "bash tests/test-ctx-experiment-report-body.sh (independent rerun; exit 0)",
     "bash tests/test-engine-clean.sh (independent rerun; exit 0)",
-    "grep gluerun_ctx_experiment_pipeline_md/render_result_md definitions in engine/",
-    "grep callers of gluerun_ctx_experiment_report_body outside owned files (none)"
+    "grep singular_ctx_experiment_pipeline_md/render_result_md definitions in engine/",
+    "grep callers of singular_ctx_experiment_report_body outside owned files (none)"
   ],
   "findings": [
     "File scope compliant: worker commit b8dc6ed vs baseRef f89fdf6 adds exactly the two owned files and nothing else; no forbidden/sibling/cli/lib file modified (scope-check + git name-status agree).",

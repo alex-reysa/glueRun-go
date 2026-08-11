@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0013",
   "runId": "RUN-20260711T041539Z-2237",
   "branch": "agent/plancritic/TASK-0013-plan-critic-driver",
@@ -15,7 +15,7 @@
     "engine/ctx-plan-critic.sh (242 lines) and tests/test-ctx-plan-critic.sh (315 lines) full read",
     "schemas/plan-critique.v0.schema.json + schemas/orchestration/audit-verdict.v0.schema.json",
     "tests/test-plan-critique-schema.sh (S2 contract gate incl. unwired-literal check at lines 207-208)",
-    "engine/lib.sh (ctx-*.sh auto-source loop @3851; helpers gluerun_finding_id/extract_json/append_event/session_meta_finalize/prompt_sha present)",
+    "engine/lib.sh (ctx-*.sh auto-source loop @3851; helpers singular_finding_id/extract_json/append_event/session_meta_finalize/prompt_sha present)",
     "l2-active-prompt.md acceptance criteria block"
   ],
   "commandsRun": [
@@ -31,12 +31,12 @@
     "File-scope compliant: exactly the two owned files changed (+557/-0), no forbidden path touched; scope-check, secret-scan, and packet-validation guards all clean.",
     "Strict_test_first honored: red.log fails on missing implementation, green.log passes after; both phases recorded in packet with matching logRefs.",
     "Gate green: gate-check.json exit 0 and regression shows 35 passed / 0 failed, including the S2 contract gate (test-plan-critique-schema.sh) and the byte-identical guard (test-engine-clean.sh). Independently reproduced both key tests at exit 0.",
-    "Schema/provenance consistent: persisted critique conforms to plan-critique.v0 (verdict enum clamp, batchTaskIds pattern, finding severity enum, ids re-minted to gluerun_finding_id identity \u2014 test pins id == helper output); plan.critiqued (happy) vs ctx.plan_critique_infra (fail-open) events correctly separated; session meta at .gluerun-state/sessions/plan-critic/<node>.json with role plan-critic.",
-    "Fail-open path bounded and observable: 1 initial + GLUERUN_AUDIT_INFRA_MAX(2) retries = 3 attempts, yields approve + ctx.plan_critique_infra and NO plan.critiqued; never blocks planning and never touches the implementation auditor.",
+    "Schema/provenance consistent: persisted critique conforms to plan-critique.v0 (verdict enum clamp, batchTaskIds pattern, finding severity enum, ids re-minted to singular_finding_id identity \u2014 test pins id == helper output); plan.critiqued (happy) vs ctx.plan_critique_infra (fail-open) events correctly separated; session meta at .singular-state/sessions/plan-critic/<node>.json with role plan-critic.",
+    "Fail-open path bounded and observable: 1 initial + SINGULAR_AUDIT_INFRA_MAX(2) retries = 3 attempts, yields approve + ctx.plan_critique_infra and NO plan.critiqued; never blocks planning and never touches the implementation auditor.",
     "No hidden scope expansion: reconcile.sh / L0 import-enforcement (critique-import-gate node) explicitly deferred and absent; new functions present-but-uncalled (auto-sourced by lib.sh ctx-*.sh loop, invoked by no engine path \u2014 test (e) confirms).",
-    "Non-blocking observation: the finding-id hash is re-implemented inline in Python rather than calling gluerun_finding_id; the test pins equivalence today, but the duplicated identity definition could silently diverge if the helper changes. Maintainability note only.",
+    "Non-blocking observation: the finding-id hash is re-implemented inline in Python rather than calling singular_finding_id; the test pins equivalence today, but the duplicated identity definition could silently diverge if the helper changes. Maintainability note only.",
     "Non-blocking observation: the red evidence is a structural 'file not present' failure rather than a behavioral red \u2014 acceptable and standard for a brand-new engine brick under strict_test_first."
   ],
   "requiredFixes": [],
-  "rationale": "The committed diff stays strictly within the two owned files (engine/ctx-plan-critic.sh, tests/test-ctx-plan-critic.sh), touches no forbidden path, and carries genuine red/green test-first evidence with the gate at exit 0 (35/35 regression, independently re-verified). Every acceptance criterion is exercised: read-only + fresh + default-runner critic over the staged batch for approve/revise/park, gluerun_extract_json plus schema-valid persistence next to candidates with gluerun_finding_id-normalized ids, one verdict+count plan.critiqued event, per-node plan-critic session meta, bounded infra fail-open emitting ctx.plan_critique_infra without blocking, and present-but-uncalled byte-identical behavior (test-engine-clean green). The S2 contract's unwired-literal gate remains green because the driver assembles the prompt basename from parts, avoiding the contiguous 'plan-critic.md' literal in engine/cli while still resolving the runtime prompt. The two observations noted are minor and non-blocking, warranting no fix. Accepted."
+  "rationale": "The committed diff stays strictly within the two owned files (engine/ctx-plan-critic.sh, tests/test-ctx-plan-critic.sh), touches no forbidden path, and carries genuine red/green test-first evidence with the gate at exit 0 (35/35 regression, independently re-verified). Every acceptance criterion is exercised: read-only + fresh + default-runner critic over the staged batch for approve/revise/park, singular_extract_json plus schema-valid persistence next to candidates with singular_finding_id-normalized ids, one verdict+count plan.critiqued event, per-node plan-critic session meta, bounded infra fail-open emitting ctx.plan_critique_infra without blocking, and present-but-uncalled byte-identical behavior (test-engine-clean green). The S2 contract's unwired-literal gate remains green because the driver assembles the prompt basename from parts, avoiding the contiguous 'plan-critic.md' literal in engine/cli while still resolving the runtime prompt. The two observations noted are minor and non-blocking, warranting no fix. Accepted."
 }

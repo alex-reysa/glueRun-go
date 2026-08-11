@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0103",
   "runId": "RUN-20260712T234435Z-35600",
   "branch": "agent/eval/TASK-0103-experiment-run-operator-handoff",

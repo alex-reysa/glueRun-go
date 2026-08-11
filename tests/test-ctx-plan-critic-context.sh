@@ -6,10 +6,10 @@
 # to prior behavior (mirroring engine/ctx-plan-critic.sh and engine/ctx-paired-audit.sh).
 #
 # Asserts:
-#   (a) resolver -> gluerun_ctx_plan_critic_stage_file <node> prints the node's
+#   (a) resolver -> singular_ctx_plan_critic_stage_file <node> prints the node's
 #       docs/context-build-plan/ stage file for a node present in that plan and
 #       empty for an unknown node; resolution is read-only.
-#   (b) assembler -> gluerun_ctx_plan_critic_context <node> <stage_dir> <out_file>
+#   (b) assembler -> singular_ctx_plan_critic_context <node> <stage_dir> <out_file>
 #       writes a single composed context file whose content includes every
 #       candidate task body, the existing-task summary, and the node's stage-file
 #       content.
@@ -18,7 +18,7 @@
 #   (d) determinism -> candidate bodies compose in a stable (sorted) order so the
 #       composed context is byte-stable across runs (idempotence).
 #   (e) present-but-uncalled -> no existing engine path invokes the new functions.
-# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and temp dirs so the
+# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and temp dirs so the
 # suite never mutates real run state.
 set -uo pipefail
 
@@ -33,12 +33,12 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/state" "$tmp/plan"
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
 # Point the resolver at an isolated plan dir instead of the real docs tree.
-export GLUERUN_PLAN_DIR="$tmp/plan"
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_PLAN_DIR="$tmp/plan"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+: > "$SINGULAR_EVENTS_FILE"
 
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
@@ -47,10 +47,10 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX" ]] || fail "engine not present yet: $CTX"
 # shellcheck disable=SC1090
 source "$CTX" || fail "sourcing $CTX failed"
-[[ "$(type -t gluerun_ctx_plan_critic_stage_file)" == "function" ]] \
-  || fail "gluerun_ctx_plan_critic_stage_file not defined by $CTX"
-[[ "$(type -t gluerun_ctx_plan_critic_context)" == "function" ]] \
-  || fail "gluerun_ctx_plan_critic_context not defined by $CTX"
+[[ "$(type -t singular_ctx_plan_critic_stage_file)" == "function" ]] \
+  || fail "singular_ctx_plan_critic_stage_file not defined by $CTX"
+[[ "$(type -t singular_ctx_plan_critic_context)" == "function" ]] \
+  || fail "singular_ctx_plan_critic_context not defined by $CTX"
 
 # --- Seed an isolated plan dir with a node stage file ------------------------
 STAGE_FILE_BODY='# Stage 2 — plan critique
@@ -64,14 +64,14 @@ printf '# other stage\n## Node `some-other-node`\n' > "$tmp/plan/stage-1-other.m
 # ---------------------------------------------------------------------------
 # (a) resolver: known node -> its stage file; unknown node -> empty.
 # ---------------------------------------------------------------------------
-resolved="$(gluerun_ctx_plan_critic_stage_file "plan-critic-driver")"
+resolved="$(singular_ctx_plan_critic_stage_file "plan-critic-driver")"
 [[ "$resolved" == "$tmp/plan/stage-2-plan-critique.md" ]] \
   || fail "resolver did not return the node's stage file, got: '$resolved'"
 
-unknown="$(gluerun_ctx_plan_critic_stage_file "no-such-node-xyz")"
+unknown="$(singular_ctx_plan_critic_stage_file "no-such-node-xyz")"
 [[ -z "$unknown" ]] || fail "resolver must return empty for an unknown node, got: '$unknown'"
 
-empty_node="$(gluerun_ctx_plan_critic_stage_file "")"
+empty_node="$(singular_ctx_plan_critic_stage_file "")"
 [[ -z "$empty_node" ]] || fail "resolver must return empty for an empty node, got: '$empty_node'"
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ printf 'existing task summary UNIQUE-SUMMARY-99\n' > "$stage_dir/existing-tasks.
 printf 'NOT-A-CANDIDATE do not include\n' > "$stage_dir/scratch.md"
 
 out="$tmp/critic-context.md"
-gluerun_ctx_plan_critic_context "plan-critic-driver" "$stage_dir" "$out" \
+singular_ctx_plan_critic_context "plan-critic-driver" "$stage_dir" "$out" \
   || fail "assembler crashed"
 
 [[ -f "$out" ]] || fail "assembler did not write the composed output file"
@@ -108,24 +108,24 @@ b_line="$(grep -n 'BODY-CANDIDATE-BRAVO' "$out" | head -1 | cut -d: -f1)"
 
 # (d) idempotence: re-running over the same inputs is byte-stable.
 out2="$tmp/critic-context-2.md"
-gluerun_ctx_plan_critic_context "plan-critic-driver" "$stage_dir" "$out2" \
+singular_ctx_plan_critic_context "plan-critic-driver" "$stage_dir" "$out2" \
   || fail "assembler crashed on second run"
 cmp -s "$out" "$out2" || fail "composed context is not byte-stable across runs"
 
 # (c) purity: the stage-dir inputs are unchanged and no events were appended.
 before_hash="$(cat "$stage_dir/TASK-0007.candidate.md" "$stage_dir/TASK-0008.candidate.md" \
   "$stage_dir/existing-tasks.md" | cksum)"
-gluerun_ctx_plan_critic_context "plan-critic-driver" "$stage_dir" "$tmp/critic-context-3.md" \
+singular_ctx_plan_critic_context "plan-critic-driver" "$stage_dir" "$tmp/critic-context-3.md" \
   || fail "assembler crashed on purity run"
 after_hash="$(cat "$stage_dir/TASK-0007.candidate.md" "$stage_dir/TASK-0008.candidate.md" \
   "$stage_dir/existing-tasks.md" | cksum)"
 [[ "$before_hash" == "$after_hash" ]] || fail "assembler mutated the staged inputs"
-[[ ! -s "$GLUERUN_EVENTS_FILE" ]] || fail "assembler appended events (must be read-only, event-free)"
+[[ ! -s "$SINGULAR_EVENTS_FILE" ]] || fail "assembler appended events (must be read-only, event-free)"
 
 # ---------------------------------------------------------------------------
 # (e) present-but-uncalled: no existing engine path invokes the new functions.
 # ---------------------------------------------------------------------------
-callers="$(grep -rl 'gluerun_ctx_plan_critic_stage_file\|gluerun_ctx_plan_critic_context' \
+callers="$(grep -rl 'singular_ctx_plan_critic_stage_file\|singular_ctx_plan_critic_context' \
   "$ENGINE_HOME/engine" 2>/dev/null | grep -v '/ctx-plan-critic-context.sh$' || true)"
 : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
 

@@ -18,10 +18,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
 # The pattern set now lives in engine/secret-patterns.tsv and is exposed by
-# gluerun_secret_scan_patterns() in lib.sh (sourced above), so the console's
+# singular_secret_scan_patterns() in lib.sh (sourced above), so the console's
 # python redactor can read the same definition.
 
-worktree="$GLUERUN_ROOT"
+worktree="$SINGULAR_ROOT"
 mode="working"
 range=""
 artifacts_dir=""
@@ -41,7 +41,7 @@ done
 if [[ "$mode" == "artifacts" ]]; then
   # shellcheck disable=SC1090
   source "$SCRIPT_DIR/ctx-artifact-scan.sh"
-  gluerun_ctx_artifact_scan "$artifacts_dir"
+  singular_ctx_artifact_scan "$artifacts_dir"
   exit $?
 fi
 
@@ -74,7 +74,7 @@ scan() {
 
 while IFS="$(printf '\t')" read -r label regex; do
   scan "$label" "$regex"
-done < <(gluerun_secret_scan_patterns)
+done < <(singular_secret_scan_patterns)
 
 # Flag any added dotenv files outright.
 while IFS= read -r p; do

@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 # Covers the graph-projector `sync` entry point in engine/ctx-graph-sync.sh — the
 # incremental append that composes the integrated rebuild machinery (the event +
-# record mappers, gluerun_graph_partition, gluerun_graph_write_corpus) and
+# record mappers, singular_graph_partition, singular_graph_write_corpus) and
 # satisfies the `rebuild equals sync on fixtures` requiredCompletion property.
 # Two chained slices:
-#   gluerun_graph_sync_cursor_read  <graphDir>       -> count of events.ndjson lines
-#   gluerun_graph_sync_cursor_write <graphDir> <n>      already projected, persisted
+#   singular_graph_sync_cursor_read  <graphDir>       -> count of events.ndjson lines
+#   singular_graph_sync_cursor_write <graphDir> <n>      already projected, persisted
 #       under <graphDir>/.sync-cursor; a missing cursor reads as 0. Pure + deterministic.
-#   gluerun_graph_sync <stateDir> [graphDir]
+#   singular_graph_sync <stateDir> [graphDir]
 #       -> reads the existing corpus + cursor, projects the events.ndjson lines
 #          BEYOND the cursor via the event mappers, reprojects the bounded
 #          record-based sources (attempts, gate-results, tasks, paired-audits,
 #          critiques — idempotent), merges with the existing corpus, partitions,
-#          writes the canonical corpus via gluerun_graph_write_corpus, and advances
+#          writes the canonical corpus via singular_graph_write_corpus, and advances
 #          the cursor to the current events.ndjson line count. <graphDir> defaults
-#          to ${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}.
+#          to ${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}.
 #
 # Asserts: cursor round-trips + reads 0 when absent; rebuild-equals-sync FROM
-# SCRATCH (no prior corpus -> byte-identical to gluerun_graph_rebuild); cursor
+# SCRATCH (no prior corpus -> byte-identical to singular_graph_rebuild); cursor
 # advances to the consumed events line count; rebuild-equals-sync INCREMENTAL
 # (rebuild, append events, sync -> byte-identical to a fresh rebuild over the
 # augmented state); a no-new-events sync leaves the corpus byte-identical and does
@@ -56,7 +56,7 @@ trap 'rm -rf "$work_root" "$snap_dir" "$VALIDATOR"' EXIT
 
 # --- OFF-parity / no-writes on source: sourcing invokes nothing, writes nothing.
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$snap_dir" \
     && source "$GRAPH" && source "$PROJECT" && source "$PLANS" \
@@ -79,7 +79,7 @@ source "$CORPUS"  || fail "sourcing $CORPUS failed"
 source "$REBUILD" || fail "sourcing $REBUILD failed"
 # shellcheck disable=SC1090
 source "$SYNC"    || fail "sourcing $SYNC failed"
-for fn in gluerun_graph_sync_cursor_read gluerun_graph_sync_cursor_write gluerun_graph_sync; do
+for fn in singular_graph_sync_cursor_read singular_graph_sync_cursor_write singular_graph_sync; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $SYNC"
 done
 
@@ -156,15 +156,15 @@ validates_file() { python3 "$VALIDATOR" "$SCHEMA" < "$1" >/dev/null 2>&1; }
 CURDIR="$work_root/curdir"
 mkdir -p "$CURDIR"
 # A missing cursor reads as 0.
-[[ "$(gluerun_graph_sync_cursor_read "$CURDIR")" == "0" ]] || fail "missing cursor did not read as 0"
+[[ "$(singular_graph_sync_cursor_read "$CURDIR")" == "0" ]] || fail "missing cursor did not read as 0"
 # A totally-absent graphDir reads as 0 too (no side effects required to read).
-[[ "$(gluerun_graph_sync_cursor_read "$work_root/nope")" == "0" ]] || fail "absent graphDir cursor did not read as 0"
+[[ "$(singular_graph_sync_cursor_read "$work_root/nope")" == "0" ]] || fail "absent graphDir cursor did not read as 0"
 # Write then read round-trips; deterministic.
-gluerun_graph_sync_cursor_write "$CURDIR" 7 || fail "cursor_write failed"
-[[ "$(gluerun_graph_sync_cursor_read "$CURDIR")" == "7" ]] || fail "cursor did not round-trip 7"
-gluerun_graph_sync_cursor_write "$CURDIR" 42 || fail "cursor_write (overwrite) failed"
-[[ "$(gluerun_graph_sync_cursor_read "$CURDIR")" == "42" ]] || fail "cursor did not overwrite to 42"
-[[ "$(gluerun_graph_sync_cursor_read "$CURDIR")" == "$(gluerun_graph_sync_cursor_read "$CURDIR")" ]] \
+singular_graph_sync_cursor_write "$CURDIR" 7 || fail "cursor_write failed"
+[[ "$(singular_graph_sync_cursor_read "$CURDIR")" == "7" ]] || fail "cursor did not round-trip 7"
+singular_graph_sync_cursor_write "$CURDIR" 42 || fail "cursor_write (overwrite) failed"
+[[ "$(singular_graph_sync_cursor_read "$CURDIR")" == "42" ]] || fail "cursor did not overwrite to 42"
+[[ "$(singular_graph_sync_cursor_read "$CURDIR")" == "$(singular_graph_sync_cursor_read "$CURDIR")" ]] \
   || fail "cursor read not deterministic"
 
 # --- Fixture builder (mirrors the rebuild fixture; every integrated mapper) ----
@@ -179,7 +179,7 @@ build_state() { # <stateDir>
 
   cat > "$STATE/runs/$RUN_A/attempts/index.json" <<JSON
 {
-  "schema": "gluerun.orchestration.attempts-index.v0",
+  "schema": "singular.orchestration.attempts-index.v0",
   "runId": "$RUN_A",
   "taskId": "$NODE",
   "attempts": [
@@ -191,7 +191,7 @@ JSON
 
   cat > "$STATE/runs/$RUN_A/paired-audit.json" <<JSON
 {
-  "schema": "gluerun.orchestration.paired-audit.v0",
+  "schema": "singular.orchestration.paired-audit.v0",
   "runId": "$RUN_A",
   "taskId": "$NODE",
   "sampled": true,
@@ -206,7 +206,7 @@ JSON
 
   cat > "$STATE/runs/$RUN_A/plan-critique.json" <<JSON
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "$NODE",
   "runId": "$RUN_A",
   "batchTaskIds": ["TASK-0078"],
@@ -222,7 +222,7 @@ JSON
 
   cat > "$STATE/docs/orchestration/gates/$NODE.gate-result.json" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$NODE",
   "status": "passed",
   "authoritative": true,
@@ -262,11 +262,11 @@ EVENTS_TOTAL="$(count_lines "$STATE/events.ndjson")"
 GDIR_R="$work_root/graph-rebuild"
 GDIR_S="$work_root/graph-sync"
 
-gluerun_graph_rebuild "$STATE" "$GDIR_R" || fail "gluerun_graph_rebuild failed"
+singular_graph_rebuild "$STATE" "$GDIR_R" || fail "singular_graph_rebuild failed"
 
 # sync into a fresh (empty) graphDir must equal a full rebuild, byte-for-byte.
 state_before="$(cd "$STATE" && find . | LC_ALL=C sort)"
-gluerun_graph_sync "$STATE" "$GDIR_S" || fail "gluerun_graph_sync (from scratch) failed"
+singular_graph_sync "$STATE" "$GDIR_S" || fail "singular_graph_sync (from scratch) failed"
 state_after="$(cd "$STATE" && find . | LC_ALL=C sort)"
 [[ "$state_before" == "$state_after" ]] || fail "sync wrote under <stateDir> (must write only under <graphDir>)"
 
@@ -298,19 +298,19 @@ print("ok" if ok else "bad")
 [[ "$split_ok" == "ok" ]] || fail "authoritative/claim split violated in synced corpus"
 
 # Cursor advanced to the consumed events.ndjson line count.
-[[ "$(gluerun_graph_sync_cursor_read "$GDIR_S")" == "$EVENTS_TOTAL" ]] \
+[[ "$(singular_graph_sync_cursor_read "$GDIR_S")" == "$EVENTS_TOTAL" ]] \
   || fail "sync did not advance cursor to events line count ($EVENTS_TOTAL)"
 
 # --- Idempotence: repeated sync with no source change is byte-identical -------
 cp "$GDIR_S/nodes.jsonl" "$work_root/nodes-sync1.jsonl"
 cp "$GDIR_S/edges.jsonl" "$work_root/edges-sync1.jsonl"
-gluerun_graph_sync "$STATE" "$GDIR_S" || fail "second gluerun_graph_sync failed"
+singular_graph_sync "$STATE" "$GDIR_S" || fail "second singular_graph_sync failed"
 diff -q "$work_root/nodes-sync1.jsonl" "$GDIR_S/nodes.jsonl" >/dev/null \
   || fail "nodes.jsonl not byte-identical on repeat sync (idempotence)"
 diff -q "$work_root/edges-sync1.jsonl" "$GDIR_S/edges.jsonl" >/dev/null \
   || fail "edges.jsonl not byte-identical on repeat sync (idempotence)"
 # No-new-events sync does not regress the cursor.
-[[ "$(gluerun_graph_sync_cursor_read "$GDIR_S")" == "$EVENTS_TOTAL" ]] \
+[[ "$(singular_graph_sync_cursor_read "$GDIR_S")" == "$EVENTS_TOTAL" ]] \
   || fail "no-new-events sync regressed the cursor"
 
 # =============================================================================
@@ -322,10 +322,10 @@ GDIR_I="$work_root/graph-inc"
 
 # A full rebuild first, then seed the cursor to the current line count (as a
 # rebuild-then-adopt-sync handoff would): starting the incremental append.
-gluerun_graph_rebuild "$STATE_I" "$GDIR_I" || fail "incremental: initial rebuild failed"
-gluerun_graph_sync "$STATE_I" "$GDIR_I" || fail "incremental: adopt-sync after rebuild failed"
+singular_graph_rebuild "$STATE_I" "$GDIR_I" || fail "incremental: initial rebuild failed"
+singular_graph_sync "$STATE_I" "$GDIR_I" || fail "incremental: adopt-sync after rebuild failed"
 BASE_TOTAL="$(count_lines "$STATE_I/events.ndjson")"
-[[ "$(gluerun_graph_sync_cursor_read "$GDIR_I")" == "$BASE_TOTAL" ]] \
+[[ "$(singular_graph_sync_cursor_read "$GDIR_I")" == "$BASE_TOTAL" ]] \
   || fail "incremental: cursor not at base line count after adopt-sync"
 
 # Append brand-new events beyond the cursor.
@@ -340,13 +340,13 @@ JSON
 AUG_TOTAL="$(count_lines "$STATE_I/events.ndjson")"
 
 # Incremental sync consumes only the appended events.
-gluerun_graph_sync "$STATE_I" "$GDIR_I" || fail "incremental sync failed"
-[[ "$(gluerun_graph_sync_cursor_read "$GDIR_I")" == "$AUG_TOTAL" ]] \
+singular_graph_sync "$STATE_I" "$GDIR_I" || fail "incremental sync failed"
+[[ "$(singular_graph_sync_cursor_read "$GDIR_I")" == "$AUG_TOTAL" ]] \
   || fail "incremental sync did not advance cursor to augmented line count"
 
 # The synced corpus must equal a FRESH full rebuild over the augmented state.
 GDIR_FRESH="$work_root/graph-fresh"
-gluerun_graph_rebuild "$STATE_I" "$GDIR_FRESH" || fail "fresh rebuild over augmented state failed"
+singular_graph_rebuild "$STATE_I" "$GDIR_FRESH" || fail "fresh rebuild over augmented state failed"
 diff -q "$GDIR_FRESH/nodes.jsonl" "$GDIR_I/nodes.jsonl" >/dev/null \
   || fail "incremental sync != fresh rebuild (nodes.jsonl)"
 diff -q "$GDIR_FRESH/edges.jsonl" "$GDIR_I/edges.jsonl" >/dev/null \
@@ -355,13 +355,13 @@ validates_file "$GDIR_I/nodes.jsonl" || fail "incremental: a nodes.jsonl line fa
 validates_file "$GDIR_I/edges.jsonl" || fail "incremental: an edges.jsonl line failed schema validation"
 
 # =============================================================================
-# graphDir default resolves to ${GLUERUN_CTX_GRAPH_DIR}
+# graphDir default resolves to ${SINGULAR_CTX_GRAPH_DIR}
 # =============================================================================
 DEFDIR="$work_root/defgraph"
-( export GLUERUN_CTX_GRAPH_DIR="$DEFDIR"; gluerun_graph_sync "$STATE" ) \
+( export SINGULAR_CTX_GRAPH_DIR="$DEFDIR"; singular_graph_sync "$STATE" ) \
   || fail "sync with default graphDir failed"
 [[ -f "$DEFDIR/nodes.jsonl" && -f "$DEFDIR/edges.jsonl" ]] \
-  || fail "sync did not honor GLUERUN_CTX_GRAPH_DIR default for graphDir"
+  || fail "sync did not honor SINGULAR_CTX_GRAPH_DIR default for graphDir"
 diff -q "$GDIR_R/nodes.jsonl" "$DEFDIR/nodes.jsonl" >/dev/null \
   || fail "default-graphDir synced corpus differs from the rebuild corpus (nodes)"
 diff -q "$GDIR_R/edges.jsonl" "$DEFDIR/edges.jsonl" >/dev/null \

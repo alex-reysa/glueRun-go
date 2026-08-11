@@ -40,18 +40,18 @@ const CO = {
   auto: { mode: "origin", sessionIds: ["origin"] },
   // L0 stacked streams
   l0: { eventsPane: null, supPane: null, supFile: null, supFails: 0, supUnavailable: false },
-  supCollapsed: localStorage.getItem("gluerun.co.sup") === "1",
+  supCollapsed: localStorage.getItem("singular.co.sup") === "1",
   // dynamic region
   panes: new Map(),        // id -> { el, head, body, pane, live, sess, pinned, soloEl, linger, lingerUntil, polling, finished }
   order: [],               // current visible pane ids (in DOM order)
   rail: [],                // recent finished/evicted session snapshots (newest first)
   queue: [],               // overflow queue-chip session ids
   // global toggles
-  autoOn: localStorage.getItem("gluerun.co.auto") !== "0",
-  follow: localStorage.getItem("gluerun.co.follow") !== "0",
-  raw: localStorage.getItem("gluerun.co.raw") === "1",
+  autoOn: localStorage.getItem("singular.co.auto") !== "0",
+  follow: localStorage.getItem("singular.co.follow") !== "0",
+  raw: localStorage.getItem("singular.co.raw") === "1",
   soloId: null,            // soloed pane id (or "origin" for the L0 pane), null = off
-  pins: safeParse(localStorage.getItem("gluerun.co.pins"), []),
+  pins: safeParse(localStorage.getItem("singular.co.pins"), []),
   tick: null,
   rr: 0,
 };
@@ -59,10 +59,10 @@ const CO = {
 function safeParse(s, fb) { try { return JSON.parse(s) || fb; } catch { return fb; } }
 function persist() {
   if (isHistorical()) return;   // read-only: never persist pins/prefs for an archived plan
-  localStorage.setItem("gluerun.co.auto", CO.autoOn ? "1" : "0");
-  localStorage.setItem("gluerun.co.follow", CO.follow ? "1" : "0");
-  localStorage.setItem("gluerun.co.raw", CO.raw ? "1" : "0");
-  localStorage.setItem("gluerun.co.pins", JSON.stringify(CO.pins));
+  localStorage.setItem("singular.co.auto", CO.autoOn ? "1" : "0");
+  localStorage.setItem("singular.co.follow", CO.follow ? "1" : "0");
+  localStorage.setItem("singular.co.raw", CO.raw ? "1" : "0");
+  localStorage.setItem("singular.co.pins", JSON.stringify(CO.pins));
 }
 
 // ---------------------------------------------------------------- role badge --
@@ -457,7 +457,7 @@ function wireEvents() {
   const supToggle = document.getElementById("co-sup-toggle");
   if (supToggle) supToggle.addEventListener("click", () => {
     CO.supCollapsed = !CO.supCollapsed;
-    localStorage.setItem("gluerun.co.sup", CO.supCollapsed ? "1" : "0");
+    localStorage.setItem("singular.co.sup", CO.supCollapsed ? "1" : "0");
     const wrap = document.querySelector(".co-stream-sup");
     if (wrap) wrap.dataset.collapsed = String(CO.supCollapsed);
     supToggle.setAttribute("aria-expanded", String(!CO.supCollapsed));

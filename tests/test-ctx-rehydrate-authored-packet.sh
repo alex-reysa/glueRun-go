@@ -5,14 +5,14 @@
 # present-but-uncalled composer over the integrated `select` (TASK-0058) and
 # `eligible` (TASK-0059) leaves:
 #
-#   gluerun_ctx_rehydrate_authored_render   <manifest-path> [trigger ...]
-#   gluerun_ctx_rehydrate_authored_manifest <manifest-path> [trigger ...]
+#   singular_ctx_rehydrate_authored_render   <manifest-path> [trigger ...]
+#   singular_ctx_rehydrate_authored_manifest <manifest-path> [trigger ...]
 #
 #   - render composes `select | eligible` and renders each eligible entry into a
 #     labeled `=== authored:<id> ===` section headed by an explicit
 #     authored-knowledge / not-authoritative marker, followed by the entry body
 #     (inline `body`, or the contents of a `path`-backed entry read READ-ONLY),
-#     each section capped at GLUERUN_CONTEXT_SECTION_MAX_CHARS (default 4000) with
+#     each section capped at SINGULAR_CONTEXT_SECTION_MAX_CHARS (default 4000) with
 #     a stable truncation marker. Deterministic, id-sorted.
 #   - manifest emits, for exactly the injected authored ids, a deterministic JSON
 #     sources list of {id, sha256, class:"authored-knowledge", authoritative:false}
@@ -56,7 +56,7 @@ write_manifest() {
   local zeta_body="$1"
   cat >"$manifest" <<JSON
 {
-  "schema": "gluerun.orchestration.authored-knowledge-manifest.v0",
+  "schema": "singular.orchestration.authored-knowledge-manifest.v0",
   "entries": [
     { "id": "zeta-body",  "body": "$zeta_body", "load-when": ["implement"], "freshness": "current" },
     { "id": "draft-note", "body": "scratch",    "load-when": ["implement"], "freshness": "current", "description_unverified": true },
@@ -79,13 +79,13 @@ before_hash="$(tree_hash)"
 render() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_authored_render "$@"
+    singular_ctx_rehydrate_authored_render "$@"
   ' _ "$@"
 }
 manifest_of() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_authored_manifest "$@"
+    singular_ctx_rehydrate_authored_manifest "$@"
   ' _ "$@"
 }
 
@@ -137,14 +137,14 @@ JSON
 count_x() { grep -o 'X' <<<"$1" | wc -l | tr -d ' '; }
 
 # Default cap (4000) honored when unset: 5000-char body is truncated.
-out_def="$(unset GLUERUN_CONTEXT_SECTION_MAX_CHARS; render "$cap_manifest")" \
+out_def="$(unset SINGULAR_CONTEXT_SECTION_MAX_CHARS; render "$cap_manifest")" \
   || fail "case4: render exited non-zero (default cap)"
 xd="$(count_x "$out_def")"
 [[ "$xd" -le 4000 ]] || fail "case4: default cap not honored, $xd X's (>4000). "
 [[ "$xd" -gt 0 ]]     || fail "case4: default-cap render produced no body."
 
 # A lowered cap tightens the section.
-out_lo="$(export GLUERUN_CONTEXT_SECTION_MAX_CHARS=200; render "$cap_manifest")" \
+out_lo="$(export SINGULAR_CONTEXT_SECTION_MAX_CHARS=200; render "$cap_manifest")" \
   || fail "case4: render exited non-zero (cap=200)"
 xl="$(count_x "$out_lo")"
 [[ "$xl" -le 200 ]] || fail "case4: lowered cap not honored, $xl X's (>200)."

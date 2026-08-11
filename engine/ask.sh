@@ -2,9 +2,9 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "ask.sh requires bash >= 4" >&2; exit 1
@@ -28,7 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 
-GLUERUN_RUNNER_BIN="${GLUERUN_RUNNER:-$SCRIPT_DIR/codex-run.sh}"
+SINGULAR_RUNNER_BIN="${SINGULAR_RUNNER:-$SCRIPT_DIR/codex-run.sh}"
 
 run_id=""
 question_arg=""
@@ -43,11 +43,11 @@ done
 [[ -n "$run_id" ]] || { echo "ask.sh: --run-id required" >&2; exit 2; }
 [[ "$run_id" =~ ^ASK-[A-Za-z0-9-]+$ ]] || { echo "ask.sh: invalid --run-id: $run_id" >&2; exit 2; }
 
-timeout_sec="${GLUERUN_ASK_TIMEOUT_SEC:-600}"
+timeout_sec="${SINGULAR_ASK_TIMEOUT_SEC:-600}"
 [[ "$timeout_sec" =~ ^[0-9]+$ && "$timeout_sec" -gt 0 ]] || timeout_sec=600
 
-gluerun_ensure_state_dirs
-run_dir="$(gluerun_run_dir "$run_id")"
+singular_ensure_state_dirs
+run_dir="$(singular_run_dir "$run_id")"
 mkdir -p "$run_dir"
 
 q_file="$run_dir/question.md"
@@ -85,7 +85,7 @@ try:
 except Exception:
     doc = {}
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-doc.setdefault("schema", "gluerun.orchestration.ask.v0")
+doc.setdefault("schema", "singular.orchestration.ask.v0")
 doc["runId"] = run_id
 doc.setdefault("createdAt", now)
 try:
@@ -112,7 +112,7 @@ PY
 
 ask_event() {
   local type="$1" message="$2" reason="${3:-}"
-  gluerun_append_event "$type" "$message" \
+  singular_append_event "$type" "$message" \
     "$(python3 - "$run_id" "$reason" <<'PY'
 import json, sys
 run_id, reason = sys.argv[1:3]
@@ -128,10 +128,10 @@ PY
 ask_write pending
 
 digest_file="$run_dir/digest.txt"
-gluerun_supervisor_digest "$digest_file"
+singular_supervisor_digest "$digest_file"
 
-tmpl="$GLUERUN_ORCH_DIR/prompts/supervisor-ask.md"
-[[ -f "$tmpl" ]] || tmpl="$GLUERUN_ENGINE_HOME/templates/prompts/supervisor-ask.md"
+tmpl="$SINGULAR_ORCH_DIR/prompts/supervisor-ask.md"
+[[ -f "$tmpl" ]] || tmpl="$SINGULAR_ENGINE_HOME/templates/prompts/supervisor-ask.md"
 if [[ ! -f "$tmpl" ]]; then
   ask_write error
   ask_event "supervisor.ask_failed" "supervisor ask template not found" "no-template"
@@ -139,7 +139,7 @@ if [[ ! -f "$tmpl" ]]; then
 fi
 
 prompt_file="$run_dir/ask-prompt.md"
-gluerun_render_supervisor_prompt "$tmpl" "$digest_file" "$prompt_file" "$q_file"
+singular_render_supervisor_prompt "$tmpl" "$digest_file" "$prompt_file" "$q_file"
 
 raw="$run_dir/answer-raw.json"
 answer_md="$run_dir/answer.md"
@@ -154,9 +154,9 @@ ask_event "supervisor.ask_started" "supervisor ask started"
 
 timed_out="no"
 rm -f "$runner_result"
-assistant_capability_profile="${GLUERUN_ASSISTANT_CAPABILITY_PROFILE:-supervisor-core}"
-gluerun_runner_contract_prepare \
-  "$GLUERUN_RUNNER_BIN" assistant "$assistant_capability_profile" "$runner_result"
+assistant_capability_profile="${SINGULAR_ASSISTANT_CAPABILITY_PROFILE:-supervisor-core}"
+singular_runner_contract_prepare \
+  "$SINGULAR_RUNNER_BIN" assistant "$assistant_capability_profile" "$runner_result"
 # `exec` so $! IS the runner script, not a subshell wrapping it. The runner is a
 # cooperative citizen — it traps TERM and group-kills its own provider session —
 # but only if the TERM actually reaches it; with an intermediate subshell the
@@ -164,12 +164,12 @@ gluerun_runner_contract_prepare \
 # session: `ask` is the attended path and Ctrl-C in the operator's terminal must
 # still reach the runner.
 (
-  export GLUERUN_RUNNER_ROLE=assistant
-  export GLUERUN_RUNNER_CAPABILITY_PROFILE="$assistant_capability_profile"
-  export GLUERUN_RUNNER_RESULT_FILE="$runner_result"
-  export GLUERUN_RUNNER_RUN_ID="$run_id"
-  exec "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
-    --level readonly -C "$GLUERUN_ROOT" \
+  export SINGULAR_RUNNER_ROLE=assistant
+  export SINGULAR_RUNNER_CAPABILITY_PROFILE="$assistant_capability_profile"
+  export SINGULAR_RUNNER_RESULT_FILE="$runner_result"
+  export SINGULAR_RUNNER_RUN_ID="$run_id"
+  exec "$SINGULAR_RUNNER_BIN" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
+    --level readonly -C "$SINGULAR_ROOT" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \
     --output-last-message "$raw" \
@@ -181,9 +181,9 @@ while kill -0 "$runner_pid" 2>/dev/null; do
   if [[ "$SECONDS" -ge "$deadline" ]]; then
     timed_out="yes"
     # With a grace period, so the runner's EXIT trap — which holds the read-only
-    # restore guard — gets to run. This is a read-only run against $GLUERUN_ROOT;
+    # restore guard — gets to run. This is a read-only run against $SINGULAR_ROOT;
     # a bare SIGKILL here left every mutation it made in the operator's repo.
-    gluerun_kill_tree "$runner_pid" "$(gluerun_kill_grace_sec)"
+    singular_kill_tree "$runner_pid" "$(singular_kill_grace_sec)"
     wait "$runner_pid" 2>/dev/null || true
     break
   fi
@@ -193,8 +193,8 @@ if [[ "$timed_out" != "yes" ]]; then
   wait "$runner_pid" || true
 fi
 
-gluerun_session_meta_finalize "$meta" "assistant" "" "$run_id" \
-  "$(basename "$GLUERUN_RUNNER_BIN")" "$(gluerun_prompt_sha "$prompt_file")" "" 1 || true
+singular_session_meta_finalize "$meta" "assistant" "" "$run_id" \
+  "$(basename "$SINGULAR_RUNNER_BIN")" "$(singular_prompt_sha "$prompt_file")" "" 1 || true
 
 state="error"
 if [[ "$timed_out" == "yes" ]]; then
@@ -255,7 +255,7 @@ try:
 except Exception:
     doc = {}
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-doc.setdefault("schema", "gluerun.orchestration.ask.v0")
+doc.setdefault("schema", "singular.orchestration.ask.v0")
 doc["runId"] = run_id
 doc.setdefault("createdAt", now)
 try:

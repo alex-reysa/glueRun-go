@@ -8,7 +8,7 @@
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines a new
 # function ONLY; NO existing engine/CLI/driver path invokes it, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior (OFF-parity
-# when GLUERUN_CTX_GRAPH is unset or 0). The graph flag GLUERUN_CTX_GRAPH and the
+# when SINGULAR_CTX_GRAPH is unset or 0). The graph flag SINGULAR_CTX_GRAPH and the
 # rehydrate arm knobs gate the LATER wire-in, not this pure reader.
 #
 # Evidence invariance / advocate-skeptic line: selection is a pure read — it
@@ -17,15 +17,15 @@
 # ORDERS existing records over <graphDir>/nodes.jsonl + edges.jsonl, reading only
 # those two files and emitting byte-identical output for a given corpus. A
 # missing or empty corpus yields a well-formed EMPTY result with a zero exit
-# (fail-safe). <graphDir> defaults to ${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}.
+# (fail-safe). <graphDir> defaults to ${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}.
 #
 # This slice SELECTS only. It does NOT resolve selected nodes to durable artifact
 # paths, assemble the packet, touch section caps, or record any manifest — the
-# assembler that maps the selection onto gluerun_ctx_rehydrate_packet/_manifest
+# assembler that maps the selection onto singular_ctx_rehydrate_packet/_manifest
 # (caps and manifest UNCHANGED) and the A/B arm wire-in are separate later slices.
 #
 # Public function:
-#   gluerun_ctx_rehydrate_subgraph_select <graphDir> <taskNodeId>
+#   singular_ctx_rehydrate_subgraph_select <graphDir> <taskNodeId>
 #       Walk the provenance lineage of <taskNodeId> and emit the DETERMINISTIC,
 #       ORDERED set of SELECTED node records (canonical JSONL, verbatim), where
 #         (1) rejected observations — nodes reached ONLY across a
@@ -36,12 +36,12 @@
 #             deterministic (by node id) order.
 #       This replaces flat per-artifact concatenation with rule-based lineage
 #       selection; there is NO relevance scoring (v0 rule). It COMPOSES the
-#       integrated graph read API — gluerun_graph_query_lineage and
-#       gluerun_graph_query_open_contradictions (engine/ctx-graph-query.sh).
+#       integrated graph read API — singular_graph_query_lineage and
+#       singular_graph_query_open_contradictions (engine/ctx-graph-query.sh).
 
-# gluerun_ctx_rehydrate_subgraph_select <graphDir> <taskNodeId>
-gluerun_ctx_rehydrate_subgraph_select() {
-  local graph_dir="${1:-${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}}"
+# singular_ctx_rehydrate_subgraph_select <graphDir> <taskNodeId>
+singular_ctx_rehydrate_subgraph_select() {
+  local graph_dir="${1:-${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}}"
   local task_node="${2:-}"
 
   # Compose the integrated read API: the provenance lineage component (the
@@ -49,21 +49,21 @@ gluerun_ctx_rehydrate_subgraph_select() {
   # targets are surfaced first). Both are read-only, fail-safe on a missing or
   # empty corpus, and deterministic for a given corpus.
   local lineage_records contradiction_edges
-  lineage_records="$(gluerun_graph_query_lineage "$graph_dir" "$task_node")" || return 1
-  contradiction_edges="$(gluerun_graph_query_open_contradictions "$graph_dir")" || return 1
+  lineage_records="$(singular_graph_query_lineage "$graph_dir" "$task_node")" || return 1
+  contradiction_edges="$(singular_graph_query_open_contradictions "$graph_dir")" || return 1
 
-  GLUERUN_SG_DIR="$graph_dir" \
-  GLUERUN_SG_TASK="$task_node" \
-  GLUERUN_SG_LINEAGE="$lineage_records" \
-  GLUERUN_SG_CONTRA="$contradiction_edges" \
+  SINGULAR_SG_DIR="$graph_dir" \
+  SINGULAR_SG_TASK="$task_node" \
+  SINGULAR_SG_LINEAGE="$lineage_records" \
+  SINGULAR_SG_CONTRA="$contradiction_edges" \
   python3 -c '
 import json, os
 from collections import deque
 
-graph_dir = os.environ["GLUERUN_SG_DIR"]
-task = os.environ["GLUERUN_SG_TASK"]
-lineage_lines = [ln for ln in os.environ["GLUERUN_SG_LINEAGE"].splitlines() if ln.strip()]
-contra_lines = [ln for ln in os.environ["GLUERUN_SG_CONTRA"].splitlines() if ln.strip()]
+graph_dir = os.environ["SINGULAR_SG_DIR"]
+task = os.environ["SINGULAR_SG_TASK"]
+lineage_lines = [ln for ln in os.environ["SINGULAR_SG_LINEAGE"].splitlines() if ln.strip()]
+contra_lines = [ln for ln in os.environ["SINGULAR_SG_CONTRA"].splitlines() if ln.strip()]
 
 # The provenance taxonomy the lineage walk follows (context-graph.v0), MINUS
 # rejects_observation. A raw lineage walk INCLUDES rejects_observation, so a

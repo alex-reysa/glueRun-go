@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.state-packet.v0",
+  "schema": "singular.orchestration.state-packet.v0",
   "packetId": "PKT-TASK-0073-RUN-20260712T142128Z-31284",
   "runId": "RUN-20260712T142128Z-31284",
   "taskId": "TASK-0073",
@@ -20,17 +20,17 @@
     {
       "cmd": "bash tests/_oldguard_repro.sh (old temporal guard + scratch engine consumer ref engine/_scratch_ctx_graph_ref.sh)",
       "exitCode": 1,
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "cmd": "bash tests/test-context-graph-schema.sh (fixed test, with and without scratch engine consumer ref)",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "cmd": "bash tests/run.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "tests": [
@@ -38,33 +38,33 @@
       "name": "pure-projection guard reproduces rule-9 breakage (old temporal absence-grep + legit engine schema reference)",
       "phase": "red",
       "status": "fail",
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "name": "test-context-graph-schema.sh passes with legit engine schema consumer present (guard no longer temporal)",
       "phase": "green",
       "status": "pass",
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "name": "tests/run.sh full regression (95 passed, 0 failed)",
       "phase": "green",
       "status": "pass",
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "evidence": [
     {
       "kind": "red-log",
-      "ref": ".gluerun-evidence/red.log"
+      "ref": ".singular-evidence/red.log"
     },
     {
       "kind": "green-log",
-      "ref": ".gluerun-evidence/green.log"
+      "ref": ".singular-evidence/green.log"
     },
     {
       "kind": "regression-log",
-      "ref": ".gluerun-evidence/regression.log"
+      "ref": ".singular-evidence/regression.log"
     },
     {
       "kind": "gate-check",

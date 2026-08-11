@@ -1,7 +1,7 @@
 # Security Policy
 
-glueRun-go runs repo-configured shell commands and launches local coding agents in
-git worktrees. Treat a repo's `gluerun.config.json`, `gluerun.config.sh`, task
+singular runs repo-configured shell commands and launches local coding agents in
+git worktrees. Treat a repo's `singular.config.json`, `singular.config.sh`, task
 files, and opt-in modules as executable trust boundaries.
 
 ## Reporting a vulnerability
@@ -13,7 +13,7 @@ payloads in the public issue.
 
 ## Handling credentials
 
-Do not commit credentials, `.env` files, `.gluerun-state/`, `.worktrees/`,
-`.gluerun-evidence/`, or generated run artifacts. Runtime operator overrides and
-secrets belong in `.gluerun-state/config.local.sh`, which is gitignored by the
+Do not commit credentials, `.env` files, `.singular-state/`, `.worktrees/`,
+`.singular-evidence/`, or generated run artifacts. Runtime operator overrides and
+secrets belong in `.singular-state/config.local.sh`, which is gitignored by the
 scaffold.

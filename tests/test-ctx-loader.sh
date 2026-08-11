@@ -13,7 +13,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_contains() { [[ "$1" == *"$2"* ]] || fail "$3: missing [$2] in [$1]"; }
 
 # Build an isolated engine dir holding only a copy of lib.sh, so ctx-*.sh
-# fixtures never pollute the real engine tree. GLUERUN_ENGINE_DIR resolves to the
+# fixtures never pollute the real engine tree. SINGULAR_ENGINE_DIR resolves to the
 # copy's directory, which is where the loader globs for ctx-*.sh.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -23,11 +23,11 @@ LIB="$tmp/engine/lib.sh"
 
 # Root is set explicitly so sourcing never touches the real repo (no git needed).
 run_source() {
-  GLUERUN_ROOT="$tmp" bash -c 'source "'"$LIB"'"; '"$1"''
+  SINGULAR_ROOT="$tmp" bash -c 'source "'"$LIB"'"; '"$1"''
 }
 
 # --- Case 1: no ctx files present -> hook is a no-op, engine functions load ---
-out="$(run_source 'echo LOADED=ok; type -t gluerun_timestamp')" \
+out="$(run_source 'echo LOADED=ok; type -t singular_timestamp')" \
   || fail "no-files case: sourcing lib.sh failed with zero ctx-*.sh files"
 assert_contains "$out" "LOADED=ok" "no-files case: lib.sh sources cleanly"
 assert_contains "$out" "function" "no-files case: engine functions still defined"
@@ -36,9 +36,9 @@ assert_contains "$out" "function" "no-files case: engine functions still defined
 
 # --- Case 2: a ctx-*.sh defining a new function is loaded ---------------------
 cat > "$tmp/engine/ctx-010-demo.sh" <<'EOF'
-gluerun_ctx_demo_fn() { echo demo-ok; }
+singular_ctx_demo_fn() { echo demo-ok; }
 EOF
-out="$(run_source 'gluerun_ctx_demo_fn')" \
+out="$(run_source 'singular_ctx_demo_fn')" \
   || fail "loads case: sourcing lib.sh with a ctx fixture failed"
 assert_contains "$out" "demo-ok" "loads case: ctx-defined function is available"
 rm -f "$tmp/engine/ctx-010-demo.sh"
@@ -62,7 +62,7 @@ rm -f "$tmp/engine/ctx-020-second.sh" "$tmp/engine/ctx-010-first.sh"
 # A good ctx file sits alongside the broken one; the load MUST abort non-zero and
 # print a diagnostic naming the offending file, not silently skip past it.
 cat > "$tmp/engine/ctx-010-ok.sh" <<'EOF'
-gluerun_ctx_ok_fn() { echo ok; }
+singular_ctx_ok_fn() { echo ok; }
 EOF
 cat > "$tmp/engine/ctx-050-broken.sh" <<'EOF'
 this is not valid bash syntax ((( <<<

@@ -23,7 +23,7 @@
 # {continue, resume} — appends no events, writes no files, and never exits
 # non-zero on any input.
 
-# gluerun_ctx_route_strategy_classify <role> <step>
+# singular_ctx_route_strategy_classify <role> <step>
 #
 # Classifies a would-be resume into `continue` vs `resume` from the re-engaging
 # actor's <role> and the phase <step> it re-enters.
@@ -43,9 +43,9 @@
 # `resume` is tainted, so defaulting an unknown case to `continue` could let a
 # tainted session appear independence-eligible. Defaulting to the tainted label
 # `resume` upholds the advocate/skeptic line and evidence invariance. This keeps
-# the classifier taint-consistent with gluerun_ctx_route_strategy_tainted:
+# the classifier taint-consistent with singular_ctx_route_strategy_tainted:
 # `continue` -> 0, `resume` -> 1 for every input.
-gluerun_ctx_route_strategy_classify() {
+singular_ctx_route_strategy_classify() {
   local role="$1" step="$2"
 
   case "$role" in

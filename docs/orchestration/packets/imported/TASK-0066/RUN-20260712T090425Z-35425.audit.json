@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0066",
   "runId": "RUN-20260712T090425Z-35425",
   "branch": "agent/routing/TASK-0066-rehydrate-authored-node",
@@ -20,8 +20,8 @@
     "git branch --show-current; git log --oneline -5; git status --porcelain",
     "git diff --name-status 460467d 93cbd85 (A engine/ctx-rehydrate-authored-node.sh, A tests/test-ctx-rehydrate-authored-node.sh)",
     "bash tests/test-ctx-rehydrate-authored-node.sh (rc=0, 'ctx-rehydrate-authored-node tests passed')",
-    "bash tests/test-engine-clean.sh (rc=0, engine/+schemas free of GLUERUN symbols)",
-    "grep -rn gluerun_ctx_rehydrate_authored_node (repo-wide + engine/ cli/): zero callers outside owned file",
+    "bash tests/test-engine-clean.sh (rc=0, engine/+schemas free of consumer-specific symbols)",
+    "grep -rn singular_ctx_rehydrate_authored_node (repo-wide + engine/ cli/): zero callers outside owned file",
     "grep -n ctx loader in engine/lib.sh (confirmed auto-source of ctx-*.sh)"
   ],
   "findings": [

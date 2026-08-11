@@ -3,8 +3,8 @@
 # (stage S5-routing, layer engine_runtime): the pure, read-only rehydration
 # packet assembler `engine/ctx-rehydrate.sh`.
 #
-#   gluerun_ctx_rehydrate_packet   id=path [id=path ...]   # labeled text packet
-#   gluerun_ctx_rehydrate_manifest id=path [id=path ...]   # JSON {id, sha256}
+#   singular_ctx_rehydrate_packet   id=path [id=path ...]   # labeled text packet
+#   singular_ctx_rehydrate_manifest id=path [id=path ...]   # JSON {id, sha256}
 #
 # Both assemble a deterministic, section-capped, quarantine-aware view over a
 # fixed set of durable artifact sources (task packet, implementer/reviewer
@@ -12,11 +12,11 @@
 #   - Deterministic: identical bytes -> byte-identical packet AND manifest;
 #     sections emitted in a fixed, documented order regardless of argument or
 #     on-disk order.
-#   - Capped: each section body truncated to <= GLUERUN_CONTEXT_SECTION_MAX_CHARS
+#   - Capped: each section body truncated to <= SINGULAR_CONTEXT_SECTION_MAX_CHARS
 #     (default 4000) with a stable marker.
 #   - Quarantine-aware: a `*.quarantined` source, or an original whose
 #     `.quarantined` sibling exists, never reaches the packet or the manifest
-#     (composes the integrated gluerun_ctx_artifact_exclude).
+#     (composes the integrated singular_ctx_artifact_exclude).
 #   - Manifest: exactly the INCLUDED source ids, each with a sha256 of that
 #     artifact's bytes.
 #   - Pure / read-only: the source files are byte-identical before and after,
@@ -30,7 +30,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export GLUERUN_ROOT="$tmp"
+export SINGULAR_ROOT="$tmp"
 
 run_dir="$tmp/run-state/RUN-REHYDRATE"
 mkdir -p "$run_dir"
@@ -72,7 +72,7 @@ rehydrate() {
   bash -c '
     source "'"$LIB"'"
     mode="$1"; shift
-    gluerun_ctx_rehydrate_"$mode" "$@"
+    singular_ctx_rehydrate_"$mode" "$@"
   ' _ "$@"
 }
 
@@ -106,13 +106,13 @@ got_mids="$(printf '%s\n' "$m1" | manifest_ids | tr '\n' ' ' | sed 's/ $//')"
 # A single oversized (single-line) source; cap tightened to 200.
 big="$(printf 'X%.0s' $(seq 1 9000))"
 printf '%s\n' "$big" >"$run_dir/task-packet.json"
-export GLUERUN_CONTEXT_SECTION_MAX_CHARS=200
+export SINGULAR_CONTEXT_SECTION_MAX_CHARS=200
 cp1="$(rehydrate packet "task-packet=$run_dir/task-packet.json")" || fail "case3: capped packet exited non-zero"
 # body = everything after the single "=== task-packet ===" header line
 cbody="$(printf '%s\n' "$cp1" | tail -n +2)"
 (( ${#cbody} <= 200 )) || fail "case3: section body ${#cbody} exceeds cap 200"
 [[ "$cbody" == *"truncated"* ]] || fail "case3: capped section missing stable truncation marker"
-unset GLUERUN_CONTEXT_SECTION_MAX_CHARS
+unset SINGULAR_CONTEXT_SECTION_MAX_CHARS
 
 # Default cap (4000) honored when the knob is unset: a 3000-char single line is
 # NOT truncated; the same source under cap=200 IS truncated (tighter).
@@ -122,11 +122,11 @@ dp="$(rehydrate packet "reviewer-capsule=$run_dir/reviewer-capsule.json")" || fa
 dbody="$(printf '%s\n' "$dp" | tail -n +2)"
 (( ${#dbody} == 3000 )) || fail "case3b: default cap 4000 not honored (body=${#dbody})"
 [[ "$dbody" != *"truncated"* ]] || fail "case3b: 3000-char body wrongly truncated under default cap"
-export GLUERUN_CONTEXT_SECTION_MAX_CHARS=200
+export SINGULAR_CONTEXT_SECTION_MAX_CHARS=200
 tp="$(rehydrate packet "reviewer-capsule=$run_dir/reviewer-capsule.json")" || fail "case3c: tight-cap packet exited non-zero"
 tbody="$(printf '%s\n' "$tp" | tail -n +2)"
 (( ${#tbody} <= 200 )) || fail "case3c: tightened cap not applied (body=${#tbody})"
-unset GLUERUN_CONTEXT_SECTION_MAX_CHARS
+unset SINGULAR_CONTEXT_SECTION_MAX_CHARS
 # restore small fixtures for the remaining cases
 printf '{"task":"T"}\n' >"$run_dir/task-packet.json"
 printf '{"rev":"cap"}\n' >"$run_dir/reviewer-capsule.json"

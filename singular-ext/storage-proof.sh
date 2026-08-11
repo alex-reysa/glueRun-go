@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# GLUERUN-owned module: storage-proof durable-proof regime.
+# SINGULAR-owned module: storage-proof durable-proof regime.
 #
 # This is NOT part of the generic engine. It is loaded only by repos that list
-# "storage-proof" in their config `modules` (GLUERUN_MODULES). It overrides the
-# engine's generic extension hooks (gluerun_select_l2_runner, gluerun_packet_module_guard,
-# gluerun_worker_contract_extra) to enforce that a durable storage proof carries a
+# "storage-proof" in their config `modules` (SINGULAR_MODULES). It overrides the
+# engine's generic extension hooks (singular_select_l2_runner, singular_packet_module_guard,
+# singular_worker_contract_extra) to enforce that a durable storage proof carries a
 # red "skip-guard" command proving the proof fails when real storage is stripped.
 #
-# Enable via gluerun.config.json:
+# Enable via singular.config.json:
 #   "modules": ["storage-proof"],
 #   "proofLayers": ["storage_proof"],
 #   "proofGrandfather": ["D1.storage_proof", "D2.storage_proof"]
 
-gluerun_task_requires_storage_proof_red_guard() {
+singular_task_requires_storage_proof_red_guard() {
   local task_file="$1"
   [[ -f "$task_file" ]] || return 1
   python3 - "$task_file" <<'PY'
@@ -53,14 +53,14 @@ PY
 }
 
 # Override: route storage_proof tasks to a real-Postgres-capable (claude) runner;
-# every other task keeps the default. An explicit GLUERUN_RUNNER override always wins.
-gluerun_select_l2_runner() {
+# every other task keeps the default. An explicit SINGULAR_RUNNER override always wins.
+singular_select_l2_runner() {
   local task_file="$1" default_runner="$2" claude_runner="${3:-}"
-  if [[ -n "${GLUERUN_RUNNER:-}" ]]; then
+  if [[ -n "${SINGULAR_RUNNER:-}" ]]; then
     printf '%s\n' "$default_runner"; return 0
   fi
   if [[ -n "$claude_runner" && -x "$claude_runner" ]] \
-     && gluerun_task_requires_storage_proof_red_guard "$task_file"; then
+     && singular_task_requires_storage_proof_red_guard "$task_file"; then
     printf '%s\n' "$claude_runner"; return 0
   fi
   printf '%s\n' "$default_runner"
@@ -69,23 +69,23 @@ gluerun_select_l2_runner() {
 # Override: red-evidence log path for storage_proof tasks. The skip-guard red
 # artifact IS the task's single red log (one red artifact, not red.log plus a
 # second skip-guard file); every other task keeps the prompt's default red log.
-gluerun_worker_red_log() {
+singular_worker_red_log() {
   local task_file="$1" task_id="${2:-}"
-  gluerun_task_requires_storage_proof_red_guard "$task_file" || { printf ''; return 0; }
-  printf '.gluerun-evidence/%s-skip-guard-red\n' "$task_id"
+  singular_task_requires_storage_proof_red_guard "$task_file" || { printf ''; return 0; }
+  printf '.singular-evidence/%s-skip-guard-red\n' "$task_id"
 }
 
 # Override: extra worker-prompt contract text for storage_proof tasks. The base
-# contract already names the red log (rewritten by gluerun_worker_red_log above);
+# contract already names the red log (rewritten by singular_worker_red_log above);
 # this only adds the skip-guard requirements that single red artifact must meet.
-gluerun_worker_contract_extra() {
+singular_worker_contract_extra() {
   local task_file="$1" task_id="${2:-}"
-  gluerun_task_requires_storage_proof_red_guard "$task_file" || { printf ''; return 0; }
+  singular_task_requires_storage_proof_red_guard "$task_file" || { printf ''; return 0; }
   cat <<EOF
-- Storage-proof red guard: your red log \`.gluerun-evidence/${task_id}-skip-guard-red\`
+- Storage-proof red guard: your red log \`.singular-evidence/${task_id}-skip-guard-red\`
   above is the ONLY red artifact; do not write any other red evidence file.
   Produce it by running a storage-stripped proof command with both
-  \`GLUERUN_STORAGE_PROOF_DATABASE_URL\` and \`GLUERUN_DATABASE_URL\` unset; it must exit
+  \`SINGULAR_STORAGE_PROOF_DATABASE_URL\` and \`SINGULAR_DATABASE_URL\` unset; it must exit
   nonzero. In the final packet, include that exact path as a nonzero command
   \`logRef\`, a red test \`logRef\`, and an evidence \`ref\`; the ref must end
   exactly in \`-skip-guard-red\`.
@@ -93,9 +93,9 @@ EOF
 }
 
 # Override: enforce the storage-proof packet guard.
-gluerun_packet_module_guard() {
+singular_packet_module_guard() {
   local packet="$1" task_file="$2" workspace="${3:-}" run_dir="${4:-}"
-  if ! gluerun_task_requires_storage_proof_red_guard "$task_file"; then
+  if ! singular_task_requires_storage_proof_red_guard "$task_file"; then
     return 0
   fi
   python3 - "$packet" "$task_file" "$workspace" "$run_dir" <<'PY'
@@ -127,7 +127,7 @@ def candidates(ref):
         out.append(os.path.join(workspace, ref))
     if run_dir:
         out.append(os.path.join(run_dir, ref))
-        if ref.startswith(".gluerun-evidence/"):
+        if ref.startswith(".singular-evidence/"):
             out.append(os.path.join(run_dir, "worker-evidence", os.path.basename(ref)))
     return out
 
@@ -151,7 +151,7 @@ storage_stripped = []
 for idx, command, ref in marked_red_commands:
     cmd = str(command.get("cmd", ""))
     lowered = cmd.lower()
-    has_storage_envs = "gluerun_storage_proof_database_url" in lowered and "gluerun_database_url" in lowered
+    has_storage_envs = "singular_storage_proof_database_url" in lowered and "singular_database_url" in lowered
     strips_env = "env -u" in lowered or "unset " in lowered or "\nunset" in lowered
     if has_storage_envs and strips_env:
         storage_stripped.append((idx, command, ref))
@@ -159,7 +159,7 @@ for idx, command, ref in marked_red_commands:
 if not storage_stripped:
     fail(
         "storage_proof skip-guard red command must visibly strip both "
-        "GLUERUN_STORAGE_PROOF_DATABASE_URL and GLUERUN_DATABASE_URL"
+        "SINGULAR_STORAGE_PROOF_DATABASE_URL and SINGULAR_DATABASE_URL"
     )
 
 evidence_refs = {str(item.get("ref", "")) for item in packet.get("evidence", [])}
@@ -186,17 +186,17 @@ PY
 }
 
 # Override: external-resource blocker (real PostgreSQL proof env required).
-gluerun_gate_red_external_proof_env_blocker() {
+singular_gate_red_external_proof_env_blocker() {
   local context_file="$1"
   [[ -f "$context_file" ]] || return 1
-  [[ -z "${GLUERUN_STORAGE_PROOF_DATABASE_URL:-}" && -z "${GLUERUN_DATABASE_URL:-}" ]] || return 1
-  grep -Eq 'GLUERUN_STORAGE_PROOF_DATABASE_URL|GLUERUN_DATABASE_URL' "$context_file" || return 1
+  [[ -z "${SINGULAR_STORAGE_PROOF_DATABASE_URL:-}" && -z "${SINGULAR_DATABASE_URL:-}" ]] || return 1
+  grep -Eq 'SINGULAR_STORAGE_PROOF_DATABASE_URL|SINGULAR_DATABASE_URL' "$context_file" || return 1
   grep -Eiq 'real PostgreSQL|PostgreSQL database' "$context_file" || return 1
   grep -Eiq 'must not silently skip|no silent skip|in-memory/SQLite substitute' "$context_file" || return 1
 }
 
 # Override: detect a skipped proof path (Go t.Skip in an owned *_test.go).
-gluerun_strict_proof_skip_detected() {
+singular_strict_proof_skip_detected() {
   local task_file="$1" worktree="$2" path full_path
   shift 2
   [[ -f "$task_file" && -d "$worktree" ]] || return 1
@@ -214,12 +214,12 @@ gluerun_strict_proof_skip_detected() {
 }
 
 # Override: terminal parking rationale for proof-related failure classes.
-gluerun_terminal_blocker_rationale() {
+singular_terminal_blocker_rationale() {
   local failure_class="$1" ctx="${2:-/dev/null}"
   case "$failure_class" in
     gate-red)
-      if gluerun_gate_red_external_proof_env_blocker "$ctx"; then
-        printf '%s' "gate-red requires a real PostgreSQL proof environment, but neither GLUERUN_STORAGE_PROOF_DATABASE_URL nor GLUERUN_DATABASE_URL is set; parking instead of retrying L2 so the proof cannot be weakened or skipped"
+      if singular_gate_red_external_proof_env_blocker "$ctx"; then
+        printf '%s' "gate-red requires a real PostgreSQL proof environment, but neither SINGULAR_STORAGE_PROOF_DATABASE_URL nor SINGULAR_DATABASE_URL is set; parking instead of retrying L2 so the proof cannot be weakened or skipped"
       fi
       ;;
     proof-skip-detected)

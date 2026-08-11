@@ -23,13 +23,13 @@ const shortRun = (r) => String(r || "").replace(/^ORIGIN-|^RUN-/, "").slice(0, 1
 
 const REASONING_ALL = ["minimal", "low", "medium", "high", "xhigh"];
 // enum option domains keyed by env key (the settings API doesn't ship choices)
-const ENUM_OPTIONS = { GLUERUN_CODEX_SERVICE_TIER: ["default", "flex", "priority"] };
+const ENUM_OPTIONS = { SINGULAR_CODEX_SERVICE_TIER: ["default", "flex", "priority"] };
 const effortOptions = (model) => /codex|gpt/i.test(model || "") ? ["minimal", "low", "medium", "high"]
   : /claude/i.test(model || "") ? ["low", "medium", "high", "xhigh"] : REASONING_ALL;
-const shortEnv = (k) => String(k || "").replace(/^GLUERUN_/, "").toLowerCase();
+const shortEnv = (k) => String(k || "").replace(/^SINGULAR_/, "").toLowerCase();
 const modelProvider = (row) => {
   if (row.provider) return String(row.provider).toLowerCase();
-  const match = /^GLUERUN_([^_]+)_/.exec(String(row.envKey || ""));
+  const match = /^SINGULAR_([^_]+)_/.exec(String(row.envKey || ""));
   return match ? match[1].toLowerCase() : String((AG.config && AG.config.provider) || "").toLowerCase();
 };
 // card → prompt-library role (the template a role runs); resolved to a file name
@@ -246,7 +246,7 @@ function renderGrid() {
     `<div class="ag-surface-head">
        <span class="co-eyebrow">agent roles</span>
        <span class="ag-head-actions">
-         <button class="insp-raw-btn" data-ag-rawconfig="1" title="view source · gluerun.config.json">{ }<span class="irb-label">config</span></button>
+         <button class="insp-raw-btn" data-ag-rawconfig="1" title="view source · singular.config.json">{ }<span class="irb-label">config</span></button>
          <button class="secondary-button compact ag-sys-btn" id="ag-sys-btn" title="Edit all orchestration settings">${icon("i-cpu")}System settings</button>
        </span>
      </div>
@@ -328,9 +328,9 @@ function roleSettingRows(card) {
   }
   if (card.limits && AG.config && AG.config.limits) {
     const L = AG.config.limits;
-    if (L.maxConcurrent != null) rows.push({ envKey: "GLUERUN_MAX_CONCURRENT", label: "max concurrent", value: String(L.maxConcurrent), kind: "count" });
-    if (L.l1Parallel != null) rows.push({ envKey: "GLUERUN_MAX_L1_CONCURRENT", label: "l1 parallel", value: String(L.l1Parallel), kind: "count" });
-    if (L.maxDispatch != null) rows.push({ envKey: "GLUERUN_MAX_DISPATCH", label: "dispatch / cycle", value: String(L.maxDispatch), kind: "derived", meaning: "follows max concurrent" });
+    if (L.maxConcurrent != null) rows.push({ envKey: "SINGULAR_MAX_CONCURRENT", label: "max concurrent", value: String(L.maxConcurrent), kind: "count" });
+    if (L.l1Parallel != null) rows.push({ envKey: "SINGULAR_MAX_L1_CONCURRENT", label: "l1 parallel", value: String(L.l1Parallel), kind: "count" });
+    if (L.maxDispatch != null) rows.push({ envKey: "SINGULAR_MAX_DISPATCH", label: "dispatch / cycle", value: String(L.maxDispatch), kind: "derived", meaning: "follows max concurrent" });
   }
   return rows.filter((r) => r.envKey);
 }
@@ -349,7 +349,7 @@ function settingsReadOnlyHtml(rows) {
   const body = rows.map((r) =>
     `<div class="ag-set-row"><span class="ag-set-key">${esc(r.label)}</span><span class="ag-set-val mono">${esc(r.value)}</span>
       <button class="ag-set-copy" data-ag-copy="${escAttr(r.envKey + "=" + r.value)}" title="copy ${escAttr(r.envKey)}"><code class="ag-set-src mono">${esc(r.envKey)}</code>${icon("i-copy")}</button></div>`).join("");
-  return `<div class="ag-settings">${body}</div><div class="ag-set-foot">read-only · export the env line or edit gluerun.config.json</div>`;
+  return `<div class="ag-settings">${body}</div><div class="ag-set-foot">read-only · export the env line or edit singular.config.json</div>`;
 }
 
 // ---- shared typed settings editor (role detail + System panel) ----------------
@@ -403,11 +403,11 @@ function renderRoleMatrix(rows, opts) {
   const byKey = new Map(rows.map((row) => [row.envKey, row]));
   const used = new Set();
   const take = (key) => { const row = byKey.get(key); if (row) used.add(key); return row; };
-  const shared = [take("GLUERUN_CODEX_MODEL"), take("GLUERUN_CODEX_SERVICE_TIER")].filter(Boolean);
+  const shared = [take("SINGULAR_CODEX_MODEL"), take("SINGULAR_CODEX_SERVICE_TIER")].filter(Boolean);
   const roles = [
-    ["planner", "L1", take("GLUERUN_CODEX_PLANNER_REASONING_EFFORT")],
-    ["worker", "L2", take("GLUERUN_CODEX_L2_REASONING_EFFORT")],
-    ["auditor", "gate", take("GLUERUN_CODEX_AUDITOR_REASONING_EFFORT")],
+    ["planner", "L1", take("SINGULAR_CODEX_PLANNER_REASONING_EFFORT")],
+    ["worker", "L2", take("SINGULAR_CODEX_L2_REASONING_EFFORT")],
+    ["auditor", "gate", take("SINGULAR_CODEX_AUDITOR_REASONING_EFFORT")],
   ].filter((entry) => entry[2]);
   const sharedBody = shared.map((row) => settingRowHtml(row)).join("");
   const roleBody = roles.map(([name, cap, row]) => {
@@ -572,7 +572,7 @@ function mount() {
     if (back) { backToGrid(); return; }
     if (e.target.closest("[data-ag-sys-close]")) { closeSysPanel(); return; }
     if (e.target.closest("#ag-sys-btn")) { openSysPanel(); return; }
-    if (e.target.closest("[data-ag-rawconfig]")) { viewRaw("config", "gluerun.config.json", "gluerun.config.json"); return; }
+    if (e.target.closest("[data-ag-rawconfig]")) { viewRaw("config", "singular.config.json", "singular.config.json"); return; }
     const copyBtn = e.target.closest("[data-ag-copy]");
     if (copyBtn) { try { navigator.clipboard.writeText(copyBtn.dataset.agCopy); toast("copied " + copyBtn.dataset.agCopy); } catch (x) { toast("copy unavailable"); } return; }
     const save = e.target.closest("[data-ag-save]");

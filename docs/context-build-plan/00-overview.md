@@ -4,7 +4,7 @@
 > (`../orchestration/gates/`), 107 tasks integrated, 0.4.0 released.
 > Knob-default decisions: `experiment-report.md` §5.
 
-This plan evolves glueRun-go from "session continuity as a token-cost optimization"
+This plan evolves singular from "session continuity as a token-cost optimization"
 to "context as a first-class, routed, measured capability" — while preserving the
 engine's design center: reproducibility, durable authoritative state, role
 isolation, parallelism, independent review, and recovery without hidden provider
@@ -20,7 +20,7 @@ its node and emits strict-test-first task slices against `engine/` and `tests/`.
 From the architecture review (2026-07-09):
 
 1. Session affinity today is *strictly intra-run*: gate 5 of
-   `gluerun_session_resume_decide` requires runId equality, and every
+   `singular_session_resume_decide` requires runId equality, and every
    `l1-drive.sh` invocation mints a new run id. Resume only ever helps attempts
    2..N of one drive. Planner sessions are never persisted at all.
 2. `templates/prompts/reviewer.md` exists and is wired to nothing — a plan-review
@@ -62,17 +62,17 @@ From the architecture review (2026-07-09):
 ## Design principles (binding on every task)
 
 1. **Feature-flag discipline.** Every behavior change ships default-OFF behind a
-   `GLUERUN_*` knob and is byte-identical to current behavior when OFF. A
+   `SINGULAR_*` knob and is byte-identical to current behavior when OFF. A
    separate small task flips the default after the stage exit gate passes.
-   (Precedent: `GLUERUN_FIX_PROMPT_STRUCTURED`, `GLUERUN_DECIDER_FAST`.)
+   (Precedent: `SINGULAR_FIX_PROMPT_STRUCTURED`, `SINGULAR_DECIDER_FAST`.)
 2. **New-file convention.** All new logic lands in new `engine/ctx-*.sh` files.
    `engine/lib.sh` is touched exactly once in this whole plan (Stage 0 loader
    hook). Existing driver files (`l1-drive.sh`, `generate-tasks.sh`,
-   `l1-plan-node.sh`, `reconcile.sh`, `cli/gluerun`, `secret-scan.sh`) may only
+   `l1-plan-node.sh`, `reconcile.sh`, `cli/singular`, `secret-scan.sh`) may only
    gain small call-site hooks, and nodes owning the same driver file are
    serialized via `dependsOn` in the DAG.
 3. **Additive schemas only.** New schemas use the existing
-   `gluerun.orchestration.*.v0` namespace; extensions to existing schemas are
+   `singular.orchestration.*.v0` namespace; extensions to existing schemas are
    optional fields only. Fail closed on validation.
 4. **Event-sourced everything.** New state is appended as events/records first;
    the graph (Stage 6) is a projection of those records, never written directly
@@ -114,31 +114,31 @@ applies, without the red skip-guard regime.
 
 | Knob | Stage | Default at intro | Meaning |
 | --- | --- | --- | --- |
-| `GLUERUN_CTX_AB` | S0 | `0` | Deterministic per-task arm assignment (hash of task id) recorded in events. |
-| `GLUERUN_PAIRED_AUDIT_PCT` | S0 | `0` | Sampled second, fresh audit on accepted diffs; disagreements recorded, outcome unchanged. |
-| `GLUERUN_PLANNER_SESSION` | S1 | `0` | Persist planner session meta per node; enable planner-role resume gates. |
-| `GLUERUN_PLAN_CRITIQUE` | S2 | `0` | Run the plan critic over staged candidates before import. |
-| `GLUERUN_PLAN_REVISE_MAX` | S3 | `1` | Max in-lineage plan revision cycles per batch. |
-| `GLUERUN_CTX_PACKET` | S4 | `0` | Emit/consume context-packet fields in tasks and capsules. |
-| `GLUERUN_CTX_ROUTING` | S5 | `0` | Route via the five-strategy module instead of the legacy resume decide. |
-| `GLUERUN_SESSION_WINDOW_MAX_PCT` | S5 | `70` | Refuse resume above this estimated context-window usage. |
-| `GLUERUN_REHYDRATE` | S5 | `0` | Allow capsule-injected fresh starts when resume is refused. |
-| `GLUERUN_CTX_GRAPH` | S6 | `0` | Maintain the provenance-graph projection. |
+| `SINGULAR_CTX_AB` | S0 | `0` | Deterministic per-task arm assignment (hash of task id) recorded in events. |
+| `SINGULAR_PAIRED_AUDIT_PCT` | S0 | `0` | Sampled second, fresh audit on accepted diffs; disagreements recorded, outcome unchanged. |
+| `SINGULAR_PLANNER_SESSION` | S1 | `0` | Persist planner session meta per node; enable planner-role resume gates. |
+| `SINGULAR_PLAN_CRITIQUE` | S2 | `0` | Run the plan critic over staged candidates before import. |
+| `SINGULAR_PLAN_REVISE_MAX` | S3 | `1` | Max in-lineage plan revision cycles per batch. |
+| `SINGULAR_CTX_PACKET` | S4 | `0` | Emit/consume context-packet fields in tasks and capsules. |
+| `SINGULAR_CTX_ROUTING` | S5 | `0` | Route via the five-strategy module instead of the legacy resume decide. |
+| `SINGULAR_SESSION_WINDOW_MAX_PCT` | S5 | `70` | Refuse resume above this estimated context-window usage. |
+| `SINGULAR_REHYDRATE` | S5 | `0` | Allow capsule-injected fresh starts when resume is refused. |
+| `SINGULAR_CTX_GRAPH` | S6 | `0` | Maintain the provenance-graph projection. |
 
 ## Docking checklist (operator, manual)
 
 1. Install/pin the engine: `bash install.sh`, then in this repo write
-   `.gluerun-version` with the installed version. **All driving happens through
-   the installed pin (`~/.gluerun/bin/gluerun`), never `engine/` from this
+   `.singular-version` with the installed version. **All driving happens through
+   the installed pin (`~/.singular/bin/singular`), never `engine/` from this
    working tree** — that is what makes self-hosting safe: workers modify
    `engine/*.sh` on task branches in worktrees while the frozen pinned copy
    drives. The modified engine only takes over when you deliberately
-   `gluerun update` after a milestone.
-2. `gluerun init` (scaffolds `docs/orchestration/` pieces that are missing), then
+   `singular update` after a milestone.
+2. `singular init` (scaffolds `docs/orchestration/` pieces that are missing), then
    copy `templates/prompts/*.md` into `docs/orchestration/prompts/` — the
    tailored `l1-planner.md` and `planner-contract.md` in this dock take
    precedence and must not be overwritten.
-3. Create `gluerun.config.json` at the repo root:
+3. Create `singular.config.json` at the repo root:
 
    ```json
    {
@@ -161,8 +161,8 @@ applies, without the red skip-guard regime.
      "proofGrandfather": [],
      "prewarm": "",
      "identity": {
-       "l0": { "name": "gluerun L0", "email": "l0@gluerun.local" },
-       "l1": { "name": "gluerun L1", "email": "l1@gluerun.local" }
+       "l0": { "name": "singular L0", "email": "l0@singular.local" },
+       "l1": { "name": "singular L1", "email": "l1@singular.local" }
      },
      "env": {}
    }
@@ -170,7 +170,7 @@ applies, without the red skip-guard regime.
 
 4. Create the `agent/integration` branch from `main`. Promotion from
    `agent/integration` to `main` is a manual, per-milestone operator action.
-5. `gluerun doctor`, then `GLUERUN_ROOT=$PWD engine/dag.sh validate-dag` (one-off
+5. `singular doctor`, then `SINGULAR_ROOT=$PWD engine/dag.sh validate-dag` (one-off
    check is fine from the tree; *driving* is not).
 6. Timebox check: run `bash tests/run.sh` once and note the wall time. It runs on
    **every attempt** as the task gate. If it exceeds ~3 minutes, split: per-task
@@ -184,9 +184,9 @@ Default: **the engine drives.** Exceptions, on purpose:
 - **`contract`-layer nodes** (`ctx-loader`, `plan-critique-contract`,
   `context-packet-contract`, `graph-contract`) are judgment-heavy, low-volume
   design work. They are single-slice by engine default
-  (`GLUERUN_SINGLE_SLICE_LAYERS=contract`). Drive them through the engine if you
+  (`SINGULAR_SINGLE_SLICE_LAYERS=contract`). Drive them through the engine if you
   like, but the operator reviews the diff before integration — set
-  `GLUERUN_AUTO_INTEGRATE=0` while a contract node is in flight.
+  `SINGULAR_AUTO_INTEGRATE=0` while a contract node is in flight.
 - **`evaluation`-kind nodes** (`invariant-docs`, `experiment-run`,
   `polish-release`) do not fit strict-test-first mechanics (reports, doc
   rewrites, an experiment run). Drive these manually; publish their gate results
@@ -195,7 +195,7 @@ Default: **the engine drives.** Exceptions, on purpose:
 ## Risks and mitigations
 
 - **Self-modification hazard** → version pinning (checklist §1). Never point
-  `GLUERUN_RUNNER`/drivers at the working tree.
+  `SINGULAR_RUNNER`/drivers at the working tree.
 - **`lib.sh` / driver-file contention** serializing parallelism → new-file
   convention + explicit `dependsOn` chains between nodes that hook the same
   driver file (encoded in the DAG). Expected parallelism is modest; this project

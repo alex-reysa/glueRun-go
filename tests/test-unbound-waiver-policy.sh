@@ -6,7 +6,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 repo="$tmp/repo"
 orch="$repo/docs/orchestration"
-state="$repo/.gluerun-state"
+state="$repo/.singular-state"
 mkdir -p "$orch" "$state/runs/RUN-waiver"
 git -C "$repo" init -q
 git -C "$repo" config user.name test
@@ -32,15 +32,15 @@ JSON
 printf '# Decisions\n' >"$orch/decisions.md"
 
 waiver_allowed() {
-  GLUERUN_ROOT="$repo" \
-  GLUERUN_ORCH_DIR="$orch" \
-  GLUERUN_STATE_DIR="$state" \
-  GLUERUN_RUNS_DIR="$state/runs" \
-    bash -c 'source "$1"; gluerun_packet_has_accept_waiver "$2"' \
+  SINGULAR_ROOT="$repo" \
+  SINGULAR_ORCH_DIR="$orch" \
+  SINGULAR_STATE_DIR="$state" \
+  SINGULAR_RUNS_DIR="$state/runs" \
+    bash -c 'source "$1"; singular_packet_has_accept_waiver "$2"' \
       bash "$ROOT/engine/lib.sh" "$state/runs/RUN-waiver/packet.json"
 }
 
-cat >"$repo/gluerun.config.json" <<'JSON'
+cat >"$repo/singular.config.json" <<'JSON'
 {
   "schemaVersion": "v2",
   "legacyCompatibility": {"unboundWaivers": false}
@@ -51,7 +51,7 @@ if waiver_allowed; then
   exit 1
 fi
 
-cat >"$repo/gluerun.config.json" <<'JSON'
+cat >"$repo/singular.config.json" <<'JSON'
 {
   "schemaVersion": "v2",
   "legacyCompatibility": {"unboundWaivers": true}
@@ -62,7 +62,7 @@ waiver_allowed || {
   exit 1
 }
 
-cat >"$repo/gluerun.config.json" <<'JSON'
+cat >"$repo/singular.config.json" <<'JSON'
 {"schemaVersion": "v1"}
 JSON
 waiver_allowed || {

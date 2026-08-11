@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # Covers the first engine/generate-tasks.sh driver-hook slice of DAG node
 # `planner-session-meta`: wiring the already-integrated
-# gluerun_ctx_planner_session_path / gluerun_ctx_planner_session_finalize into a
-# real planner run, default-OFF behind GLUERUN_PLANNER_SESSION. Asserts:
+# singular_ctx_planner_session_path / singular_ctx_planner_session_finalize into a
+# real planner run, default-OFF behind SINGULAR_PLANNER_SESSION. Asserts:
 #   (a) knob ON + a successful stub batch -> the runner is invoked with
-#       --session-meta "$(gluerun_ctx_planner_session_path <node>)" AND a valid
-#       finalized gluerun.orchestration.session-meta.v0 meta is written at
-#       .gluerun-state/sessions/planner/<node>.json with role "planner",
+#       --session-meta "$(singular_ctx_planner_session_path <node>)" AND a valid
+#       finalized singular.orchestration.session-meta.v0 meta is written at
+#       .singular-state/sessions/planner/<node>.json with role "planner",
 #       node == the planned node, and headShaAtCreate == the target-branch head
 #       resolved at planning time;
 #   (b) knob ON + a planner-failed stub (non-zero rc) -> NO finalized meta
 #       (evidence invariance: a rejected planner lineage is not extended);
 #   (c) knob OFF (unset / =0) -> no meta written and the runner is invoked with
 #       NO --session-meta argument (byte-identical to prior behavior).
-# Everything runs in an isolated GLUERUN_ROOT/GLUERUN_STATE_DIR — never the real
+# Everything runs in an isolated SINGULAR_ROOT/SINGULAR_STATE_DIR — never the real
 # repo or its state dir.
 set -uo pipefail
 
@@ -30,7 +30,7 @@ make_repo() {
   mkdir -p "$root/docs/orchestration/prompts" \
     "$root/docs/orchestration/tasks" \
     "$root/schemas/orchestration" \
-    "$root/.gluerun-state"
+    "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$root/docs/orchestration/prompts/l1-planner.md"
@@ -38,7 +38,7 @@ make_repo() {
   cp "$ENGINE_HOME/schemas/dag.v0.schema.json" "$root/schemas/orchestration/dag.v0.schema.json"
   cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "layers": ["engine_runtime"],
   "kinds": ["runtime"],
   "nodes": [
@@ -63,14 +63,14 @@ with_fixture() {
   tmp="$(mktemp -d)"
   FIXTURE_TMP="$tmp"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-  export GLUERUN_TARGET_BRANCH="target"
-  STUB_ARGS_FILE="$GLUERUN_ROOT/stub-args.txt"
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+  export SINGULAR_TARGET_BRANCH="target"
+  STUB_ARGS_FILE="$SINGULAR_ROOT/stub-args.txt"
   export STUB_ARGS_FILE
   rm -f "$STUB_ARGS_FILE"
 }
@@ -115,7 +115,7 @@ md = (
     "## Acceptance Criteria\n\n- Tests first.\n"
 )
 batch = {
-    "schema": "gluerun.orchestration.task-batch.v0",
+    "schema": "singular.orchestration.task-batch.v0",
     "tasks": [{"taskId": "TASK-0001", "markdown": md}],
 }
 with open(sys.argv[1], "w", encoding="utf-8") as f:
@@ -137,7 +137,7 @@ EOF
   chmod +x "$stub"
 }
 
-meta_path() { printf '%s/sessions/planner/%s.json' "$GLUERUN_STATE_DIR" "$NODE"; }
+meta_path() { printf '%s/sessions/planner/%s.json' "$SINGULAR_STATE_DIR" "$NODE"; }
 stub_has_session_meta() { grep -qx -- '--session-meta' "$STUB_ARGS_FILE"; }
 
 # ---------------------------------------------------------------------------
@@ -145,11 +145,11 @@ stub_has_session_meta() { grep -qx -- '--session-meta' "$STUB_ARGS_FILE"; }
 # ---------------------------------------------------------------------------
 test_on_success_finalizes() {
   with_fixture
-  local stub="$GLUERUN_ROOT/success-stub.sh"
+  local stub="$SINGULAR_ROOT/success-stub.sh"
   make_success_stub "$stub"
-  local head; head="$(git -C "$GLUERUN_ROOT" rev-parse target)"
+  local head; head="$(git -C "$SINGULAR_ROOT" rev-parse target)"
   local out
-  out="$(GLUERUN_PLANNER_SESSION=1 GLUERUN_RUNNER="$stub" \
+  out="$(SINGULAR_PLANNER_SESSION=1 SINGULAR_RUNNER="$stub" \
     "$SCRIPT_DIR/generate-tasks.sh" --node "$NODE" --count 1 2>&1 || true)"
   [[ "$out" == *"generated:"* || "$out" == *"staged:"* ]] \
     || fail "ON/success: planner did not accept the batch: $out"
@@ -160,7 +160,7 @@ test_on_success_finalizes() {
 import json, sys
 path, node, head = sys.argv[1:4]
 doc = json.load(open(path))
-assert doc.get("schema") == "gluerun.orchestration.session-meta.v0", doc
+assert doc.get("schema") == "singular.orchestration.session-meta.v0", doc
 assert doc.get("role") == "planner", doc
 assert doc.get("node") == node, doc
 assert doc.get("headShaAtCreate") == head, doc
@@ -168,7 +168,7 @@ print("ok")
 PY
 
   stub_has_session_meta || fail "ON/success: runner NOT invoked with --session-meta"
-  local expected; expected="$GLUERUN_STATE_DIR/sessions/planner/$NODE.json"
+  local expected; expected="$SINGULAR_STATE_DIR/sessions/planner/$NODE.json"
   grep -qx -- "$expected" "$STUB_ARGS_FILE" \
     || fail "ON/success: runner --session-meta value not the canonical path $expected"
   echo "PASS: ON/success finalizes and passes --session-meta"
@@ -179,10 +179,10 @@ PY
 # ---------------------------------------------------------------------------
 test_on_failure_no_meta() {
   with_fixture
-  local stub="$GLUERUN_ROOT/failing-stub.sh"
+  local stub="$SINGULAR_ROOT/failing-stub.sh"
   make_failing_stub "$stub"
   local out
-  out="$(GLUERUN_PLANNER_SESSION=1 GLUERUN_RUNNER="$stub" \
+  out="$(SINGULAR_PLANNER_SESSION=1 SINGULAR_RUNNER="$stub" \
     "$SCRIPT_DIR/generate-tasks.sh" --node "$NODE" --count 1 2>&1 || true)"
   [[ "$out" == *"planner-failed"* ]] || fail "ON/failure: expected planner-failed, got: $out"
   local mp; mp="$(meta_path)"
@@ -195,10 +195,10 @@ test_on_failure_no_meta() {
 # ---------------------------------------------------------------------------
 test_off_no_meta_no_flag() {
   with_fixture
-  local stub="$GLUERUN_ROOT/success-stub.sh"
+  local stub="$SINGULAR_ROOT/success-stub.sh"
   make_success_stub "$stub"
   local out
-  out="$(GLUERUN_RUNNER="$stub" \
+  out="$(SINGULAR_RUNNER="$stub" \
     "$SCRIPT_DIR/generate-tasks.sh" --node "$NODE" --count 1 2>&1 || true)"
   [[ "$out" == *"generated:"* || "$out" == *"staged:"* ]] \
     || fail "OFF: planner did not accept the batch: $out"
@@ -208,7 +208,7 @@ test_off_no_meta_no_flag() {
 
   # Explicit =0 behaves identically.
   rm -f "$STUB_ARGS_FILE"
-  out="$(GLUERUN_PLANNER_SESSION=0 GLUERUN_RUNNER="$stub" \
+  out="$(SINGULAR_PLANNER_SESSION=0 SINGULAR_RUNNER="$stub" \
     "$SCRIPT_DIR/generate-tasks.sh" --node "$NODE" --count 1 2>&1 || true)"
   [[ ! -e "$mp" ]] || fail "OFF(=0): finalized meta written while knob OFF at $mp"
   ! stub_has_session_meta || fail "OFF(=0): runner invoked with --session-meta while knob OFF"

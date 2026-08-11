@@ -2,9 +2,9 @@
 set -uo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "autonomate.sh requires bash >= 4" >&2; exit 1
@@ -13,28 +13,28 @@ fi
 # The self-driving loop. Each iteration runs one full actuate cycle (import ->
 # recover -> generate a ready frontier if idle -> dispatch worker batch -> audit
 # -> auto-fix -> integrate -> push), then writes STATUS and sleeps. It stops on: the STOP
-# sentinel, the wall-clock budget (GLUERUN_MAX_HOURS), the circuit breaker
-# (GLUERUN_MAX_CONSEC_FAILS consecutive no-progress failures), or DAG exhaustion.
+# sentinel, the wall-clock budget (SINGULAR_MAX_HOURS), the circuit breaker
+# (SINGULAR_MAX_CONSEC_FAILS consecutive no-progress failures), or DAG exhaustion.
 #
 # Single-instance via a pidfile so the launchd watchdog only relaunches it if it
 # died. `--once` runs a single iteration (for tests).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
-reconcile_script="${GLUERUN_RECONCILE_SCRIPT:-$SCRIPT_DIR/reconcile.sh}"
+reconcile_script="${SINGULAR_RECONCILE_SCRIPT:-$SCRIPT_DIR/reconcile.sh}"
 
-export GLUERUN_TARGET_BRANCH="${GLUERUN_TARGET_BRANCH:-}"
-export GLUERUN_AUTO_INTEGRATE="${GLUERUN_AUTO_INTEGRATE:-1}"
-export GLUERUN_PUSH="${GLUERUN_PUSH:-1}"
-export GLUERUN_GENERATE="${GLUERUN_GENERATE:-1}"
-sleep_secs="${GLUERUN_SLEEP:-20}"
-quota_sleep_cap="${GLUERUN_QUOTA_SLEEP_CAP:-300}"       # max seconds per quota-window poll nap
-quota_wait_budget="${GLUERUN_QUOTA_WAIT_BUDGET:-10800}" # total quota-wait before escalating to STOP (3h)
+export SINGULAR_TARGET_BRANCH="${SINGULAR_TARGET_BRANCH:-}"
+export SINGULAR_AUTO_INTEGRATE="${SINGULAR_AUTO_INTEGRATE:-1}"
+export SINGULAR_PUSH="${SINGULAR_PUSH:-1}"
+export SINGULAR_GENERATE="${SINGULAR_GENERATE:-1}"
+sleep_secs="${SINGULAR_SLEEP:-20}"
+quota_sleep_cap="${SINGULAR_QUOTA_SLEEP_CAP:-300}"       # max seconds per quota-window poll nap
+quota_wait_budget="${SINGULAR_QUOTA_WAIT_BUDGET:-10800}" # total quota-wait before escalating to STOP (3h)
 quota_waited_total=0
 # Provider overload gets its own budget. Sharing one would let a burst of 529s
 # spend the usage-limit budget and escalate to STOP for a reason that was never
 # a usage limit.
-overload_wait_budget="${GLUERUN_OVERLOAD_WAIT_BUDGET:-3600}"
+overload_wait_budget="${SINGULAR_OVERLOAD_WAIT_BUDGET:-3600}"
 overload_waited_total=0
 once="no"
 detach="no"
@@ -46,13 +46,13 @@ for arg in "$@"; do
   esac
 done
 
-gluerun_ensure_state_dirs
-gluerun_require_target_branch
+singular_ensure_state_dirs
+singular_require_target_branch
 
-pidfile="$GLUERUN_STATE_DIR/autonomate.pid"
+pidfile="$SINGULAR_STATE_DIR/autonomate.pid"
 # The process identity lives BESIDE the pidfile, not inside it. ops.sh, doctor
 # and the console all read the pidfile with `cat` and expect a bare number;
-# adding a second line to it broke `gluerun auto --detach` outright and would
+# adding a second line to it broke `singular auto --detach` outright and would
 # have broken five more readers quietly.
 pididfile="$pidfile.identity"
 pid_start_of() { ps -p "$1" -o lstart= 2>/dev/null | sed 's/^ *//;s/ *$//'; }
@@ -79,20 +79,20 @@ autonomate_holder_alive() {
 # --detach (0.5.0): supported daemonized launch. The field run hand-rolled
 # python setsid double-forks 6+ times because plain `nohup ... &` dies on
 # shell handoff and launchd is TCC-blocked on user dirs. The child re-execs
-# this script with GLUERUN_AUTONOMATE_DETACHED=1; the parent waits for the
+# this script with SINGULAR_AUTONOMATE_DETACHED=1; the parent waits for the
 # pidfile to prove liveness, prints it, and exits.
-if [[ "$detach" == "yes" && "${GLUERUN_AUTONOMATE_DETACHED:-}" != "1" ]]; then
+if [[ "$detach" == "yes" && "${SINGULAR_AUTONOMATE_DETACHED:-}" != "1" ]]; then
   # Identity-aware, like the claim below. This check used to be `kill -0` alone,
-  # so a recycled pid made `gluerun auto --detach` a permanent no-op.
+  # so a recycled pid made `singular auto --detach` a permanent no-op.
   if autonomate_holder_alive; then
     echo "autonomate already running (pid $(sed -n '1p' "$pidfile" 2>/dev/null))"
     exit 0
   fi
-  detach_log="$GLUERUN_STATE_DIR/autonomate.log"
+  detach_log="$SINGULAR_STATE_DIR/autonomate.log"
   detach_args=()
   [[ "$once" == "yes" ]] && detach_args+=("--once")
-  GLUERUN_AUTONOMATE_DETACHED=1 python3 - "$BASH_SOURCE" "$detach_log" \
-    "$(gluerun_bash_bin)" ${detach_args[@]+"${detach_args[@]}"} <<'PY'
+  SINGULAR_AUTONOMATE_DETACHED=1 python3 - "$BASH_SOURCE" "$detach_log" \
+    "$(singular_bash_bin)" ${detach_args[@]+"${detach_args[@]}"} <<'PY'
 import os, sys
 script, log, bash_bin = sys.argv[1:4]
 extra = sys.argv[4:]
@@ -128,7 +128,7 @@ fi
 # drops STOP while the previous loop is still exiting, and `auto` follows within
 # a second.
 #
-# mkdir is the atomic primitive (the same one gluerun_git_lock_acquire uses):
+# mkdir is the atomic primitive (the same one singular_git_lock_acquire uses):
 # exactly one process can create the directory, so exactly one can claim the
 # pidfile. Liveness is decided by autonomate_holder_alive above, which is
 # pid-reuse-safe.
@@ -183,65 +183,65 @@ trap cleanup EXIT
 # exactly that state in the field. Refusing to start is the only honest answer —
 # the alternative is hours of unsupervised runs whose failure mode is silent
 # corruption. Ordering matters: the claim already succeeded, so the EXIT trap
-# above releases the pidfile on the way out and a later `gluerun auto` is not
+# above releases the pidfile on the way out and a later `singular auto` is not
 # locked out by this refusal.
 #
 # Attended paths (ask/supervise/one-shot runners) are deliberately NOT gated: an
 # operator watching a single run can see and clean up a survivor.
 #
-# GLUERUN_ALLOW_DEGRADED_KILL=1 is the documented override for operators who
+# SINGULAR_ALLOW_DEGRADED_KILL=1 is the documented override for operators who
 # accept the risk; it downgrades the refusal to a logged warning.
-preflight_state="$(gluerun_process_control_preflight)"
+preflight_state="$(singular_process_control_preflight)"
 if [[ "$preflight_state" == degraded:* ]]; then
   preflight_reason="${preflight_state#degraded:}"
-  if [[ "${GLUERUN_ALLOW_DEGRADED_KILL:-0}" == "1" ]]; then
-    echo "[autonomate] WARNING: process-group cleanup is unverified ($preflight_reason); continuing because GLUERUN_ALLOW_DEGRADED_KILL=1. Timed-out agents may leave surviving descendants." >&2
-    gluerun_append_event "autonomate.preflight_degraded_override" \
-      "process-group cleanup unverified; continuing under GLUERUN_ALLOW_DEGRADED_KILL" \
+  if [[ "${SINGULAR_ALLOW_DEGRADED_KILL:-0}" == "1" ]]; then
+    echo "[autonomate] WARNING: process-group cleanup is unverified ($preflight_reason); continuing because SINGULAR_ALLOW_DEGRADED_KILL=1. Timed-out agents may leave surviving descendants." >&2
+    singular_append_event "autonomate.preflight_degraded_override" \
+      "process-group cleanup unverified; continuing under SINGULAR_ALLOW_DEGRADED_KILL" \
       "{\"reason\":\"$preflight_reason\"}"
   else
-    gluerun_append_event "autonomate.preflight_unsafe" \
+    singular_append_event "autonomate.preflight_unsafe" \
       "process-group cleanup unverified; refusing unattended actuation" \
       "{\"reason\":\"$preflight_reason\"}"
     {
       echo "[autonomate] REFUSING to start: this environment cannot prove it can terminate a process group ($preflight_reason)."
       echo "[autonomate] A timed-out agent's descendants could survive the kill and keep writing to a worktree."
-      echo "[autonomate] Run 'gluerun doctor' and read the runtime.process-group-kill check, or set GLUERUN_ALLOW_DEGRADED_KILL=1 to accept the risk."
+      echo "[autonomate] Run 'singular doctor' and read the runtime.process-group-kill check, or set SINGULAR_ALLOW_DEGRADED_KILL=1 to accept the risk."
     } >&2
     exit 2
   fi
 fi
 
 start_ts="$(date +%s)"
-max_hours_int="${GLUERUN_MAX_HOURS%%.*}"; [[ "$max_hours_int" =~ ^[0-9]+$ ]] || max_hours_int=20
+max_hours_int="${SINGULAR_MAX_HOURS%%.*}"; [[ "$max_hours_int" =~ ^[0-9]+$ ]] || max_hours_int=20
 deadline=$(( start_ts + max_hours_int * 3600 ))
-gluerun_breaker_reset
+singular_breaker_reset
 iteration=0
 
-gluerun_append_event "autonomate.started" "autonomous loop started" \
-  "{\"pid\":$$,\"maxHours\":\"$GLUERUN_MAX_HOURS\",\"autoIntegrate\":\"$GLUERUN_AUTO_INTEGRATE\",\"push\":\"$GLUERUN_PUSH\"}"
+singular_append_event "autonomate.started" "autonomous loop started" \
+  "{\"pid\":$$,\"maxHours\":\"$SINGULAR_MAX_HOURS\",\"autoIntegrate\":\"$SINGULAR_AUTO_INTEGRATE\",\"push\":\"$SINGULAR_PUSH\"}"
 
 while true; do
   iteration=$((iteration + 1))
   now="$(date +%s)"
 
-  if gluerun_stop_requested; then
+  if singular_stop_requested; then
     echo "[autonomate] STOP sentinel; halting after $((iteration-1)) iteration(s)"
-    gluerun_write_status "$iteration" "stopped (STOP sentinel)"
-    gluerun_append_event "autonomate.stopped" "stopped by STOP sentinel" "{\"iteration\":$iteration}"
+    singular_write_status "$iteration" "stopped (STOP sentinel)"
+    singular_append_event "autonomate.stopped" "stopped by STOP sentinel" "{\"iteration\":$iteration}"
     break
   fi
   if [[ "$now" -ge "$deadline" ]]; then
-    echo "[autonomate] wall-clock budget reached (${GLUERUN_MAX_HOURS}h); halting"
-    gluerun_write_status "$iteration" "stopped (time-box ${GLUERUN_MAX_HOURS}h)"
-    gluerun_append_event "autonomate.stopped" "stopped by time-box" "{\"iteration\":$iteration}"
+    echo "[autonomate] wall-clock budget reached (${SINGULAR_MAX_HOURS}h); halting"
+    singular_write_status "$iteration" "stopped (time-box ${SINGULAR_MAX_HOURS}h)"
+    singular_append_event "autonomate.stopped" "stopped by time-box" "{\"iteration\":$iteration}"
     break
   fi
-  breaker="$(gluerun_breaker_count)"
-  if [[ "$breaker" -ge "$GLUERUN_MAX_CONSEC_FAILS" ]]; then
-    echo "[autonomate] circuit breaker open ($breaker/$GLUERUN_MAX_CONSEC_FAILS); halting"
-    gluerun_write_status "$iteration" "stopped (circuit breaker $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
-    gluerun_append_event "autonomate.stopped" "stopped by circuit breaker" "{\"iteration\":$iteration,\"consecFails\":$breaker}"
+  breaker="$(singular_breaker_count)"
+  if [[ "$breaker" -ge "$SINGULAR_MAX_CONSEC_FAILS" ]]; then
+    echo "[autonomate] circuit breaker open ($breaker/$SINGULAR_MAX_CONSEC_FAILS); halting"
+    singular_write_status "$iteration" "stopped (circuit breaker $breaker/$SINGULAR_MAX_CONSEC_FAILS)"
+    singular_append_event "autonomate.stopped" "stopped by circuit breaker" "{\"iteration\":$iteration,\"consecFails\":$breaker}"
     break
   fi
 
@@ -260,7 +260,7 @@ while true; do
   # wait budget escalates an unbounded window to STOP rather than idling forever.
   # With no active backoff this block is a no-op.
   planner_backoff_at_cycle_start=0
-  bo_json="$(gluerun_planner_backoff_active_json 2>/dev/null || true)"
+  bo_json="$(singular_planner_backoff_active_json 2>/dev/null || true)"
   if [[ -n "$bo_json" ]]; then
     planner_backoff_at_cycle_start=1
     bo_class=""; bo_remaining=0
@@ -286,35 +286,35 @@ PY
       fi
       if [[ "$window_waited" -ge "$window_budget" ]]; then
         echo "[autonomate] $window_label wait budget exhausted (${window_waited}s >= ${window_budget}s); setting STOP"
-        : >"$GLUERUN_STOP_FILE"
-        gluerun_write_status "$iteration" "stopped ($window_label wait budget ${window_budget}s exhausted)"
-        gluerun_append_event "autonomate.stopped" "stopped: $window_label wait budget exhausted" "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"waitedTotal\":$window_waited}"
+        : >"$SINGULAR_STOP_FILE"
+        singular_write_status "$iteration" "stopped ($window_label wait budget ${window_budget}s exhausted)"
+        singular_append_event "autonomate.stopped" "stopped: $window_label wait budget exhausted" "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"waitedTotal\":$window_waited}"
         break
       fi
       nap="$bo_remaining"; [[ "$nap" -gt "$quota_sleep_cap" ]] && nap="$quota_sleep_cap"
       echo "[autonomate] planner $window_label window open (${bo_remaining}s left); sleeping up to ${nap}s WITHOUT breaker increment (waited ${window_waited}s)"
-      gluerun_append_event "autonomate.quota_wait" "sleeping through planner $window_label window" "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"remainingSec\":$bo_remaining,\"napSec\":$nap,\"waitedTotal\":$window_waited}"
-      gluerun_write_status "$iteration" "sleeping through $window_label window (${bo_remaining}s left, waited ${window_waited}s)"
+      singular_append_event "autonomate.quota_wait" "sleeping through planner $window_label window" "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"remainingSec\":$bo_remaining,\"napSec\":$nap,\"waitedTotal\":$window_waited}"
+      singular_write_status "$iteration" "sleeping through $window_label window (${bo_remaining}s left, waited ${window_waited}s)"
       [[ "$once" == "yes" ]] && { echo "[autonomate] --once: $window_label wait detected, single iteration done"; break; }
       # Interruptible (0.5.0): STOP mid-nap ends the loop within
-      # GLUERUN_SLEEP_POLL_SEC; `gluerun wake` / clear-backoff end the nap
+      # SINGULAR_SLEEP_POLL_SEC; `singular wake` / clear-backoff end the nap
       # early. Only actually-slept seconds count toward the window's budget.
       nap_started=$SECONDS
       nap_rc=0
-      gluerun_interruptible_sleep "$nap" 1 || nap_rc=$?
+      singular_interruptible_sleep "$nap" 1 || nap_rc=$?
       if [[ "$bo_class" == "provider-overloaded" ]]; then
         overload_waited_total=$((overload_waited_total + SECONDS - nap_started))
       else
         quota_waited_total=$((quota_waited_total + SECONDS - nap_started))
       fi
       [[ "$nap_rc" -eq 2 ]] && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
-      gluerun_stop_requested && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
+      singular_stop_requested && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
       iteration=$((iteration - 1))
       continue
     fi
   fi
 
-  echo "[autonomate] iteration $iteration (elapsed $(( (now-start_ts)/60 ))m, breaker $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
+  echo "[autonomate] iteration $iteration (elapsed $(( (now-start_ts)/60 ))m, breaker $breaker/$SINGULAR_MAX_CONSEC_FAILS)"
   cycle_out="$("$reconcile_script" --actuate 2>&1)" || true
   printf '%s\n' "$cycle_out" | sed 's/^/  /'
 
@@ -330,7 +330,7 @@ PY
   for v in dispatched integrated faild faili planner_failures planner_backoff_deferred l1_import_rejections reaped_ok reaped_failures workers_running promoted; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
   if [[ "$planner_backoff_at_cycle_start" -eq 1 && "$planner_failures" -gt 0 ]]; then
     echo "  [autonomate] active planner backoff made planner refusal neutral; ignoring $planner_failures planner failure(s) for breaker accounting"
-    gluerun_append_event "autonomate.planner_backoff_neutral" \
+    singular_append_event "autonomate.planner_backoff_neutral" \
       "active planner backoff suppressed repeated planner failure accounting" \
       "{\"iteration\":$iteration,\"suppressedPlannerFailures\":$planner_failures}"
     planner_failures=0
@@ -341,11 +341,11 @@ PY
   # Reconcile's frontier selector already performs the authoritative duplicate,
   # dependency, lease, and scope checks. This post-cycle value is telemetry only;
   # avoid the legacy per-task duplicate scan on large campaigns.
-  ready_now="$(gluerun_list_status_ready_tasks | wc -l | tr -d ' ')"
-  active_now="$(gluerun_active_lease_count)"
+  ready_now="$(singular_list_status_ready_tasks | wc -l | tr -d ' ')"
+  active_now="$(singular_active_lease_count)"
 
   progress="no"
-  if [[ "${GLUERUN_DETACHED_DISPATCH:-0}" == "1" ]]; then
+  if [[ "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" ]]; then
     # Detached: a dispatch returns immediately and proves nothing, so it is NOT
     # progress (otherwise every failure cycle would re-dispatch the freed slot
     # and reset the breaker, which could then never trip). Progress is an
@@ -357,10 +357,10 @@ PY
   fi
 
   if [[ "$progress" == "yes" ]]; then
-    gluerun_breaker_reset
+    singular_breaker_reset
     # Additive-increase half of the provider-pressure controller (opt-in). A
     # cycle that made progress counts as one quiet interval; after
-    # GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET of them the ceiling rises by
+    # SINGULAR_PROVIDER_PRESSURE_RECOVER_QUIET of them the ceiling rises by
     # exactly one slot. "Quiet" is approximate on purpose: recording a FRESH
     # observation resets the counter to zero, but generate-tasks.sh observes
     # mid-cycle while this ticks at end-of-cycle, so a cycle that both hit a 429
@@ -368,12 +368,12 @@ PY
     # recovering capacity, which the cluster threshold then re-takes if the
     # congestion is real. No-op unless the selected provider is actually
     # throttled, so a healthy loop writes no state.
-    gluerun_provider_pressure_success >/dev/null 2>&1 || true
-  elif [[ "$faild" -gt 0 || "$faili" -gt 0 || "$planner_failures" -gt 0 || "$l1_import_rejections" -gt 0 || ( "${GLUERUN_DETACHED_DISPATCH:-0}" == "1" && "$reaped_failures" -gt 0 ) ]]; then
+    singular_provider_pressure_success >/dev/null 2>&1 || true
+  elif [[ "$faild" -gt 0 || "$faili" -gt 0 || "$planner_failures" -gt 0 || "$l1_import_rejections" -gt 0 || ( "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" && "$reaped_failures" -gt 0 ) ]]; then
     # C2 (0.5.0): a usage-limit / 403 / overload window can poison the decider,
     # auditor, L1 fanout, or dispatch paths, producing cycle failures with NO
     # active quota backoff. When a validated runner-result/provider-error pair
-    # exists in this cycle (gluerun_cycle_limit_window_evidence_json), ARM a
+    # exists in this cycle (singular_cycle_limit_window_evidence_json), ARM a
     # quota backoff so the next iteration sleeps
     # through, and do NOT increment the breaker. Import rejections are
     # deterministic validation outcomes (duplicate candidates, bad batches) and
@@ -381,15 +381,15 @@ PY
     # (0.4.0 counted them, arming false 30-minute backoffs from healthy cycles)
     # though they still count toward the breaker branch. FAIL-CLOSED: no
     # evidence -> the breaker trips, so genuine code failures are unaffected.
-    # GLUERUN_LIMIT_SLEEPTHROUGH=0 (or legacy GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH=1,
+    # SINGULAR_LIMIT_SLEEPTHROUGH=0 (or legacy SINGULAR_DISABLE_LIMIT_SLEEPTHROUGH=1,
     # deprecated) forces the always-trip behavior.
     limit_eligible=$((faild + faili + planner_failures))
-    [[ "${GLUERUN_DETACHED_DISPATCH:-0}" == "1" ]] && limit_eligible=$((limit_eligible + reaped_failures))
-    sleepthrough="${GLUERUN_LIMIT_SLEEPTHROUGH:-1}"
-    [[ "${GLUERUN_DISABLE_LIMIT_SLEEPTHROUGH:-0}" == "1" ]] && sleepthrough=0
+    [[ "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" ]] && limit_eligible=$((limit_eligible + reaped_failures))
+    sleepthrough="${SINGULAR_LIMIT_SLEEPTHROUGH:-1}"
+    [[ "${SINGULAR_DISABLE_LIMIT_SLEEPTHROUGH:-0}" == "1" ]] && sleepthrough=0
     limit_evidence=""
     if [[ "$sleepthrough" == "1" && "$limit_eligible" -gt 0 ]]; then
-      limit_evidence="$(gluerun_cycle_limit_window_evidence_json 2>/dev/null || true)"
+      limit_evidence="$(singular_cycle_limit_window_evidence_json 2>/dev/null || true)"
     fi
     ev_resultref=""
     ev_class=""
@@ -417,16 +417,16 @@ print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
     # runner reverts); what we decline to do is buy breaker immunity with a
     # window that cannot stop us.
     if [[ -n "$ev_resultref" && -n "$ev_class" ]] \
-      && gluerun_planner_backoff_set "$ev_class" "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_resultref" \
-      && gluerun_planner_backoff_active_json >/dev/null 2>&1; then
-      echo "  [autonomate] no progress + structured provider limit evidence ($ev_resultref); armed $ev_class backoff, NO breaker increment (breaker stays $breaker/$GLUERUN_MAX_CONSEC_FAILS)"
-      gluerun_append_event "autonomate.limit_window_detected" "provider window at breaker chokepoint; armed $ev_class backoff instead of tripping" "{\"iteration\":$iteration,\"failureClass\":\"$ev_class\",\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections,\"evidence\":$limit_evidence}"
+      && singular_planner_backoff_set "$ev_class" "RUN-limit-chokepoint" "breaker-chokepoint" "$ev_resultref" \
+      && singular_planner_backoff_active_json >/dev/null 2>&1; then
+      echo "  [autonomate] no progress + structured provider limit evidence ($ev_resultref); armed $ev_class backoff, NO breaker increment (breaker stays $breaker/$SINGULAR_MAX_CONSEC_FAILS)"
+      singular_append_event "autonomate.limit_window_detected" "provider window at breaker chokepoint; armed $ev_class backoff instead of tripping" "{\"iteration\":$iteration,\"failureClass\":\"$ev_class\",\"breaker\":$breaker,\"failD\":$faild,\"failI\":$faili,\"plannerFail\":$planner_failures,\"importReject\":$l1_import_rejections,\"evidence\":$limit_evidence}"
     else
-      nb="$(gluerun_breaker_trip)"; echo "  [autonomate] no progress + failure; breaker -> $nb"
+      nb="$(singular_breaker_trip)"; echo "  [autonomate] no progress + failure; breaker -> $nb"
     fi
   fi
 
-  gluerun_write_status "$iteration" "running (disp=$dispatched int=$integrated failD=$faild failI=$faili planFail=$planner_failures planBackoff=$planner_backoff_deferred importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
+  singular_write_status "$iteration" "running (disp=$dispatched int=$integrated failD=$faild failI=$faili planFail=$planner_failures planBackoff=$planner_backoff_deferred importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
 
   # Periodic supervisor briefing (0.10.0). BYTE-INERT when the interval knob is
   # unset/0: a single string test skips the whole block, so no supervisor/ dir,
@@ -434,24 +434,24 @@ print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
   # interval, never during a quota/planner backoff, and stamp BEFORE spawning so
   # an immediate next cycle cannot double-spawn. The briefing is a detached,
   # log-redirected background readonly session — it never blocks the loop.
-  sup_int="${GLUERUN_SUPERVISOR_INTERVAL_MIN:-0}"
+  sup_int="${SINGULAR_SUPERVISOR_INTERVAL_MIN:-0}"
   if [[ "$sup_int" =~ ^[0-9]+$ && "$sup_int" -gt 0 && -z "$bo_json" ]]; then
-    sup_dir="$GLUERUN_STATE_DIR/supervisor"
+    sup_dir="$SINGULAR_STATE_DIR/supervisor"
     sup_last=0
     [[ -f "$sup_dir/last-run" ]] && sup_last="$(cat "$sup_dir/last-run" 2>/dev/null || echo 0)"
     [[ "$sup_last" =~ ^[0-9]+$ ]] || sup_last=0
     if (( now - sup_last >= sup_int * 60 )); then
       mkdir -p "$sup_dir"
       printf '%s\n' "$now" >"$sup_dir/last-run"
-      ( "$(gluerun_bash_bin)" "$SCRIPT_DIR/supervise.sh" --once >>"$sup_dir/spawn.log" 2>&1 & ) || true
+      ( "$(singular_bash_bin)" "$SCRIPT_DIR/supervise.sh" --once >>"$sup_dir/spawn.log" 2>&1 & ) || true
     fi
   fi
 
   # DAG exhausted: planner says all areas complete and nothing is left to do.
   if [[ "$gen_complete" == "yes" && "$ready_now" -eq 0 && "$active_now" -eq 0 ]]; then
     echo "[autonomate] DAG exhausted (all areas complete); halting"
-    gluerun_write_status "$iteration" "stopped (DAG complete)"
-    gluerun_append_event "autonomate.stopped" "stopped: DAG complete" "{\"iteration\":$iteration}"
+    singular_write_status "$iteration" "stopped (DAG complete)"
+    singular_append_event "autonomate.stopped" "stopped: DAG complete" "{\"iteration\":$iteration}"
     break
   fi
 
@@ -460,8 +460,8 @@ print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
   # top, so a STOP written during the sleep waited out the full nap); WAKE
   # ends it early without killing sleep children (which killed the whole loop
   # in the field).
-  gluerun_interruptible_sleep "$sleep_secs" || true
+  singular_interruptible_sleep "$sleep_secs" || true
 done
 
-gluerun_append_event "autonomate.exited" "autonomous loop exited" "{\"iterations\":$iteration}"
-echo "[autonomate] done after $iteration iteration(s). STATUS: $GLUERUN_STATUS_FILE"
+singular_append_event "autonomate.exited" "autonomous loop exited" "{\"iterations\":$iteration}"
+echo "[autonomate] done after $iteration iteration(s). STATUS: $SINGULAR_STATUS_FILE"

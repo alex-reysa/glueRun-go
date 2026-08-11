@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0076",
   "runId": "RUN-20260712T154843Z-36590",
   "branch": "agent/graph/TASK-0076-graph-projection-mappers",
@@ -10,7 +10,7 @@
     "worker-evidence/red.log (fail-closed RED: 'impl not present yet: engine/ctx-graph-project.sh (strict-test-first RED)', matching test line 34)",
     "worker-evidence/green.log (all assertions passed)",
     "worker-evidence/regression.log (project test + engine-clean both pass)",
-    "engine/ctx-graph-project.sh (3 functions only: gluerun_graph_identity, _project_attempts, _project_gate_results; no top-level calls; pure stdout; OFF-parity)",
+    "engine/ctx-graph-project.sh (3 functions only: singular_graph_identity, _project_attempts, _project_gate_results; no top-level calls; pure stdout; OFF-parity)",
     "tests/test-ctx-graph-project.sh (291-line strict-test-first suite: RED guard, OFF-parity snapshot, schema validation, identity determinism/type, cross-mapper id agreement, per-row node/edge counts, evidence invariance, idempotence, no-writes)",
     "engine/ctx-graph.sh (integrated emitters; evidenceClass fail-closed maps gate-result/commit->authoritative else claim)",
     "schemas/context-graph.v0.schema.json (node/edge oneOf, evidenceClass enum authoritative|claim, provenance required)",
@@ -34,7 +34,7 @@
     "Required gate command ('bash tests/test-ctx-graph-project.sh && bash tests/test-engine-clean.sh') reproduced at exit 0; gate-check.json agrees.",
     "All 8 acceptance criteria are exercised and passing: identity determinism/type-inclusion, cross-mapper node-id agreement (implements/verifies edge 'to' == node_id(identity('task',taskId))), attempts=1 claim node+1 implements edge per row, gate-result=authoritative for every status with passed->verifies / failed->invalidates / proposed|blocked->node-only, evidence invariance (attempts stream has zero authoritative lines), idempotence (byte-identical reruns), OFF-parity/no-writes (cwd snapshot before/after source and per-mapper), and engine-clean stays green.",
     "Schema/provenance consistency verified: emitted lines validate against the shipped schemas/context-graph.v0.schema.json; evidenceClass is fail-closed via the integrated emitter (gate-result->authoritative, attempt->claim); provenance sourcePath+contentHash present on every line.",
-    "Foundation compliance: functions-only, uncalled by any engine path, no GLUERUN_CTX_GRAPH gating needed for OFF-parity; gluerun_graph_* names are the engine's own allowed brand and do not trip test-engine-clean.sh.",
+    "Foundation compliance: functions-only, uncalled by any engine path, no SINGULAR_CTX_GRAPH gating needed for OFF-parity; singular_graph_* names are the engine's own allowed brand and do not trip test-engine-clean.sh.",
     "NON-BLOCKING (documented in packet.nextAction): the full tests/run.sh sweep was not completed due to host disk at 100% (ENOSPC); I independently confirmed only ~202Mi free. This is an environment condition, not a code defect, and does not affect the two required gates, which both pass. Recommend rerunning the full suite once disk is reclaimed."
   ],
   "requiredFixes": [],

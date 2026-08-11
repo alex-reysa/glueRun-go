@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0020",
   "runId": "RUN-20260711T073419Z-31883",
   "branch": "agent/plancritic/TASK-0020-plan-revise-prompt",
@@ -21,7 +21,7 @@
     "git diff --name-status 132f7db..1e4c18c",
     "git show --stat 1e4c18c",
     "bash tests/test-ctx-plan-revise-prompt.sh (exit 0, independent GREEN)",
-    "grep -rn gluerun_plan_revise_prompt engine tests docs (no external callers)",
+    "grep -rn singular_plan_revise_prompt engine tests docs (no external callers)",
     "grep -n 'ctx-' engine/lib.sh (verified ctx-loader auto-source block)",
     "source engine/lib.sh (function loaded, no load-time side effects)",
     "python3 schema-shape check on schemas/plan-critique.v0.schema.json",
@@ -31,7 +31,7 @@
     "File scope clean: only the two owned files changed, both added (A/A); no forbidden file outside owned scope touched.",
     "Test-first evidence genuine: engine and test added in the same commit, so the engine file was absent at baseRef; red.log's 'engine not present yet' failure is authentic RED, green.log and my independent re-run are GREEN.",
     "Gate and regression verified independently: gate-check.json exit 0 and my own tests/run.sh run reports 41 passed, 0 failed.",
-    "Schema/provenance consistency confirmed: assembler id pattern ^f-[0-9a-f]{12}$, fields id/severity/claim/evidence/suggestedChange, and schema const gluerun.orchestration.plan-critique.v0 all match schemas/plan-critique.v0.schema.json.",
+    "Schema/provenance consistency confirmed: assembler id pattern ^f-[0-9a-f]{12}$, fields id/severity/claim/evidence/suggestedChange, and schema const singular.orchestration.plan-critique.v0 all match schemas/plan-critique.v0.schema.json.",
     "Present-but-uncalled verified: no engine path references the new function; sourcing lib.sh defines it with no side effects (function-only file, no top-level statements), preserving byte-identical engine behavior \u2014 mirrors ctx-plan-critic-context.sh.",
     "No hidden scope expansion: assembler is pure/read-only, writes only <out_file>, appends no events; fail-safe paths degrade to marked-empty sections without fabricating findings or candidates.",
     "Follow-up slices (resume-vs-fresh re-invocation, rc-86 fresh-fallback record, per-finding disposition events, generate-tasks.sh/l1-plan-node.sh driver hooks, test-ctx-plan-revision.sh full-walk) are explicitly declared out-of-scope in the header; nextAction correctly notes the node gate remains BLOCKED pending them \u2014 a documented, non-blocking deferral for this slice."

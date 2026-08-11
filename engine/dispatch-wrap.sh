@@ -2,9 +2,9 @@
 set -uo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "dispatch-wrap.sh requires bash >= 4" >&2; exit 1
@@ -25,18 +25,18 @@ driver="$2"
 
 rc=0
 "$driver" "$task_id" || rc=$?
-gluerun_dispatch_exit_write "$task_id" "$rc"
-lease_status="$(gluerun_lease_status "$task_id" 2>/dev/null || true)"
+singular_dispatch_exit_write "$task_id" "$rc"
+lease_status="$(singular_lease_status "$task_id" 2>/dev/null || true)"
 if [[ "$lease_status" == "planned" ]]; then
   # The driver never took lease ownership (it overwrites the pre-lease to
   # 'running' at startup): preflight refusal, STOP-frozen no-op exit 0, or a
   # crash before the lease write. Clear the reconcile pre-lease so the task
   # stops holding a concurrency slot.
-  rm -f "$(gluerun_lease_path "$task_id")"
+  rm -f "$(singular_lease_path "$task_id")"
 elif [[ "$rc" -ne 0 && "$lease_status" == "running" ]]; then
   # Nonzero exit with the lease still 'running' means the driver died without
   # its EXIT trap (e.g. SIGKILL); mark it failed so the slot frees now instead
   # of after the stale-lease window.
-  gluerun_lease_set_status "$task_id" "failed" 2>/dev/null || true
+  singular_lease_set_status "$task_id" "failed" 2>/dev/null || true
 fi
 exit "$rc"

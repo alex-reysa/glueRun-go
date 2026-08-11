@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0080",
   "runId": "RUN-20260712T165929Z-17064",
   "branch": "agent/graph/TASK-0080-graph-project-records",
@@ -12,7 +12,7 @@
     "worker-evidence/regression.log: test + engine-clean both pass",
     "scope-check.log: 2 changed paths, all allowed; secret-scan.log: clean; module-packet-guard.log: empty (no violations); worker-packet-validation.log: ok",
     "git diff --name-status 1752f2d..b6ea016: A engine/ctx-graph-project-records.sh, A tests/test-ctx-graph-project-records.sh (only owned files, both additions)",
-    "engine/ctx-graph-project-records.sh (143 lines): three mappers gluerun_graph_project_task/_commits/_paired_audits",
+    "engine/ctx-graph-project-records.sh (143 lines): three mappers singular_graph_project_task/_commits/_paired_audits",
     "tests/test-ctx-graph-project-records.sh (303 lines): RED guard + schema validation + node counts + id agreement + dupe-collapse + idempotence + OFF-parity + no-writes + evidence-invariance",
     "dependency primitives engine/ctx-graph.sh (emit_node fail-closed evidenceClass), ctx-graph-project.sh (identity convention), ctx-graph-corpus.sh (canonicalize), schemas/context-graph.v0.schema.json (node enum includes task/commit/audit)",
     "engine/lib.sh:3851-3857 ctx-loader globs engine/ctx-*.sh (auto-sources new file without a forbidden lib.sh edit)",
@@ -29,7 +29,7 @@
   "findings": [
     "Scope compliant: only the two owned files were added (git name-status confirms A/A); no forbidden file modified; scope-check.log agrees (2 paths, all allowed).",
     "Test-first evidence present and consistent: RED via the test's fail-closed impl-presence guard (test line 42) matching red.log verbatim; GREEN in green.log; independently re-ran GREEN (exit 0) and engine-clean regression (exit 0).",
-    "Schema/type/lifecycle/provenance consistent: node types task/commit/audit are all in schema enum; evidenceClass is fail-closed inside gluerun_graph_emit_node (commit/gate-result->authoritative, else claim) so no caller can mint authoritative for task/audit; provenance sourcePath+contentHash emitted; audit attributes are a valid object.",
+    "Schema/type/lifecycle/provenance consistent: node types task/commit/audit are all in schema enum; evidenceClass is fail-closed inside singular_graph_emit_node (commit/gate-result->authoritative, else claim) so no caller can mint authoritative for task/audit; provenance sourcePath+contentHash emitted; audit attributes are a valid object.",
     "Evidence-invariance verified: commit is authoritative solely as a host-verified fact; task and audit are claim; test asserts zero authoritative nodes from task/audit mappers.",
     "Determinism/idempotence and canonicalize-collapse verified by both the mapper code (sha256 + sort_keys) and dedicated test assertions (byte-identical re-runs; two events sharing a headSha collapse to one node).",
     "No hidden scope expansion: mappers mint nodes only, deferring cross-record edges per objective; the 'auto-sourced by lib.sh ctx-loader' claim is satisfied by the existing engine/ctx-*.sh glob (lib.sh:3857) so no forbidden lib.sh edit was needed.",

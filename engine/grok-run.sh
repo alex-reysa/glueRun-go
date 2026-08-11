@@ -4,8 +4,8 @@ set -euo pipefail
 # grok-run.sh — Grok Build drop-in replacement for codex-run.sh / claude-run.sh.
 #
 # Same CLI surface and output contract so orchestration can dispatch the `grok`
-# CLI by setting GLUERUN_RUNNER to this script. Parses the headless JSON envelope
-# (.text field) into --output-last-message for gluerun_extract_json.
+# CLI by setting SINGULAR_RUNNER to this script. Parses the headless JSON envelope
+# (.text field) into --output-last-message for singular_extract_json.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
@@ -18,9 +18,9 @@ output_schema=""
 output_last_message=""
 capture_packet="auto"
 allow_prefixes=()
-runner_role="${GLUERUN_RUNNER_ROLE:-unknown}"
-capability_profile="${GLUERUN_RUNNER_CAPABILITY_PROFILE:-default}"
-result_file="${GLUERUN_RUNNER_RESULT_FILE:-}"
+runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
+capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
+result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
 describe_contract="no"
 
 while [[ $# -gt 0 ]]; do
@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$describe_contract" == "yes" ]]; then
-  gluerun_runner_describe_contract grok
+  singular_runner_describe_contract grok
   exit 0
 fi
 
@@ -50,18 +50,18 @@ if [[ -z "$run_id" ]]; then
   run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 fi
 if [[ -z "$result_file" ]]; then
-  result_file="$(gluerun_runner_default_result_file "$run_id")"
+  result_file="$(singular_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
 ro_journal=""
-gluerun_grok_result_on_exit() {
+singular_grok_result_on_exit() {
   local rc=$?
   trap - EXIT
   # An interrupted run leaves the provider CLI and its descendants alive; they
   # would keep writing to the worktree while the guard restores it, and the
   # restore would lose the race. Kill first, then restore.
   if [[ -n "${grok_pid:-}" ]]; then
-    gluerun_kill_tree "$grok_pid" 0 session 2>/dev/null || true
+    singular_kill_tree "$grok_pid" 0 session 2>/dev/null || true
     wait "$grok_pid" 2>/dev/null || true
     grok_pid=""
   fi
@@ -69,19 +69,19 @@ gluerun_grok_result_on_exit() {
   # process is the worse outcome. ask/supervise/decide background this runner
   # and kill it on timeout; the old guard was straight-line code after the run,
   # so on every one of those paths it simply never executed.
-  gluerun_readonly_guard_restore "${ro_journal:-}" || true
+  singular_readonly_guard_restore "${ro_journal:-}" || true
   ro_journal=""
   if [[ "$runner_result_written" != "yes" ]]; then
-    gluerun_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
+    singular_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
   fi
   [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
   exit "$rc"
 }
-trap gluerun_grok_result_on_exit EXIT
+trap singular_grok_result_on_exit EXIT
 # Exiting from a signal handler runs the EXIT trap, so these buy the guard a
 # chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
-# itself remains uncoverable; `gluerun_readonly_guard_sweep` is the answer there.
+# itself remains uncoverable; `singular_readonly_guard_sweep` is the answer there.
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -91,7 +91,7 @@ if [[ -z "$worktree" ]]; then
   exit 2
 fi
 
-gluerun_require_target_branch
+singular_require_target_branch
 
 grok_bin="$(command -v grok 2>/dev/null || true)"
 
@@ -111,16 +111,16 @@ if [[ -z "$prompt_file" ]]; then
 fi
 
 profile_rc=0
-gluerun_runner_capability_prepare grok "$runner_role" "$capability_profile" \
+singular_runner_capability_prepare grok "$runner_role" "$capability_profile" \
   "$worktree" "$grok_bin" || profile_rc=$?
-capability_profile="$GLUERUN_RESOLVED_CAPABILITY_PROFILE"
+capability_profile="$SINGULAR_RESOLVED_CAPABILITY_PROFILE"
 profile_provider_args=()
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
-  profile_provider_args=("${GLUERUN_RESOLVED_PROVIDER_ARGS[@]}")
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  profile_provider_args=("${SINGULAR_RESOLVED_PROVIDER_ARGS[@]}")
 fi
 [[ "$profile_rc" -eq 0 ]] || exit "$profile_rc"
-gluerun_runner_reject_strict_legacy_extra_args \
-  grok GLUERUN_GROK_EXTRA_ARGS "${GLUERUN_GROK_EXTRA_ARGS:-}" || exit $?
+singular_runner_reject_strict_legacy_extra_args \
+  grok SINGULAR_GROK_EXTRA_ARGS "${SINGULAR_GROK_EXTRA_ARGS:-}" || exit $?
 [[ -n "$grok_bin" ]] || { echo "grok CLI not found on PATH" >&2; exit 127; }
 
 if [[ "$capture_packet" == "auto" && "$level" == "l2" ]]; then
@@ -131,59 +131,59 @@ fi
 
 run_dir=""
 if [[ "$capture_packet" == "yes" ]]; then
-  run_dir="$GLUERUN_STATE_DIR/runs/$run_id"
+  run_dir="$SINGULAR_STATE_DIR/runs/$run_id"
   mkdir -p "$run_dir"
   if [[ -z "$output_last_message" ]]; then
     output_last_message="$run_dir/last-message.json"
   fi
 fi
 
-gluerun_grok_model() {
+singular_grok_model() {
   local level="$1" prompt_file="$2" prompt_name
   prompt_name="$(basename "${prompt_file:-}")"
   case "$level" in
     l2)
-      printf '%s\n' "${GLUERUN_GROK_L2_MODEL:-${GLUERUN_GROK_MODEL:-grok-build}}" ;;
+      printf '%s\n' "${SINGULAR_GROK_L2_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
     l0|l1)
-      printf '%s\n' "${GLUERUN_GROK_L1_MODEL:-${GLUERUN_GROK_MODEL:-grok-build}}" ;;
+      printf '%s\n' "${SINGULAR_GROK_L1_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
     readonly|read-only)
       case "$prompt_name" in
-        planner-prompt.md) printf '%s\n' "${GLUERUN_GROK_PLANNER_MODEL:-${GLUERUN_GROK_MODEL:-grok-build}}" ;;
-        auditor-prompt.md) printf '%s\n' "${GLUERUN_GROK_AUDITOR_MODEL:-${GLUERUN_GROK_MODEL:-grok-build}}" ;;
-        decider-prompt-*.md) printf '%s\n' "${GLUERUN_GROK_DECIDER_MODEL:-${GLUERUN_GROK_MODEL:-grok-build}}" ;;
-        *) printf '%s\n' "${GLUERUN_GROK_MODEL:-grok-build}" ;;
+        planner-prompt.md) printf '%s\n' "${SINGULAR_GROK_PLANNER_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
+        auditor-prompt.md) printf '%s\n' "${SINGULAR_GROK_AUDITOR_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
+        decider-prompt-*.md) printf '%s\n' "${SINGULAR_GROK_DECIDER_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
+        *) printf '%s\n' "${SINGULAR_GROK_MODEL:-grok-build}" ;;
       esac ;;
   esac
 }
-grok_model="$(gluerun_grok_model "$level" "$prompt_file")"
+grok_model="$(singular_grok_model "$level" "$prompt_file")"
 
-gluerun_grok_effort() {
+singular_grok_effort() {
   local level="$1" prompt_file="$2" prompt_name
   prompt_name="$(basename "${prompt_file:-}")"
   case "$level" in
     l2)
-      printf '%s\n' "${GLUERUN_GROK_L2_EFFORT:-${GLUERUN_GROK_EFFORT:-medium}}" ;;
+      printf '%s\n' "${SINGULAR_GROK_L2_EFFORT:-${SINGULAR_GROK_EFFORT:-medium}}" ;;
     readonly|read-only)
       case "$prompt_name" in
-        planner-prompt.md) printf '%s\n' "${GLUERUN_GROK_PLANNER_EFFORT:-${GLUERUN_GROK_EFFORT:-high}}" ;;
-        auditor-prompt.md) printf '%s\n' "${GLUERUN_GROK_AUDITOR_EFFORT:-${GLUERUN_GROK_EFFORT:-high}}" ;;
-        decider-prompt-*.md) printf '%s\n' "${GLUERUN_GROK_DECIDER_EFFORT:-${GLUERUN_GROK_EFFORT:-}}" ;;
-        *) printf '%s\n' "${GLUERUN_GROK_EFFORT:-}" ;;
+        planner-prompt.md) printf '%s\n' "${SINGULAR_GROK_PLANNER_EFFORT:-${SINGULAR_GROK_EFFORT:-high}}" ;;
+        auditor-prompt.md) printf '%s\n' "${SINGULAR_GROK_AUDITOR_EFFORT:-${SINGULAR_GROK_EFFORT:-high}}" ;;
+        decider-prompt-*.md) printf '%s\n' "${SINGULAR_GROK_DECIDER_EFFORT:-${SINGULAR_GROK_EFFORT:-}}" ;;
+        *) printf '%s\n' "${SINGULAR_GROK_EFFORT:-}" ;;
       esac ;;
     *)
-      printf '%s\n' "${GLUERUN_GROK_EFFORT:-}" ;;
+      printf '%s\n' "${SINGULAR_GROK_EFFORT:-}" ;;
   esac
 }
-grok_effort="$(gluerun_grok_effort "$level" "$prompt_file")"
+grok_effort="$(singular_grok_effort "$level" "$prompt_file")"
 
-grok_system_prompt="${GLUERUN_GROK_SYSTEM_PROMPT:-Your FINAL assistant message MUST be exactly one JSON object and nothing else: no prose, no preamble, no code fences, no trailing commentary. If you cannot comply, still emit a single JSON object describing the problem.}"
+grok_system_prompt="${SINGULAR_GROK_SYSTEM_PROMPT:-Your FINAL assistant message MUST be exactly one JSON object and nothing else: no prose, no preamble, no code fences, no trailing commentary. If you cannot comply, still emit a single JSON object describing the problem.}"
 
 cmd=("$grok_bin" --output-format json --model "$grok_model" --cwd "$worktree")
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
   cmd+=("${profile_provider_args[@]}")
 fi
 [[ -n "$grok_effort" ]] && cmd+=(--effort "$grok_effort")
-[[ -n "${GLUERUN_GROK_MAX_TURNS:-}" ]] && cmd+=(--max-turns "$GLUERUN_GROK_MAX_TURNS")
+[[ -n "${SINGULAR_GROK_MAX_TURNS:-}" ]] && cmd+=(--max-turns "$SINGULAR_GROK_MAX_TURNS")
 
 if [[ "$readonly_run" == "yes" ]]; then
   cmd+=(--sandbox read-only)
@@ -202,35 +202,35 @@ if [[ -n "$grok_system_prompt" ]]; then
   cmd+=(--system-prompt-override "$grok_system_prompt")
 fi
 
-if [[ -n "${GLUERUN_GROK_EXTRA_ARGS:-}" ]]; then
+if [[ -n "${SINGULAR_GROK_EXTRA_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
-  cmd+=(${GLUERUN_GROK_EXTRA_ARGS})
+  cmd+=(${SINGULAR_GROK_EXTRA_ARGS})
 fi
 
 cmd+=(--prompt-file "$prompt_file")
 
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_journal="$(gluerun_readonly_guard_capture "$worktree" "grok-$run_id")"
+  ro_journal="$(singular_readonly_guard_capture "$worktree" "grok-$run_id")"
 fi
 
-envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-grok-env.XXXXXX")"
+envelope="$(mktemp "${TMPDIR:-/tmp}/singular-grok-env.XXXXXX")"
 envelope_err="$envelope.err"
 
 exit_code=0
 echo "grok-run: level=$level model=$grok_model worktree=$worktree run_id=$run_id" >&2
-grok_timeout="${GLUERUN_GROK_TIMEOUT_SEC:-1200}"
+grok_timeout="${SINGULAR_GROK_TIMEOUT_SEC:-1200}"
 # The provider always runs in the BACKGROUND, even with the timeout disabled.
 # bash defers a trapped signal until the foreground child finishes, so a
 # foreground run would swallow the SIGTERM that ask/supervise/decide send on
 # their way to a kill -- and with it the read-only guard's only chance to run.
 # `wait` is interruptible by a trapped signal; a foreground child is not.
-# The provider as a SESSION LEADER: gluerun_setsid_exec is the LAST command of
-# run_grok, so `&` makes $! the leader itself (pid == pgid) and gluerun_kill_tree
+# The provider as a SESSION LEADER: singular_setsid_exec is the LAST command of
+# run_grok, so `&` makes $! the leader itself (pid == pgid) and singular_kill_tree
 # group-kills the whole tree with one negative pid, without `ps` (PMGO-004).
 # grok gets its working directory from --cwd, so there is no `cd` here.
 # Redirections live on the call site so they bind to the job.
 run_grok() {
-  gluerun_setsid_exec "${cmd[@]}"
+  singular_setsid_exec "${cmd[@]}"
 }
 run_grok >"$envelope" 2>"$envelope_err" & grok_pid=$!
 if [[ "$grok_timeout" =~ ^[0-9]+$ && "$grok_timeout" -gt 0 ]]; then
@@ -239,9 +239,9 @@ if [[ "$grok_timeout" =~ ^[0-9]+$ && "$grok_timeout" -gt 0 ]]; then
     if [[ "$SECONDS" -ge "$grok_deadline" ]]; then
       grok_timed_out="yes"
       # kill -9 on the direct child only left grok's descendants running, which
-      # is exactly what gluerun_kill_tree exists to prevent; the other runners
+      # is exactly what singular_kill_tree exists to prevent; the other runners
       # already used it. TERM the session first, then KILL what is left.
-      gluerun_kill_tree "$grok_pid" "$(gluerun_provider_kill_grace_sec)" session
+      singular_kill_tree "$grok_pid" "$(singular_provider_kill_grace_sec)" session
       wait "$grok_pid" 2>/dev/null || true
       exit_code=124
       break
@@ -296,7 +296,7 @@ fi
 # must see the restored tree. The trap still holds the timeout and signal paths;
 # a second restore of a consumed journal is a no-op.
 if [[ "$readonly_run" == "yes" ]]; then
-  gluerun_readonly_guard_restore "$ro_journal" || true
+  singular_readonly_guard_restore "$ro_journal" || true
   ro_journal=""
 fi
 
@@ -312,7 +312,7 @@ if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
 fi
 
-if gluerun_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
+if singular_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
   "$result_file" "$exit_code" "$envelope" "$envelope_err" "$output_last_message"; then
   runner_result_written="yes"
 fi

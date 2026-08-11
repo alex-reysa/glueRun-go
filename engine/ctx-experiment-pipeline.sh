@@ -2,9 +2,9 @@
 # ctx-experiment-pipeline.sh — read-only END-TO-END entry for the `experiment-run`
 # executable DAG node (layer evaluation). This brick ships NO metric of its own:
 # it is the single explicit-corpus operator entry that composes the two already
-# integrated capstones — it DELEGATES to gluerun_ctx_experiment_summary_json to
+# integrated capstones — it DELEGATES to singular_ctx_experiment_summary_json to
 # build the raw-metrics bundle from explicit corpus paths, then to
-# gluerun_ctx_experiment_render_md to render that in-memory bundle into the full
+# singular_ctx_experiment_render_md to render that in-memory bundle into the full
 # report-metrics markdown tables the operator drops into experiment-report.md (the
 # exit gate requires the report merged with raw metrics artifacts referenced).
 #
@@ -29,8 +29,8 @@
 # artifact, index, event, lease, or task file, and never
 # docs/context-build-plan/experiment-report.md. Because delegation is verbatim and
 # loss-preserving, the emitted markdown is byte-identical to feeding the same
-# corpus through gluerun_ctx_experiment_summary_json and
-# gluerun_ctx_experiment_render_md directly. This is measurement code the
+# corpus through singular_ctx_experiment_summary_json and
+# singular_ctx_experiment_render_md directly. This is measurement code the
 # operator's experiment-report.md references at merge; it neither declares nor
 # gates node completion.
 #
@@ -39,28 +39,28 @@
 # itself fail-safe).
 #
 # Public entry point:
-#   gluerun_ctx_experiment_pipeline_md [runs_dir] [events_file] [metrics_file]
-#     Builds the bundle via gluerun_ctx_experiment_summary_json over the explicit
-#     corpus paths, renders it via gluerun_ctx_experiment_render_md (fed the
+#   singular_ctx_experiment_pipeline_md [runs_dir] [events_file] [metrics_file]
+#     Builds the bundle via singular_ctx_experiment_summary_json over the explicit
+#     corpus paths, renders it via singular_ctx_experiment_render_md (fed the
 #     in-memory bundle on stdin, no file written), and emits ONE deterministic
 #     report-metrics markdown fragment to stdout. Defaults:
-#     runs_dir=$GLUERUN_RUNS_DIR, events_file=$GLUERUN_EVENTS_FILE,
-#     metrics_file=$GLUERUN_CTX_EXPERIMENT_METRICS_FILE.
+#     runs_dir=$SINGULAR_RUNS_DIR, events_file=$SINGULAR_EVENTS_FILE,
+#     metrics_file=$SINGULAR_CTX_EXPERIMENT_METRICS_FILE.
 
 # Explicit-corpus end-to-end pipeline. Delegates bundle build then render; threads
 # the bundle in memory. Fail-safe / always exit 0.
-gluerun_ctx_experiment_pipeline_md() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
-  local metrics_file="${3:-${GLUERUN_CTX_EXPERIMENT_METRICS_FILE:-}}"
+singular_ctx_experiment_pipeline_md() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
+  local metrics_file="${3:-${SINGULAR_CTX_EXPERIMENT_METRICS_FILE:-}}"
 
   # 1. Thread the explicit corpus through the summary capstone to obtain the
   #    raw-metrics bundle (itself fail-safe on missing/empty inputs).
   local bundle
-  bundle="$(gluerun_ctx_experiment_summary_json "$runs_dir" "$events_file" "$metrics_file")"
+  bundle="$(singular_ctx_experiment_summary_json "$runs_dir" "$events_file" "$metrics_file")"
 
   # 2. Render the in-memory bundle through the render capstone via its stdin
   #    ("-") bundle source. No temp file is written; the bundle never touches disk.
-  printf '%s' "$bundle" | gluerun_ctx_experiment_render_md -
+  printf '%s' "$bundle" | singular_ctx_experiment_render_md -
   return 0
 }

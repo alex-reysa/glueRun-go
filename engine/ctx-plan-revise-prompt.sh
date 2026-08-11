@@ -9,7 +9,7 @@
 # engine/ctx-plan-critic-context.sh, whose read-only assembler this brick
 # parallels). It never owns engine/lib.sh and adds no driver-file hook.
 #
-# The integrated bound authority gluerun_plan_revise_decide (engine/ctx-plan-revise.sh)
+# The integrated bound authority singular_plan_revise_decide (engine/ctx-plan-revise.sh)
 # already decides revise / park / import; this brick builds the INPUT a `revise`
 # decision consumes. It implements the stage phrasing "a revision prompt = base
 # planner prompt + the structured critique findings (per-id) + the prior candidate
@@ -18,7 +18,7 @@
 # this one composed prompt.
 #
 # The assembler is PURE and READ-ONLY: it reads the base planner TEMPLATE, the
-# gluerun.orchestration.plan-critique.v0 record, and the prior candidate set; it
+# singular.orchestration.plan-critique.v0 record, and the prior candidate set; it
 # writes ONLY its single output file, appends no events, spawns no runner, and
 # mutates nothing else. Fail-safe without fabrication (evidence invariance): a
 # missing/unreadable template, a missing/unparseable/schema-divergent record, or an
@@ -27,19 +27,19 @@
 # candidates and never silently emits a prompt with the findings section absent, so
 # a downstream planner is never flown blind under the guise of a normal prompt.
 #
-# The GLUERUN_PLAN_CRITIQUE-gated planner re-invocation resuming the persisted node
-# session via gluerun_planner_resume_decide, the rc-86 fresh-fallback record, the
+# The SINGULAR_PLAN_CRITIQUE-gated planner re-invocation resuming the persisted node
+# session via singular_planner_resume_decide, the rc-86 fresh-fallback record, the
 # per-finding accepted-observation / rejected-observation disposition events
 # (plan.revised with revisesRunId), and the generate-tasks.sh / l1-plan-node.sh
 # driver hooks with the test-ctx-plan-revision.sh full-walk are the sanctioned
 # follow-up slices of this node and are OUT OF SCOPE here.
 #
 # Public entry point (pure; no side effects, no events, no state writes):
-#   gluerun_plan_revise_prompt <node> <critique_record> <stage_dir> <out_file> \
+#   singular_plan_revise_prompt <node> <critique_record> <stage_dir> <out_file> \
 #                              [template_file]
 #     Compose the revision prompt into <out_file>: (a) the base planner TEMPLATE
 #     body verbatim (from template_file, else the canonical template resolved by
-#     gluerun_planner_resume_template_path — GLUERUN_PLANNER_TEMPLATE or
+#     singular_planner_resume_template_path — SINGULAR_PLANNER_TEMPLATE or
 #     docs/orchestration/prompts/l1-planner.md); (b) every findings[] entry of the
 #     record rendered with its exact id / severity / claim / evidence (+
 #     suggestedChange when present), sorted by id; (c) every *.candidate.md body in
@@ -49,24 +49,24 @@
 # Pure assembler. Reads only its inputs; writes ONLY <out_file>. Deterministic:
 # id-sorted findings, sorted candidate glob, no timestamps. See header for the
 # full contract.
-gluerun_plan_revise_prompt() {
+singular_plan_revise_prompt() {
   local node="$1" critique_record="${2:-}" stage_dir="${3:-}" out_file="${4:-}"
   local template_file="${5:-}"
   [[ -n "$out_file" ]] || return 2
   local candidate_batch_dir
-  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
+  candidate_batch_dir="$(singular_task_batch_candidate_dir "$stage_dir")" || return 2
 
   # Resolve the base planner TEMPLATE path. An explicit arg wins; otherwise fall
-  # back to the integrated canonical resolver (GLUERUN_PLANNER_TEMPLATE or the
+  # back to the integrated canonical resolver (SINGULAR_PLANNER_TEMPLATE or the
   # docs default). Readability is checked below so a missing file degrades to a
   # marked-empty section rather than crashing.
   local tpl_path
   if [[ -n "$template_file" ]]; then
     tpl_path="$template_file"
-  elif [[ "$(type -t gluerun_planner_resume_template_path)" == "function" ]]; then
-    tpl_path="$(gluerun_planner_resume_template_path)"
+  elif [[ "$(type -t singular_planner_resume_template_path)" == "function" ]]; then
+    tpl_path="$(singular_planner_resume_template_path)"
   else
-    tpl_path="${GLUERUN_PLANNER_TEMPLATE:-${GLUERUN_ROOT:-.}/docs/orchestration/prompts/l1-planner.md}"
+    tpl_path="${SINGULAR_PLANNER_TEMPLATE:-${SINGULAR_ROOT:-.}/docs/orchestration/prompts/l1-planner.md}"
   fi
 
   mkdir -p "$(dirname "$out_file")"
@@ -84,7 +84,7 @@ try:
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
     assert isinstance(doc, dict)
-    assert doc.get("schema") == "gluerun.orchestration.plan-critique.v0"
+    assert doc.get("schema") == "singular.orchestration.plan-critique.v0"
     findings = doc.get("findings")
     assert isinstance(findings, list)
 except Exception:

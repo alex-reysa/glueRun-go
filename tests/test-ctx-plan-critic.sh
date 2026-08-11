@@ -2,14 +2,14 @@
 # Covers the plan-critic runtime brick engine/ctx-plan-critic.sh: the S2 skeptic
 # driver that runs the plan critic over a STAGED candidate set via the DEFAULT
 # runner — fresh (no session resume), read-only — extracts the critique with
-# gluerun_extract_json, normalizes finding ids to the gluerun_finding_id identity,
+# singular_extract_json, normalizes finding ids to the singular_finding_id identity,
 # validates it against schemas/plan-critique.v0.schema.json, persists it next to
 # the staged candidates, records a plan.critiqued event carrying the verdict and
 # finding count, and persists per-node critic session meta (role plan-critic).
 # Asserts:
 #   (a) each verdict class approve|revise|park -> a persisted critique that
 #       validates against the shipped schema, with finding ids matching
-#       gluerun_finding_id, plus exactly one plan.critiqued event carrying the
+#       singular_finding_id, plus exactly one plan.critiqued event carrying the
 #       verdict + finding count;
 #   (b) the critique is persisted next to the staged candidates and the critic
 #       session meta lands at <state>/sessions/plan-critic/<node>.json with
@@ -17,12 +17,12 @@
 #   (c) freshness/read-only -> the stub records it was invoked read-only
 #       (--level readonly) and fresh (no --resume / --resume-session);
 #   (d) infra fail-open -> when the runner stays unparseable across the
-#       GLUERUN_AUDIT_INFRA_MAX-bounded retries, the driver treats the result as
+#       SINGULAR_AUDIT_INFRA_MAX-bounded retries, the driver treats the result as
 #       an "approve" verdict, persists an approve critique, and appends a
 #       ctx.plan_critique_infra event rather than blocking planning (and emits
 #       NO plan.critiqued event on this path);
 #   (e) present-but-uncalled -> no existing engine path invokes the new functions.
-# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and temp dirs so the
+# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and temp dirs so the
 # suite never mutates real run state.
 set -uo pipefail
 
@@ -40,9 +40,9 @@ mkdir -p "$tmp/state" "$tmp/orch/prompts" "$tmp/worktree"
 # Base plan-critic prompt the driver must pass to the default runner.
 printf '# Plan Critic Prompt\n' > "$tmp/orch/prompts/plan-critic.md"
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-export GLUERUN_ORCH_DIR="$tmp/orch"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+export SINGULAR_ORCH_DIR="$tmp/orch"
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
 
@@ -51,13 +51,13 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX_PC" ]] || fail "engine not present yet: $CTX_PC"
 # shellcheck disable=SC1090
 source "$CTX_PC" || fail "sourcing $CTX_PC failed"
-[[ "$(type -t gluerun_ctx_plan_critic_run)" == "function" ]] \
-  || fail "gluerun_ctx_plan_critic_run not defined by $CTX_PC"
-[[ "$(type -t gluerun_ctx_plan_critic_session_path)" == "function" ]] \
-  || fail "gluerun_ctx_plan_critic_session_path not defined by $CTX_PC"
+[[ "$(type -t singular_ctx_plan_critic_run)" == "function" ]] \
+  || fail "singular_ctx_plan_critic_run not defined by $CTX_PC"
+[[ "$(type -t singular_ctx_plan_critic_session_path)" == "function" ]] \
+  || fail "singular_ctx_plan_critic_session_path not defined by $CTX_PC"
 
 # Point the events log at an isolated temp file.
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
 
 # --- Minimal schema-driven validator reading the ACTUAL shipped schema --------
 # (no jsonschema module ships here) — const/enum/pattern/minLength/required/
@@ -140,7 +140,7 @@ fi
 cat > "$out" <<JSON
 Here is my critique:
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "STUB-WRONG-NODE",
   "runId": "STUB-WRONG-RUN",
   "batchTaskIds": ["TASK-9999"],
@@ -153,14 +153,14 @@ JSON
 exit 0
 STUBEOF
 chmod +x "$STUB"
-export GLUERUN_RUNNER="$STUB"
+export SINGULAR_RUNNER="$STUB"
 export STUB_ARGV_FILE="$tmp/stub-argv.txt"
 export STUB_CALLS_FILE="$tmp/stub-calls.txt"
 
 count_events() { # <type>
-  [[ -f "$GLUERUN_EVENTS_FILE" ]] || { echo 0; return 0; }
+  [[ -f "$SINGULAR_EVENTS_FILE" ]] || { echo 0; return 0; }
   local c
-  c="$(grep -c "\"type\":\"$1\"" "$GLUERUN_EVENTS_FILE" 2>/dev/null)" || true
+  c="$(grep -c "\"type\":\"$1\"" "$SINGULAR_EVENTS_FILE" 2>/dev/null)" || true
   echo "${c:-0}"
 }
 
@@ -174,8 +174,8 @@ make_stage_dir() { # <name> -> prints path; seeds rendered candidate task files
 }
 
 CLAIM='Batch slices TASK-0007 and TASK-0008 with a hidden ordering coupling'
-EXPECT_FID="$(gluerun_finding_id "$CLAIM")"
-[[ "$EXPECT_FID" =~ ^f-[0-9a-f]{12}$ ]] || fail "gluerun_finding_id shape unexpected: $EXPECT_FID"
+EXPECT_FID="$(singular_finding_id "$CLAIM")"
+[[ "$EXPECT_FID" =~ ^f-[0-9a-f]{12}$ ]] || fail "singular_finding_id shape unexpected: $EXPECT_FID"
 
 # ---------------------------------------------------------------------------
 # (a)+(b)+(c) each verdict class produces a schema-valid, persisted critique
@@ -186,14 +186,14 @@ verdict_case() { # <label> <node> <verdict>
   local label="$1" node="$2" verdict="$3"
   local run_id="RUN-$label"
   local stage_dir; stage_dir="$(make_stage_dir "$label")"
-  : > "$GLUERUN_EVENTS_FILE"
+  : > "$SINGULAR_EVENTS_FILE"
   : > "$STUB_CALLS_FILE"
   export STUB_MODE="json"
   export STUB_VERDICT="$verdict"
   # A wrong id on purpose; the driver must renormalize it from the claim text.
   export STUB_FINDINGS='[{"id":"f-ffffffffffff","severity":"blocking","claim":"'"$CLAIM"'","evidence":"owned files overlap","suggestedChange":"declare a dependsOn edge"}]'
 
-  gluerun_ctx_plan_critic_run "$node" "$run_id" "$stage_dir" "$tmp/worktree" \
+  singular_ctx_plan_critic_run "$node" "$run_id" "$stage_dir" "$tmp/worktree" \
     || fail "$label: driver crashed"
 
   local record="$stage_dir/plan-critique.json"
@@ -209,7 +209,7 @@ verdict_case() { # <label> <node> <verdict>
 import json, sys
 rec = json.load(open(sys.argv[1]))
 node, run_id, verdict, fid = sys.argv[2:6]
-assert rec.get("schema") == "gluerun.orchestration.plan-critique.v0", rec
+assert rec.get("schema") == "singular.orchestration.plan-critique.v0", rec
 assert rec.get("node") == node, rec
 assert rec.get("runId") == run_id, rec
 assert rec.get("verdict") == verdict, rec
@@ -225,7 +225,7 @@ PY
     || fail "$label: expected one plan.critiqued event, got $(count_events plan.critiqued)"
   [[ "$(count_events ctx.plan_critique_infra)" -eq 0 ]] \
     || fail "$label: unexpected ctx.plan_critique_infra event on happy path"
-  python3 - "$GLUERUN_EVENTS_FILE" "$node" "$run_id" "$verdict" <<'PY' \
+  python3 - "$SINGULAR_EVENTS_FILE" "$node" "$run_id" "$verdict" <<'PY' \
     || fail "$label: plan.critiqued event payload wrong"
 import json, sys
 evs = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
@@ -240,8 +240,8 @@ print("ok")
 PY
 
   # Session meta persisted per node with role plan-critic.
-  local meta; meta="$(gluerun_ctx_plan_critic_session_path "$node")"
-  [[ "$meta" == "$GLUERUN_STATE_DIR/sessions/plan-critic/$node.json" ]] \
+  local meta; meta="$(singular_ctx_plan_critic_session_path "$node")"
+  [[ "$meta" == "$SINGULAR_STATE_DIR/sessions/plan-critic/$node.json" ]] \
     || fail "$label: unexpected session meta path: $meta"
   [[ -f "$meta" ]] || fail "$label: critic session meta not persisted at $meta"
   python3 - "$meta" <<'PY' || fail "$label: session meta role not plan-critic"
@@ -270,16 +270,16 @@ verdict_case "PARK"    "node-park"    "park"
 # (d) infra fail-open: unparseable runner output across the bounded retries ->
 # approve verdict + ctx.plan_critique_infra event, no plan.critiqued, no block.
 # ---------------------------------------------------------------------------
-export GLUERUN_AUDIT_INFRA_MAX=2
+export SINGULAR_AUDIT_INFRA_MAX=2
 node="node-infra"
 run_id="RUN-INFRA"
 stage_dir="$(make_stage_dir "INFRA")"
-: > "$GLUERUN_EVENTS_FILE"
+: > "$SINGULAR_EVENTS_FILE"
 : > "$STUB_CALLS_FILE"
 export STUB_MODE="prose"
 unset STUB_FINDINGS 2>/dev/null || true
 
-gluerun_ctx_plan_critic_run "$node" "$run_id" "$stage_dir" "$tmp/worktree" \
+singular_ctx_plan_critic_run "$node" "$run_id" "$stage_dir" "$tmp/worktree" \
   || fail "infra: driver must fail OPEN, not crash/return non-zero"
 
 record="$stage_dir/plan-critique.json"
@@ -308,7 +308,7 @@ calls="$(grep -c 'call' "$STUB_CALLS_FILE" 2>/dev/null || echo 0)"
 # ---------------------------------------------------------------------------
 # (e) present-but-uncalled: no existing engine path invokes the new functions.
 # ---------------------------------------------------------------------------
-callers="$(grep -rl 'gluerun_ctx_plan_critic_run\|gluerun_ctx_plan_critic_session_path' \
+callers="$(grep -rl 'singular_ctx_plan_critic_run\|singular_ctx_plan_critic_session_path' \
   "$ENGINE_HOME/engine" 2>/dev/null | grep -v '/ctx-plan-critic.sh$' || true)"
 : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
 

@@ -8,16 +8,16 @@
 # prior behavior (OFF-parity).
 #
 # This is the chained brick after the integrated selection reader (TASK-0099,
-# gluerun_ctx_rehydrate_subgraph_select) and the node-record source-spec resolver
-# (TASK-0101, gluerun_ctx_rehydrate_subgraph_sources) — the piece the resolver
+# singular_ctx_rehydrate_subgraph_select) and the node-record source-spec resolver
+# (TASK-0101, singular_ctx_rehydrate_subgraph_sources) — the piece the resolver
 # comment anticipates and the one that makes rehydration packets ASSEMBLED BY
 # subgraph selection. It mirrors how the flat assembler engine/ctx-rehydrate.sh
 # carries both packet and manifest modes, but renders in the INPUT (selection)
 # order instead of re-sorting by the flat assembler RANK.
 #
-#   gluerun_ctx_rehydrate_subgraph_packet     # stdin: <source-class-id>=<path> specs
-#   gluerun_ctx_rehydrate_subgraph_manifest   # stdin: <source-class-id>=<path> specs
-#   gluerun_ctx_rehydrate_subgraph_assemble <graphDir> <taskNodeId> <packet|manifest>
+#   singular_ctx_rehydrate_subgraph_packet     # stdin: <source-class-id>=<path> specs
+#   singular_ctx_rehydrate_subgraph_manifest   # stdin: <source-class-id>=<path> specs
+#   singular_ctx_rehydrate_subgraph_assemble <graphDir> <taskNodeId> <packet|manifest>
 #
 # Renderers (slice 1): read the resolver output — `<source-class-id>=<path>`
 # specs, one per line on stdin — and emit either the rehydration packet or the
@@ -26,10 +26,10 @@
 #
 #   - `..._packet`   — one labeled `=== <source-class-id> ===` section per
 #     surviving spec IN INPUT ORDER, each artifact body read READ-ONLY and capped
-#     to GLUERUN_CONTEXT_SECTION_MAX_CHARS (default 4000) with the same stable
+#     to SINGULAR_CONTEXT_SECTION_MAX_CHARS (default 4000) with the same stable
 #     truncation marker convention as the flat assembler.
 #   - `..._manifest` — a manifest conforming to the EXISTING schema
-#     gluerun.orchestration.ctx-rehydrate-manifest.v0 (included source ids + the
+#     singular.orchestration.ctx-rehydrate-manifest.v0 (included source ids + the
 #     sha256 of each artifact's bytes), sources listed in the same selection order.
 #
 # Per-node sections, not per-class dedup: because a subgraph can select several
@@ -38,12 +38,12 @@
 # order; this is intended.
 #
 # Quarantine-aware: each candidate is filtered through the integrated
-# gluerun_ctx_artifact_exclude, so a quarantined source (a `.quarantined` path or
+# singular_ctx_artifact_exclude, so a quarantined source (a `.quarantined` path or
 # one with a `.quarantined` sibling on disk) never reaches the packet or the
 # manifest — the single quarantine authority is preserved. A declared-but-missing
 # artifact contributes nothing (non-fatal).
 #
-# Composed graph entry point (slice 2): gluerun_ctx_rehydrate_subgraph_assemble
+# Composed graph entry point (slice 2): singular_ctx_rehydrate_subgraph_assemble
 # pipes the integrated read path end-to-end — select the subgraph -> resolve
 # source specs -> render (slice 1) — so a contradictions-first, capped packet or
 # its matching manifest is produced directly from a graph dir + task node id.
@@ -54,23 +54,23 @@
 # Evidence invariance / advocate-skeptic line: rendering is a PURE READ — it reads
 # and hashes artifact bytes but never writes, renames, or deletes; appends no
 # events; mutates no taint; confers NO independence (the rehydrate strategy stays
-# tainted per gluerun_ctx_route_strategy_tainted); and records nothing as
+# tainted per singular_ctx_route_strategy_tainted); and records nothing as
 # authoritative.
 
-# gluerun_ctx_rehydrate_subgraph_packet   (specs on stdin)
-gluerun_ctx_rehydrate_subgraph_packet() {
-  _gluerun_ctx_rehydrate_subgraph_render packet
+# singular_ctx_rehydrate_subgraph_packet   (specs on stdin)
+singular_ctx_rehydrate_subgraph_packet() {
+  _singular_ctx_rehydrate_subgraph_render packet
 }
 
-# gluerun_ctx_rehydrate_subgraph_manifest (specs on stdin)
-gluerun_ctx_rehydrate_subgraph_manifest() {
-  _gluerun_ctx_rehydrate_subgraph_render manifest
+# singular_ctx_rehydrate_subgraph_manifest (specs on stdin)
+singular_ctx_rehydrate_subgraph_manifest() {
+  _singular_ctx_rehydrate_subgraph_render manifest
 }
 
 # Internal: read <id>=<path> specs from stdin IN ORDER, filter each through the
 # integrated quarantine authority, and hand the surviving <id>\t<path> specs to
 # the pure Python renderer for order-preserving capping, hashing, and emission.
-_gluerun_ctx_rehydrate_subgraph_render() {
+_singular_ctx_rehydrate_subgraph_render() {
   local mode="$1"
   local spec id path survivor specs=""
   while IFS= read -r spec; do
@@ -81,12 +81,12 @@ _gluerun_ctx_rehydrate_subgraph_render() {
     # Compose the single integrated quarantine filter: a quarantined candidate (a
     # *.quarantined path or an original with a .quarantined sibling) yields no
     # survivor and is silently excluded from the packet and the manifest.
-    survivor="$(gluerun_ctx_artifact_exclude "$path")"
+    survivor="$(singular_ctx_artifact_exclude "$path")"
     [[ -n "$survivor" ]] || continue
     specs+="$id"$'\t'"$path"$'\n'
   done
-  _gluerun_ctx_rehydrate_subgraph_render_py \
-    "$mode" "${GLUERUN_CONTEXT_SECTION_MAX_CHARS:-4000}" "$specs"
+  _singular_ctx_rehydrate_subgraph_render_py \
+    "$mode" "${SINGULAR_CONTEXT_SECTION_MAX_CHARS:-4000}" "$specs"
 }
 
 # Internal: the pure Python renderer. Takes mode, section cap, and the newline-
@@ -95,7 +95,7 @@ _gluerun_ctx_rehydrate_subgraph_render() {
 # manifest, PRESERVING the input spec order (NO rank re-sort). Caps and manifest
 # schema match the flat assembler exactly. No I/O beyond reading artifacts and
 # writing stdout; no side effects.
-_gluerun_ctx_rehydrate_subgraph_render_py() {
+_singular_ctx_rehydrate_subgraph_render_py() {
   python3 - "$1" "$2" "$3" <<'PY'
 import hashlib
 import json
@@ -142,7 +142,7 @@ for line in specs.splitlines():
 
 if mode == "manifest":
     obj = {
-        "schema": "gluerun.orchestration.ctx-rehydrate-manifest.v0",
+        "schema": "singular.orchestration.ctx-rehydrate-manifest.v0",
         "sources": [
             {"id": sid, "sha256": hashlib.sha256(data).hexdigest()}
             for sid, _path, data in sources
@@ -160,19 +160,19 @@ else:
 PY
 }
 
-# gluerun_ctx_rehydrate_subgraph_assemble <graphDir> <taskNodeId> <packet|manifest>
+# singular_ctx_rehydrate_subgraph_assemble <graphDir> <taskNodeId> <packet|manifest>
 # Pipe the integrated read path end-to-end: select the subgraph -> resolve source
 # specs -> render (slice 1), producing a contradictions-first, capped packet or
 # its matching manifest directly from a graph dir + task node id. Pure read-only.
-gluerun_ctx_rehydrate_subgraph_assemble() {
-  local graph_dir="${1:-${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}}"
+singular_ctx_rehydrate_subgraph_assemble() {
+  local graph_dir="${1:-${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}}"
   local task_node="${2:-}"
   local mode="${3:-packet}"
   case "$mode" in
     packet|manifest) ;;
     *) mode="packet" ;;
   esac
-  gluerun_ctx_rehydrate_subgraph_select "$graph_dir" "$task_node" \
-    | gluerun_ctx_rehydrate_subgraph_sources \
-    | gluerun_ctx_rehydrate_subgraph_"$mode"
+  singular_ctx_rehydrate_subgraph_select "$graph_dir" "$task_node" \
+    | singular_ctx_rehydrate_subgraph_sources \
+    | singular_ctx_rehydrate_subgraph_"$mode"
 }

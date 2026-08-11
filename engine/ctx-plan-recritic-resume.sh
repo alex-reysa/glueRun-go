@@ -16,13 +16,13 @@
 # plus the recorder that makes the carry-over observable to ctx-metrics.sh.
 #
 # It is the plan-critic (skeptic-role) variant of the integrated planner-resume
-# decider gluerun_planner_resume_decide (TASK-0009): the same single-line
+# decider singular_planner_resume_decide (TASK-0009): the same single-line
 # `resume <sessionId>` / `fresh <reason>` contract, the same ordered fail-closed
 # gates (the FIRST failing gate names the reason), reusing the
-# gluerun.orchestration.session-meta.v0 shape the plan-critic driver already
+# singular.orchestration.session-meta.v0 shape the plan-critic driver already
 # FINALIZES at <state-dir>/sessions/plan-critic/<node>.json (role plan-critic,
 # TASK-0013, explicitly earmarked usable by Stage 3 carry-over). The gate deltas
-# from the planner decider are the enable knob (GLUERUN_PLAN_RECRITIC_RESUME),
+# from the planner decider are the enable knob (SINGULAR_PLAN_RECRITIC_RESUME),
 # the role gate (plan-critic instead of planner), the critic prompt TEMPLATE
 # (the plan-critic base prompt), and the critic session-lease path. Because a plan-critic
 # session is resumable ONLY through the plan-critic role gate and a planner
@@ -30,7 +30,7 @@
 # session and NEVER a planner/implementer one, and vice versa.
 #
 # Distinct from the separate post-acceptance `critic-carryover` node
-# (GLUERUN_CRITIC_RECHECK_PCT), which rechecks an ACCEPTED diff; this brick is the
+# (SINGULAR_CRITIC_RECHECK_PCT), which rechecks an ACCEPTED diff; this brick is the
 # in-loop re-critique of REVISED candidates.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
@@ -46,15 +46,15 @@
 # Routing never weakens a gate to make a fresh-required decision resumable, never
 # makes the fresh implementation auditor bypassable, and never lets a resumed
 # (tainted) critic session satisfy an independence-required step. Events land only
-# in the pinned GLUERUN_EVENTS_FILE.
+# in the pinned SINGULAR_EVENTS_FILE.
 #
-# The single GLUERUN_PLAN_RECRITIC_RESUME-gated consult hook inside the
+# The single SINGULAR_PLAN_RECRITIC_RESUME-gated consult hook inside the
 # re-critique step of engine/ctx-plan-revise-loop.sh (behind the new knob) and the
 # test-ctx-plan-revision.sh resume-re-critique full-walk are the sanctioned
 # follow-up slice of this node and are OUT OF SCOPE here.
 #
 # Gate order (first failure wins):
-#   1. disabled              GLUERUN_PLAN_RECRITIC_RESUME unset/!=1 (default 0 = OFF)
+#   1. disabled              SINGULAR_PLAN_RECRITIC_RESUME unset/!=1 (default 0 = OFF)
 #   2. no-session            meta missing / unparseable
 #   3. no-session-id         empty provider or sessionId
 #   4. role-mismatch         role is not exactly "plan-critic"      (skeptic gate)
@@ -62,7 +62,7 @@
 #   6. head-rewritten        meta.headShaAtCreate NOT an ancestor of target head
 #   7. runner-changed        runner basename differs
 #   8. prompt-template-changed  meta.promptSha256 != sha256(critic base-prompt TEMPLATE)
-#   9. expired               age > GLUERUN_SESSION_MAX_AGE_SEC / missing createdAt
+#   9. expired               age > SINGULAR_SESSION_MAX_AGE_SEC / missing createdAt
 #  10. worktree-moved        meta.cwd != worktree
 #  11. leased                a LIVE critic session-lease held
 #   -> resume <sessionId>    when every gate passes
@@ -70,13 +70,13 @@
 # Pure helper: canonical critic prompt TEMPLATE path. The template-sha gate keys
 # on the TEMPLATE file the plan-critic driver finalized against (NOT the rendered
 # prompt), so the finalize->decide round-trip matches. Override with
-# GLUERUN_PLAN_CRITIC_TEMPLATE; the default lives under the runtime orch dir,
+# SINGULAR_PLAN_CRITIC_TEMPLATE; the default lives under the runtime orch dir,
 # mirroring engine/ctx-plan-critic.sh (the base critic prompt under the orch dir).
-gluerun_plan_recritic_resume_template_path() {
-  if [[ -n "${GLUERUN_PLAN_CRITIC_TEMPLATE:-}" ]]; then
-    printf '%s' "$GLUERUN_PLAN_CRITIC_TEMPLATE"; return 0
+singular_plan_recritic_resume_template_path() {
+  if [[ -n "${SINGULAR_PLAN_CRITIC_TEMPLATE:-}" ]]; then
+    printf '%s' "$SINGULAR_PLAN_CRITIC_TEMPLATE"; return 0
   fi
-  local orch_dir="${GLUERUN_ORCH_DIR:-${GLUERUN_ROOT:-.}/docs/orchestration}"
+  local orch_dir="${SINGULAR_ORCH_DIR:-${SINGULAR_ROOT:-.}/docs/orchestration}"
   # The basename is assembled from parts on purpose: the S2 contract gate
   # (tests/test-plan-critique-schema.sh) asserts NO engine path carries the
   # literal critic prompt filename, and engine/ctx-plan-critic.sh finalizes the
@@ -89,10 +89,10 @@ gluerun_plan_recritic_resume_template_path() {
 # means another fanout is (re)using this critic session; the decider must not
 # resume it concurrently. Lives beside the critic session-meta under the runtime
 # state dir, NEVER under docs/. Empty node -> empty (caller decides).
-gluerun_plan_recritic_resume_lease_path() {
+singular_plan_recritic_resume_lease_path() {
   local node="$1"
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
-  local state_dir="${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}"
+  local state_dir="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}"
   printf '%s/sessions/plan-critic/%s.lease' "$state_dir" "$node"
 }
 
@@ -101,7 +101,7 @@ gluerun_plan_recritic_resume_lease_path() {
 #   - file present, live PID     -> 0 (held)
 #   - file present, dead PID     -> 1 (free; a crashed holder is not concurrency)
 #   - file present, no PID found -> 0 (held; cannot prove it is free -> fail closed)
-gluerun_plan_recritic_resume_lease_live() {
+singular_plan_recritic_resume_lease_live() {
   local lease_path="$1"
   [[ -n "$lease_path" && -f "$lease_path" ]] || return 1
   local pid
@@ -134,14 +134,14 @@ PY
 # Decide whether the next re-critique may RESUME the recorded critic session.
 # Prints EXACTLY one line: `resume <sessionId>` or `fresh <reason>`. Never exits
 # non-zero. Any ambiguity resolves to `fresh <reason>`, NEVER to resume.
-#   gluerun_plan_recritic_resume_decide <critic_session_meta> <node> \
+#   singular_plan_recritic_resume_decide <critic_session_meta> <node> \
 #       <runner_basename> <worktree> <lineage_head>
-gluerun_plan_recritic_resume_decide() {
+singular_plan_recritic_resume_decide() {
   local meta_path="$1" node="$2" runner="$3" worktree="$4" lineage_head="$5"
 
-  # Gate 1: enable knob (default 0 = OFF). Independent of GLUERUN_PLAN_CRITIQUE;
+  # Gate 1: enable knob (default 0 = OFF). Independent of SINGULAR_PLAN_CRITIQUE;
   # with the knob off the re-critique stays FRESH exactly as today.
-  if [[ "${GLUERUN_PLAN_RECRITIC_RESUME:-0}" != "1" ]]; then
+  if [[ "${SINGULAR_PLAN_RECRITIC_RESUME:-0}" != "1" ]]; then
     printf 'fresh disabled\n'; return 0
   fi
   # Gate 2: meta missing.
@@ -208,14 +208,14 @@ PY
   # Gate 8: prompt-template changed. Key on the critic TEMPLATE sha (NOT the
   # rendered prompt). An unreadable template -> empty sha -> mismatch (fail closed).
   local tpl_path tpl_sha
-  tpl_path="$(gluerun_plan_recritic_resume_template_path)"
-  tpl_sha="$(gluerun_sha256_file "$tpl_path" 2>/dev/null || printf '%s' "")"
+  tpl_path="$(singular_plan_recritic_resume_template_path)"
+  tpl_sha="$(singular_sha256_file "$tpl_path" 2>/dev/null || printf '%s' "")"
   if [[ -z "$tpl_sha" || "$m_psha" != "$tpl_sha" ]]; then
     printf 'fresh prompt-template-changed\n'; return 0
   fi
-  # Gate 9: expired per GLUERUN_SESSION_MAX_AGE_SEC. Missing/unparseable createdAt
+  # Gate 9: expired per SINGULAR_SESSION_MAX_AGE_SEC. Missing/unparseable createdAt
   # -> EXPIRED (fail closed).
-  local max_age="${GLUERUN_SESSION_MAX_AGE_SEC:-14400}"
+  local max_age="${SINGULAR_SESSION_MAX_AGE_SEC:-14400}"
   local age_ok
   age_ok="$(python3 - "$m_created" "$max_age" <<'PY' 2>/dev/null || true
 import sys
@@ -249,8 +249,8 @@ PY
   # means a parallel fanout is already using this critic session — never resume it
   # concurrently.
   local lease_path
-  lease_path="$(gluerun_plan_recritic_resume_lease_path "$node")"
-  if gluerun_plan_recritic_resume_lease_live "$lease_path"; then
+  lease_path="$(singular_plan_recritic_resume_lease_path "$node")"
+  if singular_plan_recritic_resume_lease_live "$lease_path"; then
     printf 'fresh leased\n'; return 0
   fi
 
@@ -258,15 +258,15 @@ PY
 }
 
 # Records ONLY. Emits EXACTLY ONE role=plan-critic `context.strategy_selected`
-# event through gluerun_append_event carrying node, runId, `revisesRunId` (= the
+# event through singular_append_event carrying node, runId, `revisesRunId` (= the
 # revision run being re-critiqued, marking this as the re-critique round),
 # strategy (`resume` or `fresh`), the exact `reason`, and `sessionId` on resume —
 # so a re-critique that re-enters the same critic session (its prior concerns the
 # checklist) is observable to ctx-metrics.sh. No lease change, no runner, no
 # outcome mutation.
-#   gluerun_plan_recritic_record_strategy <node> <run_id> <revises_run_id> \
+#   singular_plan_recritic_record_strategy <node> <run_id> <revises_run_id> \
 #                                         <strategy> <reason> [session_id]
-gluerun_plan_recritic_record_strategy() {
+singular_plan_recritic_record_strategy() {
   local node="${1:-}" run_id="${2:-}" revises_run_id="${3:-}" \
         strategy="${4:-}" reason="${5:-}" session_id="${6:-}"
 
@@ -294,6 +294,6 @@ PY
   else
     message="plan-recritique fresh-run strategy selected"
   fi
-  gluerun_append_event "context.strategy_selected" "$message" "$event_json"
+  singular_append_event "context.strategy_selected" "$message" "$event_json"
   return 0
 }

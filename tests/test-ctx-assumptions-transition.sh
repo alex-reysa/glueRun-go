@@ -2,10 +2,10 @@
 # Covers the host-derived status-transition brick of the per-run assumption ledger
 # (stage S4-context-packets, node assumption-ledger). `engine/ctx-assumptions-transition.sh`
 # ships a PURE, present-but-uncalled helper
-#   gluerun_ctx_assumptions_transition <ledger-json> <findings-json>
+#   singular_ctx_assumptions_transition <ledger-json> <findings-json>
 # that is a ledger->ledger transform: it reads BOTH JSON arguments (no file I/O, no
 # events) and prints an updated ledger JSON on stdout whose `schema` const is
-# `gluerun.orchestration.ctx-assumptions.v0` with an `assumptions` array plus an
+# `singular.orchestration.ctx-assumptions.v0` with an `assumptions` array plus an
 # additive, non-authoritative top-level `claims` array.
 #
 #   - HOST-DERIVED: for every finding whose `assumptionId` matches a ledger entry
@@ -31,14 +31,14 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 # Invoke the real engine helper in an isolated subshell so lib.sh's `set -e` and the
-# sourced ctx-*.sh files never contaminate this test process. GLUERUN_ROOT is a
+# sourced ctx-*.sh files never contaminate this test process. SINGULAR_ROOT is a
 # scratch dir; the function must NOT touch it (it is a pure JSON->JSON transform).
 # JSON is passed as positional args to avoid any quoting surprises.
 transition() {
   local ledger="$1" findings="$2"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_assumptions_transition "$1" "$2"
+    singular_ctx_assumptions_transition "$1" "$2"
   ' _ "$ledger" "$findings"
 }
 
@@ -53,8 +53,8 @@ PY
 
 # --- Fixtures ---------------------------------------------------------------
 
-# A seeded ledger exactly in the shape gluerun_ctx_assumptions_seed emits.
-SEED='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+# A seeded ledger exactly in the shape singular_ctx_assumptions_seed emits.
+SEED='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"validated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
@@ -63,13 +63,13 @@ SEED='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
 # --- Case 1: host-derived flip -> matched id becomes violated ----------------
 FIND_A2='[{"assumptionId":"A2","detail":"auditor saw a stale row"}]'
 out1="$(transition "$SEED" "$FIND_A2")" || fail "case1: transition exited non-zero"
-expected1='{"schema":"gluerun.orchestration.ctx-assumptions.v0","claims":[],"assumptions":[
+expected1='{"schema":"singular.orchestration.ctx-assumptions.v0","claims":[],"assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"violated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
 ]}'
 json_eq "$out1" "$expected1" || fail "case1: ledger mismatch; got [$out1]"
-assert_contains "$out1" '"gluerun.orchestration.ctx-assumptions.v0"' "case1: schema const present"
+assert_contains "$out1" '"singular.orchestration.ctx-assumptions.v0"' "case1: schema const present"
 assert_contains "$out1" '"assumptions"' "case1: assumptions array present"
 assert_contains "$out1" '"claims"' "case1: additive claims array present"
 
@@ -77,7 +77,7 @@ assert_contains "$out1" '"claims"' "case1: additive claims array present"
 # The finding asserts status "validated"; the host MUST flip A1 to violated anyway.
 FIND_A1_LIE='[{"assumptionId":"A1","status":"validated","detail":"model insists it holds"}]'
 out2="$(transition "$SEED" "$FIND_A1_LIE")" || fail "case2: transition exited non-zero"
-expected2='{"schema":"gluerun.orchestration.ctx-assumptions.v0","claims":[],"assumptions":[
+expected2='{"schema":"singular.orchestration.ctx-assumptions.v0","claims":[],"assumptions":[
   {"id":"A1","status":"violated","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"validated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
@@ -89,7 +89,7 @@ json_eq "$out2" "$expected2" || fail "case2: host authority not enforced; got [$
 # status; both land in the non-authoritative, model-sourced claims array.
 FIND_MODEL='[{"assumptionId":"A99","status":"violated"},{"status":"open","detail":"free assertion"}]'
 out3="$(transition "$SEED" "$FIND_MODEL")" || fail "case3: transition exited non-zero"
-expected3='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+expected3='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"validated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
@@ -102,7 +102,7 @@ assert_contains "$out3" '"source": "model"' "case3: claims marked model-sourced"
 
 # --- Case 4: empty findings -> assumptions unchanged, empty claims -----------
 out4="$(transition "$SEED" '[]')" || fail "case4: transition exited non-zero"
-expected4='{"schema":"gluerun.orchestration.ctx-assumptions.v0","claims":[],"assumptions":[
+expected4='{"schema":"singular.orchestration.ctx-assumptions.v0","claims":[],"assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"validated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
@@ -130,21 +130,21 @@ sys.exit(0 if ids == ["A1", "A2", "A3"] else 1)
 PY
 
 # --- Case 8: empty ledger -> stable empty ledger, findings still segregate ----
-EMPTY='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[]}'
+EMPTY='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[]}'
 out8="$(transition "$EMPTY" "$FIND_A2")" || fail "case8: transition exited non-zero"
-expected8='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[],"claims":[
+expected8='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[],"claims":[
   {"assumptionId":"A2","status":null,"source":"model"}
 ]}'
 json_eq "$out8" "$expected8" || fail "case8: empty-ledger transition mismatch; got [$out8]"
 
 # --- Case 9: pure -> writes nothing to the filesystem -----------------------
-# Run with GLUERUN_ROOT pointing at an empty scratch dir and assert it stays empty:
+# Run with SINGULAR_ROOT pointing at an empty scratch dir and assert it stays empty:
 # the function performs no file I/O and emits no events.
 pure="$tmp/pure"
 mkdir -p "$pure"
-GLUERUN_ROOT="$pure" bash -c '
+SINGULAR_ROOT="$pure" bash -c '
   source "'"$LIB"'"
-  gluerun_ctx_assumptions_transition "$1" "$2"
+  singular_ctx_assumptions_transition "$1" "$2"
 ' _ "$SEED" "$FIND_A2" >/dev/null 2>&1 || fail "case9: transition exited non-zero"
 n="$(find "$pure" -type f | wc -l | tr -d ' ')"
 [[ "$n" -eq 0 ]] || fail "case9: transition wrote $n file(s); must be a pure transform"

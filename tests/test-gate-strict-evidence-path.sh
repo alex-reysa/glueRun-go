@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The engine must be able to satisfy its own strict gate validator.
 #
-# gate-check.sh built its refs from $GLUERUN_STATE_DIR, which is absolute, and
+# gate-check.sh built its refs from $SINGULAR_STATE_DIR, which is absolute, and
 # gate_report.py writes --log-ref verbatim. dag.sh's safe_repo_artifact rejects
 # an absolute ref before it checks anything else, so NO gate report the engine
 # produced could ever back an evidenceClass=deterministic-proof gate-result --
@@ -26,23 +26,23 @@ mkdir -p "$repo"
 git -C "$tmp" init -q repo
 git -C "$repo" config user.email test@example.com
 git -C "$repo" config user.name test
-printf '{"schemaVersion":"v2","targetBranch":"main"}\n' >"$repo/gluerun.config.json"
-# The read-only guard writes its journal under .gluerun-state; without the
+printf '{"schemaVersion":"v2","targetBranch":"main"}\n' >"$repo/singular.config.json"
+# The read-only guard writes its journal under .singular-state; without the
 # ignore a porcelain comparison reports the engine's own bookkeeping.
-printf '.gluerun-state/\n' >"$repo/.gitignore"
+printf '.singular-state/\n' >"$repo/.gitignore"
 mkdir -p "$repo/docs/orchestration/gates" "$repo/docs/orchestration/tasks"
 git -C "$repo" add -A
 git -C "$repo" commit -qm init
 
 run_gate_check() {
   local run_id="$1"; shift
-  GLUERUN_ROOT="$repo" GLUERUN_ENGINE_HOME="$ROOT" \
+  SINGULAR_ROOT="$repo" SINGULAR_ENGINE_HOME="$ROOT" \
     bash "$ROOT/engine/gate-check.sh" "$run_id" --task-id TASK-0001 -- "$@" >/dev/null 2>&1
 }
 
 # --- 1. the ref is repo-relative, the path stays absolute --------------------
 run_gate_check RUN-STRICT true || fail "a passing gate command should exit 0"
-report="$repo/.gluerun-state/runs/RUN-STRICT/gate-report.json"
+report="$repo/.singular-state/runs/RUN-STRICT/gate-report.json"
 [[ -f "$report" ]] || fail "gate-check.sh wrote no report"
 
 python3 - "$report" "$repo" <<'PY' || fail "gate-check.sh ref/path split is wrong"
@@ -80,7 +80,7 @@ task_ev["sha256"] = hashlib.sha256(json.dumps(
 ).encode("utf-8")).hexdigest()
 
 gate = {
-    "schema": "gluerun.orchestration.gate-result.v1",
+    "schema": "singular.orchestration.gate-result.v1",
     "node": "loc-00-contract",
     "status": "passed",
     "authoritative": True,
@@ -100,7 +100,7 @@ gate = {
 gates = os.path.join(repo, "docs/orchestration/gates")
 json.dump(gate, open(os.path.join(gates, "loc-00-contract.gate-result.json"), "w",
                     encoding="utf-8"), indent=2)
-json.dump({"schema": "gluerun.orchestration.dag.v0", "nodes": [
+json.dump({"schema": "singular.orchestration.dag.v0", "nodes": [
     {"id": "loc-00-contract", "stage": "loc", "area": "loc", "layer": "contract",
      "kind": "build", "dependsOn": [], "requiredCompletion": "done"}]},
     open(os.path.join(repo, "docs/orchestration/dag.v0.json"), "w",
@@ -109,7 +109,7 @@ PY
 
 out=""
 rc=0
-out="$(GLUERUN_ROOT="$repo" GLUERUN_ENGINE_HOME="$ROOT" \
+out="$(SINGULAR_ROOT="$repo" SINGULAR_ENGINE_HOME="$ROOT" \
   bash "$ROOT/engine/dag.sh" area-gate loc-00-contract 2>&1)" || rc=$?
 if [[ "$rc" -ne 0 ]]; then
   printf '%s\n' "$out" >&2
@@ -119,11 +119,11 @@ fi
 pass "a report gate-check.sh actually wrote backs a deterministic-proof gate-result"
 
 # --- 3. the ref stays absolute when the state dir is outside the repo --------
-# Not every deployment keeps GLUERUN_STATE_DIR inside the repo. There the strict
+# Not every deployment keeps SINGULAR_STATE_DIR inside the repo. There the strict
 # path is legitimately unsatisfiable, and the honest answer is the real absolute
 # path -- never a fabricated repo-relative ref that resolves to nothing.
 outside="$tmp/state-outside"
-GLUERUN_ROOT="$repo" GLUERUN_ENGINE_HOME="$ROOT" GLUERUN_STATE_DIR="$outside" \
+SINGULAR_ROOT="$repo" SINGULAR_ENGINE_HOME="$ROOT" SINGULAR_STATE_DIR="$outside" \
   bash "$ROOT/engine/gate-check.sh" RUN-OUTSIDE --task-id TASK-0001 -- true >/dev/null 2>&1 \
   || fail "gate-check.sh failed with an external state dir"
 python3 - "$outside/runs/RUN-OUTSIDE/gate-report.json" <<'PY' \

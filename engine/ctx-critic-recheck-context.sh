@@ -7,7 +7,7 @@
 # plancritic, layer engine_runtime, kind runtime).
 #
 # It is the POST-ACCEPTANCE sibling of the integrated staged-candidate critic context
-# assembler gluerun_ctx_plan_critic_context (TASK-0014, engine/ctx-plan-critic-context.sh):
+# assembler singular_ctx_plan_critic_context (TASK-0014, engine/ctx-plan-critic-context.sh):
 # TASK-0014 composes the context for the PLANNING-time critique of staged candidate
 # files; this brick composes the context for the post-acceptance recheck over the
 # accepted diff. Different inputs (accepted diff + prior findings vs staged candidate
@@ -15,7 +15,7 @@
 # critique), so it advances the stage rather than duplicating TASK-0014.
 #
 # Builds ONLY on already-integrated primitives — git (for the accepted diff), the
-# gluerun.orchestration.plan-critique.v0 record shape (TASK-0012), the sampling knob
+# singular.orchestration.plan-critique.v0 record shape (TASK-0012), the sampling knob
 # (TASK-0027), and the classifier/recorder (TASK-0028). It does NOT depend on the
 # resume authority decider (engine/ctx-critic-recheck-resume.sh, TASK-0029), which is
 # accepted but NOT yet integrated.
@@ -29,19 +29,19 @@
 # writes ONLY its single composed output file. It changes no accept/reject outcome,
 # weakens no gate, never lets a resumed context satisfy an independence-required step,
 # and never makes the fresh implementation auditor bypassable. The whole recheck stays
-# default-OFF behind GLUERUN_CRITIC_RECHECK_PCT (TASK-0027), consulted upstream by the
+# default-OFF behind SINGULAR_CRITIC_RECHECK_PCT (TASK-0027), consulted upstream by the
 # follow-up runner. The read-only critic-resume RUNNER, the TASK-0029 resume authority,
 # and the l1-drive.sh post-acceptance hook are sanctioned follow-up slices and are OUT
 # OF SCOPE here.
 #
 # Public entry points:
-#   gluerun_ctx_critic_recheck_accepted_diff <base_ref> <head_ref> [worktree]
+#   singular_ctx_critic_recheck_accepted_diff <base_ref> <head_ref> [worktree]
 #     PURE and READ-ONLY. Prints the accepted diff between the pre-acceptance base and
 #     the accepted/merged head via `git diff` in [worktree] (default `.`). An empty /
 #     indeterminate ref, or a non-repo worktree, yields empty output (fail-safe, never
 #     a crash). Makes no commit/checkout/reset and mutates neither the worktree nor any
 #     state. Always exits 0.
-#   gluerun_ctx_critic_recheck_context <node> <task_id> <prior_critique_record> \
+#   singular_ctx_critic_recheck_context <node> <task_id> <prior_critique_record> \
 #                                      <accepted_diff_file> <out_file>
 #     PURE assembler. Composes into <out_file>: (1) a header framing the skeptic recheck
 #     question (per prior concern: addressed | survives | obsolete); (2) the id-sorted
@@ -54,7 +54,7 @@
 # Pure/read-only accepted-diff reader. Prints `git diff <base> <head>` in the worktree;
 # an empty/indeterminate ref or a non-repo worktree yields empty output. No mutation of
 # worktree or state (no commit/checkout/reset). Always exits 0. See header for contract.
-gluerun_ctx_critic_recheck_accepted_diff() {
+singular_ctx_critic_recheck_accepted_diff() {
   local base_ref="${1:-}" head_ref="${2:-}" worktree="${3:-.}"
   # Indeterminate/empty refs or a missing worktree -> empty output (fail-safe).
   [[ -n "$base_ref" && -n "$head_ref" ]] || return 0
@@ -75,7 +75,7 @@ gluerun_ctx_critic_recheck_accepted_diff() {
 # byte-stable across runs for a fixed input set. A missing/unparseable record degrades
 # to an empty checklist and a missing/empty diff file to an empty diff section (never a
 # crash, never a fabricated finding).
-gluerun_ctx_critic_recheck_context() {
+singular_ctx_critic_recheck_context() {
   local node="${1:-}" task_id="${2:-}" prior_record="${3:-}" \
         diff_file="${4:-}" out_file="${5:-}"
   [[ -n "$out_file" ]] || return 2
@@ -105,7 +105,7 @@ findings = []
 try:
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
-    if isinstance(doc, dict) and doc.get("schema") == "gluerun.orchestration.plan-critique.v0":
+    if isinstance(doc, dict) and doc.get("schema") == "singular.orchestration.plan-critique.v0":
         fl = doc.get("findings")
         if isinstance(fl, list):
             for it in fl:

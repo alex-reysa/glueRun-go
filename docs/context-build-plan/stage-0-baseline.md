@@ -28,17 +28,17 @@ Exit gate: `bash tests/run.sh` green including `test-ctx-loader.sh`;
   and the event log. Emits per-task and aggregate JSON: attempts-to-accept,
   failure classes, audit verdicts, `workerStrategy`/`reviewerStrategy` mix,
   `context.strategy_selected` reasons, decider authority mix.
-- `cli/gluerun` gains a `metrics` subcommand delegating to it (small hook; this
-  node owns the `cli/gluerun` edit).
+- `cli/singular` gains a `metrics` subcommand delegating to it (small hook; this
+  node owns the `cli/singular` edit).
 - Test `tests/test-ctx-metrics.sh` over fixture run dirs.
 
-Exit gate: `gluerun metrics --json` produces stable, documented fields from
+Exit gate: `singular metrics --json` produces stable, documented fields from
 fixtures; suite green.
 
 ## Node `ab-harness` (area: foundation, layer: harness)
 
 - `engine/ctx-ab.sh`: deterministic arm assignment — hash(taskId) → arm A/B —
-  behind `GLUERUN_CTX_AB=0`. Assignment recorded as an `ctx.arm_assigned` event
+  behind `SINGULAR_CTX_AB=0`. Assignment recorded as an `ctx.arm_assigned` event
   at dispatch; NO behavior differs between arms in this stage (arms gain meaning
   as later stages key their knobs off the arm).
 - Determinism requirement: same task id → same arm, machine-independent.
@@ -53,7 +53,7 @@ The bias-measurement instrument. Owns the FIRST `l1-drive.sh` hook of the plan
 (later routing nodes chain behind this node for that file).
 
 - `engine/ctx-paired-audit.sh` + one post-acceptance hook in `l1-drive.sh`:
-  with probability `GLUERUN_PAIRED_AUDIT_PCT` (default 0), after a task is
+  with probability `SINGULAR_PAIRED_AUDIT_PCT` (default 0), after a task is
   ACCEPTED, run one additional auditor pass — always FRESH session, base auditor
   prompt, read-only — and record its verdict + findings as
   `ctx.paired_audit` events and a `paired-audit.json` in the run dir.

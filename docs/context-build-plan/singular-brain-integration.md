@@ -1,4 +1,4 @@
-# singular-brain × glueRun-go — integration decision record
+# singular-brain × singular — integration decision record
 
 Working handoff, written 2026-07-09, to persist the conclusions of the
 singular-brain audit + integration assessment so work resumes with zero prior
@@ -54,9 +54,9 @@ at rehydration (Stage 5).
    like a README, not session context.
 2. **Freshness scopes exclude engine-generated churn.** Tier-1 freshness on
    files the engine rewrites would bury operators in `bless`. The
-   orchestration control tree (`docs/orchestration/`, `.gluerun-state/`) is
+   orchestration control tree (`docs/orchestration/`, `.singular-state/`) is
    `noEntries`/excluded in any scope config (PMGO-launch already does this).
-3. **Engine cleanliness both ways.** No glueRun tokens in singular-brain's
+3. **Engine cleanliness both ways.** No singular tokens in singular-brain's
    `engine/`; no consumer tokens in either engine. All integration specifics
    live in the consumer dock (prompts, Makefile, `singular-brain.config.json`)
    or behind generic, additive, default-OFF engine hooks.
@@ -88,8 +88,8 @@ at rehydration (Stage 5).
    `ctx-rehydrate.sh` assembles packets from durable artifacts;
    `KNOWLEDGE.json` is the machine-readable bridge — entries carry
    `load-when` triggers and freshness state. Hook shape: optional
-   `contextManifest` path in `gluerun.config.json` (additive schema field) +
-   `GLUERUN_CTX_MANIFEST=0` knob. Rules: entries flagged
+   `contextManifest` path in `singular.config.json` (additive schema field) +
+   `SINGULAR_CTX_MANIFEST=0` knob. Rules: entries flagged
    `description_unverified` are never injected as current (inject with the
    flag, or skip); quarantined artifacts excluded; packet manifest records
    which entries were injected, like any other rehydration source.
@@ -100,9 +100,9 @@ at rehydration (Stage 5).
    attempts-to-accept, escape rate. This decides how far integration goes —
    same evidence-gated discipline as the Stage 6 entry condition.
 
-## Distribution: pre-bundle in glueRun-go (recommended)
+## Distribution: pre-bundle in singular (recommended)
 
-**Decision: bundle the singular-brain engine inside the glueRun-go install;
+**Decision: bundle the singular-brain engine inside the singular install;
 do not require a separate install or per-repo vendoring for orchestration
 use.** A separate install is a second version pin and a second setup step per
 machine (the hassle is real); per-repo vendoring already drifted once
@@ -112,23 +112,23 @@ Mechanics:
 
 - Vendor singular-brain's `engine/` into this repo (e.g.
   `vendor/singular-brain/engine/` + its `VERSION`), so it ships inside
-  `~/.gluerun/` via `install.sh` and versions through the existing
-  `.gluerun-version` pin — improvements propagate by bumping the pin, same as
+  `~/.singular/` via `install.sh` and versions through the existing
+  `.singular-version` pin — improvements propagate by bumping the pin, same as
   everything else.
 - Pin integrity like everything else: a `tests/test-vendor-sync.sh` that
   byte-compares the vendored copy against a recorded upstream version/hash,
   so drift is a red test, not a surprise.
-- Thin CLI passthrough — `gluerun manifest <gen|check|lint|bless>` — invoking
+- Thin CLI passthrough — `singular manifest <gen|check|lint|bless>` — invoking
   the bundled `cli.mjs` with the consumer's config. No reconcile-cycle step
   calls it unless the consumer config declares a manifest (default-OFF, plan
   principle 1).
-- **The one real caveat: runtime.** glueRun-go is bash + Python;
+- **The one real caveat: runtime.** singular is bash + Python;
   singular-brain needs Node (any modern Node, zero npm deps). Treat Node as
-  an *optional* dependency: `gluerun doctor` checks for `node` only when the
+  an *optional* dependency: `singular doctor` checks for `node` only when the
   consumer config declares a manifest; without Node the manifest features
   report unavailable and nothing else degrades.
 - Consumer-CI nuance: a repo that wants `singular-brain check` in its own CI
-  without a gluerun install can still vendor per-repo (singular-brain's
+  without a singular install can still vendor per-repo (singular-brain's
   native model). If both bundle and vendored copy exist, `doctor` should
   compare their VERSIONs and warn on mismatch.
 
@@ -148,5 +148,5 @@ depend on every consumer having vendored correctly).
 4. Add the integrate-step `gen` hook (behind the manifest-declared condition).
 5. Write the S0 manifest A/B arm definition into `stage-0-baseline.md` (or a
    task under `ab-harness`).
-6. Stage 5, when reached: `contextManifest` config field + `GLUERUN_CTX_MANIFEST`
+6. Stage 5, when reached: `contextManifest` config field + `SINGULAR_CTX_MANIFEST`
    knob + freshness/quarantine injection rules (this doc, Integration point 3).

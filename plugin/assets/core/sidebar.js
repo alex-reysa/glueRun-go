@@ -1,5 +1,5 @@
 /* core/sidebar.js — the app-level sidebar's collapse state (0.10.0). Persists an
-   open|rail preference in localStorage under `gluerun.side`; with no stored
+   open|rail preference in localStorage under `singular.side`; with no stored
    preference it follows the viewport (rail under 1100px, open at or above) and
    keeps following as the window crosses that breakpoint. A click on #side-collapse
    pins an explicit choice that from then on wins over the media query.
@@ -7,7 +7,7 @@
    Dependency-free (imports nothing) so it sits at the very bottom of the graph;
    main.js calls initSidebar() once, right after initPlans(). */
 
-const KEY = "gluerun.side";
+const KEY = "singular.side";
 const NARROW = "(max-width: 1100px)";
 
 // A valid stored preference, or null when the user has made no explicit choice.

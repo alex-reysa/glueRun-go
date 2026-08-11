@@ -7,25 +7,25 @@
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines new
 # functions ONLY; NO existing engine path invokes them, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior
-# (OFF-parity when GLUERUN_CTX_GRAPH is unset or 0). The eventual `cli/gluerun
+# (OFF-parity when SINGULAR_CTX_GRAPH is unset or 0). The eventual `cli/singular
 # graph query` call site is a later task.
 #
 # Every function here is a READ-ONLY, deterministic reader over the materialized
 # canonical corpus <graphDir>/nodes.jsonl + <graphDir>/edges.jsonl (dedup by id +
-# sorted by id, as gluerun_graph_write_corpus produces). Each reads ONLY those two
+# sorted by id, as singular_graph_write_corpus produces). Each reads ONLY those two
 # files, writes NOTHING, and emits byte-identical output for a given corpus. A
 # missing or empty corpus yields a well-formed EMPTY result with a zero exit
 # (fail-safe) rather than an error. <graphDir> defaults to
-# ${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph} when not supplied.
+# ${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph} when not supplied.
 #
 # Public functions:
-#   gluerun_graph_query_neighbors <graphDir> <nodeId>
+#   singular_graph_query_neighbors <graphDir> <nodeId>
 #       Print every edge record incident to <nodeId> (as `from` or `to`) sorted by
 #       edge id, followed by the adjacent node records (the distinct other-end
 #       nodes, excluding <nodeId> itself) sorted by node id. Records are emitted
 #       verbatim (canonical JSONL) so each carries its `kind` (node|edge). An
 #       unknown node id yields an empty result with a zero exit.
-#   gluerun_graph_query_lineage <graphDir> <startNodeId>
+#   singular_graph_query_lineage <graphDir> <startNodeId>
 #       Print the provenance lineage reachable from <startNodeId> by following the
 #       provenance-edge taxonomy (implements / derived_from / revises / critiques /
 #       accepts_observation / rejects_observation / verifies) as an undirected
@@ -33,7 +33,7 @@
 #       finding -> disposition chain regardless of each edge's stored direction.
 #       Emits the node record for every reachable node present in the corpus,
 #       sorted by node id, with a visited-set guard so cycles terminate.
-#   gluerun_graph_query_open_contradictions <graphDir>
+#   singular_graph_query_open_contradictions <graphDir>
 #       Print exactly the `contradicts`/`invalidates` edge records whose
 #       contradicted/invalidated node (the edge's `to`) is NOT resolved by any
 #       `supersedes` edge (i.e. no `supersedes` edge targets that node), sorted by
@@ -45,15 +45,15 @@
 # nodes.jsonl + edges.jsonl read-only (missing files -> empty streams) and prints
 # the deterministic result. No function writes any path.
 
-# gluerun_graph_query_neighbors <graphDir> <nodeId>
-gluerun_graph_query_neighbors() {
-  local graph_dir="${1:-${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}}"
+# singular_graph_query_neighbors <graphDir> <nodeId>
+singular_graph_query_neighbors() {
+  local graph_dir="${1:-${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}}"
   local node_id="${2:-}"
-  GLUERUN_GQ_DIR="$graph_dir" GLUERUN_GQ_NODE="$node_id" python3 -c '
+  SINGULAR_GQ_DIR="$graph_dir" SINGULAR_GQ_NODE="$node_id" python3 -c '
 import json, os
 
-graph_dir = os.environ["GLUERUN_GQ_DIR"]
-target = os.environ["GLUERUN_GQ_NODE"]
+graph_dir = os.environ["SINGULAR_GQ_DIR"]
+target = os.environ["SINGULAR_GQ_NODE"]
 
 def read_lines(name):
     path = os.path.join(graph_dir, name)
@@ -89,16 +89,16 @@ for nid in sorted(adjacent):
 '
 }
 
-# gluerun_graph_query_lineage <graphDir> <startNodeId>
-gluerun_graph_query_lineage() {
-  local graph_dir="${1:-${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}}"
+# singular_graph_query_lineage <graphDir> <startNodeId>
+singular_graph_query_lineage() {
+  local graph_dir="${1:-${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}}"
   local start="${2:-}"
-  GLUERUN_GQ_DIR="$graph_dir" GLUERUN_GQ_START="$start" python3 -c '
+  SINGULAR_GQ_DIR="$graph_dir" SINGULAR_GQ_START="$start" python3 -c '
 import json, os
 from collections import deque
 
-graph_dir = os.environ["GLUERUN_GQ_DIR"]
-start = os.environ["GLUERUN_GQ_START"]
+graph_dir = os.environ["SINGULAR_GQ_DIR"]
+start = os.environ["SINGULAR_GQ_START"]
 
 # The general provenance-edge taxonomy (context-graph.v0). The lineage walk is
 # defined over these relations, not the subset today’s mappers emit.
@@ -153,13 +153,13 @@ for nid in sorted(visited):
 '
 }
 
-# gluerun_graph_query_open_contradictions <graphDir>
-gluerun_graph_query_open_contradictions() {
-  local graph_dir="${1:-${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}}"
-  GLUERUN_GQ_DIR="$graph_dir" python3 -c '
+# singular_graph_query_open_contradictions <graphDir>
+singular_graph_query_open_contradictions() {
+  local graph_dir="${1:-${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}}"
+  SINGULAR_GQ_DIR="$graph_dir" python3 -c '
 import json, os
 
-graph_dir = os.environ["GLUERUN_GQ_DIR"]
+graph_dir = os.environ["SINGULAR_GQ_DIR"]
 
 CONTRADICTION = {"contradicts", "invalidates"}
 

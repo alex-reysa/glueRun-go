@@ -10,12 +10,12 @@ mechanics); gate results are published manually with the evidence attached.
 
 - Corpus: a real consumer backlog (or this repo's remaining Stage 6/7 tasks
   plus a consumer), ≥ 40 accepted tasks per arm where feasible.
-- Arms via `GLUERUN_CTX_AB`:
+- Arms via `SINGULAR_CTX_AB`:
   - A (control): engine as of M0 knob-state (continuity features OFF).
   - B (treatment): plan critique+revision ON, context packets ON, routing +
     rehydrate ON.
-  - Paired audits at `GLUERUN_PAIRED_AUDIT_PCT=25` in BOTH arms;
-    `GLUERUN_CRITIC_RECHECK_PCT=25` in arm B.
+  - Paired audits at `SINGULAR_PAIRED_AUDIT_PCT=25` in BOTH arms;
+    `SINGULAR_CRITIC_RECHECK_PCT=25` in arm B.
 - Report `docs/context-build-plan/experiment-report.md`:
   - Primary: escape rate per arm (paired-audit confirmed disagreements,
     integration failures, reverts).
@@ -47,14 +47,14 @@ fixture-tested either way, so the consumer experiment needs no engine change.
 - README: continuity + routing + graph sections rewritten around the shipped
   reality; knob table complete; the evidence-invariance principle stated where
   the old token-cost invariant lived.
-- `CHANGELOG.md`, `VERSION` bump, migration notes (any `.gluerun-state` layout
+- `CHANGELOG.md`, `VERSION` bump, migration notes (any `.singular-state` layout
   additions are new-dir-only; confirm no `SCHEMA_VERSION` bump is needed — all
   schema changes in this plan are additive/new).
 - Knob-default flips decided by the experiment report, each as its own small
   reviewed change.
-- Sweep: every `ctx.*` / `plan.*` event type documented; `gluerun metrics` and
-  `gluerun graph` covered in the CLI docs; stale references to the retired
+- Sweep: every `ctx.*` / `plan.*` event type documented; `singular metrics` and
+  `singular graph` covered in the CLI docs; stale references to the retired
   invariant removed.
 
-Exit gate: `gluerun doctor` + full suite green on a fresh clone at the release
+Exit gate: `singular doctor` + full suite green on a fresh clone at the release
 tag; docs describe shipped behavior only.

@@ -2,7 +2,7 @@
 # Covers the read-only experiment arm knob-state AUDIT consumer
 # engine/ctx-experiment-armaudit.sh. TASK-0095's l1-drive.sh hook durably writes
 # per-run knob-state provenance to arm-knob-state.json under each run directory
-# (conforming to gluerun.orchestration.ctx-experiment-armstate.v0, carrying an
+# (conforming to singular.orchestration.ctx-experiment-armstate.v0, carrying an
 # activeCount and a per-knob active flag), but nothing reads it. This consumer
 # audits, across the runs corpus, that each arm actually ran with the expected
 # knob-state so the experiment-report's escape/cost/bias attribution rests on
@@ -63,9 +63,9 @@ file_hash() { shasum "$1" 2>/dev/null | awk '{print $1}'; }
 [[ -f "$SCHEMA" ]] || fail "schema not present yet: $SCHEMA"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-for fn in gluerun_ctx_experiment_armaudit_runstate \
-          gluerun_ctx_experiment_armaudit_classify \
-          gluerun_ctx_experiment_armaudit_json; do
+for fn in singular_ctx_experiment_armaudit_runstate \
+          singular_ctx_experiment_armaudit_classify \
+          singular_ctx_experiment_armaudit_json; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $TOOL"
 done
 
@@ -160,12 +160,12 @@ mk_armstate() { # runId  [KNOB=value ...]
   local rid="$1"; shift
   mkdir -p "$runs/$rid"
   (
-    unset GLUERUN_CTX_PACKET GLUERUN_CTX_ROUTING GLUERUN_REHYDRATE \
-          GLUERUN_PAIRED_AUDIT_PCT GLUERUN_CRITIC_RECHECK_PCT \
-          GLUERUN_CTX_ARTIFACT_SCAN GLUERUN_CTX_MANIFEST
+    unset SINGULAR_CTX_PACKET SINGULAR_CTX_ROUTING SINGULAR_REHYDRATE \
+          SINGULAR_PAIRED_AUDIT_PCT SINGULAR_CRITIC_RECHECK_PCT \
+          SINGULAR_CTX_ARTIFACT_SCAN SINGULAR_CTX_MANIFEST
     local kv
     for kv in "$@"; do export "$kv"; done
-    gluerun_ctx_experiment_armstate_json
+    singular_ctx_experiment_armstate_json
   ) > "$runs/$rid/arm-knob-state.json"
 }
 
@@ -174,19 +174,19 @@ mk_armstate() { # runId  [KNOB=value ...]
 #   RA2: recorded 2 active (PACKET,ROUTING)          -> contaminated
 #   RA3: NO arm-knob-state.json                      -> unrecorded
 mk_index RA1 TA1; mk_armstate RA1
-mk_index RA2 TA2; mk_armstate RA2 GLUERUN_CTX_PACKET=1 GLUERUN_CTX_ROUTING=1
+mk_index RA2 TA2; mk_armstate RA2 SINGULAR_CTX_PACKET=1 SINGULAR_CTX_ROUTING=1
 mk_index RA3 TA3   # deliberately no arm-knob-state.json
 
 # Arm B (treatment, expects activeCount > 0):
 #   RB1: recorded 3 active (PACKET,ROUTING,REHYDRATE) -> consistent
 #   RB2: recorded M0 (activeCount 0)                  -> misconfigured-as-M0
 #   RB3: NO arm-knob-state.json                       -> unrecorded
-mk_index RB1 TB1; mk_armstate RB1 GLUERUN_CTX_PACKET=1 GLUERUN_CTX_ROUTING=1 GLUERUN_REHYDRATE=1
+mk_index RB1 TB1; mk_armstate RB1 SINGULAR_CTX_PACKET=1 SINGULAR_CTX_ROUTING=1 SINGULAR_REHYDRATE=1
 mk_index RB2 TB2; mk_armstate RB2
 mk_index RB3 TB3   # deliberately no arm-knob-state.json
 
 # RX: has an arm-knob-state.json but NO arm assignment -> excluded from A and B.
-mk_index RX TX; mk_armstate RX GLUERUN_CTX_MANIFEST=1
+mk_index RX TX; mk_armstate RX SINGULAR_CTX_MANIFEST=1
 
 cat > "$events" <<'EOF'
 {"ts":"2026-07-12T00:00:00Z","type":"ctx.arm_assigned","message":"m","data":{"taskId":"TA1","arm":"A"}}
@@ -203,7 +203,7 @@ d_before="$(file_hash "$SIB_DRIVE")"
 e_before="$(file_hash "$EMITTER")"
 
 # --- Slice 1: per-run knob-state reader ---------------------------------------
-rs="$(gluerun_ctx_experiment_armaudit_runstate "$runs")" \
+rs="$(singular_ctx_experiment_armaudit_runstate "$runs")" \
   || fail "runstate reader exited non-zero on a valid fixture"
 printf '%s' "$rs" > "$tmp/rs.json"
 python3 - "$tmp/rs.json" <<'PY' || fail "runstate reader did not match expected"
@@ -216,20 +216,20 @@ assert m["RA1"]["activeKnobs"] == [], m["RA1"]
 # RA2 recorded, 2 active knobs listed (sorted)
 assert m["RA2"]["recorded"] is True, m["RA2"]
 assert m["RA2"]["activeCount"] == 2, m["RA2"]
-assert m["RA2"]["activeKnobs"] == ["GLUERUN_CTX_PACKET", "GLUERUN_CTX_ROUTING"], m["RA2"]
+assert m["RA2"]["activeKnobs"] == ["SINGULAR_CTX_PACKET", "SINGULAR_CTX_ROUTING"], m["RA2"]
 # RA3 unrecorded (fail-safe, not an error)
 assert m["RA3"]["recorded"] is False, m["RA3"]
 assert m["RA3"]["activeKnobs"] == [], m["RA3"]
 # RB1 recorded, 3 active
 assert m["RB1"]["recorded"] is True and m["RB1"]["activeCount"] == 3, m["RB1"]
-assert m["RB1"]["activeKnobs"] == ["GLUERUN_CTX_PACKET", "GLUERUN_CTX_ROUTING", "GLUERUN_REHYDRATE"], m["RB1"]
+assert m["RB1"]["activeKnobs"] == ["SINGULAR_CTX_PACKET", "SINGULAR_CTX_ROUTING", "SINGULAR_REHYDRATE"], m["RB1"]
 assert m["RB2"]["recorded"] is True and m["RB2"]["activeCount"] == 0, m["RB2"]
 assert m["RB3"]["recorded"] is False, m["RB3"]
 print("runstate-ok")
 PY
 
 # --- Slice 2: arm-join + per-run classification -------------------------------
-cls="$(gluerun_ctx_experiment_armaudit_classify "$runs" "$events")" \
+cls="$(singular_ctx_experiment_armaudit_classify "$runs" "$events")" \
   || fail "classify aggregator exited non-zero on a valid fixture"
 printf '%s' "$cls" > "$tmp/cls.json"
 python3 - "$tmp/cls.json" <<'PY' || fail "classification did not match expected"
@@ -245,7 +245,7 @@ ia = A["inconsistentRuns"]
 assert len(ia) == 1 and ia[0]["runId"] == "RA2", ia
 assert ia[0]["classification"] == "contaminated", ia
 assert ia[0]["activeCount"] == 2, ia
-assert ia[0]["activeKnobs"] == ["GLUERUN_CTX_PACKET", "GLUERUN_CTX_ROUTING"], ia
+assert ia[0]["activeKnobs"] == ["SINGULAR_CTX_PACKET", "SINGULAR_CTX_ROUTING"], ia
 # Arm B: 2 recorded (RB1,RB2), 1 unrecorded (RB3), 1 consistent, 1 misconfigured.
 assert B["runsRecorded"] == 2, B
 assert B["runsUnrecorded"] == 1, B
@@ -263,7 +263,7 @@ print("classify-ok")
 PY
 
 # --- Slice 3: composed, schema-valid, deterministic artifact -----------------
-art="$(gluerun_ctx_experiment_armaudit_json "$runs" "$events")" \
+art="$(singular_ctx_experiment_armaudit_json "$runs" "$events")" \
   || fail "audit aggregator exited non-zero on a valid fixture"
 printf '%s' "$art" > "$tmp/art.json"
 printf '%s' "$art" | validates "$SCHEMA" || fail "artifact did not validate against $SCHEMA"
@@ -281,7 +281,7 @@ PY
 python3 - "$tmp/art.json" <<'PY' || fail "composed artifact fields did not match expected"
 import json, sys
 m = json.load(open(sys.argv[1]))
-assert m["schema"] == "gluerun.orchestration.ctx-experiment-armaudit.v0", m["schema"]
+assert m["schema"] == "singular.orchestration.ctx-experiment-armaudit.v0", m["schema"]
 arms = m["arms"]
 A, B = arms["A"], arms["B"]
 assert A["arm"] == "A" and B["arm"] == "B", arms
@@ -295,7 +295,7 @@ print("composed-ok")
 PY
 
 # --- Determinism: identical inputs -> byte-identical output ------------------
-art2="$(gluerun_ctx_experiment_armaudit_json "$runs" "$events")"
+art2="$(singular_ctx_experiment_armaudit_json "$runs" "$events")"
 [[ "$art" == "$art2" ]] || fail "composed artifact not deterministic across identical runs"
 
 # --- Read-only: input fixture tree + sibling engine files byte-unchanged ------
@@ -305,14 +305,14 @@ after="$(tree_hash "$fix")"
 [[ "$e_before" == "$(file_hash "$EMITTER")" ]]   || fail "engine/ctx-experiment-armstate.sh was mutated"
 
 # --- Fail-safe: missing runs dir + missing events -> zeroed artifact ----------
-out_empty="$(gluerun_ctx_experiment_armaudit_json "$tmp/no-such-runs" "$tmp/no-such-events.ndjson")" \
+out_empty="$(singular_ctx_experiment_armaudit_json "$tmp/no-such-runs" "$tmp/no-such-events.ndjson")" \
   || fail "audit aggregator crashed on missing input (should fail safe)"
 printf '%s' "$out_empty" > "$tmp/empty.json"
 printf '%s' "$out_empty" | validates "$SCHEMA" || fail "zeroed artifact did not validate against schema"
 python3 - "$tmp/empty.json" <<'PY' || fail "empty-input artifact not well-formed/zeroed"
 import json, sys
 m = json.load(open(sys.argv[1]))
-assert m["schema"] == "gluerun.orchestration.ctx-experiment-armaudit.v0", m
+assert m["schema"] == "singular.orchestration.ctx-experiment-armaudit.v0", m
 for arm in ("A", "B"):
     s = m["arms"][arm]
     assert s["runsRecorded"] == 0 and s["runsUnrecorded"] == 0, s
@@ -323,7 +323,7 @@ PY
 
 # present runs dir + empty events (no arm joins) -> also fail-safe and zeroed.
 : > "$tmp/empty-events.ndjson"
-noarm="$(gluerun_ctx_experiment_armaudit_json "$runs" "$tmp/empty-events.ndjson")" \
+noarm="$(singular_ctx_experiment_armaudit_json "$runs" "$tmp/empty-events.ndjson")" \
   || fail "audit crashed on an empty events file"
 python3 - <<PY || fail "no-arm audit not zeroed"
 import json
@@ -336,8 +336,8 @@ print("noarm-ok")
 PY
 
 # --- No-arg default invocation is also fail-safe -----------------------------
-GLUERUN_RUNS_DIR="$tmp/no-such-runs" GLUERUN_EVENTS_FILE="$tmp/no-such-events.ndjson" \
-  gluerun_ctx_experiment_armaudit_json >/dev/null \
+SINGULAR_RUNS_DIR="$tmp/no-such-runs" SINGULAR_EVENTS_FILE="$tmp/no-such-events.ndjson" \
+  singular_ctx_experiment_armaudit_json >/dev/null \
   || fail "no-arg default invocation crashed instead of failing safe"
 
 echo "ctx-experiment-armaudit tests passed"

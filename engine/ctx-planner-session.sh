@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ctx-planner-session.sh — per-node planner session-meta persistence behind the
-# default-OFF GLUERUN_PLANNER_SESSION knob.
+# default-OFF SINGULAR_PLANNER_SESSION knob.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines new
 # functions only; NO existing engine path invokes them, so with this file
@@ -13,11 +13,11 @@
 # already gives the implementer/reviewer. A canonical per-node path anchors the
 # planner's session-meta as RUNTIME STATE (under the state dir, never docs/,
 # because session ids are runtime state, not repo truth). A guarded finalize
-# wrapper delegates into the already-integrated gluerun_session_meta_finalize,
-# reusing the gluerun.orchestration.session-meta.v0 shape with role "planner"
+# wrapper delegates into the already-integrated singular_session_meta_finalize,
+# reusing the singular.orchestration.session-meta.v0 shape with role "planner"
 # and a new optional additive `node` field.
 #
-# Knob: GLUERUN_PLANNER_SESSION (default 0 = OFF). When OFF the finalize wrapper
+# Knob: SINGULAR_PLANNER_SESSION (default 0 = OFF). When OFF the finalize wrapper
 # is a no-op (no file written) independent of rc, so the flow is byte-identical.
 #
 # Evidence invariance: a failed/invalid planner run (non-zero rc) NEVER finalizes
@@ -25,43 +25,43 @@
 # extend blindly. (Stage 3 revision is the deliberate exception, out of scope.)
 #
 # Public entry points:
-#   gluerun_ctx_planner_session_path <node>
+#   singular_ctx_planner_session_path <node>
 #     Pure: print the canonical per-node planner session-meta path
 #     `<state-dir>/sessions/planner/<node>.json`. No side effects.
-#   gluerun_ctx_planner_session_finalize <node> <rc> <task_id> <run_id> \
+#   singular_ctx_planner_session_finalize <node> <rc> <task_id> <run_id> \
 #                                        <runner_basename> <prompt_sha> <head_sha> <attempt>
-#     Guarded: only when GLUERUN_PLANNER_SESSION=1 AND rc==0, write/update a
-#     finalized meta at the canonical path via gluerun_session_meta_finalize
+#     Guarded: only when SINGULAR_PLANNER_SESSION=1 AND rc==0, write/update a
+#     finalized meta at the canonical path via singular_session_meta_finalize
 #     (role "planner", headShaAtCreate = the planning-time head sha) and add the
 #     additive `node` field. Never fatal.
 
 # Pure path helper: the canonical per-node planner session-meta path under the
 # runtime state dir. Session ids are runtime state, so this lives beside other
-# .gluerun-state artifacts, NEVER under docs/. Empty node -> empty (caller skips).
-gluerun_ctx_planner_session_path() {
+# .singular-state artifacts, NEVER under docs/. Empty node -> empty (caller skips).
+singular_ctx_planner_session_path() {
   local node="$1"
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
-  local state_dir="${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}"
+  local state_dir="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}"
   printf '%s/sessions/planner/%s.json' "$state_dir" "$node"
 }
 
 # Guarded finalize wrapper. No-op unless the knob is ON and the planner run
 # exited successfully (rc 0). Delegates the session-meta.v0 shape to the shared
-# gluerun_session_meta_finalize (role "planner"), then adds the additive optional
+# singular_session_meta_finalize (role "planner"), then adds the additive optional
 # `node` field. NEVER fails the caller.
-gluerun_ctx_planner_session_finalize() {
+singular_ctx_planner_session_finalize() {
   local node="$1" rc="$2" task_id="$3" run_id="$4" \
         runner="$5" prompt_sha="$6" head_sha="$7" attempt="$8"
 
   # Knob default-OFF: unset/"0" -> no file written, byte-identical.
-  [[ "${GLUERUN_PLANNER_SESSION:-0}" == "1" ]] || return 0
+  [[ "${SINGULAR_PLANNER_SESSION:-0}" == "1" ]] || return 0
 
   # Evidence invariance: a failed/invalid planner run is not a lineage we extend.
   # A non-numeric rc is treated as failure (fail closed).
   [[ "$rc" =~ ^[0-9]+$ ]] || return 0
   (( rc == 0 )) || return 0
 
-  local meta_path; meta_path="$(gluerun_ctx_planner_session_path "$node")"
+  local meta_path; meta_path="$(singular_ctx_planner_session_path "$node")"
   [[ -n "$meta_path" ]] || return 0
   mkdir -p "$(dirname "$meta_path")"
 
@@ -71,18 +71,18 @@ gluerun_ctx_planner_session_finalize() {
   # which is stable across frontiers by design. Store the TEMPLATE sha so both
   # sides agree; the rendered-prompt sha the caller passes is intentionally
   # dropped. Resolve the template with the SAME canonical convention the decider
-  # keys on (gluerun_planner_resume_template_path honors GLUERUN_PLANNER_TEMPLATE
-  # and defaults under GLUERUN_ROOT). Evidence invariance: an unreadable/absent
+  # keys on (singular_planner_resume_template_path honors SINGULAR_PLANNER_TEMPLATE
+  # and defaults under SINGULAR_ROOT). Evidence invariance: an unreadable/absent
   # template resolves fail-closed to an empty sha, so a later decide returns
   # `fresh prompt-template-changed` and never a spurious `resume`.
   local tpl_path template_sha
-  tpl_path="$(gluerun_planner_resume_template_path)"
-  template_sha="$(gluerun_sha256_file "$tpl_path" 2>/dev/null || printf '%s' "")"
+  tpl_path="$(singular_planner_resume_template_path)"
+  template_sha="$(singular_sha256_file "$tpl_path" 2>/dev/null || printf '%s' "")"
 
   # Reuse the existing host-side finalize to merge the session-meta.v0 shape with
   # the planner role and lineage anchor (headShaAtCreate = planning-time head).
   # promptSha256 is the normalized TEMPLATE sha, NOT the rendered prompt_sha.
-  gluerun_session_meta_finalize "$meta_path" planner "$task_id" "$run_id" \
+  singular_session_meta_finalize "$meta_path" planner "$task_id" "$run_id" \
     "$runner" "$template_sha" "$head_sha" "$attempt"
 
   # Add the additive optional `node` field. It does not alter the shape when

@@ -45,11 +45,11 @@ git -C "$repo" checkout -q -b main
 git -C "$repo" config user.name test
 git -C "$repo" config user.email test@example.com
 cat >"$repo/.gitignore" <<'EOF'
-.gluerun-state/
+.singular-state/
 .turbo/
 node_modules/
 EOF
-cat >"$repo/gluerun.config.json" <<'JSON'
+cat >"$repo/singular.config.json" <<'JSON'
 {
   "schemaVersion": "v2",
   "targetBranch": "main",
@@ -57,18 +57,18 @@ cat >"$repo/gluerun.config.json" <<'JSON'
 }
 JSON
 printf 'committed\n' >"$repo/app.txt"
-git -C "$repo" add .gitignore gluerun.config.json app.txt
+git -C "$repo" add .gitignore singular.config.json app.txt
 git -C "$repo" commit -qm init
 head_sha="$(git -C "$repo" rev-parse HEAD)"
 
 base_env=(
-  GLUERUN_ROOT="$repo"
-  GLUERUN_STATE_DIR="$tmp/state"
-  GLUERUN_RUNS_DIR="$tmp/runs"
-  GLUERUN_WORKTREES_DIR="$tmp/worktrees"
-  GLUERUN_GIT_LOCK_DIR="$tmp/state/locks/git-op.lock"
-  GLUERUN_TARGET_BRANCH="main"
-  GLUERUN_BOOTSTRAP_JSON="{}"
+  SINGULAR_ROOT="$repo"
+  SINGULAR_STATE_DIR="$tmp/state"
+  SINGULAR_RUNS_DIR="$tmp/runs"
+  SINGULAR_WORKTREES_DIR="$tmp/worktrees"
+  SINGULAR_GIT_LOCK_DIR="$tmp/state/locks/git-op.lock"
+  SINGULAR_TARGET_BRANCH="main"
+  SINGULAR_BOOTSTRAP_JSON="{}"
 )
 
 run_verify() {
@@ -93,26 +93,26 @@ outcome() {
 # Turbo/Vitest/Bun-style cache writes are allowed in ignored workspace paths
 # and isolated cache roots, while the original audited checkout stays unchanged.
 original_before="$(git -C "$repo" status --porcelain=v1 --untracked-files=all)"
-pass_observation='printf "%s\n" "{\"schema\":\"gluerun.orchestration.gate-observation.v0\",\"failures\":[]}" >"$GLUERUN_GATE_REPORT_FILE"'
+pass_observation='printf "%s\n" "{\"schema\":\"singular.orchestration.gate-observation.v0\",\"failures\":[]}" >"$SINGULAR_GATE_REPORT_FILE"'
 cache_command="$pass_observation; mkdir -p .turbo node_modules/.vite; printf cache > .turbo/state; printf vite > node_modules/.vite/state; test -n \"\$TURBO_CACHE_DIR\"; printf external > \"\$TURBO_CACHE_DIR/entry\""
 run_verify "$cache_command" 0
 [[ "$(outcome)" == "passed" ]]
 [[ "$(git -C "$repo" status --porcelain=v1 --untracked-files=all)" == "$original_before" ]]
 [[ ! -e "$repo/.turbo/state" && ! -e "$repo/node_modules/.vite/state" ]]
 
-run_verify 'printf "%s\n" "{\"schema\":\"gluerun.orchestration.gate-observation.v0\",\"failures\":[{\"signature\":\"assertion-one\"}]}" >"$GLUERUN_GATE_REPORT_FILE"; printf "AssertionError: expected one to equal two\n" >&2; exit 1' 10
+run_verify 'printf "%s\n" "{\"schema\":\"singular.orchestration.gate-observation.v0\",\"failures\":[{\"signature\":\"assertion-one\"}]}" >"$SINGULAR_GATE_REPORT_FILE"; printf "AssertionError: expected one to equal two\n" >&2; exit 1' 10
 [[ "$(outcome)" == "failed-product" ]]
 
-run_verify 'printf "%s\n" "{\"schema\":\"gluerun.orchestration.gate-observation.v0\",\"failures\":[],\"infrastructureFailure\":true,\"infrastructureReason\":\"read-only-filesystem\"}" >"$GLUERUN_GATE_REPORT_FILE"; printf "Read-only file system\n" >&2; exit 1' 20
+run_verify 'printf "%s\n" "{\"schema\":\"singular.orchestration.gate-observation.v0\",\"failures\":[],\"infrastructureFailure\":true,\"infrastructureReason\":\"read-only-filesystem\"}" >"$SINGULAR_GATE_REPORT_FILE"; printf "Read-only file system\n" >&2; exit 1' 20
 [[ "$(outcome)" == "inconclusive-infrastructure" ]]
 
 # Infrastructure setup prose containing the word "failed" is not itself a
 # product-test signal.
-run_verify 'printf "%s\n" "{\"schema\":\"gluerun.orchestration.gate-observation.v0\",\"failures\":[],\"infrastructureFailure\":true,\"infrastructureReason\":\"permission-denied\"}" >"$GLUERUN_GATE_REPORT_FILE"; printf "tool setup failed: EACCES permission denied\n" >&2; exit 1' 20
+run_verify 'printf "%s\n" "{\"schema\":\"singular.orchestration.gate-observation.v0\",\"failures\":[],\"infrastructureFailure\":true,\"infrastructureReason\":\"permission-denied\"}" >"$SINGULAR_GATE_REPORT_FILE"; printf "tool setup failed: EACCES permission denied\n" >&2; exit 1' 20
 [[ "$(outcome)" == "inconclusive-infrastructure" ]]
 
 # A genuine product assertion wins over an unrelated infrastructure warning.
-run_verify 'printf "%s\n" "{\"schema\":\"gluerun.orchestration.gate-observation.v0\",\"failures\":[{\"signature\":\"assertion-mixed\"}],\"infrastructureFailure\":true,\"infrastructureReason\":\"read-only-filesystem\"}" >"$GLUERUN_GATE_REPORT_FILE"; printf "Read-only file system\nAssertionError: expected one to equal two\n" >&2; exit 1' 10
+run_verify 'printf "%s\n" "{\"schema\":\"singular.orchestration.gate-observation.v0\",\"failures\":[{\"signature\":\"assertion-mixed\"}],\"infrastructureFailure\":true,\"infrastructureReason\":\"read-only-filesystem\"}" >"$SINGULAR_GATE_REPORT_FILE"; printf "Read-only file system\nAssertionError: expected one to equal two\n" >&2; exit 1' 10
 [[ "$(outcome)" == "failed-product" ]]
 
 # Any attempted source mutation invalidates the disposable attempt; the source
@@ -158,7 +158,7 @@ PY
 # A bounded audited gate cannot hold a verifier slot forever. Exit 124 is
 # infrastructure, and the timeout guard terminates the command tree.
 timeout_started="$(date +%s)"
-GLUERUN_AUDIT_GATE_TIMEOUT_SEC=1 run_verify 'sleep 30' 20
+SINGULAR_AUDIT_GATE_TIMEOUT_SEC=1 run_verify 'sleep 30' 20
 timeout_elapsed="$(( $(date +%s) - timeout_started ))"
 [[ "$timeout_elapsed" -lt 10 ]] || {
   echo "audited gate timeout exceeded bound (${timeout_elapsed}s)" >&2
@@ -280,13 +280,13 @@ baseline_command_sha="$(printf '%s' "$baseline_command" | shasum -a 256 | awk '{
 printf 'known baseline failure\n' >"$run_dir/baseline-gate.log"
 cat >"$run_dir/baseline-observation.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.gate-observation.v0",
+  "schema": "singular.orchestration.gate-observation.v0",
   "failures": [{"signature": "known-baseline"}]
 }
 JSON
 cat >"$run_dir/baseline.json" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-baseline.v0",
+  "schema": "singular.orchestration.gate-baseline.v0",
   "commandSha256": "$baseline_command_sha",
   "failures": [{"signature": "known-baseline"}],
   "acknowledgedBy": "owner",

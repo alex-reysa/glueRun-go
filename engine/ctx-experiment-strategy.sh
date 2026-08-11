@@ -46,17 +46,17 @@
 # exit, never an error or partial output.
 #
 # Public entry points:
-#   gluerun_ctx_experiment_hit_rates [events_file]
+#   singular_ctx_experiment_hit_rates [events_file]
 #     Prints {"overall":SLICE, "byArm":{"A":SLICE,"B":SLICE},
 #             "byRole":{"implementer":SLICE,"planner":SLICE,"reviewer":SLICE}}
 #     where SLICE = {total, resume, rehydrate, resumeHitRate, rehydrateHitRate}.
-#   gluerun_ctx_experiment_refusal_mix [events_file]
+#   singular_ctx_experiment_refusal_mix [events_file]
 #     Prints {"reasonMix":{<reason>:count,...}, "resumeFailed":int}.
-#   gluerun_ctx_experiment_strategy_json [events_file]
+#   singular_ctx_experiment_strategy_json [events_file]
 #     Emits ONE deterministic, sorted-key JSON object conforming to
-#     gluerun.orchestration.ctx-experiment-strategy.v0, merging the per-arm and
+#     singular.orchestration.ctx-experiment-strategy.v0, merging the per-arm and
 #     per-role hit rates with the gate-refusal reason mix. Default:
-#     events_file=$GLUERUN_EVENTS_FILE.
+#     events_file=$SINGULAR_EVENTS_FILE.
 
 # --- shared read-only parser -------------------------------------------------
 # Emits Python that, when included, defines load_events(path) returning:
@@ -65,7 +65,7 @@
 #   arm_of     : taskId -> "A"/"B" (last assignment wins deterministically)
 #   resume_failed : int count of context.resume_failed events
 # plus the ROLES / ARMS / STRATEGIES constants and the slice_of() helper. Pure.
-_gluerun_ctx_experiment_strategy_py() {
+_singular_ctx_experiment_strategy_py() {
   cat <<'PY'
 import json
 
@@ -162,11 +162,11 @@ PY
 }
 
 # Resume / rehydrate hit rates, sliced overall + per arm + per role. Fail-safe.
-gluerun_ctx_experiment_hit_rates() {
-  local events_file="${1:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_hit_rates() {
+  local events_file="${1:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_strategy_py)
+$(_singular_ctx_experiment_strategy_py)
 
 selections, arm_of, _ = load_events(sys.argv[1])
 json.dump(hit_rates(selections, arm_of), sys.stdout, sort_keys=True)
@@ -175,11 +175,11 @@ PY
 }
 
 # Gate-refusal reason mix + distinct resume_failed count. Fail-safe.
-gluerun_ctx_experiment_refusal_mix() {
-  local events_file="${1:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_refusal_mix() {
+  local events_file="${1:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_strategy_py)
+$(_singular_ctx_experiment_strategy_py)
 
 selections, _, resume_failed = load_events(sys.argv[1])
 json.dump(refusal_mix(selections, resume_failed), sys.stdout, sort_keys=True)
@@ -190,15 +190,15 @@ PY
 # Composed secondary-metrics artifact. Merges the per-arm and per-role hit rates
 # with the gate-refusal reason mix into one deterministic sorted-key JSON object.
 # Fail-safe.
-gluerun_ctx_experiment_strategy_json() {
-  local events_file="${1:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_strategy_json() {
+  local events_file="${1:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_strategy_py)
+$(_singular_ctx_experiment_strategy_py)
 
 selections, arm_of, resume_failed = load_events(sys.argv[1])
 artifact = {
-    "schema": "gluerun.orchestration.ctx-experiment-strategy.v0",
+    "schema": "singular.orchestration.ctx-experiment-strategy.v0",
     "hitRates": hit_rates(selections, arm_of),
     "refusalMix": refusal_mix(selections, resume_failed),
 }

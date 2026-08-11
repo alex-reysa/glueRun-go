@@ -1,6 +1,6 @@
 # L2 Test-First Developer Prompt
 
-You are a glueRun-go worker agent executing Task `[TASK-ID]`.
+You are a singular worker agent executing Task `[TASK-ID]`.
 
 Branch: `[BRANCH]`
 

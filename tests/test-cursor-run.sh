@@ -6,7 +6,7 @@ set -euo pipefail
 # --output-format json ({"type":"result","result":"...","is_error":bool,...}), so
 # these run offline and in CI. They assert the drop-in contract: .result captured
 # into --output-last-message, missing-binary -> 127, the read-only restore guard,
-# wall-clock timeout (-> 124), the model flag omitted when GLUERUN_CURSOR_MODEL is
+# wall-clock timeout (-> 124), the model flag omitted when SINGULAR_CURSOR_MODEL is
 # unset and present when set, readonly -> `--mode ask` (not -f), and is_error -> 4.
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,7 +16,7 @@ RUN="$SCRIPT_DIR/cursor-run.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-cursor-test.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-cursor-test.XXXXXX")"
 bindir="$workroot/bin"
 mkdir -p "$bindir"
 cleanup() { rm -rf "$workroot"; }
@@ -45,20 +45,20 @@ PY
 MOCK
 chmod +x "$bindir/cursor-agent"
 
-export GLUERUN_TARGET_BRANCH="test-target"
+export SINGULAR_TARGET_BRANCH="test-target"
 
 new_repo() {
   local d="$1"; mkdir -p "$d"
   ( cd "$d" && git init -q && git config user.email t@t && git config user.name t \
-      && printf '.gluerun-state/\n' > .gitignore && git add .gitignore && git commit -qm init \
-      && git branch "$GLUERUN_TARGET_BRANCH" )
+      && printf '.singular-state/\n' > .gitignore && git add .gitignore && git commit -qm init \
+      && git branch "$SINGULAR_TARGET_BRANCH" )
 }
 
 prompt() { local p="$workroot/prompt.md"; printf 'do the thing\n' > "$p"; echo "$p"; }
 
 run_cursor_run() {
   local repo="$1"; shift
-  ( cd "$repo" && PATH="$bindir:$PATH" GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$repo/.gluerun-state" "$RUN" "$@" )
+  ( cd "$repo" && PATH="$bindir:$PATH" SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$repo/.singular-state" "$RUN" "$@" )
 }
 
 extract() { python3 - "$1" "$2" <<'PY'
@@ -84,7 +84,7 @@ pass "c1 L2 happy path: .result captured + exit 0"
 
 # --- Case 2: missing binary -> 127 ---------------------------------------------
 r="$workroot/c2"; new_repo "$r"; o="$(out)"; p="$(prompt)"; ec=0
-( cd "$r" && PATH="/usr/bin:/bin" GLUERUN_ROOT="$r" GLUERUN_STATE_DIR="$r/.gluerun-state" \
+( cd "$r" && PATH="/usr/bin:/bin" SINGULAR_ROOT="$r" SINGULAR_STATE_DIR="$r/.singular-state" \
     "$RUN" --level l2 -C "$r" --prompt-file "$p" --output-last-message "$o" ) >/dev/null 2>&1 || ec=$?
 [[ "$ec" -eq 127 ]] || fail "c2: missing cursor-agent should exit 127 (got $ec)"
 pass "c2 missing binary -> 127"
@@ -108,7 +108,7 @@ pass "c4 readonly reverts tracked modification"
 # --- Case 5: wall-clock timeout -> 124, kills the child tree --------------------
 r="$workroot/c5"; new_repo "$r"; o="$(out)"; p="$(prompt)"; marker="$r/completed.marker"; ec=0
 start=$SECONDS
-MOCK_SLEEP=6 MOCK_MARKER="$marker" GLUERUN_CURSOR_TIMEOUT_SEC=2 \
+MOCK_SLEEP=6 MOCK_MARKER="$marker" SINGULAR_CURSOR_TIMEOUT_SEC=2 \
   run_cursor_run "$r" --level l2 -C "$r" --prompt-file "$p" --output-last-message "$o" >/dev/null 2>&1 || ec=$?
 elapsed=$((SECONDS - start))
 [[ "$ec" -eq 124 ]] || fail "c5: timeout should exit 124 (got $ec)"
@@ -121,10 +121,10 @@ pass "c5 wall-clock timeout exits 124 and kills the child tree"
 r="$workroot/c6"; new_repo "$r"; o="$(out)"; p="$(prompt)"; args="$workroot/c6.args"
 MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args" \
   run_cursor_run "$r" --level l2 -C "$r" --prompt-file "$p" --output-last-message "$o" >/dev/null 2>&1
-grep -q -- "--model " "$args" && fail "c6: --model present when GLUERUN_CURSOR_MODEL unset (got: $(cat "$args"))"
+grep -q -- "--model " "$args" && fail "c6: --model present when SINGULAR_CURSOR_MODEL unset (got: $(cat "$args"))"
 grep -qw -- "-f" "$args" || fail "c6: l2 should pass -f (got: $(cat "$args"))"
 args2="$workroot/c6b.args"
-MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args2" GLUERUN_CURSOR_MODEL="auto" \
+MOCK_RESULT='{"ok":true}' MOCK_ARGS_OUT="$args2" SINGULAR_CURSOR_MODEL="auto" \
   run_cursor_run "$r" --level l2 -C "$r" --prompt-file "$p" --output-last-message "$o" >/dev/null 2>&1
 grep -q -- "--model auto" "$args2" || fail "c6: --model auto missing when model set (got: $(cat "$args2"))"
 pass "c6 model flag omitted when unset, present when set; l2 -> -f"

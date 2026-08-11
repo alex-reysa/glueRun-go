@@ -1,5 +1,5 @@
 # Runtime state (Bundle C) — never committed, created per consumer repo
-.gluerun-state/
+.singular-state/
 .worktrees/
 
 # Local scratch
@@ -9,8 +9,8 @@
 # Python bytecode (never track compiled artifacts)
 __pycache__/
 *.pyc
-.gluerun-evidence/
-.gluerun-cache/
+.singular-evidence/
+.singular-cache/
 
 # Locally installed agent skills + their lockfile. The engine reads
 # .agents/skills as a capability source, but the installed contents are

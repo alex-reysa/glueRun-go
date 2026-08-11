@@ -4,7 +4,7 @@
 # `experiment-run` executable DAG node (layer evaluation). TASK-0095's
 # l1-drive.sh hook now durably writes per-run knob-state provenance to
 # arm-knob-state.json under each run directory (conforming to
-# gluerun.orchestration.ctx-experiment-armstate.v0, carrying an activeCount and a
+# singular.orchestration.ctx-experiment-armstate.v0, carrying an activeCount and a
 # per-knob active flag), but NOTHING reads it — the provenance is write-only.
 # requiredCompletion defines the arms by their knob-state (control = M0
 # knob-state; treatment = critique + revision + packets + routing), and the
@@ -51,16 +51,16 @@
 # exit, never a nonzero exit or partial output.
 #
 # Public entry points:
-#   gluerun_ctx_experiment_armaudit_runstate [runs_dir]
+#   singular_ctx_experiment_armaudit_runstate [runs_dir]
 #     Prints {<runId>:{recorded, activeCount, activeKnobs}, ...} — per-run
 #     knob-state read from arm-knob-state.json (a missing file -> recorded false).
-#   gluerun_ctx_experiment_armaudit_classify [runs_dir] [events_file]
+#   singular_ctx_experiment_armaudit_classify [runs_dir] [events_file]
 #     Prints {"A":SLICE,"B":SLICE} where SLICE = {arm, expectation, runsRecorded,
 #     runsUnrecorded, consistent, inconsistent, inconsistentRuns[]}.
-#   gluerun_ctx_experiment_armaudit_json [runs_dir] [events_file]
+#   singular_ctx_experiment_armaudit_json [runs_dir] [events_file]
 #     Emits ONE deterministic, sorted-key JSON object conforming to
-#     gluerun.orchestration.ctx-experiment-armaudit.v0. Defaults:
-#     runs_dir=$GLUERUN_RUNS_DIR, events_file=$GLUERUN_EVENTS_FILE.
+#     singular.orchestration.ctx-experiment-armaudit.v0. Defaults:
+#     runs_dir=$SINGULAR_RUNS_DIR, events_file=$SINGULAR_EVENTS_FILE.
 
 # --- shared read-only parser -------------------------------------------------
 # Emits Python that, when included, defines:
@@ -69,7 +69,7 @@
 #                              activeKnobs} in sorted runId order
 #   classify(runs, arm_of)  -> {"A":SLICE,"B":SLICE}
 # plus the ARMS constant. Pure; reads only the given paths; no writes.
-_gluerun_ctx_experiment_armaudit_py() {
+_singular_ctx_experiment_armaudit_py() {
   cat <<'PY'
 import json
 import os
@@ -205,11 +205,11 @@ PY
 }
 
 # Per-run knob-state read from each run's arm-knob-state.json. Read-only, fail-safe.
-gluerun_ctx_experiment_armaudit_runstate() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
+singular_ctx_experiment_armaudit_runstate() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
   python3 - "$runs_dir" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_armaudit_py)
+$(_singular_ctx_experiment_armaudit_py)
 
 runs = load_runs(sys.argv[1])
 out = {
@@ -226,12 +226,12 @@ PY
 }
 
 # Per-arm join + classification. Read-only, fail-safe.
-gluerun_ctx_experiment_armaudit_classify() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_experiment_armaudit_classify() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$runs_dir" "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_armaudit_py)
+$(_singular_ctx_experiment_armaudit_py)
 
 runs_dir, events_file = sys.argv[1], sys.argv[2]
 arm_of = load_arms(events_file)
@@ -242,19 +242,19 @@ PY
 }
 
 # Composed audit artifact: ONE deterministic sorted-key JSON object conforming to
-# gluerun.orchestration.ctx-experiment-armaudit.v0. Read-only, fail-safe.
-gluerun_ctx_experiment_armaudit_json() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
+# singular.orchestration.ctx-experiment-armaudit.v0. Read-only, fail-safe.
+singular_ctx_experiment_armaudit_json() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$runs_dir" "$events_file" <<PY || true
 import json, sys
-$(_gluerun_ctx_experiment_armaudit_py)
+$(_singular_ctx_experiment_armaudit_py)
 
 runs_dir, events_file = sys.argv[1], sys.argv[2]
 arm_of = load_arms(events_file)
 runs = load_runs(runs_dir)
 artifact = {
-    "schema": "gluerun.orchestration.ctx-experiment-armaudit.v0",
+    "schema": "singular.orchestration.ctx-experiment-armaudit.v0",
     "arms": classify(runs, arm_of),
 }
 json.dump(artifact, sys.stdout, indent=2, sort_keys=True)

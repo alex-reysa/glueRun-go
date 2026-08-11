@@ -20,19 +20,19 @@ assert_contains() { [[ "$1" == *"$2"* ]] || fail "$3: missing '$2' in: $1"; }
 workroot="$(mktemp -d)"
 trap 'rm -rf "$workroot"' EXIT
 root="$workroot/repo"
-mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/prompts" "$root/.gluerun-state"
+mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/prompts" "$root/.singular-state"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 cp "$ENGINE_HOME/templates/prompts/l2-test-first-developer.md" "$root/docs/orchestration/prompts/"
 cp "$ENGINE_HOME/templates/prompts/auditor.md" "$root/docs/orchestration/prompts/"
 printf '# Decider Prompt\n[TASK-ID] [FAILURE CLASS]\n' >"$root/docs/orchestration/prompts/decider.md"
-cat >"$root/gluerun.config.json" <<'JSON'
+cat >"$root/singular.config.json" <<'JSON'
 {"schemaVersion":"v2","targetBranch":"target","gateCommand":"bash strict-gate.sh"}
 JSON
 cat >"$root/strict-gate.sh" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' '{"schema":"gluerun.orchestration.gate-observation.v0","failures":[]}' \
-  >"$GLUERUN_GATE_REPORT_FILE"
+printf '%s\n' '{"schema":"singular.orchestration.gate-observation.v0","failures":[]}' \
+  >"$SINGULAR_GATE_REPORT_FILE"
 SH
 chmod +x "$root/strict-gate.sh"
 
@@ -93,7 +93,7 @@ if [[ "$level" == "l2" ]]; then
     printf 'package widget\n// stable content\n' >"$worktree/internal/widget/parser.go"
   fi
   [[ -n "$out" ]] && cat >"$out" <<'PKT'
-{"schema":"gluerun.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
 PKT
   exit 0
 fi
@@ -123,7 +123,7 @@ import os
 
 finding = os.environ["AUDIT_FINDINGS"]
 record = {
-    "schema": "gluerun.orchestration.audit-verdict.v1",
+    "schema": "singular.orchestration.audit-verdict.v1",
     "taskId": "TASK-0001",
     "runId": "r",
     "branch": "agent/widget/TASK-0001-generic",
@@ -151,13 +151,13 @@ MOCK
 chmod +x "$mock"
 
 run_drive() {
-  env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ORCH_DIR="$root/docs/orchestration" GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
-    GLUERUN_LEASES_DIR="$root/.gluerun-state/leases" GLUERUN_INBOX_DIR="$root/.gluerun-state/inbox" \
-    GLUERUN_RUNS_DIR="$root/.gluerun-state/runs" GLUERUN_WORKTREES_DIR="$root/.worktrees" \
-    GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" \
-    GLUERUN_TARGET_BRANCH=target GLUERUN_RUNNER="$mock" GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
-    GLUERUN_DECIDER_FAST=1 AUDIT_COUNT_FILE="$workroot/audit-count" "$@" \
+  env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ORCH_DIR="$root/docs/orchestration" SINGULAR_TASKS_DIR="$root/docs/orchestration/tasks" \
+    SINGULAR_LEASES_DIR="$root/.singular-state/leases" SINGULAR_INBOX_DIR="$root/.singular-state/inbox" \
+    SINGULAR_RUNS_DIR="$root/.singular-state/runs" SINGULAR_WORKTREES_DIR="$root/.worktrees" \
+    SINGULAR_EVENTS_FILE="$root/.singular-state/events.ndjson" \
+    SINGULAR_TARGET_BRANCH=target SINGULAR_RUNNER="$mock" SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
+    SINGULAR_DECIDER_FAST=1 AUDIT_COUNT_FILE="$workroot/audit-count" "$@" \
     bash "$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1
 }
 
@@ -179,7 +179,7 @@ done
 active_status=""
 auditor_pid="$(cat "$workroot/auditor.pid")"
 for _ in $(seq 1 400); do
-  active_status="$(find "$root/.gluerun-state/runs" -name run-status.json -type f | head -1)"
+  active_status="$(find "$root/.singular-state/runs" -name run-status.json -type f | head -1)"
   if [[ -n "$active_status" ]] && python3 - "$active_status" "$auditor_pid" <<'PY' >/dev/null 2>&1
 import json
 import sys
@@ -230,19 +230,19 @@ else
   out="$(cat "$drive_output")"
   fail "drive should accept (out: $out)"
 fi
-events="$(cat "$root/.gluerun-state/events.ndjson")"
+events="$(cat "$root/.singular-state/events.ndjson")"
 assert_contains "$events" '"type":"l1.no_changes_reconciled"' "empty-diff retry reconciled"
 assert_contains "$events" '"type":"l1.task_accepted"' "task accepted after reconciled retry"
-audit_path="$(ls "$root"/.gluerun-state/runs/*/audit.json | head -1)"
+audit_path="$(ls "$root"/.singular-state/runs/*/audit.json | head -1)"
 [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "$audit_path")" \
-  == "gluerun.orchestration.audit-verdict.v1" ]] || fail "v2 repo did not write audit-verdict.v1"
+  == "singular.orchestration.audit-verdict.v1" ]] || fail "v2 repo did not write audit-verdict.v1"
 run_status="${audit_path%/audit.json}/run-status.json"
 python3 - "$run_status" <<'PY'
 import json
 import sys
 
 data = json.load(open(sys.argv[1]))
-assert data["schema"] == "gluerun.orchestration.run-status.v0"
+assert data["schema"] == "singular.orchestration.run-status.v0"
 assert data["phase"] == "terminal"
 assert data["state"] == "completed"
 assert data["outcome"] == "accepted"
@@ -252,13 +252,13 @@ assert data["process"]["pid"] > 0
 assert data["process"]["pgid"] > 0
 PY
 # 0.6.0: the auditor's runner output must be durable in the run dir.
-ls "$root"/.gluerun-state/runs/*/auditor-codex.log >/dev/null 2>&1 \
+ls "$root"/.singular-state/runs/*/auditor-codex.log >/dev/null 2>&1 \
   || fail "auditor-codex.log not written by audit phase"
 
 reset_fixture() {
-  rm -rf "$root/.gluerun-state/runs" "$root/.gluerun-state/leases" \
-    "$root/.gluerun-state/inbox" "$root/.worktrees"
-  : >"$root/.gluerun-state/events.ndjson"
+  rm -rf "$root/.singular-state/runs" "$root/.singular-state/leases" \
+    "$root/.singular-state/inbox" "$root/.worktrees"
+  : >"$root/.singular-state/events.ndjson"
   rm -f "$workroot/audit-count"
   git -C "$root" worktree prune 2>/dev/null || true
   git -C "$root" branch -D agent/widget/TASK-0001-generic 2>/dev/null || true
@@ -275,18 +275,18 @@ PY
 # verdict; the task may still be accepted on that explicitly weaker basis.
 reset_fixture
 if ! out="$(
-  run_drive env WRITE_MODE=fixed GLUERUN_AUDIT_VERIFY=0
+  run_drive env WRITE_MODE=fixed SINGULAR_AUDIT_VERIFY=0
 )"; then
   fail "evidence-only verification with a matching v1 classification should accept: $out"
 fi
-events="$(cat "$root/.gluerun-state/events.ndjson")"
+events="$(cat "$root/.singular-state/events.ndjson")"
 assert_contains "$events" '"type":"audit.evidence_only_verified"' \
   "evidence-only host verification recorded"
 assert_contains "$events" '"verification":"not-rerun-evidence-verified"' \
   "audit completion preserves evidence-only classification"
 assert_contains "$events" '"type":"l1.task_accepted"' \
   "matching evidence-only audit accepted"
-audit_path="$(ls "$root"/.gluerun-state/runs/*/audit.json | head -1)"
+audit_path="$(ls "$root"/.singular-state/runs/*/audit.json | head -1)"
 python3 - "$audit_path" <<'PY'
 import json
 import sys
@@ -304,11 +304,11 @@ grep -q 'host verification classification is `not-rerun-evidence-verified`' \
 reset_fixture
 rc=0
 out="$(
-  run_drive env WRITE_MODE=fixed GLUERUN_AUDIT_VERIFY=0 \
-    GLUERUN_AUDIT_INFRA_MAX=0 AUDIT_STATUS_OVERRIDE=passed
+  run_drive env WRITE_MODE=fixed SINGULAR_AUDIT_VERIFY=0 \
+    SINGULAR_AUDIT_INFRA_MAX=0 AUDIT_STATUS_OVERRIDE=passed
 )" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "mismatched evidence-only v1 classification must fail closed"
-events="$(cat "$root/.gluerun-state/events.ndjson")"
+events="$(cat "$root/.singular-state/events.ndjson")"
 assert_contains "$events" '"type":"l1.audit_verification_mismatch"' \
   "host/model classification mismatch recorded"
 [[ "$events" != *'"type":"l1.task_accepted"'* ]] \
@@ -318,9 +318,9 @@ assert_contains "$events" '"type":"l1.audit_verification_mismatch"' \
 #    no-changes (truly no content vs base).
 reset_fixture
 rc=0
-out="$(run_drive env WRITE_MODE=never GLUERUN_MAX_RETRIES=5)" || rc=$?
+out="$(run_drive env WRITE_MODE=never SINGULAR_MAX_RETRIES=5)" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "empty fresh attempt must not accept"
-events="$(cat "$root/.gluerun-state/events.ndjson")"
+events="$(cat "$root/.singular-state/events.ndjson")"
 assert_contains "$events" 'no-changes' "no-changes failure recorded"
 
 # 5. ...and it stops after the SECOND identical attempt instead of spending the
@@ -332,7 +332,7 @@ assert_contains "$events" 'no-changes' "no-changes failure recorded"
 assert_contains "$events" '"type":"l1.no_progress_parked"' "no-progress guard fired"
 # maxRetries=5 means up to 6 attempts; the guard must stop at 2. Counted from
 # the archived attempt directories, which is what the loop actually produced.
-attempts="$(find "$root/.gluerun-state/runs" -type f -path '*/attempts/*/failure.txt' 2>/dev/null | wc -l | tr -d ' ')"
+attempts="$(find "$root/.singular-state/runs" -type f -path '*/attempts/*/failure.txt' 2>/dev/null | wc -l | tr -d ' ')"
 [[ "$attempts" -le 2 && "$attempts" -ge 1 ]] \
   || fail "no-progress guard did not stop the loop: $attempts attempts archived (expected <= 2)"
 assert_contains "$out" "parking (no progress since the previous attempt)" \

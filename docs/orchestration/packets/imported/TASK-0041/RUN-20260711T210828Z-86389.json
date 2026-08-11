@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.state-packet.v0",
+  "schema": "singular.orchestration.state-packet.v0",
   "packetId": "PACKET-TASK-0041-20260711T210828Z",
   "runId": "RUN-20260711T210828Z-86389",
   "taskId": "TASK-0041",
@@ -22,19 +22,19 @@
   ],
   "commands": [
     {
-      "cmd": "bash tests/test-ctx-artifact-scan.sh > .gluerun-evidence/red.log 2>&1",
+      "cmd": "bash tests/test-ctx-artifact-scan.sh > .singular-evidence/red.log 2>&1",
       "exitCode": 1,
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
-      "cmd": "bash tests/test-ctx-artifact-scan.sh > .gluerun-evidence/green.log 2>&1",
+      "cmd": "bash tests/test-ctx-artifact-scan.sh > .singular-evidence/green.log 2>&1",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
-      "cmd": "bash tests/run.sh > .gluerun-evidence/regression.log 2>&1",
+      "cmd": "bash tests/run.sh > .singular-evidence/regression.log 2>&1",
       "exitCode": 1,
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     },
     {
       "cmd": "bash -n engine/secret-scan.sh engine/ctx-artifact-scan.sh tests/test-ctx-artifact-scan.sh > /tmp/task-0041-bash-n.log 2>&1",
@@ -52,19 +52,19 @@
       "name": "tests/test-ctx-artifact-scan.sh",
       "phase": "red",
       "status": "failed-as-expected",
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "name": "tests/test-ctx-artifact-scan.sh",
       "phase": "green",
       "status": "passed",
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "name": "tests/run.sh",
       "phase": "regression-initial",
       "status": "failed",
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     },
     {
       "name": "tests/run.sh",
@@ -76,15 +76,15 @@
   "evidence": [
     {
       "kind": "red-log",
-      "ref": ".gluerun-evidence/red.log"
+      "ref": ".singular-evidence/red.log"
     },
     {
       "kind": "green-log",
-      "ref": ".gluerun-evidence/green.log"
+      "ref": ".singular-evidence/green.log"
     },
     {
       "kind": "regression-log",
-      "ref": ".gluerun-evidence/regression.log"
+      "ref": ".singular-evidence/regression.log"
     },
     {
       "kind": "syntax-check",

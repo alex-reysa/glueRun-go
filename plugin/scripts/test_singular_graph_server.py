@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Unit tests for the read-only session-terminal log parsing in gluerun_graph_server.
+"""Unit tests for the read-only session-terminal log parsing in singular_graph_server.
 
 These cover the *pure* parsing layer — classify_codex_record, parse_log_lines,
 and the byte-cursor read_log_window — with no orchestration repo required. Run:
 
-    python3 -m unittest scripts.test_gluerun_graph_server
-    python3 scripts/test_gluerun_graph_server.py
+    python3 -m unittest scripts.test_singular_graph_server
+    python3 scripts/test_singular_graph_server.py
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import time
 import unittest
 from pathlib import Path
 
-import gluerun_graph_server as srv
+import singular_graph_server as srv
 
 # Every module global apply_console_adapter may mutate — tests that apply an
 # adapter snapshot these first and restore them afterwards so the rest of the
@@ -160,7 +160,7 @@ class ParseLogLinesTests(unittest.TestCase):
         self.assertTrue(warn["text"].startswith("codex_core::exec"))
 
     def test_planner_batch_agent_message(self) -> None:
-        payload = json.dumps({"schema": "gluerun.orchestration.task-batch.v0", "tasks": [{"taskId": "TASK-0475"}]})
+        payload = json.dumps({"schema": "singular.orchestration.task-batch.v0", "tasks": [{"taskId": "TASK-0475"}]})
         line = json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": payload}})
         recs = srv.parse_log_lines([line])
         self.assertEqual(len(recs), 1)
@@ -273,7 +273,7 @@ class PlannerPromptTests(unittest.TestCase):
     def test_parses_area_node_stage_layer(self) -> None:
         text = (
             "# L1 Area Planner Prompt\n\n"
-            "You are the glueRun-go Area Planner for area `workflow`. You keep going.\n\n"
+            "You are the singular Area Planner for area `workflow`. You keep going.\n\n"
             "Executable DAG node: `D2.service`\nStage: `D2`\nLayer: `service`\n"
         )
         info = srv._parse_planner_prompt(text)
@@ -547,7 +547,7 @@ class EventsOverlayTests(unittest.TestCase):
     def test_bounded_read_types_filter_and_noise(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            (repo / ".gluerun-state").mkdir()
+            (repo / ".singular-state").mkdir()
             (repo / "docs/orchestration").mkdir(parents=True)
             (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps(
                 {"nodes": [{"id": "D1.contract", "stage": "D1", "area": "artifact"}]}))
@@ -556,7 +556,7 @@ class EventsOverlayTests(unittest.TestCase):
                 json.dumps(_ev("planner.generated", "t1", taskId="T1", node="D1.contract")),
                 json.dumps(_ev("l1.committed", "t2", taskId="T1", headSha="abcdef0")),
             ]
-            (repo / ".gluerun-state/events.ndjson").write_text("\n".join(lines) + "\n")
+            (repo / ".singular-state/events.ndjson").write_text("\n".join(lines) + "\n")
             # no filter: noise excluded, area resolved for node rows
             res = srv.collect_events_overlay(repo, None, 100, None)
             types = [r["type"] for r in res["rows"]]
@@ -571,13 +571,13 @@ class EventsOverlayTests(unittest.TestCase):
 
 class PlanOverviewTests(unittest.TestCase):
     def test_parse_shell_default(self) -> None:
-        text = 'GLUERUN_CODEX_MODEL="${GLUERUN_CODEX_MODEL:-gpt-5.5}"\n' \
-               'GLUERUN_MAX_DISPATCH="${GLUERUN_MAX_DISPATCH:-$max_concurrent}"\n' \
-               'GLUERUN_L2_SLICE_BUDGET="${GLUERUN_L2_SLICE_BUDGET:-1}"\n'
-        self.assertEqual(srv.parse_shell_default(text, "GLUERUN_CODEX_MODEL"), "gpt-5.5")
-        self.assertEqual(srv.parse_shell_default(text, "GLUERUN_MAX_DISPATCH"), "$max_concurrent")
-        self.assertEqual(srv.parse_shell_default(text, "GLUERUN_L2_SLICE_BUDGET"), "1")
-        self.assertIsNone(srv.parse_shell_default(text, "GLUERUN_NOT_PRESENT"))
+        text = 'SINGULAR_CODEX_MODEL="${SINGULAR_CODEX_MODEL:-gpt-5.5}"\n' \
+               'SINGULAR_MAX_DISPATCH="${SINGULAR_MAX_DISPATCH:-$max_concurrent}"\n' \
+               'SINGULAR_L2_SLICE_BUDGET="${SINGULAR_L2_SLICE_BUDGET:-1}"\n'
+        self.assertEqual(srv.parse_shell_default(text, "SINGULAR_CODEX_MODEL"), "gpt-5.5")
+        self.assertEqual(srv.parse_shell_default(text, "SINGULAR_MAX_DISPATCH"), "$max_concurrent")
+        self.assertEqual(srv.parse_shell_default(text, "SINGULAR_L2_SLICE_BUDGET"), "1")
+        self.assertIsNone(srv.parse_shell_default(text, "SINGULAR_NOT_PRESENT"))
 
     def test_compute_plan_progress(self) -> None:
         registry = srv.parse_dag({"nodes": [
@@ -611,11 +611,11 @@ class PlanOverviewTests(unittest.TestCase):
             orch = repo / "scripts" / "orchestration"
             orch.mkdir(parents=True)
             (orch / "lib.sh").write_text(
-                'GLUERUN_L2_SLICE_BUDGET="${GLUERUN_L2_SLICE_BUDGET:-2}"\n'
-                'GLUERUN_ENABLE_L1_PARALLEL="${GLUERUN_ENABLE_L1_PARALLEL:-0}"\n'
+                'SINGULAR_L2_SLICE_BUDGET="${SINGULAR_L2_SLICE_BUDGET:-2}"\n'
+                'SINGULAR_ENABLE_L1_PARALLEL="${SINGULAR_ENABLE_L1_PARALLEL:-0}"\n'
             )
             (orch / "autonomate.sh").write_text(
-                'export GLUERUN_AUTO_INTEGRATE="${GLUERUN_AUTO_INTEGRATE:-1}"\n'
+                'export SINGULAR_AUTO_INTEGRATE="${SINGULAR_AUTO_INTEGRATE:-1}"\n'
             )
             (orch / "codex-run.sh").write_text("")
             (orch / "reconcile.sh").write_text("")
@@ -625,17 +625,17 @@ class PlanOverviewTests(unittest.TestCase):
             self.assertEqual(groups[0]["layout"], "matrix")  # models group
             flat = {it["envKey"]: it for g in groups for it in g["items"]}
             # parsed default wins over fallback; metadata is carried through
-            self.assertEqual(flat["GLUERUN_L2_SLICE_BUDGET"]["value"], "2")
-            self.assertEqual(flat["GLUERUN_L2_SLICE_BUDGET"]["kind"], "count")
+            self.assertEqual(flat["SINGULAR_L2_SLICE_BUDGET"]["value"], "2")
+            self.assertEqual(flat["SINGULAR_L2_SLICE_BUDGET"]["kind"], "count")
             # duration unit is split OUT of the label, not baked in parens
-            loop = flat["GLUERUN_MAX_HOURS"]
+            loop = flat["SINGULAR_MAX_HOURS"]
             self.assertEqual((loop["unit"], loop["label"]), ("h", "loop budget"))
             # booleans expose boolValue, never rendered as raw 0/1 downstream
-            self.assertIs(flat["GLUERUN_ENABLE_L1_PARALLEL"]["boolValue"], False)
-            self.assertIs(flat["GLUERUN_AUTO_INTEGRATE"]["boolValue"], True)
+            self.assertIs(flat["SINGULAR_ENABLE_L1_PARALLEL"]["boolValue"], False)
+            self.assertIs(flat["SINGULAR_AUTO_INTEGRATE"]["boolValue"], True)
             # derived dispatch stays an honest non-resolved string
-            self.assertEqual(flat["GLUERUN_MAX_DISPATCH"]["kind"], "derived")
-            self.assertEqual(flat["GLUERUN_MAX_DISPATCH"]["value"], "follows max concurrent")
+            self.assertEqual(flat["SINGULAR_MAX_DISPATCH"]["kind"], "derived")
+            self.assertEqual(flat["SINGULAR_MAX_DISPATCH"]["value"], "follows max concurrent")
             # every item carries meaning help text
             self.assertTrue(all(isinstance(it["meaning"], str) for it in flat.values()))
 
@@ -671,9 +671,9 @@ class PlanOverviewTests(unittest.TestCase):
         self.assertEqual([n["id"] for n in areas["evidence"]["nodes"]], ["D5.x"])
 
     def test_parse_status_md(self) -> None:
-        text = ("# glueRun-go Autonomous Status\nUpdated: 2026-06-05T13:28:30Z\nIteration: 6\n"
+        text = ("# singular Autonomous Status\nUpdated: 2026-06-05T13:28:30Z\nIteration: 6\n"
                 "Note: stopped (STOP sentinel)\nSTOP requested: yes\n"
-                "- branch: `codex/gluerun-bootstrap-target` @ `c0d342d`\n"
+                "- branch: `codex/singular-bootstrap-target` @ `c0d342d`\n"
                 "- ready tasks: 5\n- active leases: 0\n- imported packets: 536\n"
                 "- integrations (lifetime): 535\n- parked escalations (lifetime): 71\n"
                 "- circuit-breaker consecutive failures: 0 / 5\n")
@@ -683,7 +683,7 @@ class PlanOverviewTests(unittest.TestCase):
         self.assertTrue(s["stopRequested"])
         self.assertEqual(s["integrationsLifetime"], 535)
         self.assertEqual(s["parkedLifetime"], 71)
-        self.assertEqual(s["branch"], "codex/gluerun-bootstrap-target")
+        self.assertEqual(s["branch"], "codex/singular-bootstrap-target")
         self.assertEqual(s["breaker"], "0 / 5")
 
 
@@ -738,7 +738,7 @@ class NodeRankAndStageOrderTests(unittest.TestCase):
             repo = Path(d)
             (repo / "docs/orchestration/gates").mkdir(parents=True)
             (repo / "docs/orchestration/dag.v0.json").write_text(
-                json.dumps({"schema": "gluerun.orchestration.dag.v0",
+                json.dumps({"schema": "singular.orchestration.dag.v0",
                             **self._inverted_registry()}))
             view = srv.collect_dag_view(repo)
             self.assertEqual([s["id"] for s in view["stages"]], ["D9", "D5", "D1"])
@@ -769,7 +769,7 @@ class GateCohortTests(unittest.TestCase):
 
     def _dag(self, repo: Path, node_ids: list[str]) -> None:
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
-            "schema": "gluerun.orchestration.dag.v0",
+            "schema": "singular.orchestration.dag.v0",
             "nodes": [{"id": nid, "stage": "D0", "area": "core", "layer": "contract",
                        "kind": "contract", "dependsOn": [], "requiredCompletion": "x"}
                       for nid in node_ids]}))
@@ -864,8 +864,8 @@ class ConsoleAdapterPrecedenceTests(unittest.TestCase):
             repo, engine = self._fixture(Path(d))
             # (b) engine-shipped: provides commands AND noiseEventTypes
             (engine / "plugin/adapters/console-adapter.v0.json").write_text(json.dumps({
-                "schema": "gluerun.console-adapter.v0",
-                "commands": {"status": ["gluerun", "status"]},
+                "schema": "singular.console-adapter.v0",
+                "commands": {"status": ["singular", "status"]},
                 "noiseEventTypes": ["engine.noise"],
             }))
             # (a2) repo adapter file: provides noiseEventTypes only
@@ -873,7 +873,7 @@ class ConsoleAdapterPrecedenceTests(unittest.TestCase):
                 "noiseEventTypes": ["repo.noise"],
             }))
             # (a1) inline console block: provides commands only
-            (repo / "gluerun.config.json").write_text(json.dumps({
+            (repo / "singular.config.json").write_text(json.dumps({
                 "schemaVersion": "v0",
                 "console": {"commands": {"status": ["custom", "status"]}},
             }))
@@ -897,10 +897,10 @@ class ConsoleAdapterPrecedenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             repo, engine = self._fixture(Path(d))
             (engine / "plugin/adapters/console-adapter.v0.json").write_text(json.dumps({
-                "commands": {"status": ["gluerun", "status"]},
+                "commands": {"status": ["singular", "status"]},
             }))
             merged = srv.load_console_adapter(repo, str(engine))
-            self.assertEqual(merged["commands"], {"status": ["gluerun", "status"]})
+            self.assertEqual(merged["commands"], {"status": ["singular", "status"]})
             # no adapter at all -> pure built-in document
             none = srv.load_console_adapter(repo, None)
             self.assertEqual(none, srv.builtin_console_adapter())
@@ -908,7 +908,7 @@ class ConsoleAdapterPrecedenceTests(unittest.TestCase):
     def test_schema_version_selects_engine_adapter_file(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo, engine = self._fixture(Path(d))
-            (repo / "gluerun.config.json").write_text(json.dumps({"schemaVersion": "v1"}))
+            (repo / "singular.config.json").write_text(json.dumps({"schemaVersion": "v1"}))
             (engine / "plugin/adapters/console-adapter.v0.json").write_text(json.dumps({
                 "commands": {"status": ["wrong", "file"]}}))
             (engine / "plugin/adapters/console-adapter.v1.json").write_text(json.dumps({
@@ -929,13 +929,13 @@ class ConsoleAdapterPrecedenceTests(unittest.TestCase):
     def test_bad_key_keeps_builtin_for_that_key_only(self) -> None:
         bad = dict(srv.builtin_console_adapter())
         bad["idPatterns"] = {"task": "(unbalanced", "node": "x", "area": "y"}
-        bad["commands"] = {"status": ["gluerun", "status"]}
+        bad["commands"] = {"status": ["singular", "status"]}
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             apply_adapter_with_restore(self, bad)
         self.assertIn("idPatterns", err.getvalue())
         self.assertEqual(srv.TASK_ID_RE.pattern, r"^TASK-\d+$")  # built-in kept
-        self.assertEqual(srv.CONSOLE_COMMANDS["status"], ["gluerun", "status"])  # good key applied
+        self.assertEqual(srv.CONSOLE_COMMANDS["status"], ["singular", "status"])  # good key applied
 
 
 class TargetBranchFlowTests(unittest.TestCase):
@@ -945,14 +945,14 @@ class TargetBranchFlowTests(unittest.TestCase):
     def test_config_branch_flows_to_env_drift_and_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            (repo / "gluerun.config.json").write_text(json.dumps(
+            (repo / "singular.config.json").write_text(json.dumps(
                 {"targetBranch": "custom/integration"}))
             self.assertEqual(srv.load_repo_target_branch(repo), "custom/integration")
             saved = srv.TARGET_BRANCH
             self.addCleanup(lambda: setattr(srv, "TARGET_BRANCH", saved))
             srv.TARGET_BRANCH = srv.load_repo_target_branch(repo)  # what main() does
             # subprocess env injection
-            res = srv.run_command(repo, ["sh", "-c", 'printf %s "$GLUERUN_TARGET_BRANCH"'])
+            res = srv.run_command(repo, ["sh", "-c", 'printf %s "$SINGULAR_TARGET_BRANCH"'])
             self.assertEqual(res["stdout"], "custom/integration")
             # drift check + snapshot field
             saved_procs = srv.collect_processes
@@ -968,12 +968,12 @@ class TargetBranchFlowTests(unittest.TestCase):
 
 class CliProjectFixtureTests(unittest.TestCase):
     """C3: a CLI project (no Makefile, no scripts/orchestration) with
-    GLUERUN_ENGINE_HOME + the shipped v0 adapter gets gluerun commands and reads its
+    SINGULAR_ENGINE_HOME + the shipped v0 adapter gets singular commands and reads its
     settings defaults from the engine's own scripts."""
 
     SHIPPED_ADAPTER = Path(srv.__file__).resolve().parent.parent / "adapters/console-adapter.v0.json"
 
-    def test_gluerun_commands_and_engine_settings_source(self) -> None:
+    def test_singular_commands_and_engine_settings_source(self) -> None:
         if not self.SHIPPED_ADAPTER.is_file():
             # The standalone plugin copy ships the console adapterless (the engine
             # owns plugin/adapters/); skip rather than error when it isn't co-located.
@@ -982,7 +982,7 @@ class CliProjectFixtureTests(unittest.TestCase):
             base = Path(d)
             repo = base / "cli-project"
             repo.mkdir()
-            (repo / "gluerun.config.json").write_text(json.dumps(
+            (repo / "singular.config.json").write_text(json.dumps(
                 {"schemaVersion": "v0", "targetBranch": "main"}))
             engine = base / "engine-home"
             (engine / "plugin/adapters").mkdir(parents=True)
@@ -990,31 +990,31 @@ class CliProjectFixtureTests(unittest.TestCase):
                 self.SHIPPED_ADAPTER.read_text())
             (engine / "engine").mkdir()
             (engine / "engine/lib.sh").write_text(
-                'GLUERUN_MAX_CONCURRENT="${GLUERUN_MAX_CONCURRENT:-4}"\n')
+                'SINGULAR_MAX_CONCURRENT="${SINGULAR_MAX_CONCURRENT:-4}"\n')
             (engine / "engine/codex-run.sh").write_text("")
             (engine / "engine/reconcile.sh").write_text("")
             (engine / "engine/autonomate.sh").write_text("")
-            saved_env = os.environ.get("GLUERUN_ENGINE_HOME")
+            saved_env = os.environ.get("SINGULAR_ENGINE_HOME")
 
             def restore_env() -> None:
                 if saved_env is None:
-                    os.environ.pop("GLUERUN_ENGINE_HOME", None)
+                    os.environ.pop("SINGULAR_ENGINE_HOME", None)
                 else:
-                    os.environ["GLUERUN_ENGINE_HOME"] = saved_env
+                    os.environ["SINGULAR_ENGINE_HOME"] = saved_env
 
             self.addCleanup(restore_env)
-            os.environ["GLUERUN_ENGINE_HOME"] = str(engine)
+            os.environ["SINGULAR_ENGINE_HOME"] = str(engine)
             apply_adapter_with_restore(self, srv.load_console_adapter(repo, str(engine)))
-            # commands are the gluerun CLI equivalents, not make orch-* targets
-            self.assertEqual(srv.CONSOLE_COMMANDS["status"], ["gluerun", "status"])
-            self.assertEqual(srv.CONSOLE_COMMANDS["validateDag"], ["gluerun", "validate-dag"])
+            # commands are the singular CLI equivalents, not make orch-* targets
+            self.assertEqual(srv.CONSOLE_COMMANDS["status"], ["singular", "status"])
+            self.assertEqual(srv.CONSOLE_COMMANDS["validateDag"], ["singular", "validate-dag"])
             self.assertEqual(srv.console_command("areaGate", node="D1.contract"),
-                             ["gluerun", "area-gate", "D1.contract"])
+                             ["singular", "area-gate", "D1.contract"])
             # settings source resolves to the engine's scripts via the template
             self.assertEqual(srv.SETTINGS_SOURCE, "{engineHome}/engine")
             self.assertEqual(srv.resolve_settings_dir(repo), engine / "engine")
             flat = {it["envKey"]: it for g in srv.collect_settings(repo) for it in g["items"]}
-            self.assertEqual(flat["GLUERUN_MAX_CONCURRENT"]["value"], "4")
+            self.assertEqual(flat["SINGULAR_MAX_CONCURRENT"]["value"], "4")
             # the new engine event types arrive via the shipped adapter
             for etype in NEW_ENGINE_EVENT_TYPES:
                 self.assertIn(etype, srv.EVENT_MAP)
@@ -1022,21 +1022,21 @@ class CliProjectFixtureTests(unittest.TestCase):
             self.assertEqual(row["label"], "Context strategy selected")
 
     def test_settings_source_engine_home_fallback_without_adapter(self) -> None:
-        # No adapter, but GLUERUN_ENGINE_HOME set -> engine/*.sh; unset -> legacy repo dir.
+        # No adapter, but SINGULAR_ENGINE_HOME set -> engine/*.sh; unset -> legacy repo dir.
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            saved_env = os.environ.get("GLUERUN_ENGINE_HOME")
+            saved_env = os.environ.get("SINGULAR_ENGINE_HOME")
 
             def restore_env() -> None:
                 if saved_env is None:
-                    os.environ.pop("GLUERUN_ENGINE_HOME", None)
+                    os.environ.pop("SINGULAR_ENGINE_HOME", None)
                 else:
-                    os.environ["GLUERUN_ENGINE_HOME"] = saved_env
+                    os.environ["SINGULAR_ENGINE_HOME"] = saved_env
 
             self.addCleanup(restore_env)
-            os.environ["GLUERUN_ENGINE_HOME"] = "/opt/gluerun-engine"
-            self.assertEqual(srv.resolve_settings_dir(repo), Path("/opt/gluerun-engine/engine"))
-            os.environ.pop("GLUERUN_ENGINE_HOME", None)
+            os.environ["SINGULAR_ENGINE_HOME"] = "/opt/singular-engine"
+            self.assertEqual(srv.resolve_settings_dir(repo), Path("/opt/singular-engine/engine"))
+            os.environ.pop("SINGULAR_ENGINE_HOME", None)
             self.assertEqual(srv.resolve_settings_dir(repo), repo / "scripts/orchestration")
 
 
@@ -1048,10 +1048,10 @@ class UnknownEventTypeRenderingTests(unittest.TestCase):
     def test_unknown_types_in_events_ndjson_render_gracefully(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            (repo / ".gluerun-state").mkdir()
+            (repo / ".singular-state").mkdir()
             lines = [json.dumps(_ev(t, "2026-06-09T00:00:00Z", taskId="TASK-1"))
                      for t in NEW_ENGINE_EVENT_TYPES + ["totally.unknown_type"]]
-            (repo / ".gluerun-state/events.ndjson").write_text("\n".join(lines) + "\n")
+            (repo / ".singular-state/events.ndjson").write_text("\n".join(lines) + "\n")
             res = srv.collect_events_overlay(repo, None, 100, None)  # must not raise
             self.assertEqual(len(res["rows"]), len(lines))
             by_type = {r["type"]: r for r in res["rows"]}
@@ -1077,9 +1077,9 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
         (repo / "docs/orchestration/tasks").mkdir(parents=True)
         (repo / "docs/orchestration/gates").mkdir(parents=True)
         (repo / "docs/orchestration/areas/artifact").mkdir(parents=True)
-        (repo / ".gluerun-state/leases").mkdir(parents=True)
+        (repo / ".singular-state/leases").mkdir(parents=True)
         (repo / "scripts/orchestration").mkdir(parents=True)
-        (repo / "gluerun.config.json").write_text(json.dumps(
+        (repo / "singular.config.json").write_text(json.dumps(
             {"schemaVersion": "v0", "targetBranch": "agent/integration"}))
         (repo / "docs/orchestration/tasks/TASK-0001.md").write_text(
             "# TASK-0001: Sample slice\n"
@@ -1088,7 +1088,7 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             "Gate Command: `go test ./...`\nDepends On: []\n\n"
             "## Objective\nDo a sample thing.\n\n## Acceptance Criteria\n- it works\n")
         (repo / "docs/orchestration/areas/artifact/state.md").write_text("# artifact\n")
-        (repo / ".gluerun-state/leases/TASK-0001.json").write_text(json.dumps({
+        (repo / ".singular-state/leases/TASK-0001.json").write_text(json.dumps({
             "taskId": "TASK-0001", "status": "integrated", "owner": "l2-developer",
             "runId": "RUN-1", "area": "artifact", "branch": "agent/task-0001",
             "worktree": str(repo / ".worktrees/none"), "updatedAt": "2026-06-08T10:00:00Z",
@@ -1115,28 +1115,28 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             # unknown-to-the-built-in type: both servers must degrade identically
             _ev("worker.infra_retry", "2026-06-08T09:04:00Z", taskId="TASK-0001"),
         ]
-        (repo / ".gluerun-state/events.ndjson").write_text(
+        (repo / ".singular-state/events.ndjson").write_text(
             "\n".join(json.dumps(e) for e in events) + "\n")
-        (repo / ".gluerun-state/autonomate.out.log").write_text("loop line 1\nloop line 2\n")
-        (repo / ".gluerun-state/STATUS.md").write_text(
-            "# glueRun-go Autonomous Status\nUpdated: 2026-06-08T10:00:00Z\nIteration: 3\n"
+        (repo / ".singular-state/autonomate.out.log").write_text("loop line 1\nloop line 2\n")
+        (repo / ".singular-state/STATUS.md").write_text(
+            "# singular Autonomous Status\nUpdated: 2026-06-08T10:00:00Z\nIteration: 3\n"
             "Note: running\n- ready tasks: 1\n- integrations (lifetime): 12\n")
-        (repo / ".gluerun-state/circuit.json").write_text(json.dumps({"consecFails": 0}))
+        (repo / ".singular-state/circuit.json").write_text(json.dumps({"consecFails": 0}))
         (repo / "scripts/orchestration/lib.sh").write_text(
-            'GLUERUN_MAX_CONCURRENT="${GLUERUN_MAX_CONCURRENT:-2}"\n'
-            'GLUERUN_TARGET_BRANCH="${GLUERUN_TARGET_BRANCH:-agent/integration}"\n')
-        (repo / ".gluerun-state/.env").write_text("GLUERUN_SLEEP=5\nDATABASE_URL=secret\n")
+            'SINGULAR_MAX_CONCURRENT="${SINGULAR_MAX_CONCURRENT:-2}"\n'
+            'SINGULAR_TARGET_BRANCH="${SINGULAR_TARGET_BRANCH:-agent/integration}"\n')
+        (repo / ".singular-state/.env").write_text("SINGULAR_SLEEP=5\nDATABASE_URL=secret\n")
 
     def _load_head_module(self, tmp: Path):
         root = Path(srv.__file__).resolve().parents[2]
         proc = subprocess.run(
-            ["git", "-C", str(root), "show", "HEAD:plugin/scripts/gluerun_graph_server.py"],
+            ["git", "-C", str(root), "show", "HEAD:plugin/scripts/singular_graph_server.py"],
             capture_output=True, text=True)
         if proc.returncode != 0:
             self.skipTest(f"cannot read HEAD server from git: {proc.stderr.strip()}")
-        path = tmp / "gluerun_graph_server_head.py"
+        path = tmp / "singular_graph_server_head.py"
         path.write_text(proc.stdout)
-        spec = importlib.util.spec_from_file_location("gluerun_graph_server_head", path)
+        spec = importlib.util.spec_from_file_location("singular_graph_server_head", path)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
@@ -1154,9 +1154,9 @@ class NoAdapterSnapshotIdentityTests(unittest.TestCase):
             repo = base / "repo"
             repo.mkdir()
             self._build_fixture(repo)
-            saved_env = os.environ.pop("GLUERUN_ENGINE_HOME", None)
+            saved_env = os.environ.pop("SINGULAR_ENGINE_HOME", None)
             if saved_env is not None:
-                self.addCleanup(lambda: os.environ.__setitem__("GLUERUN_ENGINE_HOME", saved_env))
+                self.addCleanup(lambda: os.environ.__setitem__("SINGULAR_ENGINE_HOME", saved_env))
             head = self._load_head_module(base)
             saved = {n: getattr(srv, n) for n in
                      ("utc_now", "collect_processes", "collect_disk", "TARGET_BRANCH")}
@@ -1220,8 +1220,8 @@ class ProcessMatcherSemanticsTests(unittest.TestCase):
     PS = "\n".join([
         "  PID  PPID COMMAND",
         "  100     1 bash scripts/orchestration/autonomate.sh",
-        "  101     1 codex --cd /x/GLUERUN exec something",
-        "  102     1 python3 plugin/scripts/gluerun_graph_server.py --repo .",   # excluded
+        "  101     1 codex --cd /x/SINGULAR exec something",
+        "  102     1 python3 plugin/scripts/singular_graph_server.py --repo .",   # excluded
         "  103     1 rg --files",                                            # not matched
         "  104     1 bash /repo/.worktrees/task-1/run.sh",
         "  105     1 some autonomate thing | Cursor Helper",                 # excluded (lowered)
@@ -1251,7 +1251,7 @@ class NativeFrontierTests(unittest.TestCase):
     def _write_dag(self, repo: Path, nodes: list[dict]) -> None:
         (repo / "docs/orchestration/gates").mkdir(parents=True, exist_ok=True)
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps(
-            {"schema": "gluerun.orchestration.dag.v0", "nodes": nodes}))
+            {"schema": "singular.orchestration.dag.v0", "nodes": nodes}))
 
     def _gate(self, repo: Path, node_id: str, status: str, authoritative: bool = True) -> None:
         (repo / "docs/orchestration/gates" / f"{node_id}.gate-result.json").write_text(
@@ -1323,7 +1323,7 @@ class ValidateDagNativeTests(unittest.TestCase):
     def _write(self, repo: Path, nodes: list[dict]) -> None:
         (repo / "docs/orchestration").mkdir(parents=True, exist_ok=True)
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps(
-            {"schema": "gluerun.orchestration.dag.v0", "nodes": nodes}))
+            {"schema": "singular.orchestration.dag.v0", "nodes": nodes}))
 
     def _node(self, node_id: str, deps: list[str]) -> dict:
         return {"id": node_id, "stage": "D0", "area": "core", "layer": "contract",
@@ -1378,17 +1378,17 @@ class SnapshotNoSubprocessTests(unittest.TestCase):
     def test_collect_snapshot_runs_no_make(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            (repo / ".gluerun-state").mkdir()
+            (repo / ".singular-state").mkdir()
             (repo / "docs/orchestration/tasks").mkdir(parents=True)
             (repo / "docs/orchestration/gates").mkdir(parents=True)
             (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
-                "schema": "gluerun.orchestration.dag.v0",
+                "schema": "singular.orchestration.dag.v0",
                 "nodes": [{"id": "D0.a", "stage": "D0", "area": "core", "layer": "contract",
                            "kind": "build", "dependsOn": [], "requiredCompletion": "done"}]}))
-            run_dir = repo / ".gluerun-state/runs/RUN-resource"
+            run_dir = repo / ".singular-state/runs/RUN-resource"
             run_dir.mkdir(parents=True)
             (run_dir / "resource-plan.json").write_text(json.dumps({
-                "schema": "gluerun.orchestration.resource-plan.v0",
+                "schema": "singular.orchestration.resource-plan.v0",
                 "configuredSlots": 7,
                 "effectiveSlots": 1,
                 "freeBytes": 1,
@@ -1580,7 +1580,7 @@ class ProbeOverrideEscapeHatchTests(unittest.TestCase):
 
     def test_adapter_command_marks_probe_overridden(self) -> None:
         adapter = dict(srv.builtin_console_adapter())
-        adapter["commands"] = {"status": ["gluerun", "status"]}
+        adapter["commands"] = {"status": ["singular", "status"]}
         apply_adapter_with_restore(self, adapter)
         self.assertTrue(srv.probe_command_overridden("status"))
         # deep-merged untouched keys remain built-in -> still native
@@ -1617,7 +1617,7 @@ class AssetRouteTests(unittest.TestCase):
         self.assertIn("javascript", resolved[1])
 
     def test_rejections(self) -> None:
-        for name in ("../test_gluerun_graph_server.py", "..%2fx.js", "/etc/passwd",
+        for name in ("../test_singular_graph_server.py", "..%2fx.js", "/etc/passwd",
                      "notes.txt", ".hidden.js", "core/.env.js", "", "core/missing.js"):
             self.assertIsNone(srv.resolve_asset(name), name)
 
@@ -1631,13 +1631,13 @@ class CollectDagViewTests(unittest.TestCase):
         repo = Path(tmp.name)
         (repo / "docs/orchestration/tasks").mkdir(parents=True)
         (repo / "docs/orchestration/gates").mkdir(parents=True)
-        (repo / ".gluerun-state/leases").mkdir(parents=True)
-        (repo / ".gluerun-state/l1-leases").mkdir(parents=True)
+        (repo / ".singular-state/leases").mkdir(parents=True)
+        (repo / ".singular-state/l1-leases").mkdir(parents=True)
         return repo
 
     def _write_dag(self, repo: Path) -> None:
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
-            "schema": "gluerun.orchestration.dag.v0",
+            "schema": "singular.orchestration.dag.v0",
             "layers": ["contract", "runtime"], "kinds": ["contract", "runtime"],
             "nodes": [
                 {"id": "alpha", "stage": "S0-base", "area": "core", "layer": "contract",
@@ -1658,16 +1658,16 @@ class CollectDagViewTests(unittest.TestCase):
             "# TASK-0001: first\n\nStatus: integrated\nArea: core\n")
         (repo / "docs/orchestration/tasks/TASK-0002.md").write_text(
             "# TASK-0002: second\n\nStatus: ready\nArea: core\nDAG node: beta\n")
-        (repo / ".gluerun-state/leases/TASK-0001.json").write_text(json.dumps(
+        (repo / ".singular-state/leases/TASK-0001.json").write_text(json.dumps(
             {"taskId": "TASK-0001", "area": "core", "status": "integrated"}))
-        (repo / ".gluerun-state/events.ndjson").write_text(json.dumps(
+        (repo / ".singular-state/events.ndjson").write_text(json.dumps(
             {"ts": "2026-07-10T00:00:00Z", "type": "planner.staged",
              "data": {"taskId": "TASK-0001", "node": "alpha", "area": "core"}}) + "\n")
-        (repo / ".gluerun-state/l1-leases/beta.json").write_text(json.dumps(
+        (repo / ".singular-state/l1-leases/beta.json").write_text(json.dumps(
             {"node": "beta", "status": "planning", "updatedAt": "2026-07-10T01:00:00Z"}))
 
         view = srv.collect_dag_view(repo)
-        self.assertEqual(view["schema"], "gluerun.codex.dag.v0")
+        self.assertEqual(view["schema"], "singular.codex.dag.v0")
         self.assertTrue(view["validate"]["ok"])
         self.assertEqual(view["edges"], [{"from": "alpha", "to": "beta"}])
         by_id = {n["id"]: n for n in view["nodes"]}
@@ -1712,7 +1712,7 @@ class CollectDagViewTests(unittest.TestCase):
                     "kind": "runtime", "dependsOn": deps, "requiredCompletion": "x"}
 
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
-            "schema": "gluerun.orchestration.dag.v0",
+            "schema": "singular.orchestration.dag.v0",
             "nodes": [node("root", "core", "S0", []),
                       node("mcp-a", "mcp", "S1", ["root"]),
                       node("mcp-b", "mcp", "S1", ["root"]),
@@ -1721,15 +1721,15 @@ class CollectDagViewTests(unittest.TestCase):
     def test_ranks_cohort_lease_and_l1_selection(self) -> None:
         repo = self._repo()
         self._write_wave_dag(repo)
-        (repo / "gluerun.config.json").write_text(json.dumps(
-            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "1", "GLUERUN_MAX_L1_CONCURRENT": "3"}}))
+        (repo / "singular.config.json").write_text(json.dumps(
+            {"env": {"SINGULAR_ENABLE_L1_PARALLEL": "1", "SINGULAR_MAX_L1_CONCURRENT": "3"}}))
         # root is historical evidence: authoritative, passed, grandfathered.
         (repo / "docs/orchestration/gates/root.gate-result.json").write_text(json.dumps(
             {"node": "root", "status": "passed", "authoritative": True,
              "evidenceClass": "grandfathered", "recordedAt": "2026-06-25T22:53:13Z"}))
         # A RELEASED lease is history, not an active planner: it must pass its
         # area/scopes through to the UI without influencing selection.
-        (repo / ".gluerun-state/l1-leases/mcp-b.json").write_text(json.dumps(
+        (repo / ".singular-state/l1-leases/mcp-b.json").write_text(json.dumps(
             {"node": "mcp-b", "area": "mcp", "status": "released",
              "allowedWriteScopes": ["internal/mcp/"], "updatedAt": "2026-07-10T01:00:00Z"}))
 
@@ -1785,14 +1785,14 @@ class CollectDagViewTests(unittest.TestCase):
         (repo / "docs/orchestration/human-gates").mkdir(parents=True)
         request_ref = "docs/orchestration/human-gates/G100.human-gate.json"
         (repo / request_ref).write_text(json.dumps({
-            "schema": "gluerun.orchestration.human-gate.v0",
+            "schema": "singular.orchestration.human-gate.v0",
             "gateId": "G100", "node": "gate-node", "approvalType": "exact-artifact",
             "requiredOwner": "owner@example.com",
             "questions": [{"id": "risk", "prompt": "Accept?", "required": True}],
             "artifacts": [], "createdAt": "2026-07-24T10:00:00Z",
             "expiresAt": "2099-07-25T10:00:00Z"}))
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
-            "schema": "gluerun.orchestration.dag.v0",
+            "schema": "singular.orchestration.dag.v0",
             "nodes": [
                 {"id": "gate-node", "stage": "S0", "area": "core", "layer": "contract",
                  "kind": "contract", "dependsOn": [], "requiredCompletion": "x",
@@ -1815,7 +1815,7 @@ class CollectDagViewTests(unittest.TestCase):
 
 class NativeL1SelectionTests(unittest.TestCase):
     """AXON-002: compute_l1_selection_native must reproduce engine/lib.sh
-    `gluerun_select_l1_frontier` — same selection, plus the per-node reason the
+    `singular_select_l1_frontier` — same selection, plus the per-node reason the
     engine computes and discards."""
 
     def _entry(self, node: str, area: str) -> dict:
@@ -1925,7 +1925,7 @@ class L1SelectionConfigTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state").mkdir()
+        (repo / ".singular-state").mkdir()
         return repo
 
     def test_limits_default_to_disabled_cap_one(self) -> None:
@@ -1933,30 +1933,30 @@ class L1SelectionConfigTests(unittest.TestCase):
 
     def test_limits_from_config_env(self) -> None:
         repo = self._repo()
-        (repo / "gluerun.config.json").write_text(json.dumps(
-            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "1", "GLUERUN_MAX_L1_CONCURRENT": "4"}}))
+        (repo / "singular.config.json").write_text(json.dumps(
+            {"env": {"SINGULAR_ENABLE_L1_PARALLEL": "1", "SINGULAR_MAX_L1_CONCURRENT": "4"}}))
         self.assertEqual(srv._l1_selection_limits(repo), (True, 4))
 
     def test_enabled_default_cap_is_three_and_junk_floors_to_one(self) -> None:
         repo = self._repo()
-        (repo / "gluerun.config.json").write_text(json.dumps(
-            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "1"}}))
+        (repo / "singular.config.json").write_text(json.dumps(
+            {"env": {"SINGULAR_ENABLE_L1_PARALLEL": "1"}}))
         self.assertEqual(srv._l1_selection_limits(repo), (True, 3))
-        (repo / "gluerun.config.json").write_text(json.dumps(
-            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "1", "GLUERUN_MAX_L1_CONCURRENT": "0"}}))
+        (repo / "singular.config.json").write_text(json.dumps(
+            {"env": {"SINGULAR_ENABLE_L1_PARALLEL": "1", "SINGULAR_MAX_L1_CONCURRENT": "0"}}))
         self.assertEqual(srv._l1_selection_limits(repo), (True, 1))
 
     def test_state_env_override_beats_config_env(self) -> None:
         repo = self._repo()
-        (repo / "gluerun.config.json").write_text(json.dumps(
-            {"env": {"GLUERUN_ENABLE_L1_PARALLEL": "0", "GLUERUN_MAX_L1_CONCURRENT": "2"}}))
-        (repo / ".gluerun-state/.env").write_text(
-            "GLUERUN_ENABLE_L1_PARALLEL=1\nGLUERUN_MAX_L1_CONCURRENT=5\nDATABASE_URL=secret\n")
+        (repo / "singular.config.json").write_text(json.dumps(
+            {"env": {"SINGULAR_ENABLE_L1_PARALLEL": "0", "SINGULAR_MAX_L1_CONCURRENT": "2"}}))
+        (repo / ".singular-state/.env").write_text(
+            "SINGULAR_ENABLE_L1_PARALLEL=1\nSINGULAR_MAX_L1_CONCURRENT=5\nDATABASE_URL=secret\n")
         self.assertEqual(srv._l1_selection_limits(repo), (True, 5))
 
     def test_area_scopes_from_structured_config_and_prefix(self) -> None:
         repo = self._repo()
-        (repo / "gluerun.config.json").write_text(json.dumps(
+        (repo / "singular.config.json").write_text(json.dumps(
             {"areaPrefix": "src/", "areas": {"mcp": ["internal/mcp/", "cmd/mcp/"],
                                              "cli": "internal/cli/"}}))
         self.assertEqual(srv._l1_area_scopes(repo, ["mcp", "cli", "unmapped"]), {
@@ -1977,21 +1977,21 @@ class StopReasonTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
         (repo / "docs/orchestration/gates").mkdir(parents=True)
-        (repo / ".gluerun-state").mkdir()
+        (repo / ".singular-state").mkdir()
         return repo
 
     def _gated_dag(self, repo: Path) -> None:
         (repo / "docs/orchestration/human-gates").mkdir(parents=True, exist_ok=True)
         request_ref = "docs/orchestration/human-gates/G100.human-gate.json"
         (repo / request_ref).write_text(json.dumps({
-            "schema": "gluerun.orchestration.human-gate.v0",
+            "schema": "singular.orchestration.human-gate.v0",
             "gateId": "G100", "node": "G100", "approvalType": "exact-artifact",
             "requiredOwner": "owner@example.com",
             "questions": [{"id": "risk", "prompt": "Accept?", "required": True}],
             "artifacts": [], "createdAt": "2026-07-24T10:00:00Z",
             "expiresAt": "2099-07-25T10:00:00Z"}))
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
-            "schema": "gluerun.orchestration.dag.v0",
+            "schema": "singular.orchestration.dag.v0",
             "nodes": [
                 {"id": "G100", "stage": "S0", "area": "core", "layer": "contract",
                  "kind": "contract", "dependsOn": [], "requiredCompletion": "x",
@@ -2015,7 +2015,7 @@ class StopReasonTests(unittest.TestCase):
     def test_stop_alone_falls_back_to_the_sentinel(self) -> None:
         repo = self._repo()
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps(
-            {"schema": "gluerun.orchestration.dag.v0",
+            {"schema": "singular.orchestration.dag.v0",
              "nodes": [{"id": "B100", "stage": "S0", "area": "core", "layer": "service",
                         "kind": "runtime", "dependsOn": [], "requiredCompletion": "x"}]}))
         self.assertEqual(srv.derive_stop_reason(repo, {"stopPresent": True}),
@@ -2037,7 +2037,7 @@ class StopReasonTests(unittest.TestCase):
         self._gated_dag(repo)
         overview = srv.collect_overview(repo)
         self.assertIsNone(overview["loop"]["stopReason"])  # no sentinel yet
-        (repo / ".gluerun-state/STOP").write_text("")
+        (repo / ".singular-state/STOP").write_text("")
         srv._OVERVIEW_CACHE.invalidate()
         overview = srv.collect_overview(repo)
         self.assertTrue(overview["loop"]["stopPresent"])
@@ -2104,8 +2104,8 @@ class CollectTimelineTests(unittest.TestCase):
         repo = Path(tmp.name)
         (repo / "docs/orchestration/tasks").mkdir(parents=True)
         (repo / "docs/orchestration/gates").mkdir(parents=True)
-        (repo / ".gluerun-state/leases").mkdir(parents=True)
-        (repo / ".gluerun-state/dispatch").mkdir(parents=True)
+        (repo / ".singular-state/leases").mkdir(parents=True)
+        (repo / ".singular-state/dispatch").mkdir(parents=True)
         (repo / "docs/orchestration/dag.v0.json").write_text(json.dumps({
             "nodes": [{"id": "alpha", "stage": "S0", "area": "core", "layer": "x",
                        "kind": "contract", "dependsOn": [], "requiredCompletion": "x"}]}))
@@ -2113,7 +2113,7 @@ class CollectTimelineTests(unittest.TestCase):
 
     def test_timeline_shape(self) -> None:
         repo = self._repo()
-        (repo / ".gluerun-state/events.ndjson").write_text("\n".join([
+        (repo / ".singular-state/events.ndjson").write_text("\n".join([
             json.dumps(_tev("2026-07-10T08:00:00Z", "origin.reconcile_started", runId="ORIGIN-1", mode="apply")),
             json.dumps(_tev("2026-07-10T08:00:05Z", "origin.reconcile_completed", runId="ORIGIN-1", mode="apply")),
             json.dumps(_tev("2026-07-10T09:00:00Z", "planner.staged", taskId="TASK-0001", node="alpha", area="core")),
@@ -2123,7 +2123,7 @@ class CollectTimelineTests(unittest.TestCase):
                             branch="agent/core/TASK-0001", runId="ORIGIN-2")),
             json.dumps(_tev("2026-07-10T11:00:00Z", "origin.reconcile_started", runId="ORIGIN-3", mode="apply")),
         ]) + "\n")
-        (repo / ".gluerun-state/leases/TASK-0001.json").write_text(json.dumps(
+        (repo / ".singular-state/leases/TASK-0001.json").write_text(json.dumps(
             {"taskId": "TASK-0001", "area": "core", "status": "integrated", "retryCount": 0,
              "branch": "agent/core/TASK-0001", "createdAt": "2026-07-10T10:00:00Z",
              "updatedAt": "2026-07-10T10:35:00Z"}))
@@ -2132,7 +2132,7 @@ class CollectTimelineTests(unittest.TestCase):
              "evidenceClass": "deterministic-proof", "recordedAt": "2026-07-10T10:40:00Z"}))
 
         data = srv.collect_timeline(repo)
-        self.assertEqual(data["schema"], "gluerun.codex.timeline.v0")
+        self.assertEqual(data["schema"], "singular.codex.timeline.v0")
         self.assertEqual(data["counts"]["tasks"], 1)
         task = data["tasks"][0]
         self.assertEqual(task["node"], "alpha")
@@ -2165,13 +2165,13 @@ class SessionEnrichmentTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state/runs").mkdir(parents=True)
-        (repo / ".gluerun-state/leases").mkdir(parents=True)
+        (repo / ".singular-state/runs").mkdir(parents=True)
+        (repo / ".singular-state/leases").mkdir(parents=True)
         return repo
 
     def test_worker_meta_merge(self) -> None:
         repo = self._repo()
-        run = repo / ".gluerun-state/runs/RUN-x"
+        run = repo / ".singular-state/runs/RUN-x"
         run.mkdir()
         (run / "worker-codex.log").write_text("claude-run: level=l2\n")
         (run / "last-message.json").write_text(json.dumps(
@@ -2191,7 +2191,7 @@ class SessionEnrichmentTests(unittest.TestCase):
 
     def test_auditor_log_discoverable(self) -> None:
         repo = self._repo()
-        run = repo / ".gluerun-state/runs/RUN-audit"
+        run = repo / ".singular-state/runs/RUN-audit"
         run.mkdir()
         (run / "auditor-codex.log").write_text("{}\n")
         sessions = srv.discover_sessions(repo)
@@ -2202,7 +2202,7 @@ class SessionEnrichmentTests(unittest.TestCase):
     def test_limit_slice(self) -> None:
         repo = self._repo()
         for i in range(30):
-            run = repo / f".gluerun-state/runs/RUN-{i:03d}"
+            run = repo / f".singular-state/runs/RUN-{i:03d}"
             run.mkdir()
             (run / "gate-check.log").write_text("x\n")
         data = srv.collect_sessions(repo)
@@ -2223,18 +2223,18 @@ class ConfigEndpointTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state").mkdir()
+        (repo / ".singular-state").mkdir()
         return repo
 
     def test_precedence(self) -> None:
         repo = self._repo()
-        (repo / "gluerun.config.json").write_text(json.dumps({
+        (repo / "singular.config.json").write_text(json.dumps({
             "runner": "claude-run.sh",
-            "env": {"GLUERUN_CLAUDE_MODEL": "claude-opus-4-8",
-                    "GLUERUN_CLAUDE_PLANNER_EFFORT": "high",
-                    "GLUERUN_MAX_CONCURRENT": "3"}}))
-        (repo / ".gluerun-state/.env").write_text(
-            "GLUERUN_CLAUDE_PLANNER_EFFORT=xhigh\nDATABASE_URL=secret://never\n")
+            "env": {"SINGULAR_CLAUDE_MODEL": "claude-opus-4-8",
+                    "SINGULAR_CLAUDE_PLANNER_EFFORT": "high",
+                    "SINGULAR_MAX_CONCURRENT": "3"}}))
+        (repo / ".singular-state/.env").write_text(
+            "SINGULAR_CLAUDE_PLANNER_EFFORT=xhigh\nDATABASE_URL=secret://never\n")
         cfg = srv.collect_config(repo)
         self.assertEqual(cfg["provider"], "claude")
         self.assertEqual(cfg["roles"]["planner"]["model"], "claude-opus-4-8")   # config fallback key
@@ -2247,7 +2247,7 @@ class ConfigEndpointTests(unittest.TestCase):
 
     def test_codex_defaults(self) -> None:
         repo = self._repo()
-        (repo / "gluerun.config.json").write_text(json.dumps({"runner": "codex-run.sh", "env": {}}))
+        (repo / "singular.config.json").write_text(json.dumps({"runner": "codex-run.sh", "env": {}}))
         cfg = srv.collect_config(repo)
         self.assertEqual(cfg["provider"], "codex")
         self.assertEqual(cfg["roles"]["implementer"]["model"], "gpt-5.5")
@@ -2273,7 +2273,7 @@ class NewCollectorsNoSubprocessTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            (repo / ".gluerun-state").mkdir()
+            (repo / ".singular-state").mkdir()
             (repo / "docs/orchestration/tasks").mkdir(parents=True)
             saved = subprocess.run
             subprocess.run = record
@@ -2285,7 +2285,7 @@ class NewCollectorsNoSubprocessTests(unittest.TestCase):
                 srv.collect_home(repo)
                 srv.collect_prompts(repo)
                 srv.collect_prompt(repo, "auditor.md")
-                srv.collect_raw(repo, "config", "gluerun.config.json")
+                srv.collect_raw(repo, "config", "singular.config.json")
                 srv.collect_settings_view(repo)
                 # 0.8.0 plan-threads registry read (pure-FS).
                 srv.collect_plans(repo)
@@ -2305,7 +2305,7 @@ class AutonomateLogResolutionTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name)
-        self.state = self.repo / ".gluerun-state"
+        self.state = self.repo / ".singular-state"
         self.state.mkdir()
 
     def test_engine_name_only(self) -> None:
@@ -2338,47 +2338,47 @@ class AutonomateLogResolutionTests(unittest.TestCase):
 
 
 class SettingsOverlayTests(unittest.TestCase):
-    """/api/settings rows overlay gluerun.config.json env{} (the layer POST
+    """/api/settings rows overlay singular.config.json env{} (the layer POST
     writes to) so the System panel reflects config-set values and saves."""
 
     def test_config_env_overlays_defaults_but_not_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            (repo / ".gluerun-state").mkdir()
-            (repo / "gluerun.config.json").write_text(json.dumps(
-                {"env": {"GLUERUN_MAX_CONCURRENT": "7", "GLUERUN_SLEEP": "45"}}))
-            (repo / ".gluerun-state/.env").write_text("GLUERUN_SLEEP=9\n")
+            (repo / ".singular-state").mkdir()
+            (repo / "singular.config.json").write_text(json.dumps(
+                {"env": {"SINGULAR_MAX_CONCURRENT": "7", "SINGULAR_SLEEP": "45"}}))
+            (repo / ".singular-state/.env").write_text("SINGULAR_SLEEP=9\n")
             view = srv.collect_settings_view(repo)
             items = {it["envKey"]: it for g in view["groups"] for it in g["items"]}
-            conc = items["GLUERUN_MAX_CONCURRENT"]
+            conc = items["SINGULAR_MAX_CONCURRENT"]
             self.assertEqual((conc["value"], conc["source"], conc["overridden"]),
                              ("7", "config", True))
-            sleep = items["GLUERUN_SLEEP"]     # .env row keeps its env source
+            sleep = items["SINGULAR_SLEEP"]     # .env row keeps its env source
             self.assertEqual((sleep["value"], sleep["source"]), ("9", "env"))
 
     def test_post_response_settings_reflect_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            (repo / ".gluerun-state").mkdir()
-            (repo / "gluerun.config.json").write_text(json.dumps({"env": {}}))
-            status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "4"})
+            (repo / ".singular-state").mkdir()
+            (repo / "singular.config.json").write_text(json.dumps({"env": {}}))
+            status, payload = srv.apply_settings_changes(repo, {"SINGULAR_MAX_CONCURRENT": "4"})
             self.assertEqual(status, 200)
             items = {it["envKey"]: it for g in payload["settings"] for it in g["items"]}
-            self.assertEqual(items["GLUERUN_MAX_CONCURRENT"]["value"], "4")
-            self.assertEqual(items["GLUERUN_MAX_CONCURRENT"]["source"], "config")
+            self.assertEqual(items["SINGULAR_MAX_CONCURRENT"]["value"], "4")
+            self.assertEqual(items["SINGULAR_MAX_CONCURRENT"]["source"], "config")
 
 
 class SettingsWriteTests(unittest.TestCase):
-    """W1: apply_settings_changes validates + applies to gluerun.config.json env{}
+    """W1: apply_settings_changes validates + applies to singular.config.json env{}
     without touching any other key. collect_settings stays read-only."""
 
     def _repo(self, config: dict | None = None) -> Path:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state").mkdir()
+        (repo / ".singular-state").mkdir()
         if config is not None:
-            (repo / "gluerun.config.json").write_text(json.dumps(config))
+            (repo / "singular.config.json").write_text(json.dumps(config))
         # invalidate shared caches so cross-test residue never leaks in
         srv._CONFIG_CACHE.invalidate()
         srv._OVERVIEW_CACHE.invalidate()
@@ -2390,85 +2390,85 @@ class SettingsWriteTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"], "unknown or read-only keys")
         self.assertIn("DATABASE_URL", payload["keys"])
-        self.assertEqual(json.loads((repo / "gluerun.config.json").read_text())["env"], {})
+        self.assertEqual(json.loads((repo / "singular.config.json").read_text())["env"], {})
 
     def test_derived_kind_rejected(self) -> None:
-        # GLUERUN_MAX_DISPATCH is kind=derived in SETTINGS_SPEC -> read-only.
+        # SINGULAR_MAX_DISPATCH is kind=derived in SETTINGS_SPEC -> read-only.
         derived = [it[0] for _t, _l, items in srv.SETTINGS_SPEC for it in items if it[3] == "derived"]
-        self.assertIn("GLUERUN_MAX_DISPATCH", derived)
+        self.assertIn("SINGULAR_MAX_DISPATCH", derived)
         repo = self._repo({"env": {}})
-        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_DISPATCH": "5"})
+        status, payload = srv.apply_settings_changes(repo, {"SINGULAR_MAX_DISPATCH": "5"})
         self.assertEqual(status, 400)
-        self.assertIn("GLUERUN_MAX_DISPATCH", payload["keys"])
+        self.assertIn("SINGULAR_MAX_DISPATCH", payload["keys"])
 
     def test_bool_and_count_validation(self) -> None:
         repo = self._repo({"env": {}})
         # bool: only 0/1 (or true/false) accepted
-        status, _ = srv.apply_settings_changes(repo, {"GLUERUN_AUTO_INTEGRATE": "maybe"})
+        status, _ = srv.apply_settings_changes(repo, {"SINGULAR_AUTO_INTEGRATE": "maybe"})
         self.assertEqual(status, 400)
-        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_AUTO_INTEGRATE": True})
+        status, payload = srv.apply_settings_changes(repo, {"SINGULAR_AUTO_INTEGRATE": True})
         self.assertEqual(status, 200)
-        self.assertEqual(payload["applied"]["GLUERUN_AUTO_INTEGRATE"], "1")
+        self.assertEqual(payload["applied"]["SINGULAR_AUTO_INTEGRATE"], "1")
         # count: non-negative integer only
-        status, _ = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "-2"})
+        status, _ = srv.apply_settings_changes(repo, {"SINGULAR_MAX_CONCURRENT": "-2"})
         self.assertEqual(status, 400)
-        status, _ = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "notanumber"})
+        status, _ = srv.apply_settings_changes(repo, {"SINGULAR_MAX_CONCURRENT": "notanumber"})
         self.assertEqual(status, 400)
-        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": 4})
+        status, payload = srv.apply_settings_changes(repo, {"SINGULAR_MAX_CONCURRENT": 4})
         self.assertEqual(status, 200)
-        self.assertEqual(payload["applied"]["GLUERUN_MAX_CONCURRENT"], "4")
+        self.assertEqual(payload["applied"]["SINGULAR_MAX_CONCURRENT"], "4")
 
     def test_write_preserves_other_keys(self) -> None:
         repo = self._repo({
             "schemaVersion": "v0", "runner": "claude-run.sh", "targetBranch": "agent/integration",
-            "env": {"CUSTOM_SECRET": "keepme", "GLUERUN_SLEEP": "5"}})
-        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "3"})
+            "env": {"CUSTOM_SECRET": "keepme", "SINGULAR_SLEEP": "5"}})
+        status, payload = srv.apply_settings_changes(repo, {"SINGULAR_MAX_CONCURRENT": "3"})
         self.assertEqual(status, 200)
-        obj = json.loads((repo / "gluerun.config.json").read_text())
+        obj = json.loads((repo / "singular.config.json").read_text())
         self.assertEqual(obj["schemaVersion"], "v0")
         self.assertEqual(obj["runner"], "claude-run.sh")
         self.assertEqual(obj["targetBranch"], "agent/integration")
         self.assertEqual(obj["env"]["CUSTOM_SECRET"], "keepme")   # unknown env key preserved
-        self.assertEqual(obj["env"]["GLUERUN_SLEEP"], "5")
-        self.assertEqual(obj["env"]["GLUERUN_MAX_CONCURRENT"], "3")
-        self.assertEqual(payload["appliesAt"]["GLUERUN_MAX_CONCURRENT"], "next-cycle")
+        self.assertEqual(obj["env"]["SINGULAR_SLEEP"], "5")
+        self.assertEqual(obj["env"]["SINGULAR_MAX_CONCURRENT"], "3")
+        self.assertEqual(payload["appliesAt"]["SINGULAR_MAX_CONCURRENT"], "next-cycle")
 
     def test_empty_string_deletes_key(self) -> None:
-        repo = self._repo({"env": {"GLUERUN_MAX_CONCURRENT": "9", "CUSTOM_SECRET": "keepme"}})
-        status, _ = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": ""})
+        repo = self._repo({"env": {"SINGULAR_MAX_CONCURRENT": "9", "CUSTOM_SECRET": "keepme"}})
+        status, _ = srv.apply_settings_changes(repo, {"SINGULAR_MAX_CONCURRENT": ""})
         self.assertEqual(status, 200)
-        env = json.loads((repo / "gluerun.config.json").read_text())["env"]
-        self.assertNotIn("GLUERUN_MAX_CONCURRENT", env)
+        env = json.loads((repo / "singular.config.json").read_text())["env"]
+        self.assertNotIn("SINGULAR_MAX_CONCURRENT", env)
         self.assertEqual(env["CUSTOM_SECRET"], "keepme")
 
     def test_collect_config_reflects_write_cache_invalidated(self) -> None:
         repo = self._repo({"runner": "claude-run.sh", "env": {}})
         before = srv.load_config_view(repo)                       # primes the cache
         self.assertIsNone(before["limits"]["maxConcurrent"])
-        srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "7"})
+        srv.apply_settings_changes(repo, {"SINGULAR_MAX_CONCURRENT": "7"})
         after = srv.load_config_view(repo)                        # must see the new value
         self.assertEqual(after["limits"]["maxConcurrent"], "7")
 
     def test_loop_restart_applies_at(self) -> None:
         repo = self._repo({"env": {}})
-        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_SLEEP": "30"})
+        status, payload = srv.apply_settings_changes(repo, {"SINGULAR_SLEEP": "30"})
         self.assertEqual(status, 200)
-        self.assertEqual(payload["appliesAt"]["GLUERUN_SLEEP"], "loop-restart")
+        self.assertEqual(payload["appliesAt"]["SINGULAR_SLEEP"], "loop-restart")
 
     def test_missing_config_409(self) -> None:
         repo = self._repo(config=None)
-        status, payload = srv.apply_settings_changes(repo, {"GLUERUN_MAX_CONCURRENT": "2"})
+        status, payload = srv.apply_settings_changes(repo, {"SINGULAR_MAX_CONCURRENT": "2"})
         self.assertEqual(status, 409)
         self.assertIn("initialize the repo first", payload["error"])
 
     def test_settings_view_shape(self) -> None:
         repo = self._repo({"env": {}})
         view = srv.collect_settings_view(repo)
-        self.assertEqual(view["schema"], "gluerun.codex.settings.v0")
+        self.assertEqual(view["schema"], "singular.codex.settings.v0")
         self.assertEqual(view["groups"], srv.collect_settings(repo))
-        self.assertEqual(view["appliesAt"]["GLUERUN_SLEEP"], "loop-restart")
-        self.assertEqual(view["appliesAt"]["GLUERUN_MAX_CONCURRENT"], "next-cycle")
-        self.assertNotIn("GLUERUN_MAX_DISPATCH", view["appliesAt"])  # derived is read-only
+        self.assertEqual(view["appliesAt"]["SINGULAR_SLEEP"], "loop-restart")
+        self.assertEqual(view["appliesAt"]["SINGULAR_MAX_CONCURRENT"], "next-cycle")
+        self.assertNotIn("SINGULAR_MAX_DISPATCH", view["appliesAt"])  # derived is read-only
 
 
 class PromptEndpointTests(unittest.TestCase):
@@ -2480,7 +2480,7 @@ class PromptEndpointTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
         (repo / "docs/orchestration/prompts").mkdir(parents=True)
-        (repo / ".gluerun-state").mkdir()
+        (repo / ".singular-state").mkdir()
         return repo
 
     def test_list_maps_roles(self) -> None:
@@ -2490,7 +2490,7 @@ class PromptEndpointTests(unittest.TestCase):
         (pdir / "l2-test-first-developer.md").write_text("dev\n")
         (pdir / "custom-note.md").write_text("x\n")
         out = srv.collect_prompts(repo)
-        self.assertEqual(out["schema"], "gluerun.codex.prompts.v0")
+        self.assertEqual(out["schema"], "singular.codex.prompts.v0")
         names = [p["name"] for p in out["prompts"]]
         self.assertEqual(names, sorted(names))  # sorted by name
         by_name = {p["name"]: p for p in out["prompts"]}
@@ -2518,7 +2518,7 @@ class PromptEndpointTests(unittest.TestCase):
 
     def test_run_dir_prompt_served_through_session(self) -> None:
         repo = self._repo()
-        run = repo / ".gluerun-state/runs/RUN-1"
+        run = repo / ".singular-state/runs/RUN-1"
         run.mkdir(parents=True)
         (run / "worker-codex.log").write_text('{"type":"item.completed"}\n')
         (run / "l2-prompt.md").write_text("# worker prompt\ndo the thing\n")
@@ -2543,25 +2543,25 @@ class RawEndpointTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
         for rel in ("docs/orchestration/tasks/superseded", "docs/orchestration/gates/evidence",
-                    ".gluerun-state/leases", ".gluerun-state/l1-leases",
-                    ".gluerun-state/dispatch", ".gluerun-state/inbox"):
+                    ".singular-state/leases", ".singular-state/l1-leases",
+                    ".singular-state/dispatch", ".singular-state/inbox"):
             (repo / rel).mkdir(parents=True)
         return repo
 
     def test_happy_path_each_root(self) -> None:
         repo = self._repo()
-        (repo / "gluerun.config.json").write_text('{"schemaVersion":"v0"}')
+        (repo / "singular.config.json").write_text('{"schemaVersion":"v0"}')
         (repo / "docs/orchestration/dag.v0.json").write_text('{"nodes":[]}')
         (repo / "docs/orchestration/tasks/TASK-0007.md").write_text("# TASK-0007\n")
         (repo / "docs/orchestration/gates/D0.contract.gate-result.json").write_text('{"node":"D0.contract"}')
         (repo / "docs/orchestration/gates/evidence/ev-1.json").write_text('{"ev":1}')
-        (repo / ".gluerun-state/leases/TASK-0007.json").write_text('{"taskId":"TASK-0007"}')
-        (repo / ".gluerun-state/l1-leases/D0.contract.json").write_text('{"node":"D0.contract"}')
-        (repo / ".gluerun-state/dispatch/TASK-0007.json").write_text('{"state":"launched"}')
-        (repo / ".gluerun-state/inbox/pkt-1.json").write_text('{"pkt":1}')
-        (repo / ".gluerun-state/circuit.json").write_text('{"consecFails":0}')
+        (repo / ".singular-state/leases/TASK-0007.json").write_text('{"taskId":"TASK-0007"}')
+        (repo / ".singular-state/l1-leases/D0.contract.json").write_text('{"node":"D0.contract"}')
+        (repo / ".singular-state/dispatch/TASK-0007.json").write_text('{"state":"launched"}')
+        (repo / ".singular-state/inbox/pkt-1.json").write_text('{"pkt":1}')
+        (repo / ".singular-state/circuit.json").write_text('{"consecFails":0}')
         cases = [
-            ("config", "gluerun.config.json"), ("dag", "dag.v0.json"),
+            ("config", "singular.config.json"), ("dag", "dag.v0.json"),
             ("task", "TASK-0007.md"), ("gate", "D0.contract.gate-result.json"),
             ("gate-review", "ev-1.json"), ("lease", "TASK-0007.json"),
             ("l1-lease", "D0.contract.json"), ("dispatch", "TASK-0007.json"),
@@ -2570,7 +2570,7 @@ class RawEndpointTests(unittest.TestCase):
         for root, name in cases:
             data = srv.collect_raw(repo, root, name)
             self.assertIsNotNone(data, f"{root}/{name}")
-            self.assertEqual(data["schema"], "gluerun.codex.raw.v0")
+            self.assertEqual(data["schema"], "singular.codex.raw.v0")
             self.assertEqual(data["root"], root)
             self.assertEqual(data["name"], name)
             self.assertTrue(data["content"])
@@ -2585,7 +2585,7 @@ class RawEndpointTests(unittest.TestCase):
 
     def test_traversal_and_bad_names_rejected(self) -> None:
         repo = self._repo()
-        (repo / ".gluerun-state/.env").write_text("SECRET=1\n")
+        (repo / ".singular-state/.env").write_text("SECRET=1\n")
         self.assertIsNone(srv.collect_raw(repo, "task", "../../etc/passwd"))
         self.assertIsNone(srv.collect_raw(repo, "gate", "../evidence/ev.json"))
         self.assertIsNone(srv.collect_raw(repo, "state", ".env"))          # not in allowlist
@@ -2614,13 +2614,13 @@ class CollectHomeTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state").mkdir()
+        (repo / ".singular-state").mkdir()
         (repo / "docs/orchestration/tasks").mkdir(parents=True)
         return repo
 
     def test_empty_repo_zeros_ok(self) -> None:
         home = srv.collect_home(self._repo())
-        self.assertEqual(home["schema"], "gluerun.codex.home.v0")
+        self.assertEqual(home["schema"], "singular.codex.home.v0")
         self.assertEqual(home["health"], "ok")
         self.assertEqual(home["attention"], [])
         self.assertEqual(home["gates"], {
@@ -2638,7 +2638,7 @@ class CollectHomeTests(unittest.TestCase):
 
     def test_stop_attention(self) -> None:
         repo = self._repo()
-        (repo / ".gluerun-state/STOP").write_text("")
+        (repo / ".singular-state/STOP").write_text("")
         home = srv.collect_home(repo)
         self.assertTrue(home["stop"])
         self.assertTrue(any(a["severity"] == "watch" and "STOP" in a["text"]
@@ -2649,14 +2649,14 @@ class CollectHomeTests(unittest.TestCase):
         repo = self._repo()
         (repo / "scripts/orchestration").mkdir(parents=True)
         (repo / "scripts/orchestration/lib.sh").write_text(
-            'GLUERUN_MAX_CONSEC_FAILS="${GLUERUN_MAX_CONSEC_FAILS:-4}"\n')
-        (repo / ".gluerun-state/circuit.json").write_text(json.dumps({"consecFails": 4}))
+            'SINGULAR_MAX_CONSEC_FAILS="${SINGULAR_MAX_CONSEC_FAILS:-4}"\n')
+        (repo / ".singular-state/circuit.json").write_text(json.dumps({"consecFails": 4}))
         home = srv.collect_home(repo)
         self.assertEqual(home["breaker"], {"consecFails": 4, "threshold": 4})
         self.assertEqual(home["health"], "blocker")
         self.assertTrue(any(a["severity"] == "blocker" for a in home["attention"]))
         # one below threshold -> watch
-        (repo / ".gluerun-state/circuit.json").write_text(json.dumps({"consecFails": 3}))
+        (repo / ".singular-state/circuit.json").write_text(json.dumps({"consecFails": 3}))
         srv._HOME_CACHE.invalidate()
         home = srv.collect_home(repo)
         self.assertTrue(any(a["severity"] == "watch" and "near trip" in a["text"]
@@ -2665,7 +2665,7 @@ class CollectHomeTests(unittest.TestCase):
     def test_backoff_active_attention(self) -> None:
         repo = self._repo()
         future = (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
-        (repo / ".gluerun-state/planner-backoff.json").write_text(
+        (repo / ".singular-state/planner-backoff.json").write_text(
             json.dumps({"until": future, "failureClass": "quota"}))
         home = srv.collect_home(repo)
         self.assertTrue(home["backoff"]["active"])
@@ -2673,16 +2673,16 @@ class CollectHomeTests(unittest.TestCase):
 
     def test_stale_l1_lease_attention(self) -> None:
         repo = self._repo()
-        (repo / ".gluerun-state/l1-leases").mkdir()
+        (repo / ".singular-state/l1-leases").mkdir()
         old = (dt.datetime.now(dt.UTC) - dt.timedelta(minutes=200)).isoformat().replace("+00:00", "Z")
-        (repo / ".gluerun-state/l1-leases/D0.contract.json").write_text(
+        (repo / ".singular-state/l1-leases/D0.contract.json").write_text(
             json.dumps({"node": "D0.contract", "status": "active", "updatedAt": old}))
         home = srv.collect_home(repo)
         self.assertTrue(any("idle" in a["text"] for a in home["attention"]))
 
     def test_stale_autonomate_pidfile_attention(self) -> None:
         repo = self._repo()
-        (repo / ".gluerun-state/autonomate.pid").write_text("999999999\n")
+        (repo / ".singular-state/autonomate.pid").write_text("999999999\n")
         home = srv.collect_home(repo)
         self.assertFalse(home["autonomate"]["alive"])
         self.assertTrue(any("pidfile is stale" in a["text"] for a in home["attention"]))
@@ -2701,7 +2701,7 @@ class CollectHomeTests(unittest.TestCase):
                 mergeCommit="abc1234"),
             _ev("l1.task_failed", iso(0), taskId="TASK-3"),
         ]
-        (repo / ".gluerun-state/events.ndjson").write_text(
+        (repo / ".singular-state/events.ndjson").write_text(
             "\n".join(json.dumps(e) for e in events) + "\n")
         home = srv.collect_home(repo)
         by_date = {d["date"]: d for d in home["activityByDay"]}
@@ -2721,11 +2721,11 @@ def _write_archived_plan(plans_dir: Path, pid: str, *, node_id: str,
     root = plans_dir / pid
     (root / "docs/orchestration/tasks").mkdir(parents=True)
     (root / "docs/orchestration/gates").mkdir(parents=True)
-    (root / ".gluerun-state/leases").mkdir(parents=True)
-    (root / ".gluerun-state/l1-leases").mkdir(parents=True)
-    (root / ".gluerun-state/runs").mkdir(parents=True)
+    (root / ".singular-state/leases").mkdir(parents=True)
+    (root / ".singular-state/l1-leases").mkdir(parents=True)
+    (root / ".singular-state/runs").mkdir(parents=True)
     (root / "docs/orchestration/dag.v0.json").write_text(json.dumps({
-        "schema": "gluerun.orchestration.dag.v0",
+        "schema": "singular.orchestration.dag.v0",
         "layers": ["contract"], "kinds": ["contract"],
         "nodes": [
             {"id": node_id, "stage": "A0-arch", "area": "core", "layer": "contract",
@@ -2737,11 +2737,11 @@ def _write_archived_plan(plans_dir: Path, pid: str, *, node_id: str,
          "evidenceClass": "deterministic-proof", "recordedAt": archived_at}))
     (root / "docs/orchestration/tasks/TASK-0001.md").write_text(
         "# TASK-0001: archived task\n\nStatus: integrated\nArea: core\n")
-    (root / ".gluerun-state/events.ndjson").write_text(json.dumps(
+    (root / ".singular-state/events.ndjson").write_text(json.dumps(
         {"ts": archived_at, "type": "plan.archived",
          "data": {"planId": pid, "name": name or pid}}) + "\n")
     if with_run:
-        run_dir = root / ".gluerun-state/runs/RUN-arch-1"
+        run_dir = root / ".singular-state/runs/RUN-arch-1"
         run_dir.mkdir(parents=True)
         (run_dir / "codex.jsonl").write_text(
             json.dumps({"type": "message", "role": "assistant", "content": "done"}) + "\n")
@@ -2752,14 +2752,14 @@ def _write_archived_plan(plans_dir: Path, pid: str, *, node_id: str,
     }
     if with_manifest:
         manifest = dict(summary)
-        manifest.update({"schema": "gluerun.plan.manifest.v0",
+        manifest.update({"schema": "singular.plan.manifest.v0",
                          "engineVersion": "0.8.0", "schemaVersion": "v0", "forced": False})
         (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return summary
 
 
 class CollectPlansTests(unittest.TestCase):
-    """0.8.0 gluerun.plans.v0: registry read, manifest self-heal, sort, empties."""
+    """0.8.0 singular.plans.v0: registry read, manifest self-heal, sort, empties."""
 
     def _repo(self) -> Path:
         tmp = tempfile.TemporaryDirectory()
@@ -2768,13 +2768,13 @@ class CollectPlansTests(unittest.TestCase):
 
     def test_empty_repo(self) -> None:
         data = srv.collect_plans(self._repo())
-        self.assertEqual(data["schema"], "gluerun.plans.v0")
+        self.assertEqual(data["schema"], "singular.plans.v0")
         self.assertEqual(data["plans"], [])
         self.assertIn("generatedAt", data)
 
     def test_registry_and_self_heal_sorted(self) -> None:
         repo = self._repo()
-        plans_dir = repo / ".gluerun-state/plans"
+        plans_dir = repo / ".singular-state/plans"
         plans_dir.mkdir(parents=True)
         # Plan A: in index.json AND has a manifest (index entry must win).
         a = _write_archived_plan(plans_dir, "plan-20260101T000000Z-alpha",
@@ -2788,7 +2788,7 @@ class CollectPlansTests(unittest.TestCase):
         # manifest, so we can prove index wins the merge.
         index_entry = dict(a, name="Alpha (from index)")
         (plans_dir / "index.json").write_text(json.dumps(
-            {"schema": "gluerun.plans.index.v0", "updatedAt": a["archivedAt"],
+            {"schema": "singular.plans.index.v0", "updatedAt": a["archivedAt"],
              "plans": [index_entry]}))
 
         data = srv.collect_plans(repo)
@@ -2806,10 +2806,10 @@ class CollectPlansTests(unittest.TestCase):
     def test_index_only_no_dir(self) -> None:
         # An index entry with no archived dir on disk is still returned.
         repo = self._repo()
-        plans_dir = repo / ".gluerun-state/plans"
+        plans_dir = repo / ".singular-state/plans"
         plans_dir.mkdir(parents=True)
         (plans_dir / "index.json").write_text(json.dumps(
-            {"schema": "gluerun.plans.index.v0",
+            {"schema": "singular.plans.index.v0",
              "plans": [{"id": "plan-20260301T000000Z-x", "name": "X",
                         "archivedAt": "2026-03-01T00:00:00Z", "gates": {"passed": 0, "total": 0},
                         "taskCount": 0, "eventCount": 0, "headSha": "deadbee", "branch": "main"}]}))
@@ -2828,27 +2828,27 @@ class PlanParamRoutingTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.live = Path(tmp.name)
         for rel in ("docs/orchestration/tasks", "docs/orchestration/gates",
-                    ".gluerun-state/leases", ".gluerun-state/l1-leases",
-                    ".gluerun-state/runs"):
+                    ".singular-state/leases", ".singular-state/l1-leases",
+                    ".singular-state/runs"):
             (self.live / rel).mkdir(parents=True)
         # Live DAG has a node id distinct from the archived plan's.
         (self.live / "docs/orchestration/dag.v0.json").write_text(json.dumps({
-            "schema": "gluerun.orchestration.dag.v0",
+            "schema": "singular.orchestration.dag.v0",
             "layers": ["contract"], "kinds": ["contract"],
             "nodes": [{"id": "live-node", "stage": "L0-live", "area": "core",
                        "layer": "contract", "kind": "contract", "dependsOn": [],
                        "requiredCompletion": "x"}],
         }))
-        (self.live / "gluerun.config.json").write_text('{"env": {}}')
-        self._config_before = (self.live / "gluerun.config.json").read_text()
+        (self.live / "singular.config.json").write_text('{"env": {}}')
+        self._config_before = (self.live / "singular.config.json").read_text()
         # Archived mini-repo plan + registry.
-        plans_dir = self.live / ".gluerun-state/plans"
+        plans_dir = self.live / ".singular-state/plans"
         plans_dir.mkdir(parents=True)
         summary = _write_archived_plan(plans_dir, self.PID, node_id="arch-node",
                                        archived_at="2026-01-01T00:00:00Z", name="Test Plan",
                                        with_run=True)
         (plans_dir / "index.json").write_text(json.dumps(
-            {"schema": "gluerun.plans.index.v0", "updatedAt": summary["archivedAt"],
+            {"schema": "singular.plans.index.v0", "updatedAt": summary["archivedAt"],
              "plans": [summary]}))
         # Fresh caches so the archived/live roots resolve against this fixture.
         for cache in (srv._PLANS_CACHE, srv._DAG_VIEW_CACHE, srv._TIMELINE_CACHE,
@@ -2899,7 +2899,7 @@ class PlanParamRoutingTests(unittest.TestCase):
         self.assertIn("arch-node", raw["content"])
         status, sess = self._req("GET", f"/api/sessions?plan={self.PID}")
         self.assertEqual(status, 200)
-        self.assertEqual(sess["schema"], "gluerun.codex.sessions.v0")
+        self.assertEqual(sess["schema"], "singular.codex.sessions.v0")
 
     def test_unknown_and_malformed_and_traversal_404(self) -> None:
         for pid in ("plan-does-not-exist", "not-a-plan", "plan-..%2F..%2Fx",
@@ -2910,10 +2910,10 @@ class PlanParamRoutingTests(unittest.TestCase):
 
     def test_post_settings_with_plan_is_400_and_no_write(self) -> None:
         status, data = self._req("POST", f"/api/settings?plan={self.PID}",
-                                 body={"changes": {"GLUERUN_MAX_CONCURRENT": "9"}})
+                                 body={"changes": {"SINGULAR_MAX_CONCURRENT": "9"}})
         self.assertEqual(status, 400)
         self.assertEqual(data, {"error": "archived plans are read-only"})
-        self.assertEqual((self.live / "gluerun.config.json").read_text(), self._config_before)
+        self.assertEqual((self.live / "singular.config.json").read_text(), self._config_before)
 
     def test_state_ignores_plan_param(self) -> None:
         # /api/state is excluded: a valid ?plan= is ignored, live data served, 200.
@@ -2923,7 +2923,7 @@ class PlanParamRoutingTests(unittest.TestCase):
     def test_plans_lists_archived(self) -> None:
         status, data = self._req("GET", "/api/plans")
         self.assertEqual(status, 200)
-        self.assertEqual(data["schema"], "gluerun.plans.v0")
+        self.assertEqual(data["schema"], "singular.plans.v0")
         self.assertEqual([p["id"] for p in data["plans"]], [self.PID])
 
 
@@ -3021,7 +3021,7 @@ esac
 class CollectProvidersTests(unittest.TestCase):
     """S1: registry-driven runtime probes. Fake binaries on a test PATH + a fake
     HOME exercise version/auth parsing, the ready/warning/error/missing rollup,
-    email/plan extraction, the secrets rule, glueRun-integration fields, and the
+    email/plan extraction, the secrets rule, singular-integration fields, and the
     60s cache. Probes read the injected env/home (collect_providers overrides)."""
 
     def setUp(self) -> None:
@@ -3029,14 +3029,14 @@ class CollectProvidersTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         self.repo = base / "repo"
-        (self.repo / ".gluerun-state").mkdir(parents=True)
-        (self.repo / "gluerun.config.json").write_text(
+        (self.repo / ".singular-state").mkdir(parents=True)
+        (self.repo / "singular.config.json").write_text(
             json.dumps({"runner": "claude-run.sh", "env": {}}))
         # A seeded session-meta so claude reports lastUsed/exit/recentSessions.
-        run = self.repo / ".gluerun-state/runs/RUN-20260101T000000Z-1"
+        run = self.repo / ".singular-state/runs/RUN-20260101T000000Z-1"
         run.mkdir(parents=True)
         (run / "session-implementer.json").write_text(json.dumps({
-            "schema": "gluerun.orchestration.session-meta.v0", "provider": "claude",
+            "schema": "singular.orchestration.session-meta.v0", "provider": "claude",
             "exitCode": 0, "createdAt": "2026-01-01T00:00:00Z", "role": "implementer"}))
         # Fake HOME: gemini in "gemini-api-key" mode but no key/creds -> unknown.
         self.home = base / "home"
@@ -3057,7 +3057,7 @@ class CollectProvidersTests(unittest.TestCase):
         (self.engine_home / "engine").mkdir(parents=True)
         (self.engine_home / "engine/claude-run.sh").write_text("")
         self.env = {"PATH": str(self.bindir), "HOME": str(self.home),
-                    "GLUERUN_ENGINE_HOME": str(self.engine_home)}
+                    "SINGULAR_ENGINE_HOME": str(self.engine_home)}
         srv._PROVIDERS_CACHE.invalidate()
         self.addCleanup(srv._PROVIDERS_CACHE.invalidate)
 
@@ -3068,7 +3068,7 @@ class CollectProvidersTests(unittest.TestCase):
 
     def test_statuses_and_extraction(self) -> None:
         payload, by = self._providers()
-        self.assertEqual(payload["schema"], "gluerun.providers.v0")
+        self.assertEqual(payload["schema"], "singular.providers.v0")
         # claude: ready, version, email + plan, method
         c = by["claude"]
         self.assertEqual((c["status"], c["installed"], c["version"]), ("ready", True, "2.1.198"))
@@ -3108,9 +3108,9 @@ class CollectProvidersTests(unittest.TestCase):
         self.assertFalse(by["gemini"]["runnerPresent"])
 
     def test_env_runner_override_wins(self) -> None:
-        # config env{} GLUERUN_RUNNER overrides top-level "runner" (lib.sh order).
-        (self.repo / "gluerun.config.json").write_text(json.dumps(
-            {"runner": "codex-run.sh", "env": {"GLUERUN_RUNNER": "gemini-run.sh"}}))
+        # config env{} SINGULAR_RUNNER overrides top-level "runner" (lib.sh order).
+        (self.repo / "singular.config.json").write_text(json.dumps(
+            {"runner": "codex-run.sh", "env": {"SINGULAR_RUNNER": "gemini-run.sh"}}))
         payload, by = self._providers()
         self.assertEqual(payload["activeRunner"], "gemini-run.sh")
         self.assertEqual(payload["activeProvider"], "gemini")
@@ -3152,7 +3152,7 @@ class CollectProvidersTests(unittest.TestCase):
 
         def counting(repo, env, home):
             calls.append(str(repo))
-            return {"schema": "gluerun.providers.v0", "providers": [], "summary": {}}
+            return {"schema": "singular.providers.v0", "providers": [], "summary": {}}
 
         srv._compute_providers = counting
         srv._PROVIDERS_CACHE.invalidate()
@@ -3195,9 +3195,9 @@ class ProvidersRouteTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         self.repo = base / "repo"
-        (self.repo / ".gluerun-state").mkdir(parents=True)
-        (self.repo / "gluerun.config.json").write_text(json.dumps({"env": {}}))
-        self._config_before = (self.repo / "gluerun.config.json").read_text()
+        (self.repo / ".singular-state").mkdir(parents=True)
+        (self.repo / "singular.config.json").write_text(json.dumps({"env": {}}))
+        self._config_before = (self.repo / "singular.config.json").read_text()
         empty = base / "empty-bin"
         empty.mkdir()
         self._saved_env = {k: os.environ.get(k) for k in ("PATH", "HOME")}
@@ -3246,7 +3246,7 @@ class ProvidersRouteTests(unittest.TestCase):
     def test_endpoint_payload(self) -> None:
         status, data = self._req("GET", "/api/providers")
         self.assertEqual(status, 200)
-        self.assertEqual(data["schema"], "gluerun.providers.v0")
+        self.assertEqual(data["schema"], "singular.providers.v0")
         ids = [p["id"] for p in data["providers"]]
         self.assertEqual(ids, ["claude", "codex", "gemini", "opencode", "cursor", "grok"])
         for p in data["providers"]:
@@ -3257,21 +3257,21 @@ class ProvidersRouteTests(unittest.TestCase):
     def test_refresh_param(self) -> None:
         status, data = self._req("GET", "/api/providers?refresh=1")
         self.assertEqual(status, 200)
-        self.assertEqual(data["schema"], "gluerun.providers.v0")
+        self.assertEqual(data["schema"], "singular.providers.v0")
 
     def test_plan_param_ignored_live_only(self) -> None:
         # Unlike /api/dag, providers ignores ?plan= (live-only) -> 200, not 404.
         status, data = self._req("GET", "/api/providers?plan=plan-20260101T000000Z-x")
         self.assertEqual(status, 200)
-        self.assertEqual(data["schema"], "gluerun.providers.v0")
+        self.assertEqual(data["schema"], "singular.providers.v0")
 
     def test_runner_switch_roundtrip(self) -> None:
         status, resp = self._req("POST", "/api/settings",
-                                 body={"changes": {"GLUERUN_RUNNER": "gemini-run.sh"}})
+                                 body={"changes": {"SINGULAR_RUNNER": "gemini-run.sh"}})
         self.assertEqual(status, 200)
-        self.assertEqual(resp["applied"]["GLUERUN_RUNNER"], "gemini-run.sh")
-        env = json.loads((self.repo / "gluerun.config.json").read_text())["env"]
-        self.assertEqual(env["GLUERUN_RUNNER"], "gemini-run.sh")
+        self.assertEqual(resp["applied"]["SINGULAR_RUNNER"], "gemini-run.sh")
+        env = json.loads((self.repo / "singular.config.json").read_text())["env"]
+        self.assertEqual(env["SINGULAR_RUNNER"], "gemini-run.sh")
         # config + providers reflect the switch (caches invalidated by the write)
         _s, cfg = self._req("GET", "/api/config")
         self.assertEqual(cfg["provider"], "gemini")
@@ -3283,18 +3283,18 @@ class ProvidersRouteTests(unittest.TestCase):
     def test_runner_switch_rejects_bad_values(self) -> None:
         for bad in ("evil.sh", "../claude-run.sh", "/etc/passwd", "claude-run.sh; rm -rf"):
             status, data = self._req("POST", "/api/settings",
-                                     body={"changes": {"GLUERUN_RUNNER": bad}})
+                                     body={"changes": {"SINGULAR_RUNNER": bad}})
             self.assertEqual(status, 400, bad)
             self.assertIn("key", data)
         # nothing was written
-        self.assertEqual((self.repo / "gluerun.config.json").read_text(), self._config_before)
+        self.assertEqual((self.repo / "singular.config.json").read_text(), self._config_before)
 
     def test_new_provider_model_and_timeout_writable(self) -> None:
         status, resp = self._req("POST", "/api/settings", body={"changes": {
-            "GLUERUN_GEMINI_MODEL": "gemini-3-pro", "GLUERUN_CURSOR_TIMEOUT_SEC": "600"}})
+            "SINGULAR_GEMINI_MODEL": "gemini-3-pro", "SINGULAR_CURSOR_TIMEOUT_SEC": "600"}})
         self.assertEqual(status, 200)
-        self.assertEqual(resp["applied"]["GLUERUN_GEMINI_MODEL"], "gemini-3-pro")
-        self.assertEqual(resp["applied"]["GLUERUN_CURSOR_TIMEOUT_SEC"], "600")
+        self.assertEqual(resp["applied"]["SINGULAR_GEMINI_MODEL"], "gemini-3-pro")
+        self.assertEqual(resp["applied"]["SINGULAR_CURSOR_TIMEOUT_SEC"], "600")
 
     def test_providers_oneshot_pure_json(self) -> None:
         saved = {n: getattr(srv, n) for n in ADAPTER_GLOBALS}
@@ -3304,7 +3304,7 @@ class ProvidersRouteTests(unittest.TestCase):
             rc = srv.main(["--repo", str(self.repo), "--providers"])
         self.assertEqual(rc, 0)
         data = json.loads(buf.getvalue())        # stdout is pure JSON
-        self.assertEqual(data["schema"], "gluerun.providers.v0")
+        self.assertEqual(data["schema"], "singular.providers.v0")
         self.assertEqual(len(data["providers"]), len(srv.PROVIDERS))
 
 
@@ -3437,8 +3437,8 @@ class ProvidersQuotaFieldTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         self.repo = base / "repo"
-        (self.repo / ".gluerun-state").mkdir(parents=True)
-        (self.repo / "gluerun.config.json").write_text(
+        (self.repo / ".singular-state").mkdir(parents=True)
+        (self.repo / "singular.config.json").write_text(
             json.dumps({"runner": "codex-run.sh", "env": {}}))
         self.home = base / "home"
         self.home.mkdir()
@@ -3509,13 +3509,13 @@ class ProvidersQuotaFieldTests(unittest.TestCase):
 class CollectHomeSupervisorTests(unittest.TestCase):
     """C1: collect_home's additive supervisor fields — loop from STATUS.md,
     briefing filtered from supervisor/latest.json (None when absent), supervisor
-    {intervalMin, enabled} from config env. Schema stays gluerun.codex.home.v0."""
+    {intervalMin, enabled} from config env. Schema stays singular.codex.home.v0."""
 
     def _repo(self) -> Path:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state").mkdir()
+        (repo / ".singular-state").mkdir()
         (repo / "docs/orchestration/tasks").mkdir(parents=True)
         srv._HOME_CACHE.invalidate()
         self.addCleanup(srv._HOME_CACHE.invalidate)
@@ -3523,15 +3523,15 @@ class CollectHomeSupervisorTests(unittest.TestCase):
 
     def test_absent_supervisor_fields(self) -> None:
         home = srv.collect_home(self._repo())
-        self.assertEqual(home["schema"], "gluerun.codex.home.v0")
+        self.assertEqual(home["schema"], "singular.codex.home.v0")
         self.assertIsNone(home["briefing"])
         self.assertEqual(home["supervisor"], {"intervalMin": 0, "enabled": False})
         self.assertEqual(home["loop"], {"iteration": None, "note": None, "updatedAt": None})
 
     def test_loop_from_status_md(self) -> None:
         repo = self._repo()
-        (repo / ".gluerun-state/STATUS.md").write_text(
-            "# gluerun Autonomous Status\n\nIteration: 7\nNote: grinding core\n"
+        (repo / ".singular-state/STATUS.md").write_text(
+            "# singular Autonomous Status\n\nIteration: 7\nNote: grinding core\n"
             "Updated: 2026-07-18T00:00:00Z\n")
         home = srv.collect_home(repo)
         self.assertEqual(home["loop"]["iteration"], 7)
@@ -3540,13 +3540,13 @@ class CollectHomeSupervisorTests(unittest.TestCase):
 
     def test_briefing_filtered_and_capped(self) -> None:
         repo = self._repo()
-        sup = repo / ".gluerun-state/supervisor"
+        sup = repo / ".singular-state/supervisor"
         sup.mkdir()
         (sup / "latest.json").write_text(json.dumps({
-            "schema": "gluerun.orchestration.supervisor-report.v0",
+            "schema": "singular.orchestration.supervisor-report.v0",
             "stage": "working core", "narrative": "x" * 5000,
             "risks": ["disk"], "nextSteps": ["watch"],
-            "proposedSettings": {"GLUERUN_MAX_CONCURRENT": "2"},
+            "proposedSettings": {"SINGULAR_MAX_CONCURRENT": "2"},
             "generatedAt": "2026-07-18T00:00:00Z", "runId": "SUP-1",
             "unknownExtra": "should-be-dropped"}))
         home = srv.collect_home(repo)
@@ -3554,18 +3554,18 @@ class CollectHomeSupervisorTests(unittest.TestCase):
         self.assertEqual(b["stage"], "working core")
         self.assertEqual(len(b["narrative"]), 4000)      # narrative capped
         self.assertNotIn("unknownExtra", b)              # filtered to known keys
-        self.assertEqual(b["proposedSettings"], {"GLUERUN_MAX_CONCURRENT": "2"})
+        self.assertEqual(b["proposedSettings"], {"SINGULAR_MAX_CONCURRENT": "2"})
         self.assertEqual(b["runId"], "SUP-1")
 
     def test_supervisor_enabled_from_config(self) -> None:
         repo = self._repo()
-        (repo / "gluerun.config.json").write_text(json.dumps(
-            {"env": {"GLUERUN_SUPERVISOR_INTERVAL_MIN": "15"}}))
+        (repo / "singular.config.json").write_text(json.dumps(
+            {"env": {"SINGULAR_SUPERVISOR_INTERVAL_MIN": "15"}}))
         home = srv.collect_home(repo)
         self.assertEqual(home["supervisor"], {"intervalMin": 15, "enabled": True})
         # invalid / zero -> disabled
-        (repo / "gluerun.config.json").write_text(json.dumps(
-            {"env": {"GLUERUN_SUPERVISOR_INTERVAL_MIN": "nope"}}))
+        (repo / "singular.config.json").write_text(json.dumps(
+            {"env": {"SINGULAR_SUPERVISOR_INTERVAL_MIN": "nope"}}))
         srv._HOME_CACHE.invalidate()
         self.assertFalse(srv.collect_home(repo)["supervisor"]["enabled"])
 
@@ -3580,12 +3580,12 @@ class CollectAskTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state/runs").mkdir(parents=True)
+        (repo / ".singular-state/runs").mkdir(parents=True)
         return repo
 
     def _ask(self, repo: Path, run_id: str, ask_doc: dict, *,
              answer: str | None = None, mtime: float | None = None) -> Path:
-        run_dir = repo / ".gluerun-state/runs" / run_id
+        run_dir = repo / ".singular-state/runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "ask.json").write_text(json.dumps(ask_doc))
         if answer is not None:
@@ -3597,12 +3597,12 @@ class CollectAskTests(unittest.TestCase):
     def test_done_with_answer_and_proposed_whitelist(self) -> None:
         repo = self._repo()
         self._ask(repo, "ASK-1", {"state": "done", "question": "status?",
-                  "proposedSettings": {"GLUERUN_MAX_CONCURRENT": "4", "DATABASE_URL": "nope"},
+                  "proposedSettings": {"SINGULAR_MAX_CONCURRENT": "4", "DATABASE_URL": "nope"},
                   "answeredAt": "2026-07-18T00:00:00Z"}, answer="all good")
         d = srv.collect_ask(repo, "ASK-1")
         self.assertEqual(d["state"], "done")
         self.assertEqual(d["answer"], "all good")
-        self.assertEqual(d["proposedSettings"], {"GLUERUN_MAX_CONCURRENT": "4"})  # non-whitelist dropped
+        self.assertEqual(d["proposedSettings"], {"SINGULAR_MAX_CONCURRENT": "4"})  # non-whitelist dropped
 
     def test_pending_and_running_passthrough(self) -> None:
         repo = self._repo()
@@ -3642,7 +3642,7 @@ class CollectAskTests(unittest.TestCase):
         self._ask(repo, "ASK-a", {"state": "done"}, answer="a", mtime=time.time() - 100)
         self._ask(repo, "ASK-b", {"state": "pending"}, mtime=time.time())
         payload = srv.collect_asks(repo)
-        self.assertEqual(payload["schema"], "gluerun.orchestration.asks.v0")
+        self.assertEqual(payload["schema"], "singular.orchestration.asks.v0")
         self.assertEqual([a["runId"] for a in payload["asks"]], ["ASK-b", "ASK-a"])
 
 
@@ -3657,8 +3657,8 @@ class AskReportRouteTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name)
-        (self.repo / ".gluerun-state/runs").mkdir(parents=True)
-        (self.repo / "gluerun.config.json").write_text('{"env": {}}')
+        (self.repo / ".singular-state/runs").mkdir(parents=True)
+        (self.repo / "singular.config.json").write_text('{"env": {}}')
         # Monkeypatch Popen: record every call, never launch anything.
         self.popen_calls: list = []
         real_popen = srv.subprocess.Popen
@@ -3707,7 +3707,7 @@ class AskReportRouteTests(unittest.TestCase):
         self.assertEqual(status, 202)
         run_id = data["runId"]
         self.assertTrue(srv.ASK_ID_RE.match(run_id))
-        run_dir = self.repo / ".gluerun-state/runs" / run_id
+        run_dir = self.repo / ".singular-state/runs" / run_id
         self.assertTrue((run_dir / "question.md").is_file())
         self.assertTrue((run_dir / "ask.json").is_file())
         self.assertEqual(json.loads((run_dir / "ask.json").read_text())["state"], "pending")
@@ -3725,7 +3725,7 @@ class AskReportRouteTests(unittest.TestCase):
         self.assertIn(secret, (run_dir / "question.md").read_text())
 
     def test_busy_guard_429(self) -> None:
-        run_dir = self.repo / ".gluerun-state/runs/ASK-busy"
+        run_dir = self.repo / ".singular-state/runs/ASK-busy"
         run_dir.mkdir(parents=True)
         (run_dir / "ask.json").write_text(json.dumps(
             {"state": "running", "pid": os.getpid(), "runId": "ASK-busy"}))
@@ -3747,17 +3747,17 @@ class AskReportRouteTests(unittest.TestCase):
         self.assertEqual(len(self.popen_calls), 0)
 
     def test_get_ask_and_asks_and_404(self) -> None:
-        run_dir = self.repo / ".gluerun-state/runs/ASK-x"
+        run_dir = self.repo / ".singular-state/runs/ASK-x"
         run_dir.mkdir(parents=True)
         (run_dir / "ask.json").write_text(json.dumps(
             {"state": "done", "runId": "ASK-x", "question": "q",
-             "proposedSettings": {"GLUERUN_MAX_CONCURRENT": "3"}}))
+             "proposedSettings": {"SINGULAR_MAX_CONCURRENT": "3"}}))
         (run_dir / "answer.md").write_text("here is the answer")
         status, data = self._req("GET", "/api/ask/ASK-x")
         self.assertEqual(status, 200)
         self.assertEqual(data["state"], "done")
         self.assertEqual(data["answer"], "here is the answer")
-        self.assertEqual(data["proposedSettings"], {"GLUERUN_MAX_CONCURRENT": "3"})
+        self.assertEqual(data["proposedSettings"], {"SINGULAR_MAX_CONCURRENT": "3"})
         status, data = self._req("GET", "/api/asks")
         self.assertEqual(status, 200)
         self.assertIn("ASK-x", [a["runId"] for a in data["asks"]])
@@ -3774,7 +3774,7 @@ class AskReportRouteTests(unittest.TestCase):
         self.assertEqual(argv[2:], ["--once"])
         self.assertTrue(kwargs.get("start_new_session"))
         # a fresh SUP run dir now throttles a second request (<60s)
-        (self.repo / ".gluerun-state/runs/SUP-recent").mkdir(parents=True)
+        (self.repo / ".singular-state/runs/SUP-recent").mkdir(parents=True)
         status, data = self._req("POST", "/api/report")
         self.assertEqual(status, 429)
         self.assertIn("retryAfterSeconds", data)
@@ -3789,11 +3789,11 @@ class SessionsAssistantTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state/runs").mkdir(parents=True)
+        (repo / ".singular-state/runs").mkdir(parents=True)
         return repo
 
     def _run(self, repo: Path, name: str, files: dict) -> Path:
-        run_dir = repo / ".gluerun-state/runs" / name
+        run_dir = repo / ".singular-state/runs" / name
         run_dir.mkdir(parents=True)
         for fname, content in files.items():
             (run_dir / fname).write_text(content)
@@ -3837,12 +3837,12 @@ class SessionsAssistantTests(unittest.TestCase):
                             for line in data["lines"]))
 
     def test_stale_adapter_cannot_strip_assistant_logs(self) -> None:
-        # gluerun console always launches the server with GLUERUN_ENGINE_HOME set,
+        # singular console always launches the server with SINGULAR_ENGINE_HOME set,
         # and a pre-0.10 adapter snapshot's logFileMaps replaces CODEX_LOG_NAMES /
         # PROMPT_FILE_NAMES wholesale (without the assistant names). The pinned
         # ASSISTANT_* constants must keep ASK-/SUP- runs streaming regardless.
         apply_adapter_with_restore(self, {
-            "schema": "gluerun.console-adapter.v0",
+            "schema": "singular.console-adapter.v0",
             "logFileMaps": {"codexLogs": [["worker-codex.log", "worker"],
                                           ["planner-codex.log", "planner"],
                                           ["decider-codex.log", "decider"]],
@@ -3911,14 +3911,14 @@ class SnapshotLoopLivenessTests(unittest.TestCase):
     def test_no_pidfile(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            (repo / ".gluerun-state").mkdir()
+            (repo / ".singular-state").mkdir()
             self.assertEqual(srv._snapshot_loop_liveness(repo), {"pid": None, "alive": False})
 
     def test_dead_pid(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            (repo / ".gluerun-state").mkdir()
-            (repo / ".gluerun-state" / "autonomate.pid").write_text("999999999\n")
+            (repo / ".singular-state").mkdir()
+            (repo / ".singular-state" / "autonomate.pid").write_text("999999999\n")
             out = srv._snapshot_loop_liveness(repo)
             self.assertEqual(out["pid"], 999999999)
             self.assertFalse(out["alive"])
@@ -3926,8 +3926,8 @@ class SnapshotLoopLivenessTests(unittest.TestCase):
     def test_live_pid(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            (repo / ".gluerun-state").mkdir()
-            (repo / ".gluerun-state" / "autonomate.pid").write_text(f"{os.getpid()}\n")
+            (repo / ".singular-state").mkdir()
+            (repo / ".singular-state" / "autonomate.pid").write_text(f"{os.getpid()}\n")
             out = srv._snapshot_loop_liveness(repo)
             self.assertEqual(out["pid"], os.getpid())
             self.assertTrue(out["alive"])
@@ -3937,13 +3937,13 @@ class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
     def test_run_status_overrides_worker_file_inference(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)
-            run = repo / ".gluerun-state" / "runs" / "RUN-auditing"
+            run = repo / ".singular-state" / "runs" / "RUN-auditing"
             run.mkdir(parents=True)
             (run / "worker-codex.log").write_text("{}\n")
             (run / "gate-check.json").write_text('{"exitCode":0}\n')
             (run / "auditor-codex.log").write_text("{}\n")
             (run / "run-status.json").write_text(json.dumps({
-                "schema": "gluerun.orchestration.run-status.v0",
+                "schema": "singular.orchestration.run-status.v0",
                 "runId": "RUN-auditing",
                 "taskId": "TASK-0001",
                 "phase": "auditing",
@@ -3986,7 +3986,7 @@ class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
 
     def test_structured_categories(self) -> None:
         provider = srv.classify_codex_record({
-            "schema": "gluerun.orchestration.provider-error.v0",
+            "schema": "singular.orchestration.provider-error.v0",
             "provider": "codex",
             "kind": "usage-limit",
             "eventType": "turn.failed",
@@ -3996,7 +3996,7 @@ class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
         })
         self.assertEqual(provider["diagnostic"]["category"], "provider-failure")
         baseline = srv.classify_codex_record({
-            "schema": "gluerun.orchestration.gate-report.v0",
+            "schema": "singular.orchestration.gate-report.v0",
             "outcome": "passed-with-acknowledged-baseline",
         })
         self.assertEqual(
@@ -4004,12 +4004,12 @@ class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
             "acknowledged-baseline",
         )
         product = srv.classify_codex_record({
-            "schema": "gluerun.orchestration.gate-report.v0",
+            "schema": "singular.orchestration.gate-report.v0",
             "outcome": "failed-product",
         })
         self.assertEqual(product["diagnostic"]["category"], "product-failure")
         infrastructure = srv.classify_codex_record({
-            "schema": "gluerun.orchestration.gate-report.v0",
+            "schema": "singular.orchestration.gate-report.v0",
             "outcome": "inconclusive-infrastructure",
         })
         self.assertEqual(
@@ -4050,7 +4050,7 @@ class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
             request_ref = "docs/orchestration/human-gates/release.human-gate.json"
             approval_ref = "docs/orchestration/human-gates/release.human-approval.json"
             request = {
-                "schema": "gluerun.orchestration.human-gate.v0",
+                "schema": "singular.orchestration.human-gate.v0",
                 "gateId": "release",
                 "node": "release",
                 "approvalType": "exact-artifact",
@@ -4067,7 +4067,7 @@ class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
             request_path = repo / request_ref
             request_path.write_text(json.dumps(request))
             approval = {
-                "schema": "gluerun.orchestration.human-approval.v0",
+                "schema": "singular.orchestration.human-approval.v0",
                 "gateId": "release",
                 "node": "release",
                 "requestRef": request_ref,
@@ -4086,7 +4086,7 @@ class FieldReportLifecycleAndDiagnosticTests(unittest.TestCase):
             }
             (repo / approval_ref).write_text(json.dumps(approval))
             (orch / "dag.v0.json").write_text(json.dumps({
-                "schema": "gluerun.orchestration.dag.v0",
+                "schema": "singular.orchestration.dag.v0",
                 "nodes": [
                     {
                         "id": "release", "dependsOn": [],
@@ -4189,7 +4189,7 @@ class RedactSecretsTests(unittest.TestCase):
             "commit 8151b8c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6 landed",
             "sha256 5d2c1219eb3811839bb835d1f912afa8c18126426d9367d1652a59727e10b903",
             "authoritative auth-status input_tokens output_tokens",
-            "GLUERUN_CLAUDE_MODEL=claude-opus-4-8",
+            "SINGULAR_CLAUDE_MODEL=claude-opus-4-8",
             "merge 1a2b3c4",
         ]
         for text in keep:
@@ -4239,7 +4239,7 @@ class SessionRedactionTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state/runs").mkdir(parents=True)
+        (repo / ".singular-state/runs").mkdir(parents=True)
         return repo
 
     def test_secret_scan_log_is_redacted_in_both_modes(self):
@@ -4248,7 +4248,7 @@ class SessionRedactionTests(unittest.TestCase):
         # PLAIN_LOG_NAMES — so the gate that keeps a credential out of git hands
         # it to the browser instead.
         repo = self._repo()
-        run = repo / ".gluerun-state/runs/RUN-x"
+        run = repo / ".singular-state/runs/RUN-x"
         run.mkdir()
         (run / "secret-scan.log").write_text(
             f"secret-scan: JWT / bearer token match in added lines:\n"
@@ -4262,7 +4262,7 @@ class SessionRedactionTests(unittest.TestCase):
 
     def test_command_output_and_agent_message_are_redacted(self):
         repo = self._repo()
-        run = repo / ".gluerun-state/runs/RUN-y"
+        run = repo / ".singular-state/runs/RUN-y"
         run.mkdir()
         (run / "worker-codex.log").write_text("\n".join([
             json.dumps({"type": "item.completed", "item": {
@@ -4276,7 +4276,7 @@ class SessionRedactionTests(unittest.TestCase):
 
     def test_session_summary_peek_is_redacted(self):
         repo = self._repo()
-        run = repo / ".gluerun-state/runs/RUN-z"
+        run = repo / ".singular-state/runs/RUN-z"
         run.mkdir()
         (run / "worker-codex.log").write_text(json.dumps({
             "type": "item.completed",
@@ -4292,8 +4292,8 @@ class RawConfigRedactionTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state").mkdir(parents=True)
-        (repo / "gluerun.config.json").write_text(json.dumps(config, indent=2))
+        (repo / ".singular-state").mkdir(parents=True)
+        (repo / "singular.config.json").write_text(json.dumps(config, indent=2))
         return repo
 
     def test_credentials_masked_but_model_knobs_survive(self):
@@ -4303,23 +4303,23 @@ class RawConfigRedactionTests(unittest.TestCase):
         repo = self._repo({"schemaVersion": "v2", "env": {
             "ANTHROPIC_API_KEY": "sk-ant-secretvalue000",
             "OPENCODE_AUTH_CONTENT": "opaqueauthblob123",
-            "GLUERUN_CLAUDE_MODEL": "claude-opus-4-8",
-            "GLUERUN_MAX_CONCURRENT": "3",
+            "SINGULAR_CLAUDE_MODEL": "claude-opus-4-8",
+            "SINGULAR_MAX_CONCURRENT": "3",
         }})
-        out = srv.collect_raw(repo, "config", "gluerun.config.json")
+        out = srv.collect_raw(repo, "config", "singular.config.json")
         self.assertTrue(out["redacted"])
         env = json.loads(out["content"])["env"]
         self.assertEqual(env["ANTHROPIC_API_KEY"], "[redacted:config-env]")
         self.assertEqual(env["OPENCODE_AUTH_CONTENT"], "[redacted:config-env]")
-        self.assertEqual(env["GLUERUN_CLAUDE_MODEL"], "claude-opus-4-8")
-        self.assertEqual(env["GLUERUN_MAX_CONCURRENT"], "3")
+        self.assertEqual(env["SINGULAR_CLAUDE_MODEL"], "claude-opus-4-8")
+        self.assertEqual(env["SINGULAR_MAX_CONCURRENT"], "3")
 
     def test_clean_config_is_not_marked_redacted(self):
         repo = self._repo({"schemaVersion": "v2",
-                           "env": {"GLUERUN_MAX_CONCURRENT": "3"}})
-        out = srv.collect_raw(repo, "config", "gluerun.config.json")
+                           "env": {"SINGULAR_MAX_CONCURRENT": "3"}})
+        out = srv.collect_raw(repo, "config", "singular.config.json")
         self.assertNotIn("redacted", out)
-        self.assertEqual(json.loads(out["content"])["env"]["GLUERUN_MAX_CONCURRENT"], "3")
+        self.assertEqual(json.loads(out["content"])["env"]["SINGULAR_MAX_CONCURRENT"], "3")
 
 
 class SnapshotRedactionTests(unittest.TestCase):
@@ -4329,7 +4329,7 @@ class SnapshotRedactionTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state").mkdir(parents=True)
+        (repo / ".singular-state").mkdir(parents=True)
         (repo / "docs/orchestration").mkdir(parents=True)
         snap = srv.collect_snapshot(repo)
         # 80 raw stdout lines on every 10s poll, with zero consumers.
@@ -4339,13 +4339,13 @@ class SnapshotRedactionTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         repo = Path(tmp.name)
-        (repo / ".gluerun-state").mkdir(parents=True)
+        (repo / ".singular-state").mkdir(parents=True)
         jwt = FAKE_JWT
-        (repo / ".gluerun-state/events.ndjson").write_text(json.dumps({
+        (repo / ".singular-state/events.ndjson").write_text(json.dumps({
             "ts": "2026-07-25T10:00:00Z", "type": "l1.worker_completed",
             "message": f"worker said {jwt}", "data": {"taskId": "TASK-0001"},
         }) + "\n")
-        events = srv.parse_events(repo / ".gluerun-state/events.ndjson", 40)
+        events = srv.parse_events(repo / ".singular-state/events.ndjson", 40)
         self.assertNotIn(jwt, json.dumps(events))
 
 
@@ -4356,7 +4356,7 @@ class ProviderResolutionTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name)
-        (self.repo / ".gluerun-state").mkdir(parents=True)
+        (self.repo / ".singular-state").mkdir(parents=True)
         (self.repo / "bin").mkdir()
         self.good = self.repo / "bin" / "codex"
         self.good.write_text("#!/bin/sh\necho codex 1.0\n")
@@ -4370,7 +4370,7 @@ class ProviderResolutionTests(unittest.TestCase):
         self.addCleanup(srv._CONFIG_CACHE.invalidate)
 
     def _codex(self, config_env: dict) -> dict:
-        (self.repo / "gluerun.config.json").write_text(
+        (self.repo / "singular.config.json").write_text(
             json.dumps({"schemaVersion": "v2", "env": config_env}))
         srv._CONFIG_CACHE.invalidate()
         out = srv.collect_providers(
@@ -4394,8 +4394,8 @@ class ProviderResolutionTests(unittest.TestCase):
 
     def test_config_env_override_is_honoured(self):
         # os.environ alone is NOT enough: the console never sources lib.sh, so
-        # a pin that lives in gluerun.config.json env{} has to be read from there.
-        codex = self._codex({"GLUERUN_CODEX_BIN": str(self.good)})
+        # a pin that lives in singular.config.json env{} has to be read from there.
+        codex = self._codex({"SINGULAR_CODEX_BIN": str(self.good)})
         self.assertEqual(codex["resolution"]["source"], "configured")
         self.assertEqual(codex["path"], str(self.good))
 
@@ -4403,20 +4403,20 @@ class ProviderResolutionTests(unittest.TestCase):
         # The reported defect: a working codex sits on PATH, but the operator
         # pinned a broken one. Probing the PATH copy would report health for an
         # executable the orchestration is not running.
-        codex = self._codex({"GLUERUN_CODEX_BIN": str(self.broken)})
+        codex = self._codex({"SINGULAR_CODEX_BIN": str(self.broken)})
         self.assertEqual(codex["status"], "misconfigured")
         self.assertFalse(codex["installed"])
         self.assertIsNone(codex["path"])
         self.assertIn(str(self.broken), codex["message"])
 
     def test_relative_override_is_misconfigured_not_missing(self):
-        codex = self._codex({"GLUERUN_CODEX_BIN": "relative/codex"})
+        codex = self._codex({"SINGULAR_CODEX_BIN": "relative/codex"})
         self.assertEqual(codex["status"], "misconfigured")
         self.assertIn("absolute", codex["message"])
 
     def test_misconfigured_counts_toward_attention(self):
-        (self.repo / "gluerun.config.json").write_text(json.dumps(
-            {"schemaVersion": "v2", "env": {"GLUERUN_CODEX_BIN": str(self.broken)}}))
+        (self.repo / "singular.config.json").write_text(json.dumps(
+            {"schemaVersion": "v2", "env": {"SINGULAR_CODEX_BIN": str(self.broken)}}))
         srv._CONFIG_CACHE.invalidate()
         out = srv.collect_providers(
             self.repo,
@@ -4435,7 +4435,7 @@ class DerivePlannerStateTests(unittest.TestCase):
     def test_no_state_is_ever_integrated(self):
         # The reported symptom. `integrated` is a lease vocabulary word; a
         # planner accepts or rejects a batch, it never integrates one.
-        for critique in (None, {"schema": "gluerun.orchestration.plan-critique.v0",
+        for critique in (None, {"schema": "singular.orchestration.plan-critique.v0",
                                 "verdict": "approve"}):
             for events in ([], [self._ev("planner.staged")]):
                 state, *_ = srv.derive_planner_state(
@@ -4447,7 +4447,7 @@ class DerivePlannerStateTests(unittest.TestCase):
         def run(verdict):
             return srv.derive_planner_state(
                 fresh=False, has_batch=True,
-                critique={"schema": "gluerun.orchestration.plan-critique.v0",
+                critique={"schema": "singular.orchestration.plan-critique.v0",
                           "verdict": verdict},
                 node_events=[], run_id="RUN-x")[0]
         self.assertEqual(run("approve"), "accepted")
@@ -4478,7 +4478,7 @@ class DerivePlannerStateTests(unittest.TestCase):
         # disposition wins.
         state, verdict, _reason, source = srv.derive_planner_state(
             fresh=False, has_batch=True,
-            critique={"schema": "gluerun.orchestration.plan-critique.v0",
+            critique={"schema": "singular.orchestration.plan-critique.v0",
                       "verdict": "approve"},
             node_events=[self._ev("origin.l1_import_rejected", reason="plan-critique")],
             run_id="RUN-x")
@@ -4492,7 +4492,7 @@ class DerivePlannerStateTests(unittest.TestCase):
         # paint as a live session.
         state, *_ = srv.derive_planner_state(
             fresh=True, has_batch=True,
-            critique={"schema": "gluerun.orchestration.plan-critique.v0",
+            critique={"schema": "singular.orchestration.plan-critique.v0",
                       "verdict": "revise"},
             node_events=[], run_id="RUN-x")
         self.assertEqual(state, "rejected")
@@ -4506,7 +4506,7 @@ class DerivePlannerStateTests(unittest.TestCase):
 
     def test_malformed_critique_is_not_trusted(self):
         for bad in ({"verdict": "approve"},                       # no schema
-                    {"schema": "gluerun.orchestration.plan-critique.v0",
+                    {"schema": "singular.orchestration.plan-critique.v0",
                      "verdict": "maybe"}):                        # bad verdict
             state, verdict, _r, source = srv.derive_planner_state(
                 fresh=False, has_batch=True, critique=bad,
@@ -4529,12 +4529,12 @@ class PlannerSessionStateTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name)
-        (self.repo / ".gluerun-state/runs").mkdir(parents=True)
+        (self.repo / ".singular-state/runs").mkdir(parents=True)
         srv._EVENTS_INDEX_CACHE.invalidate()
         self.addCleanup(srv._EVENTS_INDEX_CACHE.invalidate)
 
     def _planner(self, *, verdict=None, events=()):
-        run = self.repo / ".gluerun-state/runs/RUN-p"
+        run = self.repo / ".singular-state/runs/RUN-p"
         run.mkdir(exist_ok=True)
         (run / "planner-codex.log").write_text("planning\n")
         # Must match _PLANNER_NODE_RE / _PLANNER_AREA_RE: the node is how a
@@ -4542,14 +4542,14 @@ class PlannerSessionStateTests(unittest.TestCase):
         (run / "planner-prompt.md").write_text(
             "Area Planner for area `core`\nExecutable DAG node: `D1.contract`\n")
         (run / "planner-batch.json").write_text(json.dumps(
-            {"schema": "gluerun.orchestration.task-batch.v0",
+            {"schema": "singular.orchestration.task-batch.v0",
              "tasks": [{"taskId": "TASK-0001", "markdown": "x"}]}))
         if verdict:
             (run / "plan-critique.json").write_text(json.dumps({
-                "schema": "gluerun.orchestration.plan-critique.v0",
+                "schema": "singular.orchestration.plan-critique.v0",
                 "node": "D1.contract", "runId": "RUN-p", "verdict": verdict}))
         if events:
-            (self.repo / ".gluerun-state/events.ndjson").write_text(
+            (self.repo / ".singular-state/events.ndjson").write_text(
                 "\n".join(json.dumps(e) for e in events) + "\n")
         srv._EVENTS_INDEX_CACHE.invalidate()
         sessions = srv.discover_sessions(self.repo)

@@ -24,16 +24,16 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/repo"
 mkdir -p "$root/docs/orchestration/prompts" "$root/docs/orchestration/tasks" \
-  "$root/docs/orchestration/gates" "$root/.gluerun-state/leases" \
-  "$root/.gluerun-state/runs" "$root/.gluerun-state/inbox" "$root/.worktrees"
+  "$root/docs/orchestration/gates" "$root/.singular-state/leases" \
+  "$root/.singular-state/runs" "$root/.singular-state/inbox" "$root/.worktrees"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 cp "$ENGINE_HOME/templates/prompts/supervisor-ask.md" "$root/docs/orchestration/prompts/supervisor-ask.md"
 cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
-{"schema":"gluerun.orchestration.dag.v0","layers":["scaffold"],"kinds":["build"],
+{"schema":"singular.orchestration.dag.v0","layers":["scaffold"],"kinds":["build"],
  "nodes":[{"id":"M0.core","stage":"M0","area":"core","layer":"scaffold","kind":"build","dependsOn":[],"requiredCompletion":"scaffold_complete"}]}
 EOF
-printf '# gluerun Autonomous Status\n\nIteration: 5\n' >"$root/.gluerun-state/STATUS.md"
+printf '# singular Autonomous Status\n\nIteration: 5\n' >"$root/.singular-state/STATUS.md"
 git -C "$root" add .
 git -C "$root" -c user.name=t -c user.email=t@t commit -q -m init
 
@@ -56,19 +56,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 echo "assistant runner chatter"
-[[ -n "$meta" ]] && printf '{"schema":"gluerun.orchestration.session-meta.v0","provider":"fake","model":"fake-1","effort":"low","exitCode":0}\n' >"$meta"
+[[ -n "$meta" ]] && printf '{"schema":"singular.orchestration.session-meta.v0","provider":"fake","model":"fake-1","effort":"low","exitCode":0}\n' >"$meta"
 case "${STUB_MODE:-answer}" in
   answer)
     cat >"$out" <<'ANS'
 The loop is healthy and making progress on the core area.
 
 ```json
-{"proposedSettings": {"GLUERUN_MAX_CONCURRENT": "4"}}
+{"proposedSettings": {"SINGULAR_MAX_CONCURRENT": "4"}}
 ```
 ANS
     ;;
   envelope)
-    printf '{"answer": "unwrapped prose from the envelope.", "proposedSettings": {"GLUERUN_L2_SLICE_BUDGET": "2"}}\n' >"$out"
+    printf '{"answer": "unwrapped prose from the envelope.", "proposedSettings": {"SINGULAR_L2_SLICE_BUDGET": "2"}}\n' >"$out"
     ;;
   sleep) sleep 30 ;;
 esac
@@ -76,21 +76,21 @@ SH
 chmod +x "$stub"
 
 run_env() {
-  env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ORCH_DIR="$root/docs/orchestration" GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
-    GLUERUN_LEASES_DIR="$root/.gluerun-state/leases" GLUERUN_RUNS_DIR="$root/.gluerun-state/runs" \
-    GLUERUN_INBOX_DIR="$root/.gluerun-state/inbox" GLUERUN_WORKTREES_DIR="$root/.worktrees" \
-    GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" GLUERUN_TARGET_BRANCH=target \
-    GLUERUN_RUNNER="$stub" ARGV_DUMP="$root/argv.dump" "$@"
+  env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ORCH_DIR="$root/docs/orchestration" SINGULAR_TASKS_DIR="$root/docs/orchestration/tasks" \
+    SINGULAR_LEASES_DIR="$root/.singular-state/leases" SINGULAR_RUNS_DIR="$root/.singular-state/runs" \
+    SINGULAR_INBOX_DIR="$root/.singular-state/inbox" SINGULAR_WORKTREES_DIR="$root/.worktrees" \
+    SINGULAR_EVENTS_FILE="$root/.singular-state/events.ndjson" SINGULAR_TARGET_BRANCH=target \
+    SINGULAR_RUNNER="$stub" ARGV_DUMP="$root/argv.dump" "$@"
 }
 
 # --- 1. direct ask.sh: staged question -> answered + parsed proposal --------
 ask_id="ASK-test-one"
-mkdir -p "$root/.gluerun-state/runs/$ask_id"
-printf '%s\n' "what is the status $SECRET" >"$root/.gluerun-state/runs/$ask_id/question.md"
+mkdir -p "$root/.singular-state/runs/$ask_id"
+printf '%s\n' "what is the status $SECRET" >"$root/.singular-state/runs/$ask_id/question.md"
 out="$(run_env bash "$SCRIPT_DIR/ask.sh" --run-id "$ask_id" 2>&1)"
 assert_contains "$out" "state=done" "answered"
-run_dir="$root/.gluerun-state/runs/$ask_id"
+run_dir="$root/.singular-state/runs/$ask_id"
 
 [[ -f "$run_dir/answer.md" ]] || fail "answer.md missing"
 [[ -f "$run_dir/answer-raw.json" ]] || fail "answer-raw.json missing"
@@ -104,7 +104,7 @@ python3 - "$run_dir/ask.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["state"] == "done", d
-assert d["proposedSettings"] == {"GLUERUN_MAX_CONCURRENT": "4"}, d
+assert d["proposedSettings"] == {"SINGULAR_MAX_CONCURRENT": "4"}, d
 assert d["runId"] == "ASK-test-one", d
 assert d.get("answeredAt"), d
 PY
@@ -120,37 +120,37 @@ grep -q "$SECRET" "$run_dir/ask-prompt.md" || fail "question must be rendered in
 # ...and is NEVER in a runner argv.
 grep -q "$SECRET" "$root/argv.dump" && fail "question text leaked into runner argv"
 
-evts="$(cat "$root/.gluerun-state/events.ndjson")"
+evts="$(cat "$root/.singular-state/events.ndjson")"
 assert_contains "$evts" '"type":"supervisor.ask_started"' "ask_started event"
 assert_contains "$evts" '"type":"supervisor.ask_answered"' "ask_answered event"
 
 # --- 1b. JSON-envelope answer is unwrapped into prose ------------------------
 ask_id_env="ASK-test-envelope"
-mkdir -p "$root/.gluerun-state/runs/$ask_id_env"
-printf '%s\n' "envelope question" >"$root/.gluerun-state/runs/$ask_id_env/question.md"
+mkdir -p "$root/.singular-state/runs/$ask_id_env"
+printf '%s\n' "envelope question" >"$root/.singular-state/runs/$ask_id_env/question.md"
 out="$(run_env STUB_MODE=envelope bash "$SCRIPT_DIR/ask.sh" --run-id "$ask_id_env" 2>&1)"
 assert_contains "$out" "state=done" "envelope answered"
-env_dir="$root/.gluerun-state/runs/$ask_id_env"
+env_dir="$root/.singular-state/runs/$ask_id_env"
 grep -q "unwrapped prose from the envelope" "$env_dir/answer.md" || fail "envelope answer not unwrapped"
 grep -q '"answer"' "$env_dir/answer.md" && fail "answer.md still contains the JSON envelope"
 python3 - "$env_dir/ask.json" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["state"] == "done", d
-assert d["proposedSettings"] == {"GLUERUN_L2_SLICE_BUDGET": "2"}, d
+assert d["proposedSettings"] == {"SINGULAR_L2_SLICE_BUDGET": "2"}, d
 PY
 
 # --- 2. timeout: sleeping stub + short budget -> state timeout --------------
 ask_id2="ASK-test-two"
-mkdir -p "$root/.gluerun-state/runs/$ask_id2"
-printf '%s\n' "slow question" >"$root/.gluerun-state/runs/$ask_id2/question.md"
-out="$(run_env STUB_MODE=sleep GLUERUN_ASK_TIMEOUT_SEC=2 bash "$SCRIPT_DIR/ask.sh" --run-id "$ask_id2" 2>&1)"
+mkdir -p "$root/.singular-state/runs/$ask_id2"
+printf '%s\n' "slow question" >"$root/.singular-state/runs/$ask_id2/question.md"
+out="$(run_env STUB_MODE=sleep SINGULAR_ASK_TIMEOUT_SEC=2 bash "$SCRIPT_DIR/ask.sh" --run-id "$ask_id2" 2>&1)"
 assert_contains "$out" "state=timeout" "timeout state"
-python3 - "$root/.gluerun-state/runs/$ask_id2/ask.json" <<'PY'
+python3 - "$root/.singular-state/runs/$ask_id2/ask.json" <<'PY'
 import json, sys
 assert json.load(open(sys.argv[1]))["state"] == "timeout"
 PY
-assert_contains "$(cat "$root/.gluerun-state/events.ndjson")" '"reason":"timeout"' "ask timeout event"
+assert_contains "$(cat "$root/.singular-state/events.ndjson")" '"reason":"timeout"' "ask timeout event"
 
 # --- 3. bad run-id rejected --------------------------------------------------
 rc=0
@@ -161,8 +161,8 @@ run_env bash "$SCRIPT_DIR/ask.sh" --run-id "NOTASK-1" >/dev/null 2>&1 || rc=$?
 out="$(run_env bash "$SCRIPT_DIR/ops.sh" ask "where are we $SECRET" --wait 2>&1)"
 assert_contains "$out" "runId=ASK-" "ops ask prints a runId"
 ops_id="$(sed -n 's/^runId=//p' <<<"$out" | tail -1)"
-[[ -d "$root/.gluerun-state/runs/$ops_id" ]] || fail "ops ask did not create the run dir"
-python3 - "$root/.gluerun-state/runs/$ops_id/ask.json" <<'PY'
+[[ -d "$root/.singular-state/runs/$ops_id" ]] || fail "ops ask did not create the run dir"
+python3 - "$root/.singular-state/runs/$ops_id/ask.json" <<'PY'
 import json, sys
 assert json.load(open(sys.argv[1]))["state"] == "done"
 PY

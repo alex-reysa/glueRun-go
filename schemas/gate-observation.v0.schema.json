@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.gate-observation.v0",
-  "title": "gluerun Gate Adapter Observation",
+  "$id": "singular.orchestration.gate-observation.v0",
+  "title": "singular Gate Adapter Observation",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,7 +9,7 @@
     "failures"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.gate-observation.v0" },
+    "schema": { "const": "singular.orchestration.gate-observation.v0" },
     "failures": {
       "type": "array",
       "items": {

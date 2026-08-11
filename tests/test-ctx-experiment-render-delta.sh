@@ -2,8 +2,8 @@
 # Covers the read-only experiment HEADLINE renderer engine/ctx-experiment-render-delta.sh.
 # TASK-0085 engine/ctx-experiment-render.sh renders the summary bundle's per-arm
 # ABSOLUTE tables, but the treatment-vs-control DELTA (TASK-0089
-# gluerun_ctx_experiment_delta_json) and the arm-integrity AUDIT (TASK-0097
-# gluerun_ctx_experiment_armaudit_json) are not rendered as markdown anywhere.
+# singular_ctx_experiment_delta_json) and the arm-integrity AUDIT (TASK-0097
+# singular_ctx_experiment_armaudit_json) are not rendered as markdown anywhere.
 # This brick renders BOTH, completing the report presentation.
 #
 # It ships NO metric of its own: it FORMATS the already-computed delta and audit
@@ -12,13 +12,13 @@
 # delegating to their integrated json composers over the resolved corpus defaults.
 #
 # Three chained slices, all inside engine/ctx-experiment-render-delta.sh:
-#   1. gluerun_ctx_experiment_render_delta_table   — from the delta artifact,
+#   1. singular_ctx_experiment_render_delta_table   — from the delta artifact,
 #      render a deterministic treatment-effect table (each metric's B-minus-A
 #      delta + neutral direction).
-#   2. gluerun_ctx_experiment_render_armaudit_table — from the audit artifact,
+#   2. singular_ctx_experiment_render_armaudit_table — from the audit artifact,
 #      render a per-arm integrity table (recorded / unrecorded / consistent /
 #      inconsistent counts + the flagged inconsistent runIds).
-#   3. gluerun_ctx_experiment_render_result_md [runs_dir] [events_file] [metrics_file]
+#   3. singular_ctx_experiment_render_result_md [runs_dir] [events_file] [metrics_file]
 #      — obtain both artifacts by delegating to the composers (threading the
 #      corpus args per each composer's signature) and render both sections in a
 #      stable order to stdout as ONE markdown fragment.
@@ -85,9 +85,9 @@ source "$SIB_DELTA"    || fail "sourcing $SIB_DELTA failed"
 source "$SIB_ARMAUDIT" || fail "sourcing $SIB_ARMAUDIT failed"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-for fn in gluerun_ctx_experiment_render_delta_table \
-          gluerun_ctx_experiment_render_armaudit_table \
-          gluerun_ctx_experiment_render_result_md; do
+for fn in singular_ctx_experiment_render_delta_table \
+          singular_ctx_experiment_render_armaudit_table \
+          singular_ctx_experiment_render_result_md; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $TOOL"
 done
 
@@ -105,7 +105,7 @@ mkdir -p "$indir"
 delta_fix="$indir/delta.json"
 cat > "$delta_fix" <<'EOF'
 {
-  "schema": "gluerun.orchestration.ctx-experiment-delta.v0",
+  "schema": "singular.orchestration.ctx-experiment-delta.v0",
   "deltas": {
     "escapeRate": {"a": 0.5, "b": 0.2, "delta": -0.3, "direction": "lower"},
     "costTokensPerTask": {"a": 100, "b": 150, "delta": 50, "direction": "higher"},
@@ -114,7 +114,7 @@ cat > "$delta_fix" <<'EOF'
 }
 EOF
 
-dtab="$(gluerun_ctx_experiment_render_delta_table "$(cat "$delta_fix")")" \
+dtab="$(singular_ctx_experiment_render_delta_table "$(cat "$delta_fix")")" \
   || fail "delta-table renderer exited non-zero on a valid artifact"
 [[ -n "$dtab" ]] || fail "delta-table renderer produced empty output"
 printf '%s\n' "$dtab" > "$tmp/dtab.md"
@@ -158,13 +158,13 @@ PY
 audit_fix="$indir/audit.json"
 cat > "$audit_fix" <<'EOF'
 {
-  "schema": "gluerun.orchestration.ctx-experiment-armaudit.v0",
+  "schema": "singular.orchestration.ctx-experiment-armaudit.v0",
   "arms": {
     "A": {"arm": "A", "expectation": "activeCount==0", "runsRecorded": 2,
           "runsUnrecorded": 1, "consistent": 1, "inconsistent": 1,
           "inconsistentRuns": [{"runId": "RA2", "classification": "contaminated",
                                 "activeCount": 2,
-                                "activeKnobs": ["GLUERUN_CTX_PACKET", "GLUERUN_CTX_ROUTING"]}]},
+                                "activeKnobs": ["SINGULAR_CTX_PACKET", "SINGULAR_CTX_ROUTING"]}]},
     "B": {"arm": "B", "expectation": "activeCount>0", "runsRecorded": 3,
           "runsUnrecorded": 0, "consistent": 1, "inconsistent": 2,
           "inconsistentRuns": [{"runId": "RB2", "classification": "misconfigured-as-M0",
@@ -175,7 +175,7 @@ cat > "$audit_fix" <<'EOF'
 }
 EOF
 
-atab="$(gluerun_ctx_experiment_render_armaudit_table "$(cat "$audit_fix")")" \
+atab="$(singular_ctx_experiment_render_armaudit_table "$(cat "$audit_fix")")" \
   || fail "armaudit-table renderer exited non-zero on a valid artifact"
 [[ -n "$atab" ]] || fail "armaudit-table renderer produced empty output"
 printf '%s\n' "$atab" > "$tmp/atab.md"
@@ -206,9 +206,9 @@ PY
 # ============================================================================
 # Determinism: identical input -> byte-identical output, both slices.
 # ============================================================================
-dtab2="$(gluerun_ctx_experiment_render_delta_table "$(cat "$delta_fix")")"
+dtab2="$(singular_ctx_experiment_render_delta_table "$(cat "$delta_fix")")"
 [[ "$dtab" == "$dtab2" ]] || fail "delta-table render not deterministic across identical runs"
-atab2="$(gluerun_ctx_experiment_render_armaudit_table "$(cat "$audit_fix")")"
+atab2="$(singular_ctx_experiment_render_armaudit_table "$(cat "$audit_fix")")"
 [[ "$atab" == "$atab2" ]] || fail "armaudit-table render not deterministic across identical runs"
 
 # ============================================================================
@@ -233,12 +233,12 @@ mk_armstate() { # runId  [KNOB=value ...]
   local rid="$1"; shift
   mkdir -p "$runs/$rid"
   (
-    unset GLUERUN_CTX_PACKET GLUERUN_CTX_ROUTING GLUERUN_REHYDRATE \
-          GLUERUN_PAIRED_AUDIT_PCT GLUERUN_CRITIC_RECHECK_PCT \
-          GLUERUN_CTX_ARTIFACT_SCAN GLUERUN_CTX_MANIFEST
+    unset SINGULAR_CTX_PACKET SINGULAR_CTX_ROUTING SINGULAR_REHYDRATE \
+          SINGULAR_PAIRED_AUDIT_PCT SINGULAR_CRITIC_RECHECK_PCT \
+          SINGULAR_CTX_ARTIFACT_SCAN SINGULAR_CTX_MANIFEST
     local kv
     for kv in "$@"; do export "$kv"; done
-    gluerun_ctx_experiment_armstate_json
+    singular_ctx_experiment_armstate_json
   ) > "$runs/$rid/arm-knob-state.json"
 }
 
@@ -247,8 +247,8 @@ mk_index R2 T2 '[{"n":1,"failureClass":"none","findings":["f1"]}]'
 mk_index R3 T3 '[{"n":1,"failureClass":"window","findings":["f1","f2","f3"]},{"n":2,"failureClass":"taint","findings":[]}]'
 mk_index R4 T4 '[{"n":1,"failureClass":""},{"n":2,"failureClass":"accepted","findings":["f1"]}]'
 mk_armstate R1                                   # arm A, M0            -> consistent
-mk_armstate R2 GLUERUN_CTX_PACKET=1              # arm A, contaminated  -> inconsistent
-mk_armstate R3 GLUERUN_CTX_PACKET=1 GLUERUN_CTX_ROUTING=1  # arm B, active -> consistent
+mk_armstate R2 SINGULAR_CTX_PACKET=1              # arm A, contaminated  -> inconsistent
+mk_armstate R3 SINGULAR_CTX_PACKET=1 SINGULAR_CTX_ROUTING=1  # arm B, active -> consistent
 mk_armstate R4                                   # arm B, M0            -> misconfigured
 
 cat > "$events" <<'EOF'
@@ -287,13 +287,13 @@ su_before="$(file_hash "$SIB_SUMMARY")"
 report_before="$(report_state)"
 
 # The delegated artifacts, obtained directly from the composers (threaded args).
-direct_delta="$(gluerun_ctx_experiment_delta_json "$runs" "$events" "$metrics")" \
+direct_delta="$(singular_ctx_experiment_delta_json "$runs" "$events" "$metrics")" \
   || fail "delta composer exited non-zero"
-direct_audit="$(gluerun_ctx_experiment_armaudit_json "$runs" "$events")" \
+direct_audit="$(singular_ctx_experiment_armaudit_json "$runs" "$events")" \
   || fail "armaudit composer exited non-zero"
 
 # The composed entry, threading the same corpus args.
-composed="$(gluerun_ctx_experiment_render_result_md "$runs" "$events" "$metrics")" \
+composed="$(singular_ctx_experiment_render_result_md "$runs" "$events" "$metrics")" \
   || fail "result renderer exited non-zero on a threaded corpus"
 [[ -n "$composed" ]] || fail "result renderer produced empty output on a valid corpus"
 printf '%s\n' "$composed" > "$tmp/composed.md"
@@ -301,8 +301,8 @@ printf '%s\n' "$composed" > "$tmp/composed.md"
 # The entry renders exactly what rendering the delegated artifacts produces: the
 # delta table over direct_delta and the armaudit table over direct_audit both
 # appear verbatim inside the composed fragment.
-expect_dtab="$(gluerun_ctx_experiment_render_delta_table "$direct_delta")"
-expect_atab="$(gluerun_ctx_experiment_render_armaudit_table "$direct_audit")"
+expect_dtab="$(singular_ctx_experiment_render_delta_table "$direct_delta")"
+expect_atab="$(singular_ctx_experiment_render_armaudit_table "$direct_audit")"
 case "$composed" in
   *"$expect_dtab"*) : ;;
   *) fail "composed fragment does not contain the rendered delegated delta table" ;;
@@ -324,13 +324,13 @@ print("order-ok")
 PY
 
 # Determinism of the composed entry.
-composed2="$(gluerun_ctx_experiment_render_result_md "$runs" "$events" "$metrics")"
+composed2="$(singular_ctx_experiment_render_result_md "$runs" "$events" "$metrics")"
 [[ "$composed" == "$composed2" ]] || fail "composed entry not deterministic across identical runs"
 
 # No-arg env-default delegation renders identically to the threaded-arg form.
-env_composed="$(GLUERUN_RUNS_DIR="$runs" GLUERUN_EVENTS_FILE="$events" \
-  GLUERUN_CTX_EXPERIMENT_METRICS_FILE="$metrics" \
-  gluerun_ctx_experiment_render_result_md)" \
+env_composed="$(SINGULAR_RUNS_DIR="$runs" SINGULAR_EVENTS_FILE="$events" \
+  SINGULAR_CTX_EXPERIMENT_METRICS_FILE="$metrics" \
+  singular_ctx_experiment_render_result_md)" \
   || fail "no-arg result renderer exited non-zero (should delegate over env defaults)"
 [[ "$env_composed" == "$composed" ]] \
   || fail "no-arg env-default render differs from threaded-arg render"
@@ -339,18 +339,18 @@ env_composed="$(GLUERUN_RUNS_DIR="$runs" GLUERUN_EVENTS_FILE="$events" \
 # Fail-safe: zeroed / empty artifacts render well-formed zero tables, zero exit.
 # ============================================================================
 # The slice renderers on empty artifacts render a well-formed table skeleton.
-zero_dtab="$(gluerun_ctx_experiment_render_delta_table '{"schema":"gluerun.orchestration.ctx-experiment-delta.v0","deltas":{}}')" \
+zero_dtab="$(singular_ctx_experiment_render_delta_table '{"schema":"singular.orchestration.ctx-experiment-delta.v0","deltas":{}}')" \
   || fail "delta-table renderer non-zero on an empty deltas map (should fail safe)"
 [[ -n "$zero_dtab" ]] || fail "empty delta artifact rendered nothing (not well-formed)"
 case "$zero_dtab" in *"| --- |"*) : ;; *) fail "empty delta table missing a separator row" ;; esac
 
-zero_atab="$(gluerun_ctx_experiment_render_armaudit_table '{"schema":"gluerun.orchestration.ctx-experiment-armaudit.v0","arms":{}}')" \
+zero_atab="$(singular_ctx_experiment_render_armaudit_table '{"schema":"singular.orchestration.ctx-experiment-armaudit.v0","arms":{}}')" \
   || fail "armaudit-table renderer non-zero on an empty arms map (should fail safe)"
 [[ -n "$zero_atab" ]] || fail "empty audit artifact rendered nothing (not well-formed)"
 case "$zero_atab" in *"| --- |"*) : ;; *) fail "empty audit table missing a separator row" ;; esac
 
 # The composed entry over a missing corpus renders well-formed zero tables, exit 0.
-zero_md="$(gluerun_ctx_experiment_render_result_md "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")" \
+zero_md="$(singular_ctx_experiment_render_result_md "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")" \
   || fail "result renderer non-zero on a missing corpus (should fail safe)"
 [[ -n "$zero_md" ]] || fail "missing-corpus render produced empty output (not well-formed)"
 printf '%s\n' "$zero_md" > "$tmp/zero.md"

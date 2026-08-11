@@ -116,7 +116,7 @@ def main() -> None:
     observation_path = Path(args.observation) if args.observation else None
     if observation_path and observation_path.is_file():
         observation = read_object(
-            observation_path, "gluerun.orchestration.gate-observation.v0"
+            observation_path, "singular.orchestration.gate-observation.v0"
         )
         observed = failures(observation.get("failures"), "observation.failures")
         infrastructure = bool(observation.get("infrastructureFailure"))
@@ -164,7 +164,7 @@ def main() -> None:
                 "strict gate observation missing for acknowledged baseline"
             )
         baseline = read_object(
-            baseline_path, "gluerun.orchestration.gate-baseline.v0"
+            baseline_path, "singular.orchestration.gate-baseline.v0"
         )
         if baseline.get("commandSha256") != command_sha:
             raise ValueError("baseline command hash mismatch")
@@ -206,7 +206,7 @@ def main() -> None:
         outcome = "failed-product"
 
     record: dict[str, Any] = {
-        "schema": "gluerun.orchestration.gate-report.v0",
+        "schema": "singular.orchestration.gate-report.v0",
         "taskId": args.task_id,
         "runId": args.run_id,
         "headSha": args.head_sha,
@@ -219,11 +219,11 @@ def main() -> None:
         "rawExitCode": args.raw_exit_code,
         "logRef": args.log_ref,
         # logRef is a repository-relative CITATION: dag.sh anchors it at
-        # GLUERUN_ROOT and rejects absolute refs. logPath is the file this
+        # SINGULAR_ROOT and rejects absolute refs. logPath is the file this
         # process actually opened and hashed, verbatim from --log-path.
         #
         # They are separate because the repo has THREE incompatible bases for a
-        # relative logRef -- GLUERUN_ROOT (dag.sh), the run directory
+        # relative logRef -- SINGULAR_ROOT (dag.sh), the run directory
         # (evidence-manifest.sh) and the report's own directory
         # (gate-report.py). Readers that need to open the file follow logPath
         # and are immune to which base a producer chose; only dag.sh reads

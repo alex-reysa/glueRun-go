@@ -6,14 +6,14 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 pass=0
 fail=0
 failed=""
-gate_report_file="${GLUERUN_GATE_REPORT_FILE:-}"
-# Durable per-run artifact directory, set by `gluerun test`'s supervisor. Read
+gate_report_file="${SINGULAR_GATE_REPORT_FILE:-}"
+# Durable per-run artifact directory, set by `singular test`'s supervisor. Read
 # here, before the env scrub below, for the same reason gate_report_file is:
-# the scrub deletes every GLUERUN_* from the environment a few lines down.
+# the scrub deletes every SINGULAR_* from the environment a few lines down.
 # Unset (the default, and every direct `bash tests/run.sh` invocation) means no
 # per-test logs and no progress file — the output below is then byte-identical
 # to what this harness has always printed.
-run_dir="${GLUERUN_TEST_RUN_DIR:-}"
+run_dir="${SINGULAR_TEST_RUN_DIR:-}"
 
 # Environmental preflights, before any test is discovered or run. Both fail
 # once, loudly, instead of letting every dependent test fail separately.
@@ -23,7 +23,7 @@ run_dir="${GLUERUN_TEST_RUN_DIR:-}"
 #      produced cryptic per-test failures instead of one diagnosis. The shim
 #      re-execs this script under a vetted interpreter when needed, which is
 #      also why it is sourced before the env scrub below: that scrub unsets
-#      GLUERUN_BASH_BOOTSTRAPPED, harmlessly, because every test is launched
+#      SINGULAR_BASH_BOOTSTRAPPED, harmlessly, because every test is launched
 #      with "$BASH" (already >= 4) and their own inline guards then no-op.
 #   2. A real Git working tree with history and disposable worktrees
 #      (PMGO-010). Most tests need all three; a `git archive` extraction has
@@ -32,30 +32,30 @@ run_dir="${GLUERUN_TEST_RUN_DIR:-}"
 . "$TESTS_DIR/../engine/bash-guard.sh" || exit 2
 # shellcheck source=../engine/git-preflight.sh
 . "$TESTS_DIR/../engine/git-preflight.sh" || exit 2
-gluerun_git_source_preflight "$TESTS_DIR/.." || exit 1
+singular_git_source_preflight "$TESTS_DIR/.." || exit 1
 
-# Hermetic guard: scrub inherited GLUERUN_* env. When this suite runs as the
+# Hermetic guard: scrub inherited SINGULAR_* env. When this suite runs as the
 # regression gate under l1-drive, the drive has already exported the consumer
-# repo's config into the environment (GLUERUN_RUNNER, GLUERUN_AREA_PREFIX,
-# GLUERUN_TARGET_BRANCH, ...) and lib.sh's ${VAR:-default} fallbacks keep the
+# repo's config into the environment (SINGULAR_RUNNER, SINGULAR_AREA_PREFIX,
+# SINGULAR_TARGET_BRANCH, ...) and lib.sh's ${VAR:-default} fallbacks keep the
 # leaked values, so sandboxed tests see the consumer's config instead of
-# pristine defaults (and a leaked GLUERUN_RUNNER replaces test runner stubs
-# with a real CLI). Tests set every GLUERUN_* var they need internally.
-while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+# pristine defaults (and a leaked SINGULAR_RUNNER replaces test runner stubs
+# with a real CLI). Tests set every SINGULAR_* var they need internally.
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
 
 # Positional arguments are a basename filter: `bash tests/run.sh test-a.sh
 # test-b.sh` runs only those two files. Discovery itself is untouched — the
-# filter is applied to the same list, so gluerun-ext glob semantics still hold
+# filter is applied to the same list, so singular-ext glob semantics still hold
 # — and with no arguments (every existing caller) nothing is filtered at all.
-# This is what makes `gluerun test --rerun-failures` possible without a second,
+# This is what makes `singular test --rerun-failures` possible without a second,
 # divergent discovery path.
 filter=" $* "
 
 if [[ -n "$run_dir" ]]; then mkdir -p "$run_dir/logs"; fi
 
-# Generic engine suite + the gluerun-ext (opt-in module) suite, if present.
-EXT_DIR="$(cd "$TESTS_DIR/../gluerun-ext/tests" 2>/dev/null && pwd || true)"
+# Generic engine suite + the singular-ext (opt-in module) suite, if present.
+EXT_DIR="$(cd "$TESTS_DIR/../singular-ext/tests" 2>/dev/null && pwd || true)"
 for t in "$TESTS_DIR"/test-*.sh ${EXT_DIR:+"$EXT_DIR"/test-*.sh}; do
   [[ -e "$t" ]] || continue
   name="$(basename "$t")"
@@ -120,7 +120,7 @@ failures = [
     for name in failed.split()
 ]
 record = {
-    "schema": "gluerun.orchestration.gate-observation.v0",
+    "schema": "singular.orchestration.gate-observation.v0",
     "failures": failures,
 }
 temporary = path + ".tmp"

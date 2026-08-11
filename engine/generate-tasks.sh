@@ -2,9 +2,9 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "generate-tasks.sh requires bash >= 4" >&2; exit 1
@@ -39,44 +39,44 @@ done
 
 # Task fatness knob: how many mutually-independent strict-test-first slices the
 # planner may fold into one L2 task. Default 1 (byte-identical to prior behavior).
-# Clamped to GLUERUN_L2_SLICE_BUDGET_MAX; the per-node layer guardrail below forces 1
+# Clamped to SINGULAR_L2_SLICE_BUDGET_MAX; the per-node layer guardrail below forces 1
 # on the configured single-slice layers regardless of this value.
-slice_budget="${GLUERUN_L2_SLICE_BUDGET:-1}"
-slice_budget_max="${GLUERUN_L2_SLICE_BUDGET_MAX:-3}"
-[[ "$slice_budget" =~ ^[0-9]+$ && "$slice_budget" -ge 1 ]] || { echo "GLUERUN_L2_SLICE_BUDGET must be an integer >= 1" >&2; exit 2; }
-[[ "$slice_budget_max" =~ ^[0-9]+$ && "$slice_budget_max" -ge 1 ]] || { echo "GLUERUN_L2_SLICE_BUDGET_MAX must be an integer >= 1" >&2; exit 2; }
+slice_budget="${SINGULAR_L2_SLICE_BUDGET:-1}"
+slice_budget_max="${SINGULAR_L2_SLICE_BUDGET_MAX:-3}"
+[[ "$slice_budget" =~ ^[0-9]+$ && "$slice_budget" -ge 1 ]] || { echo "SINGULAR_L2_SLICE_BUDGET must be an integer >= 1" >&2; exit 2; }
+[[ "$slice_budget_max" =~ ^[0-9]+$ && "$slice_budget_max" -ge 1 ]] || { echo "SINGULAR_L2_SLICE_BUDGET_MAX must be an integer >= 1" >&2; exit 2; }
 [[ "$slice_budget" -gt "$slice_budget_max" ]] && slice_budget="$slice_budget_max"
 
-gluerun_ensure_state_dirs
+singular_ensure_state_dirs
 
 # Honor the kill switch at the generation entry point, not only in the loop
 # wrappers, so a manual invocation cannot generate work while frozen.
-if gluerun_stop_requested; then
-  gluerun_append_event "planner.frozen" "STOP sentinel present; refusing to generate" "{}"
-  echo "frozen (STOP sentinel present; $GLUERUN_STOP_FILE)"
+if singular_stop_requested; then
+  singular_append_event "planner.frozen" "STOP sentinel present; refusing to generate" "{}"
+  echo "frozen (STOP sentinel present; $SINGULAR_STOP_FILE)"
   exit 0
 fi
 
-gluerun_require_target_branch
+singular_require_target_branch
 
 # Planner session-meta lineage anchor: resolve the target-branch head at planning
 # time (the head a resumable planner session would be anchored to). Used only by
-# the default-OFF GLUERUN_PLANNER_SESSION finalize hook below; unused otherwise.
-planner_head_sha="$(git -C "$GLUERUN_ROOT" rev-parse "$GLUERUN_TARGET_BRANCH" 2>/dev/null || true)"
+# the default-OFF SINGULAR_PLANNER_SESSION finalize hook below; unused otherwise.
+planner_head_sha="$(git -C "$SINGULAR_ROOT" rev-parse "$SINGULAR_TARGET_BRANCH" 2>/dev/null || true)"
 
 # Pick the first eligible ungated DAG node from the manifest and authoritative
 # gate-result records.
 if [[ -n "$node_override" ]]; then
   # Staged/fanout mode: target a specific, still-eligible frontier node.
   dag_next="$("$SCRIPT_DIR/dag.sh" node-fields "$node_override" 2>&1)" || {
-    gluerun_append_event "planner.failed" "dag node-fields failed" \
+    singular_append_event "planner.failed" "dag node-fields failed" \
       "{\"node\":\"$node_override\",\"runId\":\"\"}"
     echo "planner-failed ($dag_next)"
     exit 1
   }
 else
   dag_next="$("$SCRIPT_DIR/dag.sh" next-area 2>&1)" || {
-    gluerun_append_event "planner.failed" "dag frontier selection failed" "$(python3 - "$dag_next" <<'PY'
+    singular_append_event "planner.failed" "dag frontier selection failed" "$(python3 - "$dag_next" <<'PY'
 import json, sys
 print(json.dumps({"reason": "dag-frontier", "message": sys.argv[1]}))
 PY
@@ -96,36 +96,36 @@ active_layer="$(printf '%s\n' "$dag_next" | sed -n 's/^layer=//p' | tail -1)"
 active_kind="$(printf '%s\n' "$dag_next" | sed -n 's/^kind=//p' | tail -1)"
 active_required="$(printf '%s\n' "$dag_next" | sed -n 's/^requiredCompletion=//p' | tail -1)"
 if [[ -z "$active_node" || -z "$active_area" || -z "$active_layer" ]]; then
-  gluerun_append_event "planner.failed" "dag frontier output incomplete" "{\"output\":\"$dag_next\"}"
+  singular_append_event "planner.failed" "dag frontier output incomplete" "{\"output\":\"$dag_next\"}"
   echo "planner-failed (dag frontier output incomplete)"
   exit 1
 fi
 
-# Layer guardrail: keep configured layers single-slice (GLUERUN_SINGLE_SLICE_LAYERS,
+# Layer guardrail: keep configured layers single-slice (SINGULAR_SINGLE_SLICE_LAYERS,
 # default "contract"). Promotion is fail-closed, so folding extra slices into such
 # a node can only leave its gate un-promotable, never corrupt it; we force a
 # single slice to keep those nodes clean. Other layers fatten freely.
 effective_slice_budget="$slice_budget"
-single_slice_layers="${GLUERUN_SINGLE_SLICE_LAYERS:-contract}"
+single_slice_layers="${SINGULAR_SINGLE_SLICE_LAYERS:-contract}"
 for _ssl in ${single_slice_layers//,/ }; do
   if [[ "$active_layer" == "$_ssl" ]]; then effective_slice_budget=1; break; fi
 done
 
-run_id="${GLUERUN_PLANNING_RUN_ID:-$(gluerun_worker_run_id)}"
+run_id="${SINGULAR_PLANNING_RUN_ID:-$(singular_worker_run_id)}"
 planner_status_activity="Planning failed for $active_node"
 planner_status_next_action="Inspect the planner evidence"
 planner_status_outcome="planning-failed"
 
 # Status-record identity only; $run_id keeps its meaning everywhere else (events,
 # backoff, staging, session correlation). Under L1 fanout every concurrent
-# planner inherits the SAME origin id via GLUERUN_PLANNING_RUN_ID, and
+# planner inherits the SAME origin id via SINGULAR_PLANNING_RUN_ID, and
 # run-status.sh keys its path on the id alone -- so without this the planners
 # race on one record and `health` cannot report more than one of them. Matches
 # l1-plan-node.sh's derivation, so both layers of a single planner write to one
 # record rather than two.
 status_run_id="$run_id-l1-$(printf '%s' "$active_node" | tr -c 'A-Za-z0-9._-' '-')"
 
-gluerun_planner_status_write() {
+singular_planner_status_write() {
   local phase="$1" state="$2" activity="$3" safe_cancel="$4" next_action="$5"
   "$SCRIPT_DIR/run-status.sh" write \
     --run-id "$status_run_id" --node "$active_node" --phase "$phase" --state "$state" \
@@ -133,7 +133,7 @@ gluerun_planner_status_write() {
     --process-type planner --pid "$$" >/dev/null 2>&1 || true
 }
 
-gluerun_planner_status_on_exit() {
+singular_planner_status_on_exit() {
   local rc=$?
   local state="failed"
   trap - EXIT
@@ -146,17 +146,17 @@ gluerun_planner_status_on_exit() {
   exit "$rc"
 }
 
-gluerun_planner_status_write planning active \
+singular_planner_status_write planning active \
   "Planning tasks for $active_node" true "Validate and stage planner output"
-trap gluerun_planner_status_on_exit EXIT
+trap singular_planner_status_on_exit EXIT
 
-# Planner suppression (0.5.0, GLUERUN_SUPPRESS_UNPROMOTED_REPLAN=1): a node
+# Planner suppression (0.5.0, SINGULAR_SUPPRESS_UNPROMOTED_REPLAN=1): a node
 # whose tasks are all integrated/satisfied but whose gate is unpublished must
 # NOT be re-planned — 0.4.0 kept minting duplicate tasks for such nodes
 # (import-rejected each cycle, feeding the false-quota chokepoint) until an
 # operator manually promoted. Not a failure: exit 0, distinct event.
-if [[ "${GLUERUN_SUPPRESS_UNPROMOTED_REPLAN:-1}" == "1" && -n "$active_node" ]]   && gluerun_node_pending_promotion "$active_node" 2>/dev/null; then
-  gluerun_append_event "planner.suppressed_pending_promotion"     "node tasks complete; awaiting gate promotion — not re-planning"     "{\"node\":\"$active_node\",\"area\":\"$active_area\",\"runId\":\"$run_id\"}"
+if [[ "${SINGULAR_SUPPRESS_UNPROMOTED_REPLAN:-1}" == "1" && -n "$active_node" ]]   && singular_node_pending_promotion "$active_node" 2>/dev/null; then
+  singular_append_event "planner.suppressed_pending_promotion"     "node tasks complete; awaiting gate promotion — not re-planning"     "{\"node\":\"$active_node\",\"area\":\"$active_area\",\"runId\":\"$run_id\"}"
   planner_status_activity="Planning suppressed for $active_node; promotion is pending"
   planner_status_next_action="Promote the node gate"
   planner_status_outcome="suppressed-pending-promotion"
@@ -164,7 +164,7 @@ if [[ "${GLUERUN_SUPPRESS_UNPROMOTED_REPLAN:-1}" == "1" && -n "$active_node" ]] 
   exit 0
 fi
 
-backoff_json="$(gluerun_planner_backoff_active_json 2>/dev/null || true)"
+backoff_json="$(singular_planner_backoff_active_json 2>/dev/null || true)"
 if [[ -n "$backoff_json" ]]; then
   event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$backoff_json" <<'PY'
 import json
@@ -176,7 +176,7 @@ data.update({"node": node, "area": area, "runId": run_id})
 print(json.dumps(data, separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "planner.backoff_active" "planner backoff active; refusing to call codex" "$event_json"
+  singular_append_event "planner.backoff_active" "planner backoff active; refusing to call codex" "$event_json"
   failure_class="$(python3 - "$backoff_json" <<'PY'
 import json, sys
 print(json.loads(sys.argv[1]).get("failureClass", "unknown"))
@@ -187,7 +187,7 @@ PY
 fi
 
 blocked_gate_json=""
-if blocked_gate_json="$(gluerun_blocked_gate_planner_guard_json "$active_node" 2>/dev/null)"; then
+if blocked_gate_json="$(singular_blocked_gate_planner_guard_json "$active_node" 2>/dev/null)"; then
   event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$blocked_gate_json" <<'PY'
 import json
 import sys
@@ -198,7 +198,7 @@ data.update({"node": node, "area": area, "runId": run_id})
 print(json.dumps(data, separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "planner.blocked" "blocked gate has unmet task-set evidence; refusing to call codex" "$event_json"
+  singular_append_event "planner.blocked" "blocked gate has unmet task-set evidence; refusing to call codex" "$event_json"
   echo "planner-blocked (closeout-gate)"
   exit 1
 fi
@@ -207,14 +207,14 @@ fi
 # real, globally-unique ids are assigned by L0's serial importer, so we
 # deliberately do NOT consult the allocator here (that would also race against
 # concurrent planners). Non-staged mode reserves real ids from the durable
-# monotonic allocator (gluerun_task_id_next) BEFORE the planner runs — a failed
+# monotonic allocator (singular_task_id_next) BEFORE the planner runs — a failed
 # planner burns its reserved ids, which is intentional: monotonicity (never
 # reusing an archived task's id) is the invariant, not density.
 declare -a next_ids=()
 if [[ -z "$stage_dir" ]]; then
   while IFS= read -r _id; do
     [[ -n "$_id" ]] && next_ids+=("$_id")
-  done < <(gluerun_task_id_next "$count")
+  done < <(singular_task_id_next "$count")
   [[ ${#next_ids[@]} -eq "$count" ]] || { echo "task-id allocation failed" >&2; exit 1; }
 else
   for ((i=1; i<=count; i++)); do
@@ -228,11 +228,11 @@ next_ids_csv="$(IFS=,; echo "${next_ids[*]}")"
 task_summary="$(
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    tid="$(gluerun_task_field "$f" taskId 2>/dev/null || echo '?')"
-    st="$(gluerun_task_field "$f" status 2>/dev/null || echo '?')"
-    ti="$(gluerun_task_field "$f" title 2>/dev/null || echo '')"
+    tid="$(singular_task_field "$f" taskId 2>/dev/null || echo '?')"
+    st="$(singular_task_field "$f" status 2>/dev/null || echo '?')"
+    ti="$(singular_task_field "$f" title 2>/dev/null || echo '')"
     echo "- $tid [$st] $ti"
-  done < <(find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
+  done < <(find "$SINGULAR_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
 )"
 [[ -n "$task_summary" ]] || task_summary="(none yet)"
 
@@ -241,12 +241,12 @@ task_summary="$(
 # filesystem namespace. l1-plan-node.sh binds this internal directory to the
 # node-private staging directory. Direct/serial callers retain the canonical
 # per-run directory.
-run_dir="${GLUERUN_PLANNING_ARTIFACT_DIR:-$(gluerun_run_dir "$run_id")}"
+run_dir="${SINGULAR_PLANNING_ARTIFACT_DIR:-$(singular_run_dir "$run_id")}"
 mkdir -p "$run_dir"
 prompt_file="$run_dir/planner-prompt.md"
 
-python3 - "$GLUERUN_ORCH_DIR/prompts/l1-planner.md" "$prompt_file" \
-  "$active_area" "$GLUERUN_TARGET_BRANCH" "$next_id" "$next_ids_csv" "$count" "$task_summary" \
+python3 - "$SINGULAR_ORCH_DIR/prompts/l1-planner.md" "$prompt_file" \
+  "$active_area" "$SINGULAR_TARGET_BRANCH" "$next_id" "$next_ids_csv" "$count" "$task_summary" \
   "$active_node" "$active_stage" "$active_layer" "$active_kind" "$active_required" \
   "$effective_slice_budget" <<'PY'
 import sys
@@ -298,21 +298,21 @@ fi
 out="$run_dir/planner-out.md"
 codex_log="$run_dir/planner-codex.log"
 runner_result="$run_dir/planner-runner-result.json"
-codex_runner="${GLUERUN_RUNNER:-${GLUERUN_CODEX_RUNNER:-$SCRIPT_DIR/codex-run.sh}}"
+codex_runner="${SINGULAR_RUNNER:-${SINGULAR_CODEX_RUNNER:-$SCRIPT_DIR/codex-run.sh}}"
 codex_exit=0
-# Planner session-meta hook (default-OFF): when GLUERUN_PLANNER_SESSION=1, offer
+# Planner session-meta hook (default-OFF): when SINGULAR_PLANNER_SESSION=1, offer
 # the runner the canonical per-node planner session-meta path — mirroring the
 # worker/reviewer --session-meta wiring in l1-drive.sh. With the knob unset/0 no
 # --session-meta arg is added, so the invocation is byte-identical to prior.
-planner_runner_args=(--level readonly -C "$GLUERUN_ROOT" --run-id "$run_id" \
+planner_runner_args=(--level readonly -C "$SINGULAR_ROOT" --run-id "$run_id" \
   --prompt-file "$prompt_file" --output-last-message "$out")
 planner_session_meta=""
-if [[ "${GLUERUN_PLANNER_SESSION:-0}" == "1" ]]; then
-  planner_session_meta="$(gluerun_ctx_planner_session_path "$active_node")"
+if [[ "${SINGULAR_PLANNER_SESSION:-0}" == "1" ]]; then
+  planner_session_meta="$(singular_ctx_planner_session_path "$active_node")"
   [[ -n "$planner_session_meta" ]] && planner_runner_args+=(--session-meta "$planner_session_meta")
 fi
 
-# Planner session-resume consult hook (default-OFF): when GLUERUN_PLANNER_SESSION=1,
+# Planner session-resume consult hook (default-OFF): when SINGULAR_PLANNER_SESSION=1,
 # consult the already-integrated ordered fail-closed decider before invoking the
 # runner — mirroring the implementer/reviewer resume path in l1-drive.sh. The
 # lineage head is the current target-branch head (planner_head_sha), the same
@@ -329,9 +329,9 @@ fi
 planner_resume_id=""
 planner_lease_path=""
 planner_base_args=("${planner_runner_args[@]}")
-if [[ "${GLUERUN_PLANNER_SESSION:-0}" == "1" ]]; then
-  planner_decision="$(gluerun_planner_resume_decide "$planner_session_meta" "$active_node" \
-    "$(basename "$codex_runner")" "$GLUERUN_ROOT" "$planner_head_sha" 2>/dev/null || echo "fresh decide-error")"
+if [[ "${SINGULAR_PLANNER_SESSION:-0}" == "1" ]]; then
+  planner_decision="$(singular_planner_resume_decide "$planner_session_meta" "$active_node" \
+    "$(basename "$codex_runner")" "$SINGULAR_ROOT" "$planner_head_sha" 2>/dev/null || echo "fresh decide-error")"
   planner_strategy="${planner_decision%% *}"
   planner_strategy_reason="${planner_decision#* }"
   if [[ "$planner_strategy" == "resume" ]]; then
@@ -339,27 +339,27 @@ if [[ "${GLUERUN_PLANNER_SESSION:-0}" == "1" ]]; then
     planner_runner_args+=(--resume-session "$planner_resume_id")
     # Acquire the canonical planner session-lease before the resume run so a
     # parallel L1 fanout's decider sees `leased` and does not resume concurrently.
-    planner_lease_path="$(gluerun_planner_resume_lease_path "$active_node")"
+    planner_lease_path="$(singular_planner_resume_lease_path "$active_node")"
     if [[ -n "$planner_lease_path" ]]; then
       mkdir -p "$(dirname "$planner_lease_path")"
       printf '{"pid": %s}\n' "$$" >"$planner_lease_path"
     fi
-    gluerun_append_event "context.strategy_selected" "planner session resume strategy selected" \
+    singular_append_event "context.strategy_selected" "planner session resume strategy selected" \
       "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"strategy\":\"resume\",\"reason\":\"resume\",\"sessionId\":\"$planner_resume_id\"}" || true
   else
-    gluerun_append_event "context.strategy_selected" "planner fresh-run strategy selected" \
+    singular_append_event "context.strategy_selected" "planner fresh-run strategy selected" \
       "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"strategy\":\"fresh\",\"reason\":\"$planner_strategy_reason\"}" || true
   fi
 fi
 
 rm -f "$runner_result"
-gluerun_runner_contract_prepare \
+singular_runner_contract_prepare \
   "$codex_runner" planner planner-core "$runner_result"
-GLUERUN_RUNNER_ROLE=planner \
-GLUERUN_RUNNER_CAPABILITY_PROFILE=planner-core \
-GLUERUN_RUNNER_RESULT_FILE="$runner_result" \
-GLUERUN_RUNNER_RUN_ID="$run_id" \
-  "$codex_runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+SINGULAR_RUNNER_ROLE=planner \
+SINGULAR_RUNNER_CAPABILITY_PROFILE=planner-core \
+SINGULAR_RUNNER_RESULT_FILE="$runner_result" \
+SINGULAR_RUNNER_RUN_ID="$run_id" \
+  "$codex_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
     "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
 
 # rc-86 in-run fresh fallback: the runner refused the resume. Drop
@@ -367,18 +367,18 @@ GLUERUN_RUNNER_RUN_ID="$run_id" \
 # optimization miss; the planning outcome is unchanged), mirroring the worker
 # rc-86 fallback in l1-drive.sh.
 if [[ "$codex_exit" -eq 86 && -n "$planner_resume_id" ]]; then
-  gluerun_append_event "context.resume_failed" "planner resume failed; re-running fresh" \
+  singular_append_event "context.resume_failed" "planner resume failed; re-running fresh" \
     "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"sessionId\":\"$planner_resume_id\"}" || true
   planner_runner_args=("${planner_base_args[@]}")
   codex_exit=0
   rm -f "$runner_result"
-  gluerun_runner_contract_prepare \
+  singular_runner_contract_prepare \
     "$codex_runner" planner planner-core "$runner_result"
-  GLUERUN_RUNNER_ROLE=planner \
-  GLUERUN_RUNNER_CAPABILITY_PROFILE=planner-core \
-  GLUERUN_RUNNER_RESULT_FILE="$runner_result" \
-  GLUERUN_RUNNER_RUN_ID="$run_id" \
-    "$codex_runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+  SINGULAR_RUNNER_ROLE=planner \
+  SINGULAR_RUNNER_CAPABILITY_PROFILE=planner-core \
+  SINGULAR_RUNNER_RESULT_FILE="$runner_result" \
+  SINGULAR_RUNNER_RUN_ID="$run_id" \
+    "$codex_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
       "${planner_runner_args[@]}" >"$codex_log" 2>&1 || codex_exit=$?
 fi
 
@@ -389,10 +389,10 @@ if [[ -n "$planner_lease_path" ]]; then
 fi
 
 if [[ "$codex_exit" -ne 0 ]]; then
-  failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out" "$runner_result")"
+  failure_class="$(singular_planner_failure_class "$codex_log" "$codex_exit" "$out" "$runner_result")"
   case "$failure_class" in
-    quota|provider-overloaded) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
-    timeout|codex-exit) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
+    quota|provider-overloaded) singular_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
+    timeout|codex-exit) singular_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
   esac
   event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$failure_class" "$codex_exit" "$codex_log" "$out" "$runner_result" <<'PY'
 import json
@@ -411,16 +411,16 @@ print(json.dumps({
 }, separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "planner.failed" "planner codex invocation failed" "$event_json"
+  singular_append_event "planner.failed" "planner codex invocation failed" "$event_json"
   echo "planner-failed ($failure_class)"
   exit 1
 fi
 
 if [[ ! -s "$out" ]]; then
-  failure_class="$(gluerun_planner_failure_class "$codex_log" "$codex_exit" "$out" "$runner_result")"
+  failure_class="$(singular_planner_failure_class "$codex_log" "$codex_exit" "$out" "$runner_result")"
   case "$failure_class" in
-    quota|provider-overloaded) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
-    timeout|codex-exit) gluerun_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
+    quota|provider-overloaded) singular_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$runner_result" ;;
+    timeout|codex-exit) singular_planner_backoff_set "$failure_class" "$run_id" "$active_node" "$codex_log" ;;
   esac
   event_json="$(python3 - "$active_node" "$active_area" "$run_id" "$failure_class" "$codex_exit" "$codex_log" "$out" "$runner_result" <<'PY'
 import json
@@ -439,7 +439,7 @@ print(json.dumps({
 }, separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "planner.failed" "planner produced no output" "$event_json"
+  singular_append_event "planner.failed" "planner produced no output" "$event_json"
   echo "planner-failed ($failure_class)"; exit 1
 fi
 
@@ -458,7 +458,7 @@ PY
 # AREA-COMPLETE sentinel?
 first_line="$(printf '%s\n' "$body" | head -1 | tr -d '[:space:]')"
 if [[ "$first_line" == "AREA-COMPLETE" || "$body" == "AREA-COMPLETE" ]]; then
-  gluerun_append_event "planner.failed" "planner attempted non-authoritative area completion" \
+  singular_append_event "planner.failed" "planner attempted non-authoritative area completion" \
     "{\"node\":\"$active_node\",\"area\":\"$active_area\",\"runId\":\"$run_id\"}"
   echo "planner-failed (AREA-COMPLETE is not authoritative; publish gate-result.v0 instead)"
   exit 1
@@ -474,23 +474,23 @@ batch_expected_json="$(printf '%s\n' "${next_ids[@]}" | python3 -c \
   'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')"
 materialized_dir="$run_dir/planner-candidates"
 batch_rc=0
-gluerun_task_batch_materialize "$body_file" "$batch_file" "$materialized_dir" \
-  "$active_area" "$batch_expected_json" assign "$GLUERUN_TASKBATCH_SCHEMA" || batch_rc=$?
+singular_task_batch_materialize "$body_file" "$batch_file" "$materialized_dir" \
+  "$active_area" "$batch_expected_json" assign "$SINGULAR_TASKBATCH_SCHEMA" || batch_rc=$?
 
 # Empty batch (rc 4): a valid no-op, NOT a planner failure. 0.4.0 classified
 # {"tasks": []} as invalid-output; the failure then fed the autonomate
 # chokepoint, which armed a false 30-minute quota backoff (field audit, S3
 # accessibility window). No failure event, no backoff, exit 0.
 if [[ "$batch_rc" -eq 4 ]]; then
-  gluerun_append_event "planner.no_tasks" "planner returned a valid empty batch" \
+  singular_append_event "planner.no_tasks" "planner returned a valid empty batch" \
     "{\"node\":\"$active_node\",\"area\":\"$active_area\",\"runId\":\"$run_id\",\"class\":\"no-tasks\"}"
   if [[ -n "$stage_dir" ]]; then
     mkdir -p "$stage_dir"
     : >"$stage_dir/NO-TASKS"
   fi
   echo "planner-no-tasks (node=$active_node)"
-  gluerun_ctx_planner_session_finalize "$active_node" 0 "" "$run_id" \
-    "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
+  singular_ctx_planner_session_finalize "$active_node" 0 "" "$run_id" \
+    "$(basename "$codex_runner")" "$(singular_prompt_sha "$prompt_file" 2>/dev/null || true)" \
     "$planner_head_sha" 1 >/dev/null 2>&1 || true
   planner_status_activity="Planning completed with no tasks for $active_node"
   planner_status_next_action="Advance or re-evaluate the DAG frontier"
@@ -510,10 +510,10 @@ PY
   for tid in "${batch_ids[@]}"; do
     tmp="$materialized_dir/$tid.candidate.md"
     if [[ -z "$stage_dir" ]]; then
-      duplicate_json="$(gluerun_find_duplicate_task_signature "$tmp" "$active_node" 2>/dev/null || true)"
+      duplicate_json="$(singular_find_duplicate_task_signature "$tmp" "$active_node" 2>/dev/null || true)"
       if [[ -n "$duplicate_json" ]]; then
-        event_json="$(gluerun_duplicate_candidate_event_json "$run_id" "$active_node" "$duplicate_json")"
-        gluerun_append_event "origin.l1_import_rejected" "duplicate-candidate" "$event_json"
+        event_json="$(singular_duplicate_candidate_event_json "$run_id" "$active_node" "$duplicate_json")"
+        singular_append_event "origin.l1_import_rejected" "duplicate-candidate" "$event_json"
         echo "planner-failed (duplicate-candidate)"
         exit 1
       fi
@@ -523,20 +523,20 @@ PY
     if [[ -n "$stage_dir" ]]; then
       mkdir -p "$stage_dir"
       mv "$materialized_dir/$tid.candidate.md" "$stage_dir/$tid.candidate.md"
-      gluerun_append_event "planner.staged" "task staged" \
+      singular_append_event "planner.staged" "task staged" \
         "{\"area\":\"$active_area\",\"taskId\":\"$tid\",\"runId\":\"$run_id\",\"node\":\"$active_node\"}"
       echo "staged:$tid"
     else
-      mv "$materialized_dir/$tid.candidate.md" "$GLUERUN_TASKS_DIR/$tid.md"
-      gluerun_append_event "planner.generated" "task generated" \
+      mv "$materialized_dir/$tid.candidate.md" "$SINGULAR_TASKS_DIR/$tid.md"
+      singular_append_event "planner.generated" "task generated" \
         "{\"area\":\"$active_area\",\"taskId\":\"$tid\",\"runId\":\"$run_id\"}"
       echo "generated:$tid"
     fi
   done
   # Accepted batch: persist the finalized planner session-meta (default-OFF; a
-  # no-op unless GLUERUN_PLANNER_SESSION=1). Never fatal.
-  gluerun_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
-    "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
+  # no-op unless SINGULAR_PLANNER_SESSION=1). Never fatal.
+  singular_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
+    "$(basename "$codex_runner")" "$(singular_prompt_sha "$prompt_file" 2>/dev/null || true)" \
     "$planner_head_sha" 1 >/dev/null 2>&1 || true
   if [[ -n "$stage_dir" ]]; then
     planner_status_activity="Planning staged ${#batch_ids[@]} task candidate(s) for $active_node"
@@ -551,7 +551,7 @@ PY
 fi
 
 if [[ "$count" -ne 1 ]]; then
-  gluerun_append_event "planner.failed" "planner output was not a valid task batch" \
+  singular_append_event "planner.failed" "planner output was not a valid task batch" \
     "{\"area\":\"$active_area\",\"runId\":\"$run_id\",\"failureClass\":\"invalid-output\",\"count\":$count,\"logRef\":\"$codex_log\",\"outputRef\":\"$out\"}"
   echo "planner-failed"; exit 1
 fi
@@ -561,32 +561,32 @@ if [[ -n "$stage_dir" ]]; then
   mkdir -p "$stage_dir"
   dest="$stage_dir/$next_id.candidate.md"
 else
-  dest="$GLUERUN_TASKS_DIR/$next_id.md"
+  dest="$SINGULAR_TASKS_DIR/$next_id.md"
 fi
 tmp="$run_dir/$next_id.candidate.md"
 printf '%s\n' "$body" >"$tmp"
 
-body_id="$(gluerun_task_field "$tmp" taskId 2>/dev/null || echo '')"
+body_id="$(singular_task_field "$tmp" taskId 2>/dev/null || echo '')"
 if [[ -n "$body_id" && "$body_id" != "$next_id" ]]; then
   # Token-safe rewrite (never substring-corrupts a longer TASK-#### token).
-  gluerun_rewrite_task_id_token "$tmp" "$body_id" "$next_id"
+  singular_rewrite_task_id_token "$tmp" "$body_id" "$next_id"
 fi
 
-v_status="$(gluerun_task_field "$tmp" status 2>/dev/null || echo '')"
-v_area="$(gluerun_task_field "$tmp" area 2>/dev/null || echo '')"
-v_owned="$(gluerun_task_field "$tmp" ownedFiles 2>/dev/null || echo '[]')"
-v_mode="$(gluerun_task_field "$tmp" dispatchMode 2>/dev/null || echo '')"
+v_status="$(singular_task_field "$tmp" status 2>/dev/null || echo '')"
+v_area="$(singular_task_field "$tmp" area 2>/dev/null || echo '')"
+v_owned="$(singular_task_field "$tmp" ownedFiles 2>/dev/null || echo '[]')"
+v_mode="$(singular_task_field "$tmp" dispatchMode 2>/dev/null || echo '')"
 if [[ "$v_status" != "ready" || "$v_area" != "$active_area" || "$v_owned" == "[]" || "$v_mode" != "canonical" ]]; then
-  gluerun_append_event "planner.failed" "planner output failed validation" \
+  singular_append_event "planner.failed" "planner output failed validation" \
     "{\"area\":\"$active_area\",\"runId\":\"$run_id\",\"failureClass\":\"invalid-output\",\"status\":\"$v_status\",\"area_field\":\"$v_area\",\"dispatchMode\":\"$v_mode\",\"logRef\":\"$codex_log\",\"outputRef\":\"$out\"}"
   echo "planner-failed (status=$v_status area=$v_area owned=$v_owned mode=$v_mode)"; exit 1
 fi
 
 if [[ -z "$stage_dir" ]]; then
-  duplicate_json="$(gluerun_find_duplicate_task_signature "$tmp" "$active_node" 2>/dev/null || true)"
+  duplicate_json="$(singular_find_duplicate_task_signature "$tmp" "$active_node" 2>/dev/null || true)"
   if [[ -n "$duplicate_json" ]]; then
-    event_json="$(gluerun_duplicate_candidate_event_json "$run_id" "$active_node" "$duplicate_json")"
-    gluerun_append_event "origin.l1_import_rejected" "duplicate-candidate" "$event_json"
+    event_json="$(singular_duplicate_candidate_event_json "$run_id" "$active_node" "$duplicate_json")"
+    singular_append_event "origin.l1_import_rejected" "duplicate-candidate" "$event_json"
     echo "planner-failed (duplicate-candidate)"
     exit 1
   fi
@@ -594,19 +594,19 @@ fi
 
 mv "$tmp" "$dest"
 # Accepted single task: persist the finalized planner session-meta (default-OFF;
-# a no-op unless GLUERUN_PLANNER_SESSION=1). Never fatal.
-gluerun_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
-  "$(basename "$codex_runner")" "$(gluerun_prompt_sha "$prompt_file" 2>/dev/null || true)" \
+# a no-op unless SINGULAR_PLANNER_SESSION=1). Never fatal.
+singular_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
+  "$(basename "$codex_runner")" "$(singular_prompt_sha "$prompt_file" 2>/dev/null || true)" \
   "$planner_head_sha" 1 >/dev/null 2>&1 || true
 if [[ -n "$stage_dir" ]]; then
-  gluerun_append_event "planner.staged" "task staged" \
+  singular_append_event "planner.staged" "task staged" \
     "{\"area\":\"$active_area\",\"taskId\":\"$next_id\",\"runId\":\"$run_id\",\"node\":\"$active_node\"}"
   echo "staged:$next_id"
   planner_status_activity="Planning staged task $next_id for $active_node"
   planner_status_next_action="Critique or import the staged candidate"
   planner_status_outcome="task-staged"
 else
-  gluerun_append_event "planner.generated" "task generated" \
+  singular_append_event "planner.generated" "task generated" \
     "{\"area\":\"$active_area\",\"taskId\":\"$next_id\",\"runId\":\"$run_id\"}"
   echo "generated:$next_id"
   planner_status_activity="Planning generated task $next_id for $active_node"

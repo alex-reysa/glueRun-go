@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # AXON-001: two configuration sources describe the same knob and disagree.
 #
-# `resources.maxConcurrent: 3` and `env: {"GLUERUN_MAX_CONCURRENT": "2"}` both
+# `resources.maxConcurrent: 3` and `env: {"SINGULAR_MAX_CONCURRENT": "2"}` both
 # set the dispatch cap. engine/lib.sh emits structured fields first and the
 # env{} map last, and the eval applies them in that order — so the legacy env
 # entry silently wins and the operator who raised the structured field keeps
@@ -37,7 +37,7 @@ esv="$(tr -d '[:space:]' <"$ROOT/SCHEMA_VERSION")"
 # write_config <python literal for "resources"> <python literal for "controlState">
 #              <python literal for "env">
 write_config() {
-  python3 - "$repo/gluerun.config.json" "$esv" "$1" "$2" "$3" <<'PY'
+  python3 - "$repo/singular.config.json" "$esv" "$1" "$2" "$3" <<'PY'
 import ast, json, sys
 path, schema_version, resources, control_state, env = sys.argv[1:]
 data = {
@@ -63,8 +63,8 @@ conflict_check() {
   local report
   report="$(
     cd "$repo" \
-      && env HOME="$fakehome" GLUERUN_ENGINE_HOME="$ROOT" \
-        bash "$ROOT/cli/gluerun" doctor --json 2>/dev/null
+      && env HOME="$fakehome" SINGULAR_ENGINE_HOME="$ROOT" \
+        bash "$ROOT/cli/singular" doctor --json 2>/dev/null
   )" || true
   [[ -n "$report" ]] || fail "doctor produced no JSON report"
   python3 - "$report" <<'PY'
@@ -78,13 +78,13 @@ PY
 }
 
 # --- (a) structured 3 vs legacy env 2: the env{} map wins, so say so ----------
-write_config "{'maxConcurrent': 3}" "{}" "{'GLUERUN_MAX_CONCURRENT': '2'}"
+write_config "{'maxConcurrent': 3}" "{}" "{'SINGULAR_MAX_CONCURRENT': '2'}"
 check="$(conflict_check)" || exit 1
 python3 - "$check" <<'PY' || exit 1
 import json, sys
 item = json.loads(sys.argv[1])
 assert item["status"] == "warn", item
-assert "GLUERUN_MAX_CONCURRENT" in item["message"], item["message"]
+assert "SINGULAR_MAX_CONCURRENT" in item["message"], item["message"]
 for token in ("3", "2"):
     assert token in item["message"], (token, item["message"])
 assert "effective 2" in item["message"], item["message"]
@@ -92,7 +92,7 @@ assert "Remove the legacy env override" in item["remediation"], item["remediatio
 conflicts = item["details"]["conflicts"]
 assert len(conflicts) == 1, conflicts
 entry = conflicts[0]
-assert entry["key"] == "GLUERUN_MAX_CONCURRENT", entry
+assert entry["key"] == "SINGULAR_MAX_CONCURRENT", entry
 assert entry["structuredValue"] == "3", entry
 assert entry["envValue"] == "2", entry
 assert entry["effective"] == "2", entry
@@ -101,7 +101,7 @@ assert not entry.get("runtimeDiffers"), entry
 PY
 
 # --- (b) same knob, same value: agreement is not a conflict -------------------
-write_config "{'maxConcurrent': 3}" "{}" "{'GLUERUN_MAX_CONCURRENT': '3'}"
+write_config "{'maxConcurrent': 3}" "{}" "{'SINGULAR_MAX_CONCURRENT': '3'}"
 check="$(conflict_check)" || exit 1
 python3 - "$check" <<'PY' || exit 1
 import json, sys
@@ -112,7 +112,7 @@ assert item["details"]["conflicts"] == [], item["details"]
 PY
 
 # --- (c) an env{} key with no structured counterpart is not a conflict --------
-write_config "{'maxConcurrent': 3}" "{}" "{'GLUERUN_CODEX_MODEL': 'gpt-5.6-sol'}"
+write_config "{'maxConcurrent': 3}" "{}" "{'SINGULAR_CODEX_MODEL': 'gpt-5.6-sol'}"
 check="$(conflict_check)" || exit 1
 python3 - "$check" <<'PY' || exit 1
 import json, sys
@@ -122,13 +122,13 @@ assert item["details"]["conflicts"] == [], item["details"]
 PY
 
 # --- (d) two conflicting knobs at once: report both, not the first -----------
-# controlState.commitIntervalSeconds -> GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC
-# and resources.maxConcurrent -> GLUERUN_MAX_CONCURRENT (engine/lib.sh,
-# gluerun_json_config_to_env).
+# controlState.commitIntervalSeconds -> SINGULAR_CONTROL_COMMIT_MIN_INTERVAL_SEC
+# and resources.maxConcurrent -> SINGULAR_MAX_CONCURRENT (engine/lib.sh,
+# singular_json_config_to_env).
 write_config \
   "{'maxConcurrent': 3}" \
   "{'commitIntervalSeconds': 300}" \
-  "{'GLUERUN_MAX_CONCURRENT': '2', 'GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC': '60'}"
+  "{'SINGULAR_MAX_CONCURRENT': '2', 'SINGULAR_CONTROL_COMMIT_MIN_INTERVAL_SEC': '60'}"
 check="$(conflict_check)" || exit 1
 python3 - "$check" <<'PY' || exit 1
 import json, sys
@@ -136,26 +136,26 @@ item = json.loads(sys.argv[1])
 assert item["status"] == "warn", item
 conflicts = {entry["key"]: entry for entry in item["details"]["conflicts"]}
 assert set(conflicts) == {
-    "GLUERUN_MAX_CONCURRENT",
-    "GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC",
+    "SINGULAR_MAX_CONCURRENT",
+    "SINGULAR_CONTROL_COMMIT_MIN_INTERVAL_SEC",
 }, sorted(conflicts)
-assert conflicts["GLUERUN_MAX_CONCURRENT"]["structuredValue"] == "3"
-assert conflicts["GLUERUN_MAX_CONCURRENT"]["effective"] == "2"
-assert conflicts["GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC"]["structuredValue"] == "300"
-assert conflicts["GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC"]["effective"] == "60"
+assert conflicts["SINGULAR_MAX_CONCURRENT"]["structuredValue"] == "3"
+assert conflicts["SINGULAR_MAX_CONCURRENT"]["effective"] == "2"
+assert conflicts["SINGULAR_CONTROL_COMMIT_MIN_INTERVAL_SEC"]["structuredValue"] == "300"
+assert conflicts["SINGULAR_CONTROL_COMMIT_MIN_INTERVAL_SEC"]["effective"] == "60"
 for key in conflicts:
     assert key in item["message"], (key, item["message"])
 PY
 
 # --- (e) a THIRD source beats the winner named above -------------------------
-# .gluerun-state/config.local.sh is sourced after the JSON eval, so the value
+# .singular-state/config.local.sh is sourced after the JSON eval, so the value
 # doctor derives from the generator is not necessarily the one the run uses.
 # Naming the wrong effective value would be its own AXON-001.
-mkdir -p "$repo/.gluerun-state"
-printf 'export GLUERUN_MAX_CONCURRENT=7\n' >"$repo/.gluerun-state/config.local.sh"
-write_config "{'maxConcurrent': 3}" "{}" "{'GLUERUN_MAX_CONCURRENT': '2'}"
+mkdir -p "$repo/.singular-state"
+printf 'export SINGULAR_MAX_CONCURRENT=7\n' >"$repo/.singular-state/config.local.sh"
+write_config "{'maxConcurrent': 3}" "{}" "{'SINGULAR_MAX_CONCURRENT': '2'}"
 check="$(conflict_check)" || exit 1
-rm -rf "$repo/.gluerun-state"
+rm -rf "$repo/.singular-state"
 python3 - "$check" <<'PY' || exit 1
 import json, sys
 item = json.loads(sys.argv[1])

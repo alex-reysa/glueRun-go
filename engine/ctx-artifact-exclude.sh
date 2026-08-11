@@ -7,7 +7,7 @@
 # stays byte-identical to prior behavior. The assembly wire-in that applies this
 # filter is a separate later slice and is OUT OF SCOPE here.
 #
-# gluerun_ctx_artifact_exclude [path...]
+# singular_ctx_artifact_exclude [path...]
 #   (candidate paths may also be supplied one-per-line on stdin)
 #
 # Given a set of candidate artifact paths, drops every quarantined entry:
@@ -17,21 +17,21 @@
 # a quarantined artifact can never reach a rendered prompt or rehydration packet.
 # It is PURE and READ-ONLY: it inspects paths (and tests for `.quarantined`
 # siblings) but never writes, renames, or deletes anything.
-gluerun_ctx_artifact_exclude() {
+singular_ctx_artifact_exclude() {
   local path
   if [[ $# -gt 0 ]]; then
     for path in "$@"; do
-      _gluerun_ctx_artifact_exclude_emit "$path"
+      _singular_ctx_artifact_exclude_emit "$path"
     done
   else
     while IFS= read -r path; do
-      _gluerun_ctx_artifact_exclude_emit "$path"
+      _singular_ctx_artifact_exclude_emit "$path"
     done
   fi
 }
 
 # Internal: emit a single candidate iff it survives the quarantine filter.
-_gluerun_ctx_artifact_exclude_emit() {
+_singular_ctx_artifact_exclude_emit() {
   local p="$1"
   [[ -n "$p" ]] || return 0
   # Drop the quarantined evidence file itself.

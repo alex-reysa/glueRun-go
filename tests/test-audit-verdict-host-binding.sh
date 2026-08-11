@@ -15,7 +15,7 @@ import sys
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
     json.dump(
         {
-            "schema": "gluerun.orchestration.gate-report.v0",
+            "schema": "singular.orchestration.gate-report.v0",
             "outcome": sys.argv[2],
         },
         handle,
@@ -30,7 +30,7 @@ import sys
 
 statuses = sys.argv[2:]
 record = {
-    "schema": "gluerun.orchestration.audit-verdict.v1",
+    "schema": "singular.orchestration.audit-verdict.v1",
     "taskId": "TASK-0001",
     "runId": "RUN-binding",
     "branch": "agent/test",

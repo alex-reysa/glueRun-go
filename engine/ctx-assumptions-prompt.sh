@@ -4,7 +4,7 @@
 # lib.sh (it matches the ctx-*.sh glob). Like engine/ctx-assumptions.sh and
 # engine/ctx-assumptions-transition.sh, this file defines PURE helpers and is
 # present-but-uncalled by every existing engine/CLI/driver path, so with it sourced the
-# engine stays byte-identical to prior behavior (notably under GLUERUN_CTX_PACKET=0,
+# engine stays byte-identical to prior behavior (notably under SINGULAR_CTX_PACKET=0,
 # which no path here consults; the flag gate lives at the later wire-in site).
 #
 # The seed emits a ledger whose assumptions carry stable ids A1..An; the host-derived
@@ -23,30 +23,30 @@
 # inject into any real prompt, add per-attempt carry or capsule recording, or add/consult
 # the flag — those are later slices for this node.
 
-# gluerun_ctx_assumptions_fix_section <ledger-json>
+# singular_ctx_assumptions_fix_section <ledger-json>
 #
 # Renders the implementer/fix-prompt section on stdout. Violated assumptions are
 # foregrounded as open findings to address (each with its id and claim); the remaining
 # non-violated assumptions follow for context. Both lists are in id order (A1, A2, ...).
 # A ledger with zero assumptions (or an absent/empty/malformed argument) renders "".
-gluerun_ctx_assumptions_fix_section() {
-  gluerun_ctx_assumptions_prompt_py fix "$1"
+singular_ctx_assumptions_fix_section() {
+  singular_ctx_assumptions_prompt_py fix "$1"
 }
 
-# gluerun_ctx_assumptions_audit_section <ledger-json>
+# singular_ctx_assumptions_audit_section <ledger-json>
 #
 # Renders the auditor-prompt section on stdout. It instructs the auditor to verify the
 # listed assumptions were not silently violated and to raise a finding CITING the
 # assumption's id (the `assumptionId` the host-derived transition consumes) for any
 # violation, then lists every assumption with its id in id order (A1, A2, ...). A ledger
 # with zero assumptions (or an absent/empty/malformed argument) renders "".
-gluerun_ctx_assumptions_audit_section() {
-  gluerun_ctx_assumptions_prompt_py audit "$1"
+singular_ctx_assumptions_audit_section() {
+  singular_ctx_assumptions_prompt_py audit "$1"
 }
 
 # Internal: the pure Python render. Reads the section kind + ledger JSON on argv and
 # prints the rendered section (or nothing). No I/O beyond stdout; no side effects.
-gluerun_ctx_assumptions_prompt_py() {
+singular_ctx_assumptions_prompt_py() {
   python3 - "$1" "$2" <<'PY'
 import json, sys
 

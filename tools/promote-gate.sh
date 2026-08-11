@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Consumer gate promoter for the glueRun-go self-dock (context-evolution plan).
+# Consumer gate promoter for the singular self-dock (context-evolution plan).
 #
 #   tools/promote-gate.sh NODE [EVIDENCE_CMD]
 #
@@ -12,7 +12,7 @@ set -euo pipefail
 # frontier read, so the log file and the gate record MUST be committed together
 # and never edited afterwards; re-promotion regenerates both.
 #
-# GLUERUN_PROMOTER can point at this script so `gluerun promote-gate NODE` works.
+# SINGULAR_PROMOTER can point at this script so `singular promote-gate NODE` works.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 node="${1:?usage: tools/promote-gate.sh NODE [EVIDENCE_CMD]}"
@@ -24,8 +24,8 @@ cmd="${2:-bash tests/run.sh}"
 # only.
 case "$node" in
   experiment-run|polish-release)
-    if [[ "${GLUERUN_FORCE_EVAL_GATE:-0}" != "1" ]]; then
-      echo "promote-gate: REFUSED — $node is an operator-driven eval node; set GLUERUN_FORCE_EVAL_GATE=1 to promote deliberately" >&2
+    if [[ "${SINGULAR_FORCE_EVAL_GATE:-0}" != "1" ]]; then
+      echo "promote-gate: REFUSED — $node is an operator-driven eval node; set SINGULAR_FORCE_EVAL_GATE=1 to promote deliberately" >&2
       exit 3
     fi
     ;;
@@ -60,7 +60,7 @@ out, node, ec, cmd, log_rel, log_sha, head_sha = sys.argv[1:8]
 ec = int(ec)
 status = "passed" if ec == 0 else "failed"
 doc = {
-    "schema": "gluerun.orchestration.gate-result.v0",
+    "schema": "singular.orchestration.gate-result.v0",
     "node": node,
     "status": status,
     "authoritative": True,

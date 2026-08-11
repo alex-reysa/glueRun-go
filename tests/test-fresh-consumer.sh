@@ -3,7 +3,7 @@ set -euo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
-CLI="$ENGINE_HOME/cli/gluerun"
+CLI="$ENGINE_HOME/cli/singular"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_contains() { [[ "$1" == *"$2"* ]] || fail "$3: missing '$2' in: $1"; }
@@ -41,8 +41,8 @@ test_init_scaffolds_fresh_repo_and_reconcile_apply_is_noop_safe() {
   repo="$tmp/repo"
   new_git_repo "$repo"
 
-  out="$(cd "$repo" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" init 2>&1)"
-  assert_contains "$out" "gluerun init ->" "init reports target repo"
+  out="$(cd "$repo" && SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" init 2>&1)"
+  assert_contains "$out" "singular init ->" "init reports target repo"
 
   assert_dir "$repo/docs/orchestration/packets/imported" "init packet import scaffold"
   assert_dir "$repo/docs/orchestration/areas/core" "init starter area scaffold"
@@ -53,17 +53,17 @@ test_init_scaffolds_fresh_repo_and_reconcile_apply_is_noop_safe() {
   for schema in audit-verdict decider-verdict gate-result state-packet task-batch dag l1-lease; do
     assert_file "$repo/schemas/orchestration/$schema.v0.schema.json" "init schema mirror $schema"
   done
-  for entry in ".gluerun-state/" ".worktrees/" ".gluerun-evidence/" ".gluerun-cache/"; do
+  for entry in ".singular-state/" ".worktrees/" ".singular-evidence/" ".singular-cache/"; do
     grep -qxF "$entry" "$repo/.gitignore" || fail "init gitignore missing $entry"
   done
 
   git -C "$repo" checkout -q -b agent/integration
   set +e
-  out="$(cd "$repo" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" reconcile --apply 2>&1)"
+  out="$(cd "$repo" && SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" reconcile --apply 2>&1)"
   rc=$?
   set -e
   assert_eq "$rc" "0" "fresh reconcile --apply"
-  assert_contains "$out" "gluerun origin reconcile (apply)" "fresh reconcile prints summary"
+  assert_contains "$out" "singular origin reconcile (apply)" "fresh reconcile prints summary"
   assert_contains "$(cat "$repo/docs/orchestration/project-state.md")" "Latest Reconcile Snapshot" "fresh reconcile writes project snapshot"
 }
 
@@ -77,15 +77,15 @@ test_setup_after_init_is_a_clean_noop_ladder() {
   repo="$tmp/repo"
   new_git_repo "$repo"
 
-  out="$(cd "$repo" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" init 2>&1)"
-  assert_contains "$out" "gluerun init ->" "init runs before setup"
-  before_config="$(shasum -a 256 "$repo/gluerun.config.json" | awk '{print $1}')"
+  out="$(cd "$repo" && SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" init 2>&1)"
+  assert_contains "$out" "singular init ->" "init runs before setup"
+  before_config="$(shasum -a 256 "$repo/singular.config.json" | awk '{print $1}')"
   before_dag="$(shasum -a 256 "$repo/docs/orchestration/dag.v0.json" | awk '{print $1}')"
 
   # doctor probes the SELECTED provider's real executable, so pin a stub one
   # through the operator override lib.sh sources last; otherwise this test would
   # assert facts about whichever CLI happens to be authenticated on the host.
-  mkdir -p "$repo/.gluerun-state" "$tmp/bin"
+  mkdir -p "$repo/.singular-state" "$tmp/bin"
   cat >"$tmp/bin/codex" <<'SH'
 #!/usr/bin/env bash
 case "${1:-}" in
@@ -95,26 +95,26 @@ esac
 exit 0
 SH
   chmod +x "$tmp/bin/codex"
-  cat >"$repo/.gluerun-state/config.local.sh" <<SH
-export GLUERUN_RUNNER="$SCRIPT_DIR/codex-run.sh"
-export GLUERUN_CODEX_BIN="$tmp/bin/codex"
+  cat >"$repo/.singular-state/config.local.sh" <<SH
+export SINGULAR_RUNNER="$SCRIPT_DIR/codex-run.sh"
+export SINGULAR_CODEX_BIN="$tmp/bin/codex"
 SH
 
   set +e
-  out="$(cd "$repo" && HOME="$tmp/home" GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" setup --no-test 2>&1)"
+  out="$(cd "$repo" && HOME="$tmp/home" SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" setup --no-test 2>&1)"
   rc=$?
   set -e
   assert_eq "$rc" "0" "setup after init succeeds ($out)"
-  assert_contains "$out" "gluerun.config.json exists — init not re-run" "setup does not re-scaffold"
-  assert_contains "$out" ".gluerun-version present" "setup keeps the pin init wrote"
+  assert_contains "$out" "singular.config.json exists — init not re-run" "setup does not re-scaffold"
+  assert_contains "$out" ".singular-version present" "setup keeps the pin init wrote"
   assert_contains "$out" "matches engine schema — nothing to migrate" "setup migrates nothing"
-  assert_not_contains "$out" "gluerun init ->" "setup did not re-run init"
+  assert_not_contains "$out" "singular init ->" "setup did not re-run init"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^Next: ')" "1" "setup prints exactly one next action"
-  assert_file "$repo/.gluerun-state/STOP" "setup leaves the repository stopped"
-  assert_eq "$(json_file_field "$repo/.gluerun-state/setup/state.json" state)" "validated" \
+  assert_file "$repo/.singular-state/STOP" "setup leaves the repository stopped"
+  assert_eq "$(json_file_field "$repo/.singular-state/setup/state.json" state)" "validated" \
     "setup reaches validated without a regression run"
-  assert_eq "$(shasum -a 256 "$repo/gluerun.config.json" | awk '{print $1}')" "$before_config" \
-    "setup left gluerun.config.json byte-identical"
+  assert_eq "$(shasum -a 256 "$repo/singular.config.json" | awk '{print $1}')" "$before_config" \
+    "setup left singular.config.json byte-identical"
   assert_eq "$(shasum -a 256 "$repo/docs/orchestration/dag.v0.json" | awk '{print $1}')" "$before_dag" \
     "setup left the DAG byte-identical"
 }
@@ -124,7 +124,7 @@ test_v0_to_v2_migration_backfills_scaffold_rebrands_and_syncs_contracts() {
   tmp="$(mktemp -d)"
   repo="$tmp/repo"
   new_git_repo "$repo"
-  cat >"$repo/gluerun.config.json" <<'JSON'
+  cat >"$repo/singular.config.json" <<'JSON'
 {
   "schemaVersion": "v0",
   "engineVersion": "0.3.0",
@@ -138,27 +138,27 @@ test_v0_to_v2_migration_backfills_scaffold_rebrands_and_syncs_contracts() {
 JSON
   mkdir -p "$repo/docs/orchestration/prompts"
   printf 'legacy schema pmgo.orchestration.state-packet.v0\n' >"$repo/docs/orchestration/prompts/legacy.md"
-  git -C "$repo" add gluerun.config.json docs/orchestration/prompts/legacy.md
+  git -C "$repo" add singular.config.json docs/orchestration/prompts/legacy.md
   git -C "$repo" -c user.name=test -c user.email=test@example.local commit -q -m orchestration-v0
 
-  out="$(cd "$repo" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate 2>&1)"
+  out="$(cd "$repo" && SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate 2>&1)"
   assert_contains "$out" "run   v0-to-v1.sh (v0 -> v1)" "migration announces v1 step"
   assert_contains "$out" "run   v1-to-v2.sh (v1 -> v2)" "migration announces v2 step"
-  assert_eq "$(json_file_field "$repo/gluerun.config.json" schemaVersion)" "v2" "migration advances schemaVersion"
-  grep -q 'gluerun.orchestration.decider-verdict.v0' "$repo/gluerun.config.json" || fail "migration did not rebrand config namespace"
-  grep -q 'gluerun.orchestration.state-packet.v0' "$repo/docs/orchestration/prompts/legacy.md" || fail "migration did not rebrand orchestration namespace"
+  assert_eq "$(json_file_field "$repo/singular.config.json" schemaVersion)" "v2" "migration advances schemaVersion"
+  grep -q 'singular.orchestration.decider-verdict.v0' "$repo/singular.config.json" || fail "migration did not rebrand config namespace"
+  grep -q 'singular.orchestration.state-packet.v0' "$repo/docs/orchestration/prompts/legacy.md" || fail "migration did not rebrand orchestration namespace"
   assert_file "$repo/docs/orchestration/project-state.md" "migration project-state scaffold"
   assert_dir "$repo/docs/orchestration/packets/imported" "migration packet import scaffold"
   assert_file "$repo/schemas/orchestration/audit-verdict.v1.schema.json" "migration v1 audit contract"
   assert_file "$repo/schemas/orchestration/gate-result.v1.schema.json" "migration v1 gate contract"
 
-  out="$(cd "$repo" && GLUERUN_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate 2>&1)"
+  out="$(cd "$repo" && SINGULAR_ENGINE_HOME="$ENGINE_HOME" bash "$CLI" migrate 2>&1)"
   assert_contains "$out" "up to date, nothing to do" "migration is idempotent after v2"
 }
 
 write_missing_branch_fixture() {
   local repo="$1" packet_dir="$1/docs/orchestration/packets/imported/TASK-0001"
-  mkdir -p "$repo/docs/orchestration/tasks" "$packet_dir" "$repo/.gluerun-state/leases"
+  mkdir -p "$repo/docs/orchestration/tasks" "$packet_dir" "$repo/.singular-state/leases"
   cat >"$repo/docs/orchestration/decisions.md" <<'EOF'
 # Decisions
 
@@ -201,7 +201,7 @@ import json
 import sys
 path, head = sys.argv[1:3]
 packet = {
-    "schema": "gluerun.orchestration.state-packet.v0",
+    "schema": "singular.orchestration.state-packet.v0",
     "packetId": "RUN-MISSING",
     "runId": "RUN-MISSING",
     "taskId": "TASK-0001",
@@ -229,7 +229,7 @@ PY
 import json
 import sys
 audit = {
-    "schema": "gluerun.orchestration.audit-verdict.v0",
+    "schema": "singular.orchestration.audit-verdict.v0",
     "taskId": "TASK-0001",
     "runId": "RUN-MISSING",
     "branch": "agent/missing/TASK-0001",
@@ -244,9 +244,9 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(audit, f, indent=2)
     f.write("\n")
 PY
-  GLUERUN_ROOT="$repo" GLUERUN_ORCH_DIR="$repo/docs/orchestration" GLUERUN_STATE_DIR="$repo/.gluerun-state" \
-    GLUERUN_LEASES_DIR="$repo/.gluerun-state/leases" GLUERUN_TARGET_BRANCH=target \
-    bash -c 'source "$0/lib.sh"; gluerun_lease_write TASK-0001 agent/missing/TASK-0001 core l2 "README.md" accepted RUN-MISSING "" target "" "[\"README.md\"]" "[]"' "$SCRIPT_DIR"
+  SINGULAR_ROOT="$repo" SINGULAR_ORCH_DIR="$repo/docs/orchestration" SINGULAR_STATE_DIR="$repo/.singular-state" \
+    SINGULAR_LEASES_DIR="$repo/.singular-state/leases" SINGULAR_TARGET_BRANCH=target \
+    bash -c 'source "$0/lib.sh"; singular_lease_write TASK-0001 agent/missing/TASK-0001 core l2 "README.md" accepted RUN-MISSING "" target "" "[\"README.md\"]" "[]"' "$SCRIPT_DIR"
 }
 
 test_integrate_parks_missing_branch_once_then_skips_blocked_history() {
@@ -257,22 +257,22 @@ test_integrate_parks_missing_branch_once_then_skips_blocked_history() {
   git -C "$repo" checkout -q -b target
   write_missing_branch_fixture "$repo"
 
-  out="$(GLUERUN_ROOT="$repo" GLUERUN_ORCH_DIR="$repo/docs/orchestration" GLUERUN_STATE_DIR="$repo/.gluerun-state" \
-    GLUERUN_LEASES_DIR="$repo/.gluerun-state/leases" GLUERUN_TASKS_DIR="$repo/docs/orchestration/tasks" \
-    GLUERUN_TARGET_BRANCH=target GLUERUN_DEFAULT_GATE_CMD=true bash "$SCRIPT_DIR/integrate.sh" --run-id RUN-MISSING-INTEG 2>&1)"
+  out="$(SINGULAR_ROOT="$repo" SINGULAR_ORCH_DIR="$repo/docs/orchestration" SINGULAR_STATE_DIR="$repo/.singular-state" \
+    SINGULAR_LEASES_DIR="$repo/.singular-state/leases" SINGULAR_TASKS_DIR="$repo/docs/orchestration/tasks" \
+    SINGULAR_TARGET_BRANCH=target SINGULAR_DEFAULT_GATE_CMD=true bash "$SCRIPT_DIR/integrate.sh" --run-id RUN-MISSING-INTEG 2>&1)"
   assert_contains "$out" "skip TASK-0001: branch missing" "first integrate reports missing branch"
-  assert_eq "$(json_file_field "$repo/.gluerun-state/leases/TASK-0001.json" status)" "blocked" "missing branch blocks lease"
+  assert_eq "$(json_file_field "$repo/.singular-state/leases/TASK-0001.json" status)" "blocked" "missing branch blocks lease"
   grep -q '^Status: blocked$' "$repo/docs/orchestration/tasks/TASK-0001.md" || fail "missing branch blocks task"
   assert_contains "$(cat "$repo/docs/orchestration/decisions.md")" "decide:escalate-parked" "missing branch records parked decision"
 
-  out2="$(GLUERUN_ROOT="$repo" GLUERUN_ORCH_DIR="$repo/docs/orchestration" GLUERUN_STATE_DIR="$repo/.gluerun-state" \
-    GLUERUN_LEASES_DIR="$repo/.gluerun-state/leases" GLUERUN_TASKS_DIR="$repo/docs/orchestration/tasks" \
-    GLUERUN_TARGET_BRANCH=target GLUERUN_DEFAULT_GATE_CMD=true bash "$SCRIPT_DIR/integrate.sh" --run-id RUN-MISSING-INTEG2 2>&1)"
+  out2="$(SINGULAR_ROOT="$repo" SINGULAR_ORCH_DIR="$repo/docs/orchestration" SINGULAR_STATE_DIR="$repo/.singular-state" \
+    SINGULAR_LEASES_DIR="$repo/.singular-state/leases" SINGULAR_TASKS_DIR="$repo/docs/orchestration/tasks" \
+    SINGULAR_TARGET_BRANCH=target SINGULAR_DEFAULT_GATE_CMD=true bash "$SCRIPT_DIR/integrate.sh" --run-id RUN-MISSING-INTEG2 2>&1)"
   assert_not_contains "$out2" "branch missing" "blocked missing branch is not rescanned in normal cycle"
 
-  out3="$(GLUERUN_ROOT="$repo" GLUERUN_ORCH_DIR="$repo/docs/orchestration" GLUERUN_STATE_DIR="$repo/.gluerun-state" \
-    GLUERUN_LEASES_DIR="$repo/.gluerun-state/leases" GLUERUN_TASKS_DIR="$repo/docs/orchestration/tasks" \
-    GLUERUN_TARGET_BRANCH=target GLUERUN_DEFAULT_GATE_CMD=true bash "$SCRIPT_DIR/integrate.sh" --task TASK-0001 --dry-run 2>&1)"
+  out3="$(SINGULAR_ROOT="$repo" SINGULAR_ORCH_DIR="$repo/docs/orchestration" SINGULAR_STATE_DIR="$repo/.singular-state" \
+    SINGULAR_LEASES_DIR="$repo/.singular-state/leases" SINGULAR_TASKS_DIR="$repo/docs/orchestration/tasks" \
+    SINGULAR_TARGET_BRANCH=target SINGULAR_DEFAULT_GATE_CMD=true bash "$SCRIPT_DIR/integrate.sh" --task TASK-0001 --dry-run 2>&1)"
   assert_contains "$out3" "skip TASK-0001: branch missing" "explicit task rechecks missing branch"
 }
 
@@ -286,7 +286,7 @@ test_l1_drive_provisions_gitignored_files_and_allowlisted_env() {
   cp "$ENGINE_HOME/templates/prompts/l2-test-first-developer.md" "$repo/docs/orchestration/prompts/l2-test-first-developer.md"
   cp "$ENGINE_HOME/templates/prompts/auditor.md" "$repo/docs/orchestration/prompts/auditor.md"
   cp "$ENGINE_HOME/templates/prompts/decider.md" "$repo/docs/orchestration/prompts/decider.md"
-  printf '.gluerun-state/\n.worktrees/\n.gluerun-evidence/\n.env.local\n' >"$repo/.gitignore"
+  printf '.singular-state/\n.worktrees/\n.singular-evidence/\n.env.local\n' >"$repo/.gitignore"
   cat >"$repo/.env.local" <<'EOF'
 LOCAL_ONLY=present
 EOF
@@ -294,12 +294,12 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 test -f .env.local
-test -f "$GLUERUN_WORKTREE_ENV_FILE"
-. "$GLUERUN_WORKTREE_ENV_FILE"
+test -f "$SINGULAR_WORKTREE_ENV_FILE"
+. "$SINGULAR_WORKTREE_ENV_FILE"
 test "${PUBLIC_ALLOWED:-}" = ok
 test -z "${SECRET_DENIED:-}"
-printf '%s\n' '{"schema":"gluerun.orchestration.gate-observation.v0","failures":[]}' \
-  >"$GLUERUN_GATE_REPORT_FILE"
+printf '%s\n' '{"schema":"singular.orchestration.gate-observation.v0","failures":[]}' \
+  >"$SINGULAR_GATE_REPORT_FILE"
 SH
   chmod +x "$repo/strict-gate.sh"
   cat >"$repo/docs/orchestration/tasks/TASK-0001.md" <<'EOF'
@@ -334,7 +334,7 @@ Forbidden files:
 EOF
   git -C "$repo" add .gitignore docs/orchestration src strict-gate.sh
   git -C "$repo" -c user.name=test -c user.email=test@example.local commit -q -m target-setup
-  cat >"$repo/gluerun.config.json" <<JSON
+  cat >"$repo/singular.config.json" <<JSON
 {
   "schemaVersion": "v2",
   "targetBranch": "target",
@@ -359,16 +359,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 if [[ "$level" == "l2" ]]; then
-  mkdir -p "$chdir/src" "$chdir/.gluerun-evidence"
+  mkdir -p "$chdir/src" "$chdir/.singular-evidence"
   printf 'generated\n' >"$chdir/src/generated.txt"
-  printf 'red\n' >"$chdir/.gluerun-evidence/red.log"
-  printf 'green\n' >"$chdir/.gluerun-evidence/green.log"
-  printf 'regression\n' >"$chdir/.gluerun-evidence/regression.log"
+  printf 'red\n' >"$chdir/.singular-evidence/red.log"
+  printf 'green\n' >"$chdir/.singular-evidence/green.log"
+  printf 'regression\n' >"$chdir/.singular-evidence/regression.log"
   python3 - "$out" <<'PY'
 import json
 import sys
 packet = {
-    "schema": "gluerun.orchestration.state-packet.v0",
+    "schema": "singular.orchestration.state-packet.v0",
     "packetId": "p",
     "runId": "r",
     "taskId": "TASK-0001",
@@ -382,9 +382,9 @@ packet = {
     "ownedFiles": ["src/generated.txt"],
     "changedFiles": ["src/generated.txt"],
     "commands": [{"cmd": "true", "exitCode": 0}],
-    "tests": [{"name": "fixture", "phase": "red", "status": "fail", "logRef": ".gluerun-evidence/red.log"},
-              {"name": "fixture", "phase": "green", "status": "pass", "logRef": ".gluerun-evidence/green.log"}],
-    "evidence": [{"kind": "red", "ref": ".gluerun-evidence/red.log"}],
+    "tests": [{"name": "fixture", "phase": "red", "status": "fail", "logRef": ".singular-evidence/red.log"},
+              {"name": "fixture", "phase": "green", "status": "pass", "logRef": ".singular-evidence/green.log"}],
+    "evidence": [{"kind": "red", "ref": ".singular-evidence/red.log"}],
     "blockers": [],
     "nextAction": "audit",
     "createdAt": "2026-01-01T00:00:00Z",
@@ -398,7 +398,7 @@ python3 - "$out" <<'PY'
 import json
 import sys
 audit = {
-    "schema": "gluerun.orchestration.audit-verdict.v0",
+    "schema": "singular.orchestration.audit-verdict.v0",
     "taskId": "TASK-0001",
     "runId": "r",
     "branch": "agent/core/TASK-0001-provisioning",
@@ -416,10 +416,10 @@ SH
   chmod +x "$runner"
 
   set +e
-  out="$(PUBLIC_ALLOWED=ok SECRET_DENIED=bad GLUERUN_ROOT="$repo" GLUERUN_ORCH_DIR="$repo/docs/orchestration" \
-    GLUERUN_STATE_DIR="$repo/.gluerun-state" GLUERUN_RUNS_DIR="$repo/.gluerun-state/runs" \
-    GLUERUN_TASKS_DIR="$repo/docs/orchestration/tasks" GLUERUN_WORKTREES_DIR="$repo/.worktrees" \
-    GLUERUN_TARGET_BRANCH=target GLUERUN_RUNNER="$runner" GLUERUN_MAX_RETRIES=0 \
+  out="$(PUBLIC_ALLOWED=ok SECRET_DENIED=bad SINGULAR_ROOT="$repo" SINGULAR_ORCH_DIR="$repo/docs/orchestration" \
+    SINGULAR_STATE_DIR="$repo/.singular-state" SINGULAR_RUNS_DIR="$repo/.singular-state/runs" \
+    SINGULAR_TASKS_DIR="$repo/docs/orchestration/tasks" SINGULAR_WORKTREES_DIR="$repo/.worktrees" \
+    SINGULAR_TARGET_BRANCH=target SINGULAR_RUNNER="$runner" SINGULAR_MAX_RETRIES=0 \
     bash "$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)"
   rc=$?
   set -e

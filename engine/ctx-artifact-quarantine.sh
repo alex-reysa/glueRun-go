@@ -7,11 +7,11 @@
 # byte-identical to prior behavior. The finalize-site hook that fires quarantine
 # is a separate later slice and is OUT OF SCOPE here.
 #
-# gluerun_ctx_artifact_quarantine <run_dir>
+# singular_ctx_artifact_quarantine <run_dir>
 #
 # Enumerates the durable context artifacts by REUSING the integrated enumerator
-# (gluerun_ctx_artifact_scan_paths) and the shared secret patterns
-# (gluerun_secret_scan_patterns). For every artifact whose content matches a
+# (singular_ctx_artifact_scan_paths) and the shared secret patterns
+# (singular_secret_scan_patterns). For every artifact whose content matches a
 # secret pattern it:
 #   1. renames the artifact to `<path>.quarantined` — the content is PRESERVED
 #      under the new name (never deleted), so forensic evidence is retained;
@@ -23,17 +23,17 @@
 # byte-for-byte untouched (not renamed, no event). Already-quarantined paths
 # (suffix `.quarantined`) are skipped. Exit 2 only on genuine misuse (the
 # artifacts path is not a directory, or a required helper is unavailable).
-gluerun_ctx_artifact_quarantine() {
+singular_ctx_artifact_quarantine() {
   local run_dir="$1"
   [[ -n "$run_dir" && -d "$run_dir" ]] || {
     echo "artifact-quarantine: artifacts path is not a directory: $run_dir" >&2
     return 2
   }
-  if [[ "$(type -t gluerun_ctx_artifact_scan_paths)" != "function" ]]; then
+  if [[ "$(type -t singular_ctx_artifact_scan_paths)" != "function" ]]; then
     echo "artifact-quarantine: internal error: artifact enumerator unavailable" >&2
     return 2
   fi
-  if [[ "$(type -t gluerun_secret_scan_patterns)" != "function" ]]; then
+  if [[ "$(type -t singular_secret_scan_patterns)" != "function" ]]; then
     echo "artifact-quarantine: internal error: secret patterns unavailable" >&2
     return 2
   fi
@@ -50,13 +50,13 @@ gluerun_ctx_artifact_quarantine() {
         # Rename (content preserved under `.quarantined`; never deleted), then
         # record one event. First matching pattern wins per artifact.
         mv -f -- "$file" "$file.quarantined"
-        gluerun_append_event "ctx.artifact_secret" \
+        singular_append_event "ctx.artifact_secret" \
           "quarantined durable context artifact matching secret pattern" \
           "{\"artifact\":\"$file\",\"pattern\":\"$label\"}"
         break
       fi
-    done < <(gluerun_secret_scan_patterns)
-  done < <(gluerun_ctx_artifact_scan_paths "$run_dir" | sort -u)
+    done < <(singular_secret_scan_patterns)
+  done < <(singular_ctx_artifact_scan_paths "$run_dir" | sort -u)
 
   return 0
 }

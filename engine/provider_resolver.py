@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Shared provider-executable resolution.
 
-The python twin of ``gluerun_resolve_codex_bin`` (engine/lib.sh). Bash stays
+The python twin of ``singular_resolve_codex_bin`` (engine/lib.sh). Bash stays
 authoritative for the runtime hot path — codex-run.sh resolves once per provider
 invocation, and shelling a python interpreter there would add latency to every
 planner/worker/auditor run and make a broken python break all orchestration.
-This module exists so the two *diagnostic* consumers — ``gluerun doctor`` and
+This module exists so the two *diagnostic* consumers — ``singular doctor`` and
 the console's Providers surface — answer the identical question the same way.
 ``tests/test-provider-resolver-parity.sh`` pins the two implementations
 together; edit one and you must edit the other.
 
 Why this module exists at all: the console daemon never sources lib.sh
-(cli/gluerun execs it with only GLUERUN_ENGINE_HOME), so it used to resolve the
+(cli/singular execs it with only SINGULAR_ENGINE_HOME), so it used to resolve the
 provider with a bare ``shutil.which`` over its own PATH. A field run showed the
 Providers card reporting an unauthenticated /opt/homebrew/bin/codex while the
 orchestration was actually driving a different Codex entirely.
@@ -38,7 +38,7 @@ PATH_NOT_EXECUTABLE = "path-not-executable"  # PATH hit, but not +x
 
 # Only codex has a strict override today. Providers absent from this map resolve
 # by PATH alone, and a codex override must never leak into their resolution.
-OVERRIDE_ENV_KEYS = {"codex": "GLUERUN_CODEX_BIN"}
+OVERRIDE_ENV_KEYS = {"codex": "SINGULAR_CODEX_BIN"}
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ class ProviderResolution:
     configured: str | None
     override_key: str | None
     message: str
-    exit_code: int       # 0 | 2 | 127 — mirrors gluerun_resolve_codex_bin's rc
+    exit_code: int       # 0 | 2 | 127 — mirrors singular_resolve_codex_bin's rc
 
     @property
     def ok(self) -> bool:
@@ -147,5 +147,5 @@ def resolve_provider_bin(provider: str, binary: str,
 
 
 def resolve_codex_bin(env: Mapping[str, str]) -> ProviderResolution:
-    """Convenience wrapper — the parity target for gluerun_resolve_codex_bin."""
+    """Convenience wrapper — the parity target for singular_resolve_codex_bin."""
     return resolve_provider_bin("codex", "codex", env)

@@ -3,8 +3,8 @@ set -uo pipefail
 
 # Runs the console server's python unittest suite as part of the bash gate.
 #
-# plugin/scripts/test_gluerun_graph_server.py is plain `unittest` and imports
-# `gluerun_graph_server` as a sibling module, so it needs plugin/scripts on
+# plugin/scripts/test_singular_graph_server.py is plain `unittest` and imports
+# `singular_graph_server` as a sibling module, so it needs plugin/scripts on
 # sys.path. It was never wired into tests/run.sh (which globs test-*.sh), so a
 # few hundred passing console assertions were invisible to the regression gate
 # and to the l1-drive gate command. This wrapper closes that hole without
@@ -12,12 +12,12 @@ set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="$ENGINE_HOME/plugin/scripts"
-SUITE="test_gluerun_graph_server"
+SUITE="test_singular_graph_server"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 [[ -f "$SCRIPTS_DIR/$SUITE.py" ]] || fail "console suite not present: $SCRIPTS_DIR/$SUITE.py"
-[[ -f "$SCRIPTS_DIR/gluerun_graph_server.py" ]] \
+[[ -f "$SCRIPTS_DIR/singular_graph_server.py" ]] \
   || fail "console server not present in this checkout"
 
 # Isolate: run from a scratch cwd so a test that touches relative paths cannot

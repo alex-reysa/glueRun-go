@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.state-packet.v0",
+  "schema": "singular.orchestration.state-packet.v0",
   "packetId": "PKT-TASK-0051-RUN-20260712T031305Z-45645",
   "runId": "RUN-20260712T031305Z-45645",
   "taskId": "TASK-0051",
@@ -22,22 +22,22 @@
     {
       "cmd": "bash tests/test-ctx-rehydrate.sh",
       "exitCode": 1,
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "cmd": "bash tests/test-ctx-rehydrate.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "cmd": "bash tests/test-ctx-rehydrate.sh && bash tests/test-engine-clean.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     },
     {
       "cmd": "bash tests/test-ctx-loader.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "tests": [
@@ -45,39 +45,39 @@
       "name": "tests/test-ctx-rehydrate.sh",
       "phase": "red",
       "status": "fail",
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "name": "tests/test-ctx-rehydrate.sh",
       "phase": "green",
       "status": "pass",
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "name": "tests/test-ctx-rehydrate.sh",
       "phase": "regression",
       "status": "pass",
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     },
     {
       "name": "tests/test-engine-clean.sh",
       "phase": "regression",
       "status": "pass",
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "evidence": [
     {
       "kind": "red-log",
-      "ref": ".gluerun-evidence/red.log"
+      "ref": ".singular-evidence/red.log"
     },
     {
       "kind": "green-log",
-      "ref": ".gluerun-evidence/green.log"
+      "ref": ".singular-evidence/green.log"
     },
     {
       "kind": "regression-log",
-      "ref": ".gluerun-evidence/regression.log"
+      "ref": ".singular-evidence/regression.log"
     },
     {
       "kind": "gate-check",

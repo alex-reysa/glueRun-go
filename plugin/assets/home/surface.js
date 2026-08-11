@@ -1,7 +1,7 @@
 /* home/surface.js — the Home surface (0.7.0 workspace polish).
 
    The default landing surface: a 16:9 glance canvas over GET /api/home
-   (gluerun.codex.home.v0, 10s aggregate). Top→bottom: a hero health + attention
+   (singular.codex.home.v0, 10s aggregate). Top→bottom: a hero health + attention
    row, a gates block with per-stage bars (from the shared plan/data.js dag), the
    relocated live event feed side-by-side with a dependency-free 14-day activity
    sparkline, a throughput/limits tile row, and quick links into Plan/Consoles.
@@ -49,7 +49,7 @@ const CHAT = {
 };
 const CHAT_POLL_MS = 3000;
 const CHAT_POLL_CAP_MS = 12 * 60 * 1000;
-const shortKey = (k) => String(k || "").replace(/^GLUERUN_/, "").toLowerCase().replace(/_/g, " ");
+const shortKey = (k) => String(k || "").replace(/^SINGULAR_/, "").toLowerCase().replace(/_/g, " ");
 
 const HEALTH_TONE = { ok: "success", healthy: "success", watch: "warn", blocker: "error" };
 const HEALTH_LABEL = { ok: "all clear", healthy: "all clear", watch: "watch", blocker: "blocker" };
@@ -200,7 +200,7 @@ function prevPlansHtml() {
           <span class="hpc-meta mono">${esc(fmtDate(p.archivedAt))} · gates ${esc(gp + "/" + gt)} · ${esc((p.taskCount != null ? p.taskCount : 0) + " tasks")}</span>
         </button>`;
       }).join("")
-    : `<div class="home-empty">No archived plans yet — run <code>gluerun plan archive</code> when a DAG completes.</div>`;
+    : `<div class="home-empty">No archived plans yet — run <code>singular plan archive</code> when a DAG completes.</div>`;
   return `<section class="home-block home-prevplans">
     <div class="home-block-head"><span class="home-eyebrow">previous plans</span></div>
     <div class="hb-body"><div class="home-plan-list">${body}</div></div>
@@ -360,7 +360,7 @@ function supervisorHtml(d) {
   } else if (!sup.enabled) {
     body = `<div class="home-sup-off">
       <span class="home-sup-offtext">periodic briefings are off</span>
-      <button class="secondary-button compact home-sup-enable" data-sup-enable title="set GLUERUN_SUPERVISOR_INTERVAL_MIN=15">enable auto-briefing</button>
+      <button class="secondary-button compact home-sup-enable" data-sup-enable title="set SINGULAR_SUPERVISOR_INTERVAL_MIN=15">enable auto-briefing</button>
     </div>`;
   } else {
     body = `<div class="home-sup-off"><span class="home-sup-offtext">no briefing yet — refresh to generate one</span></div>`;
@@ -778,7 +778,7 @@ function requestBriefing(btn) {
     .finally(() => { if (btn) setTimeout(() => { btn.disabled = false; }, 1500); });
 }
 
-// Turn on periodic auto-briefings (writes GLUERUN_SUPERVISOR_INTERVAL_MIN=15).
+// Turn on periodic auto-briefings (writes SINGULAR_SUPERVISOR_INTERVAL_MIN=15).
 // Follows the same shape as postSettings in agents/providers: adopt whatever the
 // server echoes back, and build the toast from appliesAt instead of asserting an
 // effect. That last part matters here — autonomate.sh sources lib.sh once at
@@ -792,7 +792,7 @@ function enableBriefings(btn) {
   fetch("/api/settings", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ changes: { GLUERUN_SUPERVISOR_INTERVAL_MIN: String(BRIEFING_INTERVAL_MIN) } }),
+    body: JSON.stringify({ changes: { SINGULAR_SUPERVISOR_INTERVAL_MIN: String(BRIEFING_INTERVAL_MIN) } }),
   })
     .then(async (res) => {
       const data = await res.json().catch(() => ({}));
@@ -800,7 +800,7 @@ function enableBriefings(btn) {
         toast("settings are read-only on this server"); reenable(); return;
       }
       if (!res.ok) { toast(data.error ? String(data.error) : "could not enable"); reenable(); return; }
-      const at = (data.appliesAt || {}).GLUERUN_SUPERVISOR_INTERVAL_MIN || "applied";
+      const at = (data.appliesAt || {}).SINGULAR_SUPERVISOR_INTERVAL_MIN || "applied";
       toast(`auto-briefing every ${BRIEFING_INTERVAL_MIN} min → ${at}`);
       if (data.settings) HOME.settings = data.settings;
       if (data.config) HOME.config = data.config;

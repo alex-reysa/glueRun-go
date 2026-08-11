@@ -2,20 +2,20 @@
 # Covers the pure attempt-open assembler of the per-run assumption ledger
 # (stage S4-context-packets, node assumption-ledger). `engine/ctx-assumptions-assemble.sh`
 # ships a PURE, present-but-uncalled helper
-#   gluerun_ctx_assumptions_assemble <task-file> <prior-ledger-json>
+#   singular_ctx_assumptions_assemble <task-file> <prior-ledger-json>
 # that ties the already-integrated seed, carry, and fix/audit render helpers into one
 # attempt-OPEN call: it computes the current attempt's input ledger as
 # carry(prior, seed(task-file)) and renders both prompt sections from it, printing a
 # single envelope JSON on stdout whose `schema` const is
-# `gluerun.orchestration.ctx-assumptions-run.v0` and which carries `ledger`,
+# `singular.orchestration.ctx-assumptions-run.v0` and which carries `ledger`,
 # `fixSection`, and `auditSection`.
 #
 #   - LEDGER = carry(prior, seed(task-file)): a first attempt (empty/absent/`{}` prior)
 #     yields the seed ledger; a retry whose prior holds a `violated` assumption keeps
 #     that id `violated` in the envelope ledger (sticky carry).
 #   - SECTIONS = the render helpers applied to the envelope ledger: `fixSection` equals
-#     gluerun_ctx_assumptions_fix_section(ledger) and `auditSection` equals
-#     gluerun_ctx_assumptions_audit_section(ledger); a zero-assumption task yields empty
+#     singular_ctx_assumptions_fix_section(ledger) and `auditSection` equals
+#     singular_ctx_assumptions_audit_section(ledger); a zero-assumption task yields empty
 #     `fixSection` and `auditSection`.
 #   - ATTEMPT-OPEN ONLY: the assembler composes seed + carry + render but NOT the
 #     host-derived transition (applied at attempt-close by the later driver hook).
@@ -35,14 +35,14 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 # Invoke the real engine helper in an isolated subshell so lib.sh's `set -e` and the
-# sourced ctx-*.sh files never contaminate this test process. GLUERUN_ROOT is a scratch
+# sourced ctx-*.sh files never contaminate this test process. SINGULAR_ROOT is a scratch
 # dir; $3 optionally overrides the events file so the malformed case can be inspected.
 assemble() {
   local tf="$1" prior="$2" ev="${3:-$tmp/events.ndjson}"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    GLUERUN_EVENTS_FILE="'"$ev"'"
-    gluerun_ctx_assumptions_assemble "$1" "$2"
+    SINGULAR_EVENTS_FILE="'"$ev"'"
+    singular_ctx_assumptions_assemble "$1" "$2"
   ' _ "$tf" "$prior"
 }
 
@@ -50,31 +50,31 @@ assemble() {
 # envelope fields equal exactly what the composed bricks produce.
 seed() {
   local tf="$1"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    GLUERUN_EVENTS_FILE="'"$tmp"'/ref-events.ndjson"
-    gluerun_ctx_assumptions_seed "$1"
+    SINGULAR_EVENTS_FILE="'"$tmp"'/ref-events.ndjson"
+    singular_ctx_assumptions_seed "$1"
   ' _ "$tf"
 }
 carry() {
   local prior="$1" s="$2"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_assumptions_carry "$1" "$2"
+    singular_ctx_assumptions_carry "$1" "$2"
   ' _ "$prior" "$s"
 }
 fix_section() {
   local ledger="$1"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_assumptions_fix_section "$1"
+    singular_ctx_assumptions_fix_section "$1"
   ' _ "$ledger"
 }
 audit_section() {
   local ledger="$1"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_assumptions_audit_section "$1"
+    singular_ctx_assumptions_audit_section "$1"
   ' _ "$ledger"
 }
 
@@ -126,7 +126,7 @@ cat > "$full" <<'EOF'
 
 ### Inspected symbols
 
-- gluerun_ctx_assumptions_seed — the composed seed
+- singular_ctx_assumptions_seed — the composed seed
 EOF
 
 # Packet present but zero assumptions.
@@ -157,11 +157,11 @@ EOF
 absent="$tmp/absent.md"
 cp "$TEMPLATE" "$absent"
 
-EMPTY_LEDGER='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[]}'
+EMPTY_LEDGER='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[]}'
 
 # --- Case 1: first attempt (empty prior) -> ledger == seed, schema const -----
 env1="$(assemble "$full" '')" || fail "case1: assemble exited non-zero"
-assert_contains "$env1" '"gluerun.orchestration.ctx-assumptions-run.v0"' "case1: envelope schema const present"
+assert_contains "$env1" '"singular.orchestration.ctx-assumptions-run.v0"' "case1: envelope schema const present"
 seed_full="$(seed "$full")" || fail "case1: seed exited non-zero"
 led1="$(field "$env1" ledger)"
 json_eq "$led1" "$seed_full" || fail "case1: envelope ledger != seed on first attempt; got [$led1]"
@@ -186,7 +186,7 @@ assert_contains "$(field "$env1" auditSection)" "A1" "case2: auditSection lists 
 # The prior attempt observed A2 violated (host-derived). Seed re-seeds A2 `validated`,
 # but the envelope ledger must keep A2 `violated` (sticky carry), and the fix section
 # must foreground it as an open finding.
-PRIOR_A2_VIOLATED='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+PRIOR_A2_VIOLATED='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"violated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
@@ -238,10 +238,10 @@ total="$(wc -l < "$ev" | tr -d ' ')"
 # --- Case 8: pure -> writes nothing to the filesystem (well-formed input) ----
 pure="$tmp/pure"
 mkdir -p "$pure"
-GLUERUN_ROOT="$pure" bash -c '
+SINGULAR_ROOT="$pure" bash -c '
   source "'"$LIB"'"
-  GLUERUN_EVENTS_FILE="'"$pure"'/events.ndjson"
-  gluerun_ctx_assumptions_assemble "$1" "$2"
+  SINGULAR_EVENTS_FILE="'"$pure"'/events.ndjson"
+  singular_ctx_assumptions_assemble "$1" "$2"
 ' _ "$full" '' >/dev/null 2>&1 || fail "case8: assemble exited non-zero"
 nf="$(find "$pure" -type f | wc -l | tr -d ' ')"
 [[ "$nf" -eq 0 ]] || fail "case8: assemble wrote $nf file(s) on well-formed input; must be a pure transform"

@@ -6,34 +6,34 @@
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines new
 # functions ONLY; NO existing engine path invokes them, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior
-# (OFF-parity when GLUERUN_CTX_GRAPH is unset or 0). The mappers write NO file:
+# (OFF-parity when SINGULAR_CTX_GRAPH is unset or 0). The mappers write NO file:
 # each prints a `node` JSONL stream to stdout (one schema-valid line each; every
 # line self-identifies via `kind`). These two families mint nodes only — the
 # cross-family `derived_from` edges (assumption/capsule -> its task/attempt) are
 # deferred to a follow-up linkage task.
 #
 # These compose the integrated primitives — the identity convention
-# gluerun_graph_identity (engine/ctx-graph-project.sh) plus engine/ctx-graph.sh's
-# gluerun_graph_node_id / gluerun_graph_emit_node — extending the graph-projector's
-# inner layer with the assumption/capsule node families. A later `gluerun graph
-# rebuild` entry point (behind GLUERUN_CTX_GRAPH, default 0) partitions the stream
+# singular_graph_identity (engine/ctx-graph-project.sh) plus engine/ctx-graph.sh's
+# singular_graph_node_id / singular_graph_emit_node — extending the graph-projector's
+# inner layer with the assumption/capsule node families. A later `singular graph
+# rebuild` entry point (behind SINGULAR_CTX_GRAPH, default 0) partitions the stream
 # by `kind` and hands the node stream to the integrated corpus writer
-# gluerun_graph_write_corpus (engine/ctx-graph-corpus.sh).
+# singular_graph_write_corpus (engine/ctx-graph-corpus.sh).
 #
-# Evidence class is fail-closed and delegated to gluerun_graph_emit_node: both
+# Evidence class is fail-closed and delegated to singular_graph_emit_node: both
 # `assumption` and `capsule` are model-authored (a task-authored assumption
 # claim; an implementer/reviewer context capsule), so every node minted here is
 # `claim`. No input path in this file mints an `authoritative` node.
 #
 # Public functions:
-#   gluerun_graph_project_assumptions <taskFilePath>
+#   singular_graph_project_assumptions <taskFilePath>
 #       -> parses the task markdown `## Context packet` `### Assumptions` block
 #          (grammar `- [open|validated|violated] <claim> — <basis>`) and emits one
 #          `assumption` node (claim) per entry, keyed identity('assumption',
 #          taskId, entryKey) with attributes.status in {open, validated, violated}.
 #          A task with no Context packet or no Assumptions entries emits nothing
 #          (empty, not an error). No edge.
-#   gluerun_graph_project_capsules <capsuleRecordPath>
+#   singular_graph_project_capsules <capsuleRecordPath>
 #       -> reads a per-run implementer/reviewer context-capsule record
 #          (implementer-capsule.json / reviewer-capsule.json; role + runId) and
 #          emits one `capsule` node (claim) keyed identity('capsule', runId, role)
@@ -50,12 +50,12 @@
 # textually identical. attributes.status is the grammar status token. A task
 # with no Context packet or no Assumptions entries emits nothing (empty, not an
 # error). Deterministic and idempotent; pure stdout — writes no file.
-gluerun_graph_project_assumptions() {
+singular_graph_project_assumptions() {
   local task_path="$1"
   local task_id
-  task_id="$(GLUERUN_GP_PATH="$task_path" python3 -c '
+  task_id="$(SINGULAR_GP_PATH="$task_path" python3 -c '
 import os, re, sys
-with open(os.environ["GLUERUN_GP_PATH"], encoding="utf-8") as f:
+with open(os.environ["SINGULAR_GP_PATH"], encoding="utf-8") as f:
     first = f.readline().rstrip("\n")
 m = re.match(r"^#\s+(TASK-\w+)\b", first)
 if not m:
@@ -68,16 +68,16 @@ print(m.group(1))
   while IFS=$'\037' read -r key status content_b64; do
     [[ -n "$content_b64" ]] || continue
     content="$(printf '%s' "$content_b64" | base64 --decode)"
-    ident="$(gluerun_graph_identity assumption "$task_id" "$key")"
-    attrs="$(GLUERUN_GP_STATUS="$status" python3 -c '
+    ident="$(singular_graph_identity assumption "$task_id" "$key")"
+    attrs="$(SINGULAR_GP_STATUS="$status" python3 -c '
 import json, os
-print(json.dumps({"status": os.environ["GLUERUN_GP_STATUS"]}, separators=(",", ":")))')"
-    gluerun_graph_emit_node assumption "$ident" "$task_path" "$content" "" "$attrs"
-  done < <(GLUERUN_GP_PATH="$task_path" python3 -c '
+print(json.dumps({"status": os.environ["SINGULAR_GP_STATUS"]}, separators=(",", ":")))')"
+    singular_graph_emit_node assumption "$ident" "$task_path" "$content" "" "$attrs"
+  done < <(SINGULAR_GP_PATH="$task_path" python3 -c '
 import os, re, json, base64
 
 US = "\x1f"
-with open(os.environ["GLUERUN_GP_PATH"], encoding="utf-8") as f:
+with open(os.environ["SINGULAR_GP_PATH"], encoding="utf-8") as f:
     lines = f.read().split("\n")
 
 # Locate the `## Context packet` section, then the `### Assumptions` subsection
@@ -124,7 +124,7 @@ for raw in lines:
 # identity('capsule', runId, role) with attributes.role and provenance (source
 # path + content hash). Deterministic and idempotent; pure stdout — writes no
 # file.
-gluerun_graph_project_capsules() {
+singular_graph_project_capsules() {
   local record_path="$1"
   local run_id role attrs content_b64 content ident
   # Newline-delimited fields; attrs and content are single-line (no newlines).
@@ -132,9 +132,9 @@ gluerun_graph_project_capsules() {
     read -r role
     read -r attrs
     read -r content_b64
-  } < <(GLUERUN_GP_PATH="$record_path" python3 -c '
+  } < <(SINGULAR_GP_PATH="$record_path" python3 -c '
 import json, os, base64
-d = json.load(open(os.environ["GLUERUN_GP_PATH"]))
+d = json.load(open(os.environ["SINGULAR_GP_PATH"]))
 role = str(d.get("role", ""))
 attrs = {"role": role}
 content = json.dumps(d, sort_keys=True, separators=(",", ":"))
@@ -145,6 +145,6 @@ print(base64.b64encode(content.encode()).decode())
 ') || return 1
 
   content="$(printf '%s' "$content_b64" | base64 --decode)"
-  ident="$(gluerun_graph_identity capsule "$run_id" "$role")"
-  gluerun_graph_emit_node capsule "$ident" "$record_path" "$content" "" "$attrs"
+  ident="$(singular_graph_identity capsule "$run_id" "$role")"
+  singular_graph_emit_node capsule "$ident" "$record_path" "$content" "" "$attrs"
 }

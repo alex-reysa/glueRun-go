@@ -1,4 +1,4 @@
-# Planner Contract — glueRun self-hosted (context-evolution plan)
+# Planner Contract — singular self-hosted (context-evolution plan)
 
 Create small, canonical, strict-test-first tasks validated by their gate
 command. Keep owned files narrow, declare dependencies explicitly, and never
@@ -12,15 +12,15 @@ broaden scope beyond the node's stage file in `docs/context-build-plan/`.
    `lib.sh` — extend behavior by wrapping existing functions from `ctx-*.sh`
    files.
 2. **Driver-file hooks are scarce.** `l1-drive.sh`, `generate-tasks.sh`,
-   `l1-plan-node.sh`, `reconcile.sh`, `cli/gluerun`, `secret-scan.sh` may only
+   `l1-plan-node.sh`, `reconcile.sh`, `cli/singular`, `secret-scan.sh` may only
    receive small call-site hooks, and only in tasks for the DAG node that owns
    that hook (see the node descriptions). Keep each hook to the minimum lines
    that delegate into a `ctx-*.sh` function.
 3. **Feature-flag discipline.** Every behavior change is default-OFF behind a
-   documented `GLUERUN_*` knob and byte-identical to current behavior when
+   documented `SINGULAR_*` knob and byte-identical to current behavior when
    OFF. Default flips are separate tasks, only after the stage exit gate.
 4. **Additive schemas only.** New schemas live in `schemas/` under the
-   `gluerun.orchestration.*.v0` namespace; changes to existing schemas are
+   `singular.orchestration.*.v0` namespace; changes to existing schemas are
    optional fields only. Validation fails closed.
 5. **Test-first is literal.** The red log is the new `tests/test-ctx-*.sh`
    failing before implementation; green is it passing after; regression is the

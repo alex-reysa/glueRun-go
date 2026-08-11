@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0074",
   "runId": "RUN-20260712T151253Z-34153",
   "branch": "agent/graph/TASK-0074-graph-projection-primitives",
@@ -14,7 +14,7 @@
     "engine/ctx-graph.sh (identity primitives + pure-stdout node/edge JSONL emitters, fail-closed evidenceClass)",
     "tests/test-ctx-graph.sh (determinism/distinctness/shape, evidenceClass invariance, edge id+direction, schema-driven validation vs shipped schema, OFF-parity/no-writes)",
     "schemas/context-graph.v0.schema.json (node/edge oneOf, enums, id/hash patterns, closed objects)",
-    "engine/tests/test-engine-clean.sh (bans project-specific symbols; 'gluerun' brand allowed)",
+    "engine/tests/test-engine-clean.sh (bans project-specific symbols; 'singular' brand allowed)",
     "engine/lib.sh:3851-3865 ctx-*.sh auto-source loop (sources only, no invocation)"
   ],
   "commandsRun": [
@@ -24,16 +24,16 @@
     "bash tests/test-ctx-graph.sh && bash tests/test-engine-clean.sh (EXIT=0)",
     "bash tests/test-ctx-loader.sh (EXIT=0)",
     "bash -n engine/ctx-graph.sh; bash -n tests/test-ctx-graph.sh (syntax OK)",
-    "grep -rn 'gluerun_graph_' engine/ excluding owned file (no external callers)",
+    "grep -rn 'singular_graph_' engine/ excluding owned file (no external callers)",
     "grep loader block engine/lib.sh; python3 --version (3.14.5)"
   ],
   "findings": [
     "File scope compliant: exactly the two owned files were added (git name-status: A/A); no forbidden file touched; packet changedFiles==ownedFiles.",
     "Genuine test-first: red.log matches the test's line-29 RED precondition ('impl not present yet ... strict-test-first RED', EXIT=1); green.log EXIT=0; both independently reproduced.",
-    "Gate exit 0 confirmed (gate-check.json + gate-check.log); engine-clean passes because it bans specific project symbols (glueRun-go, storage_proof, ...) not the allowed 'gluerun' brand used here.",
+    "Gate exit 0 confirmed (gate-check.json + gate-check.log); engine-clean passes because it bans specific project symbols (singular, storage_proof, ...) not the allowed 'singular' brand used here.",
     "Schema/provenance consistency verified: emitted node/edge lines validate against the shipped context-graph.v0 schema via the test's schema-driven validator; required fields, id/hash patterns (n-/e-/sha256:64hex), enums, and closed objects all satisfied.",
     "evidenceClass is fail-closed per schema intent: authoritative only for commit/gate-result, claim for every other type including audit \u2014 asserted across all node types.",
-    "OFF-parity holds: ctx-graph.sh only defines functions; the lib.sh ctx-*.sh loop merely sources it and no engine path invokes gluerun_graph_* (grep found zero external callers); emitters are pure stdout with before/after directory snapshots proving no writes.",
+    "OFF-parity holds: ctx-graph.sh only defines functions; the lib.sh ctx-*.sh loop merely sources it and no engine path invokes singular_graph_* (grep found zero external callers); emitters are pure stdout with before/after directory snapshots proving no writes.",
     "Determinism confirmed (python json sort_keys + printf '%s' no-trailing-newline hashing): identical input -> byte-identical output; distinct identity/type/direction -> distinct ids.",
     "Non-blocking observation (not a required fix): the primitives do not reject out-of-enum node/edge types or malformed from/to node ids \u2014 a downstream caller passing invalid values would emit a schema-invalid line; validation is intentionally left to the schema/consumer for these atoms and all tested usage is well-formed."
   ],

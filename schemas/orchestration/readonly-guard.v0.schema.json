@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.readonly-guard.v0",
-  "title": "gluerun Read-only Working-tree Guard Result",
+  "$id": "singular.orchestration.readonly-guard.v0",
+  "title": "singular Read-only Working-tree Guard Result",
   "description": "What the read-only guard found and what it did about it. Written to result.json in the journal directory after every restore, including the ones that had nothing to do.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "journal", "worktree", "mode", "outcome", "actions"],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.readonly-guard.v0" },
+    "schema": { "const": "singular.orchestration.readonly-guard.v0" },
     "journal": {
       "type": "string",
       "minLength": 1,

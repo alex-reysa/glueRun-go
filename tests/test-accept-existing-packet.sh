@@ -34,7 +34,7 @@ PY
 }
 
 worktree_count() {
-  git -C "$GLUERUN_ROOT" worktree list --porcelain | grep -c '^worktree '
+  git -C "$SINGULAR_ROOT" worktree list --porcelain | grep -c '^worktree '
 }
 
 json_field() {
@@ -59,7 +59,7 @@ make_repo() {
     "$root/docs/orchestration/packets/imported" \
     "$root/docs/orchestration/decisions" \
     "$root/schemas/orchestration" \
-    "$root/.gluerun-state"
+    "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/schemas/state-packet.v0.schema.json" "$root/schemas/orchestration/state-packet.v0.schema.json"
@@ -74,22 +74,22 @@ with_fixture() {
   local tmp
   tmp="$(mktemp -d)"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-  export GLUERUN_LEASES_DIR="$GLUERUN_STATE_DIR/leases"
-  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-  export GLUERUN_EVENTS_FILE="$GLUERUN_STATE_DIR/events.ndjson"
-  export GLUERUN_AUDIT_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/audit-verdict.v0.schema.json"
-  export GLUERUN_TARGET_BRANCH="target"
-  export GLUERUN_MODULES="storage-proof"
-  export GLUERUN_PROOF_LAYERS="storage_proof"
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+  export SINGULAR_LEASES_DIR="$SINGULAR_STATE_DIR/leases"
+  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+  export SINGULAR_EVENTS_FILE="$SINGULAR_STATE_DIR/events.ndjson"
+  export SINGULAR_AUDIT_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/audit-verdict.v0.schema.json"
+  export SINGULAR_TARGET_BRANCH="target"
+  export SINGULAR_MODULES="storage-proof"
+  export SINGULAR_PROOF_LAYERS="storage_proof"
 }
 
 write_task() {
-  cat >"$GLUERUN_TASKS_DIR/TASK-9001.md" <<'EOF'
+  cat >"$SINGULAR_TASKS_DIR/TASK-9001.md" <<'EOF'
 # TASK-9001: Existing packet acceptance fixture
 
 Status: blocked
@@ -123,7 +123,7 @@ EOF
 }
 
 write_storage_proof_task() {
-  cat >"$GLUERUN_TASKS_DIR/TASK-9001.md" <<'EOF'
+  cat >"$SINGULAR_TASKS_DIR/TASK-9001.md" <<'EOF'
 # TASK-9001: Durable storage proof existing packet fixture
 
 Status: blocked
@@ -164,10 +164,10 @@ write_worker_branch_and_packet() {
   local run_id="RUN-TEST-9001"
   local branch="agent/artifact/TASK-9001-test"
   local base head worktree run_dir
-  base="$(git -C "$GLUERUN_ROOT" rev-parse target)"
-  worktree="$(dirname "$GLUERUN_ROOT")/wt-TASK-9001"
-  git -C "$GLUERUN_ROOT" branch "$branch" target
-  git -C "$GLUERUN_ROOT" worktree add -q "$worktree" "$branch"
+  base="$(git -C "$SINGULAR_ROOT" rev-parse target)"
+  worktree="$(dirname "$SINGULAR_ROOT")/wt-TASK-9001"
+  git -C "$SINGULAR_ROOT" branch "$branch" target
+  git -C "$SINGULAR_ROOT" worktree add -q "$worktree" "$branch"
   echo "package artifact" >"$worktree/internal/artifact/a.go"
   cat >"$worktree/internal/artifact/a_test.go" <<'EOF'
 package artifact
@@ -176,18 +176,18 @@ import "testing"
 
 func TestFixture(t *testing.T) {}
 EOF
-  mkdir -p "$worktree/.gluerun-evidence"
-  echo "red failed as expected" >"$worktree/.gluerun-evidence/red.log"
-  echo "green passed" >"$worktree/.gluerun-evidence/green.log"
-  echo "regression passed" >"$worktree/.gluerun-evidence/regression.log"
+  mkdir -p "$worktree/.singular-evidence"
+  echo "red failed as expected" >"$worktree/.singular-evidence/red.log"
+  echo "green passed" >"$worktree/.singular-evidence/green.log"
+  echo "regression passed" >"$worktree/.singular-evidence/regression.log"
   git -C "$worktree" add internal/artifact/a.go internal/artifact/a_test.go
   git -C "$worktree" -c user.name=test -c user.email=test@example.local commit -q -m "TASK-9001 worker"
   head="$(git -C "$worktree" rev-parse HEAD)"
-  run_dir="$GLUERUN_RUNS_DIR/$run_id"
+  run_dir="$SINGULAR_RUNS_DIR/$run_id"
   mkdir -p "$run_dir"
   cat >"$run_dir/packet.json" <<EOF
 {
-  "schema": "gluerun.orchestration.state-packet.v0",
+  "schema": "singular.orchestration.state-packet.v0",
   "packetId": "TASK-9001-$run_id",
   "runId": "$run_id",
   "taskId": "TASK-9001",
@@ -207,27 +207,27 @@ EOF
     "internal/artifact/a_test.go"
   ],
   "commands": [
-    {"cmd": "false", "exitCode": 1, "logRef": ".gluerun-evidence/red.log"},
-    {"cmd": "test -f internal/artifact/a.go", "exitCode": 0, "logRef": ".gluerun-evidence/green.log"},
-    {"cmd": "test -f internal/artifact/a_test.go", "exitCode": 0, "logRef": ".gluerun-evidence/regression.log"}
+    {"cmd": "false", "exitCode": 1, "logRef": ".singular-evidence/red.log"},
+    {"cmd": "test -f internal/artifact/a.go", "exitCode": 0, "logRef": ".singular-evidence/green.log"},
+    {"cmd": "test -f internal/artifact/a_test.go", "exitCode": 0, "logRef": ".singular-evidence/regression.log"}
   ],
   "tests": [
-    {"name": "fixture red", "phase": "red", "status": "failed-as-expected", "logRef": ".gluerun-evidence/red.log"},
-    {"name": "fixture green", "phase": "green", "status": "passed", "logRef": ".gluerun-evidence/green.log"},
-    {"name": "fixture regression", "phase": "regression", "status": "passed", "logRef": ".gluerun-evidence/regression.log"}
+    {"name": "fixture red", "phase": "red", "status": "failed-as-expected", "logRef": ".singular-evidence/red.log"},
+    {"name": "fixture green", "phase": "green", "status": "passed", "logRef": ".singular-evidence/green.log"},
+    {"name": "fixture regression", "phase": "regression", "status": "passed", "logRef": ".singular-evidence/regression.log"}
   ],
   "evidence": [
-    {"kind": "red-log", "ref": ".gluerun-evidence/red.log"},
-    {"kind": "green-log", "ref": ".gluerun-evidence/green.log"},
-    {"kind": "regression-log", "ref": ".gluerun-evidence/regression.log"}
+    {"kind": "red-log", "ref": ".singular-evidence/red.log"},
+    {"kind": "green-log", "ref": ".singular-evidence/green.log"},
+    {"kind": "regression-log", "ref": ".singular-evidence/regression.log"}
   ],
   "blockers": [],
   "nextAction": "await review",
   "createdAt": "2026-06-03T00:00:00Z"
 }
 EOF
-  mkdir -p "$GLUERUN_LEASES_DIR"
-  cat >"$GLUERUN_LEASES_DIR/TASK-9001.json" <<EOF
+  mkdir -p "$SINGULAR_LEASES_DIR"
+  cat >"$SINGULAR_LEASES_DIR/TASK-9001.json" <<EOF
 {
   "taskId": "TASK-9001",
   "branch": "$branch",
@@ -248,7 +248,7 @@ EOF
 
 write_accept_waiver_records() {
   local run_id="RUN-TEST-9001"
-  python3 - "$GLUERUN_RUNS_DIR/$run_id/packet.json" <<'PY'
+  python3 - "$SINGULAR_RUNS_DIR/$run_id/packet.json" <<'PY'
 import json
 import sys
 
@@ -262,9 +262,9 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(packet, f, indent=2)
     f.write("\n")
 PY
-  cat >"$GLUERUN_RUNS_DIR/$run_id/audit.json" <<'EOF'
+  cat >"$SINGULAR_RUNS_DIR/$run_id/audit.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-9001",
   "runId": "RUN-TEST-9001",
   "branch": "agent/artifact/TASK-9001-test",
@@ -276,9 +276,9 @@ PY
   "rationale": "needs waiver"
 }
 EOF
-  cat >"$GLUERUN_RUNS_DIR/$run_id/decision-audit-needs-fix.json" <<'EOF'
+  cat >"$SINGULAR_RUNS_DIR/$run_id/decision-audit-needs-fix.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.decider-verdict.v0",
+  "schema": "singular.orchestration.decider-verdict.v0",
   "failureClass": "audit-needs-fix",
   "taskId": "TASK-9001",
   "action": "accept-waiver",
@@ -290,7 +290,7 @@ EOF
   "confidence": 0.8
 }
 EOF
-  cat >"$GLUERUN_ORCH_DIR/decisions.md" <<'EOF'
+  cat >"$SINGULAR_ORCH_DIR/decisions.md" <<'EOF'
 # Decisions
 
 ### 2026-06-04T00:00:00Z — TASK-9001 — accept
@@ -313,15 +313,15 @@ test_accepts_existing_packet_and_imports_afterward() {
   with_fixture
   write_task
   write_worker_branch_and_packet
-  cat >"$GLUERUN_ROOT/gluerun.config.json" <<'JSON'
+  cat >"$SINGULAR_ROOT/singular.config.json" <<'JSON'
 {"schemaVersion":"v2","targetBranch":"target","gateCommand":"true"}
 JSON
 
   local workspace before_fingerprint before_worktrees
-  workspace="$(json_field "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" workspace)"
+  workspace="$(json_field "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" workspace)"
   before_fingerprint="$(workspace_fingerprint "$workspace")"
   before_worktrees="$(worktree_count)"
-  python3 - "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" "$workspace" <<'PY'
+  python3 - "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" "$workspace" <<'PY'
 import json
 import shlex
 import sys
@@ -339,7 +339,7 @@ packet["commands"].append({
         ' && printf bun-cache > "$BUN_INSTALL_CACHE_DIR/acceptance-probe"'
     ),
     "exitCode": 0,
-    "logRef": ".gluerun-evidence/regression.log",
+    "logRef": ".singular-evidence/regression.log",
 })
 packet["commands"].append({
     "cmd": (
@@ -348,26 +348,26 @@ packet["commands"].append({
         " # (attempt-2 green: shell comments remain executable syntax)"
     ),
     "exitCode": 0,
-    "logRef": ".gluerun-evidence/regression.log",
+    "logRef": ".singular-evidence/regression.log",
 })
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(packet, handle, indent=2)
     handle.write("\n")
 PY
 
-  "$SCRIPT_DIR/accept-existing-packet.sh" "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" >/tmp/accept-existing-packet.out
-  assert_eq "accepted" "$(json_field "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" status)" "packet is accepted"
-  assert_eq "accepted" "$(json_field "$GLUERUN_RUNS_DIR/RUN-TEST-9001/audit.json" verdict)" "audit verdict"
-  assert_eq "gluerun.orchestration.audit-verdict.v1" \
-    "$(json_field "$GLUERUN_RUNS_DIR/RUN-TEST-9001/audit.json" schema)" \
+  "$SCRIPT_DIR/accept-existing-packet.sh" "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" >/tmp/accept-existing-packet.out
+  assert_eq "accepted" "$(json_field "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" status)" "packet is accepted"
+  assert_eq "accepted" "$(json_field "$SINGULAR_RUNS_DIR/RUN-TEST-9001/audit.json" verdict)" "audit verdict"
+  assert_eq "singular.orchestration.audit-verdict.v1" \
+    "$(json_field "$SINGULAR_RUNS_DIR/RUN-TEST-9001/audit.json" schema)" \
     "v2 acceptance writes audit-verdict.v1"
   assert_eq "$before_fingerprint" "$(workspace_fingerprint "$workspace")" \
     "original worker workspace remains byte-identical"
   assert_eq "$before_worktrees" "$(worktree_count)" \
     "disposable verification worktree is removed"
-  assert_contains "$(sed -n '1,8p' "$GLUERUN_TASKS_DIR/TASK-9001.md")" "Status: accepted" "task status updated"
-  assert_eq "accepted" "$(json_field "$GLUERUN_LEASES_DIR/TASK-9001.json" status)" "lease status updated"
-  python3 - "$GLUERUN_RUNS_DIR/RUN-TEST-9001" <<'PY'
+  assert_contains "$(sed -n '1,8p' "$SINGULAR_TASKS_DIR/TASK-9001.md")" "Status: accepted" "task status updated"
+  assert_eq "accepted" "$(json_field "$SINGULAR_LEASES_DIR/TASK-9001.json" status)" "lease status updated"
+  python3 - "$SINGULAR_RUNS_DIR/RUN-TEST-9001" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -378,7 +378,7 @@ manifest = json.loads((run_dir / "evidence-manifest.json").read_text(encoding="u
 packet_input = json.loads(
     (run_dir / "accept-existing-packet-input.json").read_text(encoding="utf-8")
 )
-assert manifest["schema"] == "gluerun.orchestration.evidence-manifest.v0"
+assert manifest["schema"] == "singular.orchestration.evidence-manifest.v0"
 assert manifest["headSha"] == packet_input["headSha"]
 assert packet_input["status"] == "needs-review"
 assert manifest["checks"]["scope"]["status"] == "passed"
@@ -399,9 +399,9 @@ assert str(run_dir / "evidence-manifest.json") in audit["evidenceReviewed"]
 assert str(run_dir / "evidence-manifest.json") in audit["verificationResults"][0]["evidenceRefs"]
 PY
 
-  "$SCRIPT_DIR/import-packet.sh" "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" >/tmp/import-existing-packet.out
-  [[ -f "$GLUERUN_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] || fail "packet imported"
-  [[ -f "$GLUERUN_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.audit.json" ]] || fail "audit sidecar imported"
+  "$SCRIPT_DIR/import-packet.sh" "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" >/tmp/import-existing-packet.out
+  [[ -f "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] || fail "packet imported"
+  [[ -f "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.audit.json" ]] || fail "audit sidecar imported"
 }
 
 test_rejects_source_mutation_and_preserves_original_workspace() {
@@ -409,7 +409,7 @@ test_rejects_source_mutation_and_preserves_original_workspace() {
   write_task
   write_worker_branch_and_packet
   local packet workspace before_fingerprint before_worktrees out rc=0
-  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
   workspace="$(json_field "$packet" workspace)"
   before_fingerprint="$(workspace_fingerprint "$workspace")"
   before_worktrees="$(worktree_count)"
@@ -423,7 +423,7 @@ with open(path, encoding="utf-8") as handle:
 packet["commands"] = [{
     "cmd": "printf '\\nmutation\\n' >> internal/artifact/a.go",
     "exitCode": 0,
-    "logRef": ".gluerun-evidence/green.log",
+    "logRef": ".singular-evidence/green.log",
 }]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(packet, handle, indent=2)
@@ -437,7 +437,7 @@ PY
     "source-mutation attempt never touches original workspace"
   assert_eq "$before_worktrees" "$(worktree_count)" \
     "mutating disposable worktree is discarded"
-  [[ ! -f "$GLUERUN_RUNS_DIR/RUN-TEST-9001/audit.json" ]] \
+  [[ ! -f "$SINGULAR_RUNS_DIR/RUN-TEST-9001/audit.json" ]] \
     || fail "source-mutation rejection must not emit an accepted audit"
 }
 
@@ -446,7 +446,7 @@ test_rejects_failed_rerun_in_disposable_worktree() {
   write_task
   write_worker_branch_and_packet
   local packet workspace before_fingerprint before_worktrees out rc=0
-  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
   workspace="$(json_field "$packet" workspace)"
   before_fingerprint="$(workspace_fingerprint "$workspace")"
   before_worktrees="$(worktree_count)"
@@ -460,7 +460,7 @@ with open(path, encoding="utf-8") as handle:
 packet["commands"] = [{
     "cmd": "test -f internal/artifact/does-not-exist.go",
     "exitCode": 0,
-    "logRef": ".gluerun-evidence/green.log",
+    "logRef": ".singular-evidence/green.log",
 }]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(packet, handle, indent=2)
@@ -475,7 +475,7 @@ PY
     "failed rerun leaves original workspace immutable"
   assert_eq "$before_worktrees" "$(worktree_count)" \
     "failed-rerun disposable worktree is discarded"
-  [[ ! -f "$GLUERUN_RUNS_DIR/RUN-TEST-9001/audit.json" ]] \
+  [[ ! -f "$SINGULAR_RUNS_DIR/RUN-TEST-9001/audit.json" ]] \
     || fail "failed rerun must not emit an accepted audit"
 }
 
@@ -484,7 +484,7 @@ test_rejects_annotated_command_before_execution() {
   write_task
   write_worker_branch_and_packet
   local packet workspace before_fingerprint before_worktrees out rc=0
-  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
   workspace="$(json_field "$packet" workspace)"
   before_fingerprint="$(workspace_fingerprint "$workspace")"
   before_worktrees="$(worktree_count)"
@@ -501,7 +501,7 @@ packet["commands"] = [{
         " (attempt-2 green: 40 pass, 0 fail)"
     ),
     "exitCode": 0,
-    "logRef": ".gluerun-evidence/green.log",
+    "logRef": ".singular-evidence/green.log",
 }]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(packet, handle, indent=2)
@@ -513,7 +513,7 @@ PY
     "annotated command contract rejection"
   assert_contains "$out" "rationale or evidence" \
     "annotated command remediation"
-  [[ ! -e "$GLUERUN_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-0.log" ]] \
+  [[ ! -e "$SINGULAR_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-0.log" ]] \
     || fail "annotated command reached deterministic bash execution"
   assert_eq "needs-review" "$(json_field "$packet" status)" \
     "annotated command packet remains unaccepted"
@@ -529,7 +529,7 @@ test_hash_inside_shell_word_does_not_bypass_annotation_rejection() {
   write_worker_branch_and_packet
   local packet workspace before_fingerprint before_worktrees out prefix
   local -a prefixes=("printf x#" "printf '#'" 'printf \#')
-  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
   workspace="$(json_field "$packet" workspace)"
   before_fingerprint="$(workspace_fingerprint "$workspace")"
   before_worktrees="$(worktree_count)"
@@ -544,7 +544,7 @@ with open(path, encoding="utf-8") as handle:
 packet["commands"] = [{
     "cmd": prefix + " (attempt-2 green: 40 pass, 0 fail)",
     "exitCode": 0,
-    "logRef": ".gluerun-evidence/green.log",
+    "logRef": ".singular-evidence/green.log",
 }]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(packet, handle, indent=2)
@@ -556,7 +556,7 @@ PY
       || fail "non-comment hash form must not bypass annotation rejection: $prefix"
     assert_contains "$out" "commands[0].cmd contains a trailing human annotation" \
       "non-comment hash annotation rejection: $prefix"
-    [[ ! -e "$GLUERUN_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-0.log" ]] \
+    [[ ! -e "$SINGULAR_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-0.log" ]] \
       || fail "non-comment hash command reached deterministic bash execution: $prefix"
   done
   assert_eq "needs-review" "$(json_field "$packet" status)" \
@@ -572,7 +572,7 @@ test_rejects_whitespace_only_packet_command() {
   write_task
   write_worker_branch_and_packet
   local packet out rc=0
-  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
   python3 - "$packet" <<'PY'
 import json
 import sys
@@ -589,7 +589,7 @@ PY
   [[ "$rc" -ne 0 ]] || fail "whitespace-only packet command must be rejected"
   assert_contains "$out" "commands[1].cmd must be non-empty executable shell text" \
     "empty command contract rejection"
-  [[ ! -e "$GLUERUN_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-1.log" ]] \
+  [[ ! -e "$SINGULAR_RUNS_DIR/RUN-TEST-9001/accept-existing-packet-command-1.log" ]] \
     || fail "empty command reached deterministic bash execution"
 }
 
@@ -598,11 +598,11 @@ test_required_bootstrap_failure_blocks_acceptance() {
   write_task
   write_worker_branch_and_packet
   local packet workspace before_fingerprint before_worktrees out rc=0
-  packet="$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json"
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
   workspace="$(json_field "$packet" workspace)"
   before_fingerprint="$(workspace_fingerprint "$workspace")"
   before_worktrees="$(worktree_count)"
-  out="$(GLUERUN_BOOTSTRAP_JSON='{"command":"exit 17","required":true}' \
+  out="$(SINGULAR_BOOTSTRAP_JSON='{"command":"exit 17","required":true}' \
     "$SCRIPT_DIR/accept-existing-packet.sh" "$packet" 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "required bootstrap failure must block acceptance"
   assert_contains "$out" "required deterministic acceptance bootstrap failed" \
@@ -612,7 +612,7 @@ test_required_bootstrap_failure_blocks_acceptance() {
     "bootstrap failure leaves original workspace immutable"
   assert_eq "$before_worktrees" "$(worktree_count)" \
     "bootstrap-failure disposable worktree is discarded"
-  [[ ! -f "$GLUERUN_RUNS_DIR/RUN-TEST-9001/audit.json" ]] \
+  [[ ! -f "$SINGULAR_RUNS_DIR/RUN-TEST-9001/audit.json" ]] \
     || fail "bootstrap failure must not emit an accepted audit"
 }
 
@@ -622,14 +622,14 @@ test_imports_accept_waiver_packet_and_integrates_eligibly() {
   write_worker_branch_and_packet
   write_accept_waiver_records
 
-  "$SCRIPT_DIR/import-packet.sh" "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" >/tmp/import-waiver-packet.out
-  [[ -f "$GLUERUN_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] || fail "waiver packet imported"
-  [[ -f "$GLUERUN_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.audit.json" ]] || fail "waiver audit sidecar imported"
-  assert_eq "needs-fix" "$(json_field "$GLUERUN_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.audit.json" verdict)" "waiver preserves original audit verdict"
+  "$SCRIPT_DIR/import-packet.sh" "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" >/tmp/import-waiver-packet.out
+  [[ -f "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] || fail "waiver packet imported"
+  [[ -f "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.audit.json" ]] || fail "waiver audit sidecar imported"
+  assert_eq "needs-fix" "$(json_field "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.audit.json" verdict)" "waiver preserves original audit verdict"
   assert_contains "$(cat /tmp/import-waiver-packet.out)" "acceptance: accepted-waiver" "waiver import mode recorded"
 
   local out
-  out="$(GLUERUN_DEFAULT_GATE_CMD=true "$SCRIPT_DIR/integrate.sh" --dry-run --task TASK-9001)"
+  out="$(SINGULAR_DEFAULT_GATE_CMD=true "$SCRIPT_DIR/integrate.sh" --dry-run --task TASK-9001)"
   assert_contains "$out" "eligible: TASK-9001" "waiver packet is integration-eligible"
 }
 
@@ -637,10 +637,10 @@ test_rejects_already_imported_task() {
   with_fixture
   write_task
   write_worker_branch_and_packet
-  mkdir -p "$GLUERUN_ORCH_DIR/packets/imported/TASK-9001"
-  cp "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" "$GLUERUN_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json"
+  mkdir -p "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001"
+  cp "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json"
   local out rc=0
-  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
+  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "duplicate import must be rejected"
   assert_contains "$out" "already imported" "duplicate rejection reason"
 }
@@ -649,7 +649,7 @@ test_rejects_head_mismatch() {
   with_fixture
   write_task
   write_worker_branch_and_packet
-  python3 - "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" <<'PY'
+  python3 - "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" <<'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -661,7 +661,7 @@ with open(path, "w", encoding="utf-8") as f:
     f.write("\n")
 PY
   local out rc=0
-  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
+  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "head mismatch must be rejected"
   assert_contains "$out" "does not match branch head" "head mismatch reason"
 }
@@ -670,12 +670,12 @@ test_rejects_scope_violation() {
   with_fixture
   write_task
   write_worker_branch_and_packet
-  worktree="$(json_field "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" workspace)"
+  worktree="$(json_field "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" workspace)"
   printf 'package artifact\n\nconst forbiddenFixture = true\n' >"$worktree/internal/artifact/doc.go"
   git -C "$worktree" add internal/artifact/doc.go
   git -C "$worktree" -c user.name=test -c user.email=test@example.local commit -q -m "scope violation"
   head="$(git -C "$worktree" rev-parse HEAD)"
-  python3 - "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" "$head" <<'PY'
+  python3 - "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" "$head" <<'PY'
 import json
 import sys
 path, head = sys.argv[1:3]
@@ -687,7 +687,7 @@ with open(path, "w", encoding="utf-8") as f:
     f.write("\n")
 PY
   local out rc=0
-  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
+  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "scope violation must be rejected"
   assert_contains "$out" "scope check failed" "scope failure reason"
 }
@@ -697,7 +697,7 @@ test_accept_existing_rejects_storage_proof_without_marked_red_guard() {
   write_storage_proof_task
   write_worker_branch_and_packet
   local out rc=0
-  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
+  out="$("$SCRIPT_DIR/accept-existing-packet.sh" "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "storage proof existing packet without marked red guard must be rejected"
   assert_contains "$out" "logRef ending in -skip-guard-red" "storage proof guard rejection reason"
 }
@@ -708,7 +708,7 @@ test_import_rejects_storage_proof_without_marked_red_guard() {
   write_worker_branch_and_packet
   write_accept_waiver_records
   local out rc=0
-  out="$("$SCRIPT_DIR/import-packet.sh" "$GLUERUN_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
+  out="$("$SCRIPT_DIR/import-packet.sh" "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "storage proof import without marked red guard must be rejected"
   assert_contains "$out" "logRef ending in -skip-guard-red" "storage proof import guard rejection reason"
 }

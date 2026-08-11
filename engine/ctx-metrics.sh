@@ -6,20 +6,20 @@
 # present-but-uncalled the engine is byte-identical to prior behavior.
 #
 # STRICTLY READ-ONLY: it reads each run's attempts index
-# (runs/<runId>/attempts/index.json, schema gluerun.orchestration.attempts-index.v0)
+# (runs/<runId>/attempts/index.json, schema singular.orchestration.attempts-index.v0)
 # and an events log (events.ndjson) and emits metrics as JSON on stdout. It never
 # creates, modifies, or deletes any run artifact, index, or event.
 #
 # Public entry point:
-#   gluerun_ctx_metrics_json [runs_dir] [events_file]
-#     runs_dir     defaults to ${GLUERUN_RUNS_DIR:-}
-#     events_file  defaults to ${GLUERUN_EVENTS_FILE:-}
+#   singular_ctx_metrics_json [runs_dir] [events_file]
+#     runs_dir     defaults to ${SINGULAR_RUNS_DIR:-}
+#     events_file  defaults to ${SINGULAR_EVENTS_FILE:-}
 #   Missing/empty inputs are NOT an error: they yield a well-formed metrics
 #   object with zeroed counts (fail safe).
 #
 # Output shape (stable; keys sorted; deterministic for a given input set):
 #   {
-#     "schema": "gluerun.orchestration.ctx-metrics.v0",
+#     "schema": "singular.orchestration.ctx-metrics.v0",
 #     "perTask": [                      # one entry per runs/<runId>/attempts/index.json,
 #                                       # sorted by (taskId, runId)
 #       {
@@ -52,9 +52,9 @@
 # JSON is emitted with sorted keys and a trailing newline so downstream consumers
 # and tests can pin the exact bytes.
 
-gluerun_ctx_metrics_json() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_metrics_json() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$runs_dir" "$events_file" <<'PY'
 import json
 import os
@@ -180,7 +180,7 @@ if events_file and os.path.isfile(events_file):
         pass
 
 metrics = {
-    "schema": "gluerun.orchestration.ctx-metrics.v0",
+    "schema": "singular.orchestration.ctx-metrics.v0",
     "perTask": per_task_list,
     "aggregate": {
         "runsTotal": len(per_task_list),

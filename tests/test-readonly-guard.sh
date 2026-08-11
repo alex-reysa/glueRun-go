@@ -29,11 +29,11 @@ new_repo() {
   git -C "$dir" config user.email guard@test
   git -C "$dir" config user.name guard
   git -C "$dir" config commit.gpgsign false
-  # Every gluerun repo ignores its state directory, and the fixture has to as
+  # Every singular repo ignores its state directory, and the fixture has to as
   # well: the guard writes its journal, quarantine and result there, so without
   # this the porcelain comparison below reports the guard's own bookkeeping as
   # a change the guard failed to clean up.
-  printf '.gluerun-state/\n' >"$dir/.gitignore"
+  printf '.singular-state/\n' >"$dir/.gitignore"
   printf 'tracked-clean\n' >"$dir/clean.txt"
   printf 'tracked-dirty\n' >"$dir/dirty.txt"
   mkdir -p "$dir/docs/orchestration/tasks"
@@ -164,7 +164,7 @@ restore "$tmp/j8" >/dev/null
 [[ "$(status_of "$r")" == "$before" ]] || fail "c8: status not restored"
 
 # --- c9: a concurrent engine write inside an excluded directory ---------------
-# Read-only runs execute against $GLUERUN_ROOT for up to 1200s while the rest of
+# Read-only runs execute against $SINGULAR_ROOT for up to 1200s while the rest of
 # the engine keeps importing task files into it. The old guard classified those
 # as agent output and rm -rf'd them: the engine deleting its own control state.
 r="$(new_repo c9)"
@@ -284,7 +284,7 @@ python3 "$GUARD" sweep --root "$tmp/sweeproot" >/dev/null
 [[ "$(cat "$r/clean.txt")" == "AGENT" ]] || fail "c16b: sweep touched a live run's journal"
 
 # --- c17: two read-only runs sharing one root ---------------------------------
-# Up to GLUERUN_MAX_L1_CONCURRENT planners run against $GLUERUN_ROOT at once.
+# Up to SINGULAR_MAX_L1_CONCURRENT planners run against $SINGULAR_ROOT at once.
 # Each must undo its own damage and leave the other's in-flight state alone.
 r="$(new_repo c17)"
 before="$(status_of "$r")"
@@ -327,46 +327,46 @@ grep -q '<<<<<<<' "$r/conflict.txt" || fail "c19: guard rewrote a conflicted fil
 
 # --- c20: the lib.sh wrappers -------------------------------------------------
 r="$(new_repo c20)"
-export GLUERUN_ROOT="$r"
-export GLUERUN_STATE_DIR="$r/.gluerun-state"
-export GLUERUN_EVENTS_FILE="$r/.gluerun-state/events.ndjson"
-export GLUERUN_ENGINE_HOME="$ENGINE_HOME"
+export SINGULAR_ROOT="$r"
+export SINGULAR_STATE_DIR="$r/.singular-state"
+export SINGULAR_EVENTS_FILE="$r/.singular-state/events.ndjson"
+export SINGULAR_ENGINE_HOME="$ENGINE_HOME"
 # shellcheck disable=SC1091
 source "$ENGINE_HOME/engine/lib.sh"
 
 # The wrapper must exclude the engine's own directories by default: the whole
 # point of c9 is worthless if callers have to remember to ask for it.
 before="$(status_of "$r")"
-journal="$(gluerun_readonly_guard_capture "$r" wrapper)"
+journal="$(singular_readonly_guard_capture "$r" wrapper)"
 [[ -n "$journal" && -d "$journal" ]] || fail "c20: wrapper produced no journal"
 printf '# TASK-0043\n' >"$r/docs/orchestration/tasks/TASK-0043.md"
 printf 'AGENT\n' >"$r/clean.txt"
-gluerun_readonly_guard_restore "$journal" 2>/dev/null
+singular_readonly_guard_restore "$journal" 2>/dev/null
 [[ -f "$r/docs/orchestration/tasks/TASK-0043.md" ]] \
   || fail "c20: wrapper did not exclude the orchestration directory by default"
 [[ "$(cat "$r/clean.txt")" == "tracked-clean" ]] || fail "c20: wrapper did not restore"
-grep -q '"type":"readonly_guard.restored"' "$GLUERUN_EVENTS_FILE" \
+grep -q '"type":"readonly_guard.restored"' "$SINGULAR_EVENTS_FILE" \
   || fail "c20: a containment failure must leave an event"
 
 # off disarms the guard entirely, and must do so without leaving a journal
 # behind for sweep to apply later.
-GLUERUN_READONLY_GUARD_MODE=off
-journal="$(gluerun_readonly_guard_capture "$r" wrapper-off)"
+SINGULAR_READONLY_GUARD_MODE=off
+journal="$(singular_readonly_guard_capture "$r" wrapper-off)"
 [[ -z "$journal" ]] || fail "c20: mode=off still armed the guard"
 printf 'AGENT-OFF\n' >"$r/clean.txt"
-gluerun_readonly_guard_restore "" 2>/dev/null
+singular_readonly_guard_restore "" 2>/dev/null
 [[ "$(cat "$r/clean.txt")" == "AGENT-OFF" ]] || fail "c20: mode=off still restored"
-GLUERUN_READONLY_GUARD_MODE=restore
+SINGULAR_READONLY_GUARD_MODE=restore
 git -C "$r" checkout -- clean.txt
 
 # A restore is safe to call with an argument that never became a journal.
-gluerun_readonly_guard_restore "$r/nope" 2>/dev/null \
+singular_readonly_guard_restore "$r/nope" 2>/dev/null \
   || fail "c20: restore of a missing journal must not fail the run"
 
 # --- c21: a grace period lets the killed runner run its EXIT trap -------------
 # The guard lives in that trap. ask/supervise/decide used a bare SIGKILL on
 # timeout, which executes no handler — so every mutation a timed-out read-only
-# run had made stayed in $GLUERUN_ROOT, and the guard's own journal was left for
+# run had made stayed in $SINGULAR_ROOT, and the guard's own journal was left for
 # `sweep` to find later. The grace period is what closes that.
 cat >"$tmp/trapped.sh" <<'SH'
 #!/usr/bin/env bash
@@ -379,7 +379,7 @@ chmod +x "$tmp/trapped.sh"
 
 "$tmp/trapped.sh" "$tmp/graceful.marker" & graceful_pid=$!
 sleep 1
-gluerun_kill_tree "$graceful_pid" 5
+singular_kill_tree "$graceful_pid" 5
 wait "$graceful_pid" 2>/dev/null || true
 [[ -f "$tmp/graceful.marker" ]] \
   || fail "c21: a graceful kill must let the EXIT trap run"
@@ -388,7 +388,7 @@ wait "$graceful_pid" 2>/dev/null || true
 # to clean up; asserting it here is what makes the case above mean something.
 "$tmp/trapped.sh" "$tmp/hard.marker" & hard_pid=$!
 sleep 1
-gluerun_kill_tree "$hard_pid"
+singular_kill_tree "$hard_pid"
 # Polled rather than waited on: `wait` makes bash announce the SIGKILL as
 # "Killed: 9" on stderr, which reads like a test failure in a passing run.
 for _ in 1 2 3 4 5; do kill -0 "$hard_pid" 2>/dev/null || break; sleep 1; done
@@ -397,14 +397,14 @@ kill -0 "$hard_pid" 2>/dev/null && fail "c21: a bare kill must actually kill"
 
 # --- c22: reconcile applies the journals a SIGKILLed run left behind ---------
 r="$(new_repo c22)"
-export GLUERUN_ROOT="$r"
-export GLUERUN_STATE_DIR="$r/.gluerun-state"
-export GLUERUN_EVENTS_FILE="$r/.gluerun-state/events.ndjson"
+export SINGULAR_ROOT="$r"
+export SINGULAR_STATE_DIR="$r/.singular-state"
+export SINGULAR_EVENTS_FILE="$r/.singular-state/events.ndjson"
 before="$(status_of "$r")"
 # Captured through the wrapper, so this exercises the real journal location and
 # the real default excludes; then the owner is rewritten to a dead pid to stand
 # in for the SIGKILL that would have left it behind.
-journal="$(gluerun_readonly_guard_capture "$r" killed-run)"
+journal="$(singular_readonly_guard_capture "$r" killed-run)"
 [[ -n "$journal" ]] || fail "c22: wrapper produced no journal"
 python3 - "$journal/journal.json" <<'PY'
 import json, sys
@@ -415,7 +415,7 @@ json.dump(data, open(path, "w"))
 PY
 printf 'AGENT\n' >"$r/clean.txt"
 printf 'AGENT-NEW\n' >"$r/orphan.txt"
-gluerun_readonly_guard_sweep
+singular_readonly_guard_sweep
 [[ "$(cat "$r/clean.txt")" == "tracked-clean" ]] \
   || fail "c22: the sweep did not apply an orphaned journal"
 [[ ! -e "$r/orphan.txt" ]] || fail "c22: the sweep left an agent-created file"

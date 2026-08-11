@@ -31,7 +31,7 @@ chmod +x "$doctor_bin/codex"
 
 write_config() {
   local required_missing="${1:-no}"
-  python3 - "$repo/gluerun.config.json" "$required_missing" <<'PY'
+  python3 - "$repo/singular.config.json" "$required_missing" <<'PY'
 import json, sys
 path, required_missing = sys.argv[1:]
 required = ["filesystem", "git", "schemas", "runner-contract", "provider-executable"]
@@ -67,7 +67,7 @@ data = {
     "deploymentCredentials": [
         {"id": "release-token", "env": "DOCTOR_RELEASE_TOKEN", "requiredFor": ["deploy"]}
     ],
-    "env": {"GLUERUN_CODEX_MODEL": "gpt-doctor"},
+    "env": {"SINGULAR_CODEX_MODEL": "gpt-doctor"},
 }
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(data, handle, indent=2)
@@ -91,8 +91,8 @@ doctor_json() {
   (
     cd "$repo"
     env HOME="$doctor_home" PATH="$doctor_bin:$PATH" \
-      GLUERUN_ENGINE_HOME="$ROOT" \
-      bash "$ROOT/cli/gluerun" doctor --json "$@"
+      SINGULAR_ENGINE_HOME="$ROOT" \
+      bash "$ROOT/cli/singular" doctor --json "$@"
   )
 }
 
@@ -102,7 +102,7 @@ report="$(doctor_json)"
 python3 - "$report" "$doctor_bin/codex" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
-assert data["schema"] == "gluerun.doctor-report.v1"
+assert data["schema"] == "singular.doctor-report.v1"
 assert data["ok"] is True
 checks = data["checks"]
 for check in checks:
@@ -133,7 +133,7 @@ assert "--stage-dir" not in by_id["runner.contract-v1"]["details"]["arguments"]
 assert by_id["bootstrap.dry-run"]["status"] == "pass"
 assert by_id["resources.adaptive-disk"]["details"]["configuredSlots"] == 2
 assert by_id["governance.unbound-waivers"]["status"] == "pass"
-# The real probe, on a process-capable host: gluerun's timeout cleanup depends
+# The real probe, on a process-capable host: singular's timeout cleanup depends
 # on session creation + group termination, and the machine-readable preflight is
 # where an unattended launcher looks before it starts.
 group_kill = by_id["runtime.process-group-kill"]
@@ -163,7 +163,7 @@ PY
 # process group cannot clean up a timed-out agent, so this is a blocking check,
 # not a note: whatever launches unattended runs reads this report to decide.
 rc=0
-report="$(GLUERUN_TEST_PROCESS_CONTROL=1 GLUERUN_TEST_PROCESS_CONTROL_STATE=no-group-kill \
+report="$(SINGULAR_TEST_PROCESS_CONTROL=1 SINGULAR_TEST_PROCESS_CONTROL_STATE=no-group-kill \
   doctor_json)" || rc=$?
 [[ "$rc" -ne 0 ]] \
   || { echo "an environment without group termination must fail doctor" >&2; exit 1; }
@@ -179,9 +179,9 @@ PY
 # PMGO-005 in the machine surface: the verdict is a field, so a supervisor
 # reading this report can tell "the process is gone" from "I was not allowed to
 # look" — which is the distinction that made doctor call a live server stale.
-mkdir -p "$repo/.gluerun-state"
-printf '4242\n' >"$repo/.gluerun-state/console.pid"
-report="$(GLUERUN_TEST_PID_PROBE=1 GLUERUN_TEST_PID_PROBE_STATE=unknown doctor_json)"
+mkdir -p "$repo/.singular-state"
+printf '4242\n' >"$repo/.singular-state/console.pid"
+report="$(SINGULAR_TEST_PID_PROBE=1 SINGULAR_TEST_PID_PROBE_STATE=unknown doctor_json)"
 python3 - "$report" <<'PY'
 import json, sys
 check = next(
@@ -193,7 +193,7 @@ assert check["details"]["verdict"] == "unknown-permission", check["details"]
 assert check["details"]["pid"] == 4242, check["details"]
 assert "Do not delete the pidfile automatically." in check["message"], check["message"]
 PY
-rm -f "$repo/.gluerun-state/console.pid"
+rm -f "$repo/.singular-state/console.pid"
 
 # Consumer-only repository schema extensions survive migrations and are valid
 # inputs to doctor. They do not weaken authoritative copy checks below.
@@ -275,7 +275,7 @@ PY
 
 # Doctor validates providerArgs as literal bounded argv arrays before runtime.
 write_config no
-python3 - "$repo/gluerun.config.json" <<'PY'
+python3 - "$repo/singular.config.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path, encoding="utf-8"))
@@ -298,7 +298,7 @@ PY
 # An unrelated provider argv cannot activate a strict external capability.
 # Activation argv must be bound to that exact capability ID, matching runtime.
 write_config no
-python3 - "$repo/gluerun.config.json" <<'PY'
+python3 - "$repo/singular.config.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path, encoding="utf-8"))
@@ -324,7 +324,7 @@ assert "capabilityArgs.skills" in profile["message"], profile["message"]
 PY
 
 write_config no
-python3 - "$repo/gluerun.config.json" <<'PY'
+python3 - "$repo/singular.config.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path, encoding="utf-8"))
@@ -348,7 +348,7 @@ PY
 
 # Strict providerArgs cannot replace the native sandbox/capability boundary.
 write_config no
-python3 - "$repo/gluerun.config.json" <<'PY'
+python3 - "$repo/singular.config.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 data = json.load(open(path, encoding="utf-8"))
@@ -391,7 +391,7 @@ compgen -G "$doctor_home/.codex/models_cache.json.bak-*" >/dev/null \
 
 cat >"$repo/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     {
       "id": "deploy",
@@ -425,10 +425,10 @@ PY
 
 human_help="$(
   cd "$repo"
-  env HOME="$doctor_home" PATH="$doctor_bin:$PATH" GLUERUN_ENGINE_HOME="$ROOT" \
-    bash "$ROOT/cli/gluerun" human-gate status --help
+  env HOME="$doctor_home" PATH="$doctor_bin:$PATH" SINGULAR_ENGINE_HOME="$ROOT" \
+    bash "$ROOT/cli/singular" human-gate status --help
 )"
 [[ "$human_help" == *"--require-approved"* ]] \
-  || { echo "gluerun human-gate status was not passed through" >&2; exit 1; }
+  || { echo "singular human-gate status was not passed through" >&2; exit 1; }
 
 echo "PASS: test-doctor-json"

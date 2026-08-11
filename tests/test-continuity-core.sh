@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Continuity-core regression tests (T-F2, T-E1, T-E2 + structural split):
-# - gluerun_task_preflight: pass + every refusal reason, incl. owned/forbidden
+# - singular_task_preflight: pass + every refusal reason, incl. owned/forbidden
 #   segment-boundary semantics ("a/b" conflicts with "a/b/c", NOT "a/bc");
-# - gluerun_attempt_archive: per-attempt artifact copies + attempts/index.json
+# - singular_attempt_archive: per-attempt artifact copies + attempts/index.json
 #   upsert across attempts;
-# - gluerun_finding_id: normalization (whitespace/backticks/case-insensitive);
-# - gluerun_findings_ledger_update: open -> auditor-status resolve -> re-report
+# - singular_finding_id: normalization (whitespace/backticks/case-insensitive);
+# - singular_findings_ledger_update: open -> auditor-status resolve -> re-report
 #   reopen -> accepted resolves all; absence alone never resolves;
 # - implementer capsule: argv scope (post-amend) wins over the packet's scope,
 #   lists capped at 20;
@@ -34,7 +34,7 @@ make_repo() {
   local root="$1"
   mkdir -p "$root/docs/orchestration/prompts" \
     "$root/docs/orchestration/tasks" \
-    "$root/.gluerun-state"
+    "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/templates/prompts/l2-test-first-developer.md" "$root/docs/orchestration/prompts/l2-test-first-developer.md"
@@ -48,27 +48,27 @@ with_fixture() {
   tmp="$(mktemp -d)"
   FIXTURE_TMP="$tmp"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-  export GLUERUN_LEASES_DIR="$GLUERUN_STATE_DIR/leases"
-  export GLUERUN_EVENTS_FILE="$GLUERUN_STATE_DIR/events.ndjson"
-  export GLUERUN_STOP_FILE="$GLUERUN_STATE_DIR/STOP"
-  export GLUERUN_WORKTREES_DIR="$GLUERUN_ROOT/.worktrees"
-  export GLUERUN_TARGET_BRANCH="target"
-  export GLUERUN_ENGINE_HOME="$ENGINE_HOME"
-  unset GLUERUN_MODULES GLUERUN_WORKER_RED_LOG GLUERUN_WORKER_CONTRACT_EXTRA GLUERUN_RUNNER \
-    GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE GLUERUN_ATTEMPT_TASK_ID GLUERUN_ATTEMPT_STARTED_AT 2>/dev/null || true
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+  export SINGULAR_LEASES_DIR="$SINGULAR_STATE_DIR/leases"
+  export SINGULAR_EVENTS_FILE="$SINGULAR_STATE_DIR/events.ndjson"
+  export SINGULAR_STOP_FILE="$SINGULAR_STATE_DIR/STOP"
+  export SINGULAR_WORKTREES_DIR="$SINGULAR_ROOT/.worktrees"
+  export SINGULAR_TARGET_BRANCH="target"
+  export SINGULAR_ENGINE_HOME="$ENGINE_HOME"
+  unset SINGULAR_MODULES SINGULAR_WORKER_RED_LOG SINGULAR_WORKER_CONTRACT_EXTRA SINGULAR_RUNNER \
+    SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE SINGULAR_ATTEMPT_TASK_ID SINGULAR_ATTEMPT_STARTED_AT 2>/dev/null || true
   # Re-source so derived paths (events file, lock dirs) follow the fixture env.
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib.sh"
 }
 
 write_generic_task() {
-  cat >"$GLUERUN_TASKS_DIR/TASK-0001.md" <<'EOF'
+  cat >"$SINGULAR_TASKS_DIR/TASK-0001.md" <<'EOF'
 # TASK-0001: Generic widget parser
 
 Status: ready
@@ -112,7 +112,7 @@ expect_preflight_fail() {
   # expect_preflight_fail <label> <expected-reason-substr> <task_json> [args...]
   local label="$1" expect="$2" json="$3"; shift 3
   local out rc=0
-  out="$(gluerun_task_preflight "$json" "$@")" || rc=$?
+  out="$(singular_task_preflight "$json" "$@")" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "$label: preflight must fail"
   assert_contains "$out" "$expect" "$label"
 }
@@ -122,12 +122,12 @@ test_preflight_pass_and_failures() {
   local out rc
 
   # Pass: valid task, no output, rc 0.
-  out="$(gluerun_task_preflight "$GOOD_TASK")" || fail "preflight: valid task must pass"
+  out="$(singular_task_preflight "$GOOD_TASK")" || fail "preflight: valid task must pass"
   assert_eq "$out" "" "preflight: valid task prints nothing"
 
-  # Pass: the real fixture task file parsed through gluerun_task_json.
+  # Pass: the real fixture task file parsed through singular_task_json.
   write_generic_task
-  out="$(gluerun_task_preflight "$(gluerun_task_json "$GLUERUN_TASKS_DIR/TASK-0001.md")")" \
+  out="$(singular_task_preflight "$(singular_task_json "$SINGULAR_TASKS_DIR/TASK-0001.md")")" \
     || fail "preflight: parsed fixture task must pass"
 
   expect_preflight_fail "empty taskId" "missing taskId" "$(mutate_task taskId '""')"
@@ -148,23 +148,23 @@ test_preflight_pass_and_failures() {
   # Segment boundary: "a/b" must NOT conflict with "a/bc".
   local seg_task
   seg_task="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["ownedFiles"]=["a/b"]; d["forbiddenFiles"]=["a/bc"]; print(json.dumps(d))' "$GOOD_TASK")"
-  out="$(gluerun_task_preflight "$seg_task")" || fail "segment boundary: a/b vs a/bc must NOT conflict ($out)"
+  out="$(singular_task_preflight "$seg_task")" || fail "segment boundary: a/b vs a/bc must NOT conflict ($out)"
   seg_task="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["ownedFiles"]=["a/b"]; d["forbiddenFiles"]=["a/b/c"]; print(json.dumps(d))' "$GOOD_TASK")"
   expect_preflight_fail "segment boundary conflict" "conflicts with forbidden" "$seg_task"
 
   # Gate command: whitespace-only fails when required, passes when exempt (dry-run).
   expect_preflight_fail "blank gate" "no gate command" "$(mutate_task gateCommand '"   "')" "" "" 1
-  out="$(gluerun_task_preflight "$(mutate_task gateCommand '"   "')" "" "" 0)" \
+  out="$(singular_task_preflight "$(mutate_task gateCommand '"   "')" "" "" 0)" \
     || fail "blank gate with require_gate=0 (dry-run exemption) must pass"
   # An effective gate cmd passed by the driver (config default) satisfies the check.
-  out="$(gluerun_task_preflight "$(mutate_task gateCommand '""')" "make check" "" 1)" \
+  out="$(singular_task_preflight "$(mutate_task gateCommand '""')" "make check" "" 1)" \
     || fail "effective gate cmd from argv must satisfy the gate check"
 
   # Acceptance criteria requirement is env-switchable (default on).
   expect_preflight_fail "no acceptance criteria" "no acceptance criteria" "$(mutate_task acceptanceCriteria '[]')"
   rc=0
-  out="$(GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE=0 gluerun_task_preflight "$(mutate_task acceptanceCriteria '[]')")" || rc=$?
-  assert_eq "$rc" "0" "acceptance check disabled via GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE=0"
+  out="$(SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE=0 singular_task_preflight "$(mutate_task acceptanceCriteria '[]')")" || rc=$?
+  assert_eq "$rc" "0" "acceptance check disabled via SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE=0"
 
   echo "ok: preflight"
 }
@@ -172,7 +172,7 @@ test_preflight_pass_and_failures() {
 test_attempt_archive() {
   with_fixture
   local run_id="RUN-ARCH-1" run_dir
-  run_dir="$GLUERUN_RUNS_DIR/$run_id"
+  run_dir="$SINGULAR_RUNS_DIR/$run_id"
   mkdir -p "$run_dir"
   echo "prompt v1" >"$run_dir/l2-active-prompt.md"
   echo "re-audit prompt v1" >"$run_dir/auditor-active-prompt.md"
@@ -182,8 +182,8 @@ test_attempt_archive() {
   echo "gate log" >"$run_dir/gate-check.log"
   echo '{"action":"retry"}' >"$run_dir/decision-gate-red.json"
 
-  GLUERUN_ATTEMPT_TASK_ID="TASK-0009" GLUERUN_ATTEMPT_STARTED_AT="2026-01-01T00:00:00Z" \
-    gluerun_attempt_archive "$run_dir" 1 "gate-red" "unknown" "" "retry" "decider" \
+  SINGULAR_ATTEMPT_TASK_ID="TASK-0009" SINGULAR_ATTEMPT_STARTED_AT="2026-01-01T00:00:00Z" \
+    singular_attempt_archive "$run_dir" 1 "gate-red" "unknown" "" "retry" "decider" \
     || fail "archive attempt 1 must succeed"
 
   assert_file "$run_dir/attempts/1/failure.txt" "attempt 1"
@@ -199,9 +199,9 @@ test_attempt_archive() {
 
   local idx="$run_dir/attempts/index.json"
   assert_file "$idx" "attempts index"
-  assert_eq "$(gluerun_json_field "$idx" schema)" "gluerun.orchestration.attempts-index.v0" "index schema"
-  assert_eq "$(gluerun_json_field "$idx" taskId)" "TASK-0009" "index taskId"
-  assert_eq "$(gluerun_json_field "$idx" runId)" "RUN-ARCH-1" "index runId"
+  assert_eq "$(singular_json_field "$idx" schema)" "singular.orchestration.attempts-index.v0" "index schema"
+  assert_eq "$(singular_json_field "$idx" taskId)" "TASK-0009" "index taskId"
+  assert_eq "$(singular_json_field "$idx" runId)" "RUN-ARCH-1" "index runId"
   local entry
   entry="$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["attempts"]; print(len(a), a[0]["n"], a[0]["failureClass"], a[0]["deciderAction"], a[0]["deciderAuthority"], a[0]["dir"], a[0]["startedAt"])' "$idx")"
   assert_eq "$entry" "1 1 gate-red retry decider attempts/1 2026-01-01T00:00:00Z" "index attempt-1 entry"
@@ -209,7 +209,7 @@ test_attempt_archive() {
   # Second (accepted) attempt appends a new entry.
   echo "prompt v2" >"$run_dir/l2-active-prompt.md"
   echo '{"verdict":"accepted"}' >"$run_dir/audit.json"
-  GLUERUN_ATTEMPT_TASK_ID="TASK-0009" gluerun_attempt_archive "$run_dir" 2 "" "accepted" "abc1234" "accept" "l1" \
+  SINGULAR_ATTEMPT_TASK_ID="TASK-0009" singular_attempt_archive "$run_dir" 2 "" "accepted" "abc1234" "accept" "l1" \
     || fail "archive attempt 2 must succeed"
   assert_eq "$(cat "$run_dir/attempts/2/failure.txt")" "accepted" "accepted attempt failure.txt"
   assert_file "$run_dir/attempts/2/audit.json" "attempt 2 audit copy"
@@ -219,19 +219,19 @@ test_attempt_archive() {
   assert_eq "$entry" "2 2 '' accepted abc1234 accept" "index attempt-2 entry (empty failureClass on accept)"
 
   # Re-archiving the same n upserts (no duplicate entries).
-  GLUERUN_ATTEMPT_TASK_ID="TASK-0009" gluerun_attempt_archive "$run_dir" 2 "" "accepted" "abc1234" "accept" "l1" || true
+  SINGULAR_ATTEMPT_TASK_ID="TASK-0009" singular_attempt_archive "$run_dir" 2 "" "accepted" "abc1234" "accept" "l1" || true
   assert_eq "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["attempts"]))' "$idx")" "2" "index upsert by n"
 
-  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" '"l1.attempt_archived"' "archive event emitted"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"l1.attempt_archived"' "archive event emitted"
   echo "ok: attempt archive"
 }
 
 test_finding_id_normalization() {
   with_fixture
   local a b c
-  a="$(gluerun_finding_id 'Fix the `parser` bug')"
-  b="$(gluerun_finding_id '  fix   the parser BUG ')"
-  c="$(gluerun_finding_id 'a different finding')"
+  a="$(singular_finding_id 'Fix the `parser` bug')"
+  b="$(singular_finding_id '  fix   the parser BUG ')"
+  c="$(singular_finding_id 'a different finding')"
   assert_eq "$a" "$b" "finding id: whitespace/backticks/case normalize to same id"
   [[ "$a" != "$c" ]] || fail "finding id: different text must differ"
   [[ "$a" =~ ^f-[0-9a-f]{12}$ ]] || fail "finding id format: got $a"
@@ -240,20 +240,20 @@ test_finding_id_normalization() {
 
 test_findings_ledger_lifecycle() {
   with_fixture
-  local run_dir="$GLUERUN_RUNS_DIR/RUN-LEDGER-1" out id_a id_b ledger
+  local run_dir="$SINGULAR_RUNS_DIR/RUN-LEDGER-1" out id_a id_b ledger
   mkdir -p "$run_dir"
   ledger="$run_dir/findings-status.json"
-  id_a="$(gluerun_finding_id 'Parser drops nil input')"
-  id_b="$(gluerun_finding_id 'Handle empty payload')"
+  id_a="$(singular_finding_id 'Parser drops nil input')"
+  id_b="$(singular_finding_id 'Handle empty payload')"
 
   # Attempt 1: two new findings open.
   cat >"$run_dir/a1.json" <<EOF
 {"taskId":"TASK-0009","runId":"RUN-LEDGER-1","verdict":"needs-fix",
  "findings":["Parser drops nil input"],"requiredFixes":["Handle empty payload"]}
 EOF
-  out="$(gluerun_findings_ledger_update "$run_dir" 1 "$run_dir/a1.json")" || fail "ledger update 1"
+  out="$(singular_findings_ledger_update "$run_dir" 1 "$run_dir/a1.json")" || fail "ledger update 1"
   assert_eq "$out" "open=2 resolved=0 new=2" "ledger attempt 1 counts"
-  assert_eq "$(gluerun_json_field "$ledger" schema)" "gluerun.orchestration.findings-ledger.v0" "ledger schema"
+  assert_eq "$(singular_json_field "$ledger" schema)" "singular.orchestration.findings-ledger.v0" "ledger schema"
   assert_eq "$(python3 -c 'import json,sys; f={x["id"]:x for x in json.load(open(sys.argv[1]))["findings"]}; e=f[sys.argv[2]]; print(e["status"], e["source"], e["firstSeenAttempt"], e["lastSeenAttempt"])' "$ledger" "$id_a")" \
     "open finding 1 1" "ledger A initial"
   assert_eq "$(python3 -c 'import json,sys; f={x["id"]:x for x in json.load(open(sys.argv[1]))["findings"]}; print(f[sys.argv[2]]["source"])' "$ledger" "$id_b")" \
@@ -266,7 +266,7 @@ EOF
  "findings":[],"requiredFixes":["Handle empty payload"],
  "findingsStatus":{"$id_a":"resolved"}}
 EOF
-  out="$(gluerun_findings_ledger_update "$run_dir" 2 "$run_dir/a2.json")" || fail "ledger update 2"
+  out="$(singular_findings_ledger_update "$run_dir" 2 "$run_dir/a2.json")" || fail "ledger update 2"
   assert_eq "$out" "open=1 resolved=1 new=0" "ledger attempt 2 counts"
   assert_eq "$(python3 -c 'import json,sys; f={x["id"]:x for x in json.load(open(sys.argv[1]))["findings"]}; e=f[sys.argv[2]]; print(e["status"], e["resolvedAttempt"], e["resolvedBy"])' "$ledger" "$id_a")" \
     "resolved 2 auditor-status" "ledger A resolved by auditor status"
@@ -278,14 +278,14 @@ EOF
 {"taskId":"TASK-0009","runId":"RUN-LEDGER-1","verdict":"needs-fix",
  "findings":["parser  drops NIL input"],"requiredFixes":[]}
 EOF
-  out="$(gluerun_findings_ledger_update "$run_dir" 3 "$run_dir/a3.json")" || fail "ledger update 3"
+  out="$(singular_findings_ledger_update "$run_dir" 3 "$run_dir/a3.json")" || fail "ledger update 3"
   assert_eq "$out" "open=2 resolved=0 new=0" "ledger attempt 3 counts (reopen, no new)"
   assert_eq "$(python3 -c 'import json,sys; f={x["id"]:x for x in json.load(open(sys.argv[1]))["findings"]}; e=f[sys.argv[2]]; print(e["status"], e["resolvedAttempt"], e["resolvedBy"], e["firstSeenAttempt"], e["lastSeenAttempt"])' "$ledger" "$id_a")" \
     "open None None 1 3" "ledger A reopened (resolution cleared, firstSeen kept)"
 
   # Attempt 4: accepted verdict resolves everything still open.
   echo '{"taskId":"TASK-0009","runId":"RUN-LEDGER-1","verdict":"accepted"}' >"$run_dir/a4.json"
-  out="$(gluerun_findings_ledger_update "$run_dir" 4 "$run_dir/a4.json")" || fail "ledger update 4"
+  out="$(singular_findings_ledger_update "$run_dir" 4 "$run_dir/a4.json")" || fail "ledger update 4"
   assert_eq "$out" "open=0 resolved=2 new=0" "ledger attempt 4 counts"
   assert_eq "$(python3 -c 'import json,sys; f=json.load(open(sys.argv[1]))["findings"]; print(all(x["status"]=="resolved" for x in f), len(f))' "$ledger")" \
     "True 2" "ledger accepted resolves all open"
@@ -296,13 +296,13 @@ EOF
 
 test_implementer_capsule_scope_and_caps() {
   with_fixture
-  local run_dir="$GLUERUN_RUNS_DIR/RUN-CAP-1" capsule owned_json
+  local run_dir="$SINGULAR_RUNS_DIR/RUN-CAP-1" capsule owned_json
   mkdir -p "$run_dir"
   # Packet declares a DIFFERENT (stale) scope and >20 changed files.
   python3 - "$run_dir/packet.json" <<'PY'
 import json, sys
 packet = {
-    "schema": "gluerun.orchestration.state-packet.v0",
+    "schema": "singular.orchestration.state-packet.v0",
     "taskId": "TASK-0009", "runId": "RUN-CAP-1",
     "baseRef": "target", "branch": "agent/widget/TASK-0009",
     "ownedFiles": ["packet/stale.go"],
@@ -316,22 +316,22 @@ with open(sys.argv[1], "w") as f:
     json.dump(packet, f)
 PY
   owned_json="$(python3 -c 'import json; print(json.dumps([f"argv/own{i}.go" for i in range(25)]))')"
-  gluerun_capsule_write_implementer "$run_dir" 2 "$run_dir/packet.json" "deadbeef" \
+  singular_capsule_write_implementer "$run_dir" 2 "$run_dir/packet.json" "deadbeef" \
     "$owned_json" '["argv/forbidden.go"]' || fail "implementer capsule write"
   capsule="$run_dir/implementer-capsule.json"
   assert_file "$capsule" "implementer capsule"
-  assert_eq "$(gluerun_json_field "$capsule" role)" "implementer" "capsule role"
-  assert_eq "$(gluerun_json_field "$capsule" attempt)" "2" "capsule attempt"
-  assert_eq "$(gluerun_json_field "$capsule" headSha)" "deadbeef" "capsule headSha"
+  assert_eq "$(singular_json_field "$capsule" role)" "implementer" "capsule role"
+  assert_eq "$(singular_json_field "$capsule" attempt)" "2" "capsule attempt"
+  assert_eq "$(singular_json_field "$capsule" headSha)" "deadbeef" "capsule headSha"
   # Scope comes from ARGV (post-amend), capped at 20 — never from the packet.
   assert_eq "$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); print(len(c["ownedFiles"]), c["ownedFiles"][0], c["forbiddenFiles"])' "$capsule")" \
     "20 argv/own0.go ['argv/forbidden.go']" "capsule scope from argv + cap"
   assert_not_contains "$(cat "$capsule")" "packet/stale.go" "capsule must not use the packet's stale scope"
   assert_eq "$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); print(len(c["changedFiles"]), len(c["commands"]))' "$capsule")" \
     "20 20" "capsule list caps"
-  assert_eq "$(gluerun_json_field "$capsule" packetSha256)" "$(gluerun_sha256_file "$run_dir/packet.json")" "capsule packetSha256"
+  assert_eq "$(singular_json_field "$capsule" packetSha256)" "$(singular_sha256_file "$run_dir/packet.json")" "capsule packetSha256"
   # contentHash: sha256 over canonical JSON minus createdAt/contentHash/packetSha256.
-  assert_eq "$(gluerun_json_field "$capsule" contentHash)" \
+  assert_eq "$(singular_json_field "$capsule" contentHash)" \
     "$(python3 -c 'import hashlib,json,sys
 c=json.load(open(sys.argv[1]))
 h={k:v for k,v in c.items() if k not in ("createdAt","contentHash","packetSha256")}
@@ -342,19 +342,19 @@ print(hashlib.sha256(json.dumps(h,sort_keys=True,separators=(",",":")).encode())
 
 test_reviewer_capsule_tolerates_junk() {
   with_fixture
-  local run_dir="$GLUERUN_RUNS_DIR/RUN-REV-1" capsule
+  local run_dir="$SINGULAR_RUNS_DIR/RUN-REV-1" capsule
   mkdir -p "$run_dir"
   # Junk verdict: wrong types, missing arrays — must not crash.
   echo '{"verdict":42,"findings":"not-a-list","rationale":12345}' >"$run_dir/audit.json"
-  gluerun_capsule_write_reviewer "$run_dir" 1 "$run_dir/audit.json" "" "feedf00d" \
+  singular_capsule_write_reviewer "$run_dir" 1 "$run_dir/audit.json" "" "feedf00d" \
     || fail "reviewer capsule must tolerate junk verdict JSON"
   capsule="$run_dir/reviewer-capsule.json"
   assert_file "$capsule" "reviewer capsule"
-  assert_eq "$(gluerun_json_field "$capsule" role)" "reviewer" "reviewer role"
-  assert_eq "$(gluerun_json_field "$capsule" verdict)" "42" "junk verdict coerced to string"
-  assert_eq "$(gluerun_json_field "$capsule" diffRange)" "" "attempt-1 diffRange empty"
-  assert_eq "$(gluerun_json_field "$capsule" auditedHeadSha)" "feedf00d" "auditedHeadSha"
-  assert_eq "$(gluerun_json_field "$capsule" findingIds)" "[]" "junk findings -> empty findingIds"
+  assert_eq "$(singular_json_field "$capsule" role)" "reviewer" "reviewer role"
+  assert_eq "$(singular_json_field "$capsule" verdict)" "42" "junk verdict coerced to string"
+  assert_eq "$(singular_json_field "$capsule" diffRange)" "" "attempt-1 diffRange empty"
+  assert_eq "$(singular_json_field "$capsule" auditedHeadSha)" "feedf00d" "auditedHeadSha"
+  assert_eq "$(singular_json_field "$capsule" findingIds)" "[]" "junk findings -> empty findingIds"
 
   # A sane second attempt: prior head feeds diffRange; finding ids stable.
   cat >"$run_dir/audit.json" <<'EOF'
@@ -363,13 +363,13 @@ test_reviewer_capsule_tolerates_junk() {
  "evidenceReviewed":["runs/RUN-REV-1/gate-check.json"],"commandsRun":["git diff"],
  "rationale":"needs work"}
 EOF
-  gluerun_capsule_write_reviewer "$run_dir" 2 "$run_dir/audit.json" "feedf00d" "cafe1234" \
+  singular_capsule_write_reviewer "$run_dir" 2 "$run_dir/audit.json" "feedf00d" "cafe1234" \
     || fail "reviewer capsule attempt 2"
-  assert_eq "$(gluerun_json_field "$capsule" diffRange)" "feedf00d..cafe1234" "attempt-2 diffRange"
+  assert_eq "$(singular_json_field "$capsule" diffRange)" "feedf00d..cafe1234" "attempt-2 diffRange"
   # findings + requiredFixes normalize to the SAME id -> deduped to one.
-  assert_eq "$(gluerun_json_field "$capsule" findingIds)" "[\"$(gluerun_finding_id 'Parser drops nil input')\"]" \
+  assert_eq "$(singular_json_field "$capsule" findingIds)" "[\"$(singular_finding_id 'Parser drops nil input')\"]" \
     "findingIds use normalized finding ids"
-  assert_eq "$(gluerun_json_field "$capsule" auditSha256)" "$(gluerun_sha256_file "$run_dir/audit.json")" "auditSha256"
+  assert_eq "$(singular_json_field "$capsule" auditSha256)" "$(singular_sha256_file "$run_dir/audit.json")" "auditSha256"
   echo "ok: reviewer capsule"
 }
 
@@ -410,7 +410,7 @@ test_drive_preflight_blocks_bad_task() {
   with_fixture
   write_generic_task
   # Break the task: drop acceptance criteria AND blank the objective.
-  python3 - "$GLUERUN_TASKS_DIR/TASK-0001.md" <<'PY'
+  python3 - "$SINGULAR_TASKS_DIR/TASK-0001.md" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path).read()
@@ -423,10 +423,10 @@ PY
   assert_eq "$rc" "3" "driver preflight failure exits 3"
   assert_contains "$out" "task preflight failed" "driver echoes preflight refusal"
   assert_contains "$out" "missing objective" "driver echoes the reasons"
-  assert_eq "$(gluerun_task_field "$GLUERUN_TASKS_DIR/TASK-0001.md" status)" "blocked" "task parked as blocked"
-  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" '"l1.preflight_failed"' "preflight event emitted"
-  assert_contains "$(cat "$GLUERUN_ORCH_DIR/decisions.md")" "escalate-parked" "decision recorded"
-  [[ ! -d "$GLUERUN_LEASES_DIR" || -z "$(ls -A "$GLUERUN_LEASES_DIR" 2>/dev/null)" ]] \
+  assert_eq "$(singular_task_field "$SINGULAR_TASKS_DIR/TASK-0001.md" status)" "blocked" "task parked as blocked"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"l1.preflight_failed"' "preflight event emitted"
+  assert_contains "$(cat "$SINGULAR_ORCH_DIR/decisions.md")" "escalate-parked" "decision recorded"
+  [[ ! -d "$SINGULAR_LEASES_DIR" || -z "$(ls -A "$SINGULAR_LEASES_DIR" 2>/dev/null)" ]] \
     || fail "preflight failure must not create a lease"
   echo "ok: driver preflight wiring"
 }
@@ -438,9 +438,9 @@ PY
 fixprompt_fixture() {
   local rd="$1"
   mkdir -p "$rd"
-  printf 'BASE WORKER PROMPT BODY\nschema "gluerun.orchestration.state-packet.v0"\n' >"$rd/base-prompt.md"
+  printf 'BASE WORKER PROMPT BODY\nschema "singular.orchestration.state-packet.v0"\n' >"$rd/base-prompt.md"
   cat >"$rd/findings-status.json" <<'JSON'
-{"schema":"gluerun.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
+{"schema":"singular.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
  "findings":[
   {"id":"f-open1","text":"first open finding","source":"finding","status":"open","firstSeenAttempt":1,"lastSeenAttempt":2,"resolvedAttempt":null,"resolvedBy":null},
   {"id":"f-open2","text":"second open finding","source":"requiredFix","status":"open","firstSeenAttempt":1,"lastSeenAttempt":2,"resolvedAttempt":null,"resolvedBy":null},
@@ -449,7 +449,7 @@ fixprompt_fixture() {
  ],"updatedAt":"2026-01-01T00:00:00Z"}
 JSON
   cat >"$rd/implementer-capsule.json" <<'JSON'
-{"schema":"gluerun.orchestration.context-capsule.v0","role":"implementer","nextAction":"finish the parser","blockers":["bx"],"changedFiles":["src/widget.py"]}
+{"schema":"singular.orchestration.context-capsule.v0","role":"implementer","nextAction":"finish the parser","blockers":["bx"],"changedFiles":["src/widget.py"]}
 JSON
   printf 'gate noise line\nanother gate line\nGATE FAILED: regression\n' >"$rd/gate-check.log"
 }
@@ -459,7 +459,7 @@ test_fix_prompt_structured() {
   local rd="$FIXTURE_TMP/fixrun"
   fixprompt_fixture "$rd"
   local out="$rd/out.md"
-  gluerun_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 gate-red /dev/null \
+  singular_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 gate-red /dev/null \
     '["src/widget.py"]' '[]' || fail "fix prompt render must succeed"
   local body; body="$(cat "$out")"
   assert_contains "$body" "Authoritative findings" "fix: findings header"
@@ -474,7 +474,7 @@ test_fix_prompt_structured() {
   assert_contains "$body" "Address every Authoritative finding; do not relitigate resolved ones; stay in scope." "fix: closing line"
   # The base prompt's raw audit-JSON byte-tail must not leak into the appended
   # sections (we appended only the contract reference string, never a verdict).
-  assert_not_contains "$body" '"schema": "gluerun.orchestration.audit-verdict' "fix: no raw audit JSON"
+  assert_not_contains "$body" '"schema": "singular.orchestration.audit-verdict' "fix: no raw audit JSON"
   echo "ok: structured fix prompt"
 }
 
@@ -488,7 +488,7 @@ test_fix_prompt_section_cap() {
   python3 - "$rd/findings-status.json" <<'PY'
 import json, sys
 big = "X" * 6000
-json.dump({"schema":"gluerun.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
+json.dump({"schema":"singular.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
   "findings":[{"id":"f-big","text":big,"source":"finding","status":"open",
                "firstSeenAttempt":1,"lastSeenAttempt":1,"resolvedAttempt":None,"resolvedBy":None}],
   "updatedAt":"now"}, open(sys.argv[1],"w"))
@@ -497,7 +497,7 @@ PY
   # the per-finding 500-char cap; the oversized 6000-char finding is reduced to
   # the section budget and a truncation marker is appended.
   local out="$rd/out.md"
-  GLUERUN_CONTEXT_SECTION_MAX_CHARS=200 gluerun_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 gate-red /dev/null '["a"]' '[]' \
+  SINGULAR_CONTEXT_SECTION_MAX_CHARS=200 singular_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 gate-red /dev/null '["a"]' '[]' \
     || fail "cap render must succeed"
   # The findings section (everything between its header and the next header) must
   # be <= cap + marker and carry the truncation marker.
@@ -512,7 +512,7 @@ PY
 # (b-default) Section cap at its DEFAULT (4000). The lowered-cap test above proves
 # the mechanism fires; this proves the DEFAULT path works: enough open findings
 # (12 x ~400 chars each, > 4000 joined) trip the section-level truncation marker
-# at the default cap WITHOUT any GLUERUN_CONTEXT_SECTION_MAX_CHARS override.
+# at the default cap WITHOUT any SINGULAR_CONTEXT_SECTION_MAX_CHARS override.
 test_fix_prompt_section_cap_default() {
   with_fixture
   local rd="$FIXTURE_TMP/fixcapdef"
@@ -532,13 +532,13 @@ for i in range(12):
         "firstSeenAttempt": 1, "lastSeenAttempt": 1,
         "resolvedAttempt": None, "resolvedBy": None,
     })
-json.dump({"schema":"gluerun.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
+json.dump({"schema":"singular.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
   "findings": findings, "updatedAt":"now"}, open(sys.argv[1],"w"))
 PY
   local out="$rd/out.md"
-  # NO GLUERUN_CONTEXT_SECTION_MAX_CHARS override: exercise the 4000 default. The
+  # NO SINGULAR_CONTEXT_SECTION_MAX_CHARS override: exercise the 4000 default. The
   # with_fixture re-source already unset any inherited value.
-  gluerun_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 gate-red /dev/null '["a"]' '[]' \
+  singular_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 gate-red /dev/null '["a"]' '[]' \
     || fail "default-cap render must succeed"
   local section
   section="$(awk '/^### Authoritative findings/{f=1;next} /^### Evidence/{f=0} f' "$out")"
@@ -551,12 +551,12 @@ PY
   # carry the marker — proving the marker is the default cap firing, not always-on.
   python3 - "$rd/findings-status.json" <<'PY'
 import json, sys
-json.dump({"schema":"gluerun.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
+json.dump({"schema":"singular.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
   "findings":[{"id":"f-solo","text":"finding 00 "+("y"*390),"source":"finding","status":"open",
                "firstSeenAttempt":1,"lastSeenAttempt":1,"resolvedAttempt":None,"resolvedBy":None}],
   "updatedAt":"now"}, open(sys.argv[1],"w"))
 PY
-  gluerun_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 gate-red /dev/null '["a"]' '[]' \
+  singular_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 gate-red /dev/null '["a"]' '[]' \
     || fail "default-cap solo render must succeed"
   section="$(awk '/^### Authoritative findings/{f=1;next} /^### Evidence/{f=0} f' "$out")"
   assert_not_contains "$section" "section truncated" "default-cap: single small finding under 4000 is NOT truncated"
@@ -579,13 +579,13 @@ test_fix_prompt_audit_fallback_confinement() {
   # renderer can fold is the attempt_ctx audit JSON, via the audit-* fallback.
   local ctx="$rd/audit-ctx.json"
   cat >"$ctx" <<'EOF'
-{"schema":"gluerun.orchestration.audit-verdict.v0","taskId":"TASK-0001","runId":"R",
+{"schema":"singular.orchestration.audit-verdict.v0","taskId":"TASK-0001","runId":"R",
  "branch":"agent/widget/TASK-0001","verdict":"needs-fix","evidenceReviewed":[],
  "commandsRun":[],"findings":["LEAK-CANARY-finding-text"],
  "requiredFixes":["LEAK-CANARY-fix-text"],"rationale":"raw json that must stay in Evidence only"}
 EOF
   local out="$rd/out.md"
-  gluerun_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 audit-needs-fix "$ctx" '["a"]' '[]' \
+  singular_render_fix_prompt "$out" "$rd/base-prompt.md" "$rd" 2 audit-needs-fix "$ctx" '["a"]' '[]' \
     || fail "audit-fallback render must succeed"
   local body; body="$(cat "$out")"
 
@@ -597,13 +597,13 @@ EOF
   # The findings section must be EMPTY (no open ledger items) and must carry the
   # "(no open ledger findings recorded)" placeholder, NOT the raw audit JSON.
   assert_contains "$findings_section" "(no open ledger findings recorded)" "fold: empty findings placeholder"
-  assert_not_contains "$findings_section" '"schema":"gluerun.orchestration.audit-verdict' "fold: raw audit JSON must NOT leak into findings"
+  assert_not_contains "$findings_section" '"schema":"singular.orchestration.audit-verdict' "fold: raw audit JSON must NOT leak into findings"
   assert_not_contains "$findings_section" "LEAK-CANARY-finding-text" "fold: audit finding text must NOT leak into the authoritative findings block"
   assert_not_contains "$findings_section" "LEAK-CANARY-fix-text" "fold: audit fix text must NOT leak into the authoritative findings block"
 
   # The legacy tail fold MUST be in the Evidence section (that is where raw audit
   # context is intended to live for an audit-* failure).
-  assert_contains "$evidence_section" '"schema":"gluerun.orchestration.audit-verdict' "fold: raw audit JSON folded into Evidence"
+  assert_contains "$evidence_section" '"schema":"singular.orchestration.audit-verdict' "fold: raw audit JSON folded into Evidence"
   assert_contains "$evidence_section" "LEAK-CANARY-fix-text" "fold: audit fix text present in Evidence (the fold target)"
 
   # Confinement (the load-bearing claim): every occurrence of the raw audit schema
@@ -612,8 +612,8 @@ EOF
   # class-scoped tail, once via the legacy fallback fold) — both copies live under
   # Evidence, so the file-wide count must equal the Evidence-section count.
   local file_hits ev_hits
-  file_hits="$(grep -c '"schema":"gluerun.orchestration.audit-verdict' "$out" || true)"
-  ev_hits="$(printf '%s\n' "$evidence_section" | grep -c '"schema":"gluerun.orchestration.audit-verdict' || true)"
+  file_hits="$(grep -c '"schema":"singular.orchestration.audit-verdict' "$out" || true)"
+  ev_hits="$(printf '%s\n' "$evidence_section" | grep -c '"schema":"singular.orchestration.audit-verdict' || true)"
   [[ "$file_hits" -ge 1 ]] || fail "fold: expected the raw audit JSON to be folded at least once"
   assert_eq "$ev_hits" "$file_hits" "fold: every raw-audit-JSON occurrence is confined to the Evidence section"
   echo "ok: fix prompt audit-fallback confinement"
@@ -632,7 +632,7 @@ test_fix_prompt_legacy_byte_identical() {
   local attempt_failure="gate-red"
   local fix_hints
   fix_hints="The previous attempt failed with: $attempt_failure. Address it. Findings:"$'\n'"$(tail -c 3000 "$rd/attempt-ctx.log" 2>/dev/null || true)"
-  # Legacy rendering (GLUERUN_FIX_PROMPT_STRUCTURED=0 path of prepare_worker_prompt).
+  # Legacy rendering (SINGULAR_FIX_PROMPT_STRUCTURED=0 path of prepare_worker_prompt).
   local legacy_a="$rd/legacy-a.md"
   cp "$rd/base-prompt.md" "$legacy_a"
   { echo ""; echo "---"; echo "## Previous attempt feedback (fix these, stay in scope)"; echo ""; echo "$fix_hints"; } >>"$legacy_a"
@@ -645,7 +645,7 @@ test_fix_prompt_legacy_byte_identical() {
   # the env gate genuinely chooses between two distinct shapes.
   printf 'gate fail\n' >"$rd/gate-check.log"
   local structured="$rd/structured.md"
-  gluerun_render_fix_prompt "$structured" "$rd/base-prompt.md" "$rd" 2 gate-red "$rd/attempt-ctx.log" '["a"]' '[]' \
+  singular_render_fix_prompt "$structured" "$rd/base-prompt.md" "$rd" 2 gate-red "$rd/attempt-ctx.log" '["a"]' '[]' \
     || fail "structured render must succeed"
   if cmp -s "$legacy_a" "$structured"; then fail "structured output must differ from legacy"; fi
   assert_contains "$(cat "$structured")" "Current scope (authoritative" "legacy-test: structured is structured"
@@ -660,7 +660,7 @@ test_reaudit_n1_byte_identical() {
   mkdir -p "$rd"
   printf 'AUDITOR BASE PROMPT\nschema reference here\n' >"$rd/audit-base.md"
   local out="$rd/auditor-active-prompt.md"
-  gluerun_render_reaudit_prompt "$out" "$rd/audit-base.md" "$rd" 1 "deadbeef" "cafef00d" "$GLUERUN_ROOT" \
+  singular_render_reaudit_prompt "$out" "$rd/audit-base.md" "$rd" 1 "deadbeef" "cafef00d" "$SINGULAR_ROOT" \
     || fail "reaudit n=1 render must succeed"
   cmp "$rd/audit-base.md" "$out" || fail "reaudit n=1 must be byte-identical to base audit prompt"
   echo "ok: reaudit n=1 byte-identical"
@@ -684,14 +684,14 @@ test_reaudit_n2_diff() {
   local s2; s2="$(git -C "$wt" rev-parse HEAD)"
   printf '{"auditedHeadSha":"%s"}\n' "$s1" >"$rd/reviewer-capsule.json"
   cat >"$rd/findings-status.json" <<JSON
-{"schema":"gluerun.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
+{"schema":"singular.orchestration.findings-ledger.v0","taskId":"TASK-0001","runId":"R",
  "findings":[
   {"id":"f-o1","text":"open finding to verify","source":"finding","status":"open","firstSeenAttempt":1,"lastSeenAttempt":1},
   {"id":"f-r1","text":"resolved already","source":"finding","status":"resolved","firstSeenAttempt":1,"lastSeenAttempt":1,"resolvedAttempt":1,"resolvedBy":"auditor-status"}
  ],"updatedAt":"now"}
 JSON
   local out="$rd/auditor-active-prompt.md"
-  gluerun_render_reaudit_prompt "$out" "$rd/audit-base.md" "$rd" 2 "$s1" "$s2" "$wt" \
+  singular_render_reaudit_prompt "$out" "$rd/audit-base.md" "$rd" 2 "$s1" "$s2" "$wt" \
     || fail "reaudit n=2 render must succeed"
   local body; body="$(cat "$out")"
   assert_contains "$body" "$s1..$s2" "reaudit: diff range"
@@ -727,7 +727,7 @@ test_reaudit_history_rewritten() {
   printf '{"findings":[]}\n' >"$rd/findings-status.json"
   # prior_head=s2 is NOT an ancestor of new_head=s1 -> rewrite path.
   local out="$rd/auditor-active-prompt.md"
-  gluerun_render_reaudit_prompt "$out" "$rd/audit-base.md" "$rd" 2 "$s2" "$s1" "$wt" \
+  singular_render_reaudit_prompt "$out" "$rd/audit-base.md" "$rd" 2 "$s2" "$s1" "$wt" \
     || fail "reaudit rewrite render must succeed"
   local body; body="$(cat "$out")"
   assert_contains "$body" "History was rewritten" "reaudit: rewrite notice"
@@ -753,14 +753,14 @@ assert fs["type"] == "object", "findingsStatus must be object"
 assert fs["additionalProperties"]["enum"] == ["resolved", "still-open"], "wrong enum"
 # required[] untouched (findingsStatus NOT required).
 assert "findingsStatus" not in schema["required"], "findingsStatus must stay optional"
-assert schema["properties"]["schema"]["const"] == "gluerun.orchestration.audit-verdict.v0"
+assert schema["properties"]["schema"]["const"] == "singular.orchestration.audit-verdict.v0"
 # Replicate the engine's set/required validation (accept-existing-packet.sh).
 def validate(verdict):
     missing = [k for k in schema["required"] if k not in verdict]
     extra = sorted(set(verdict) - set(schema["properties"]))
     return missing, extra
 base = {
-    "schema": "gluerun.orchestration.audit-verdict.v0", "taskId": "TASK-0001",
+    "schema": "singular.orchestration.audit-verdict.v0", "taskId": "TASK-0001",
     "runId": "R", "branch": "b", "verdict": "needs-fix",
     "evidenceReviewed": [], "commandsRun": [], "findings": ["x"],
     "requiredFixes": [], "rationale": "r",
@@ -783,22 +783,22 @@ test_lease_update_owned() {
   # amend-scope widens the in-memory owned set; the lease must be rewritten so the
   # parallel-L1 scope-overlap guard (which reads lease.ownedFiles) sees the new scope.
   with_fixture
-  gluerun_lease_write TASK-0001 agent/widget/TASK-0001 widget l2-developer \
+  singular_lease_write TASK-0001 agent/widget/TASK-0001 widget l2-developer \
     "internal/widget/parser.go" running RUN-LEASE-1 "" "" "" \
     '["internal/widget/parser.go"]' '[]'
-  assert_eq "$(gluerun_lease_field TASK-0001 ownedFiles)" '["internal/widget/parser.go"]' \
+  assert_eq "$(singular_lease_field TASK-0001 ownedFiles)" '["internal/widget/parser.go"]' \
     "initial lease ownedFiles"
-  gluerun_lease_update_owned TASK-0001 '["internal/widget/parser.go","internal/widget/extra.go"]' \
+  singular_lease_update_owned TASK-0001 '["internal/widget/parser.go","internal/widget/extra.go"]' \
     || fail "lease_update_owned must succeed"
   local owned
-  owned="$(gluerun_lease_field TASK-0001 ownedFiles)"
+  owned="$(singular_lease_field TASK-0001 ownedFiles)"
   assert_contains "$owned" "internal/widget/extra.go" "lease ownedFiles widened with extra.go"
   assert_contains "$owned" "internal/widget/parser.go" "lease ownedFiles keeps parser.go"
   # Bad input is a no-op-with-error, never a crash that aborts the drive.
   local rc=0
-  gluerun_lease_update_owned TASK-0001 'not-json' 2>/dev/null || rc=$?
+  singular_lease_update_owned TASK-0001 'not-json' 2>/dev/null || rc=$?
   assert_eq "$rc" "1" "lease_update_owned rejects non-array JSON (rc 1, no crash)"
-  echo "ok: gluerun_lease_update_owned persists the widened amend-scope set"
+  echo "ok: singular_lease_update_owned persists the widened amend-scope set"
 }
 
 test_runner_auditor_prompt_keying() {
@@ -812,25 +812,25 @@ test_runner_auditor_prompt_keying() {
   # Functional: extract claude-run.sh's selector functions and confirm the auditor
   # env vars are honored for prompt_file=auditor-active-prompt.md.
   local fns="$FIXTURE_TMP/claude-selectors.sh"
-  awk '/^gluerun_claude_model\(\) \{/{m=1} m{print} /^\}/{if(m){m=0}}' "$SCRIPT_DIR/claude-run.sh" >"$fns"
-  awk '/^gluerun_claude_effort\(\) \{/{e=1} e{print} /^\}/{if(e){e=0}}' "$SCRIPT_DIR/claude-run.sh" >>"$fns"
+  awk '/^singular_claude_model\(\) \{/{m=1} m{print} /^\}/{if(m){m=0}}' "$SCRIPT_DIR/claude-run.sh" >"$fns"
+  awk '/^singular_claude_effort\(\) \{/{e=1} e{print} /^\}/{if(e){e=0}}' "$SCRIPT_DIR/claude-run.sh" >>"$fns"
   local model effort
-  model="$(GLUERUN_CLAUDE_AUDITOR_MODEL=audmodel bash -c '
+  model="$(SINGULAR_CLAUDE_AUDITOR_MODEL=audmodel bash -c '
     source "'"$fns"'"
-    gluerun_claude_model readonly /x/auditor-active-prompt.md')" || fail "model selector failed"
-  effort="$(GLUERUN_CLAUDE_AUDITOR_EFFORT=audeffort bash -c '
+    singular_claude_model readonly /x/auditor-active-prompt.md')" || fail "model selector failed"
+  effort="$(SINGULAR_CLAUDE_AUDITOR_EFFORT=audeffort bash -c '
     source "'"$fns"'"
-    gluerun_claude_effort readonly /x/auditor-active-prompt.md')" || fail "effort selector failed"
+    singular_claude_effort readonly /x/auditor-active-prompt.md')" || fail "effort selector failed"
   assert_eq "$model" "audmodel" "auditor-active-prompt.md keys to the auditor model"
   assert_eq "$effort" "audeffort" "auditor-active-prompt.md keys to the auditor effort"
 
   # codex-run.sh effort selector likewise honors the active prompt name.
   local cfn="$FIXTURE_TMP/codex-effort.sh"
-  awk '/^gluerun_codex_reasoning_effort\(\) \{/{c=1} c{print} /^\}/{if(c){c=0}}' "$SCRIPT_DIR/codex-run.sh" >"$cfn"
+  awk '/^singular_codex_reasoning_effort\(\) \{/{c=1} c{print} /^\}/{if(c){c=0}}' "$SCRIPT_DIR/codex-run.sh" >"$cfn"
   local ceffort
-  ceffort="$(GLUERUN_CODEX_AUDITOR_REASONING_EFFORT=codeff bash -c '
+  ceffort="$(SINGULAR_CODEX_AUDITOR_REASONING_EFFORT=codeff bash -c '
     source "'"$cfn"'"
-    gluerun_codex_reasoning_effort readonly /x/auditor-active-prompt.md')" || fail "codex effort selector failed"
+    singular_codex_reasoning_effort readonly /x/auditor-active-prompt.md')" || fail "codex effort selector failed"
   assert_eq "$ceffort" "codeff" "codex auditor-active-prompt.md keys to the auditor effort"
   echo "ok: runner auditor prompt keying"
 }

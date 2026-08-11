@@ -13,9 +13,9 @@ import subprocess
 from typing import Any
 
 
-CAPTURE_SCHEMA = "gluerun.orchestration.field-report-capture.v0"
-STATUS_SCHEMA = "gluerun.orchestration.run-status.v0"
-GATE_SCHEMA = "gluerun.orchestration.gate-result.v1"
+CAPTURE_SCHEMA = "singular.orchestration.field-report-capture.v0"
+STATUS_SCHEMA = "singular.orchestration.run-status.v0"
+GATE_SCHEMA = "singular.orchestration.gate-result.v1"
 DIAGNOSTIC_CATEGORIES = {
     "product-failure",
     "orchestration-failure",
@@ -123,7 +123,7 @@ def validate_and_materialize(
     assert set(events_meta["diagnosticCounts"]) == DIAGNOSTIC_CATEGORIES
 
     orchestration = repo / "docs" / "orchestration"
-    state = repo / ".gluerun-state"
+    state = repo / ".singular-state"
     (orchestration / "gates").mkdir(parents=True, exist_ok=True)
     state.mkdir(parents=True, exist_ok=True)
     dag_target = orchestration / "dag.v0.json"
@@ -153,19 +153,19 @@ def engine_environment(root: Path, repo: Path, dag_path: Path) -> dict[str, str]
     env = os.environ.copy()
     env.update(
         {
-            "GLUERUN_ROOT": str(repo),
-            "GLUERUN_ENGINE_HOME": str(root),
-            "GLUERUN_ENGINE_DIR": str(root / "engine"),
-            "GLUERUN_SCHEMA_DIR": str(root / "schemas"),
-            "GLUERUN_STATE_DIR": str(repo / ".gluerun-state"),
-            "GLUERUN_RUNS_DIR": str(repo / ".gluerun-state" / "runs"),
-            "GLUERUN_ORCH_DIR": str(repo / "docs" / "orchestration"),
-            "GLUERUN_DAG_FILE": str(dag_path),
-            "GLUERUN_GATES_DIR": str(repo / "docs" / "orchestration" / "gates"),
-            "GLUERUN_TASKS_DIR": str(repo / "docs" / "orchestration" / "tasks"),
-            "GLUERUN_LEASES_DIR": str(repo / ".gluerun-state" / "leases"),
-            "GLUERUN_WORKTREES_DIR": str(repo / ".worktrees"),
-            "GLUERUN_TARGET_BRANCH": "main",
+            "SINGULAR_ROOT": str(repo),
+            "SINGULAR_ENGINE_HOME": str(root),
+            "SINGULAR_ENGINE_DIR": str(root / "engine"),
+            "SINGULAR_SCHEMA_DIR": str(root / "schemas"),
+            "SINGULAR_STATE_DIR": str(repo / ".singular-state"),
+            "SINGULAR_RUNS_DIR": str(repo / ".singular-state" / "runs"),
+            "SINGULAR_ORCH_DIR": str(repo / "docs" / "orchestration"),
+            "SINGULAR_DAG_FILE": str(dag_path),
+            "SINGULAR_GATES_DIR": str(repo / "docs" / "orchestration" / "gates"),
+            "SINGULAR_TASKS_DIR": str(repo / "docs" / "orchestration" / "tasks"),
+            "SINGULAR_LEASES_DIR": str(repo / ".singular-state" / "leases"),
+            "SINGULAR_WORKTREES_DIR": str(repo / ".worktrees"),
+            "SINGULAR_TARGET_BRANCH": "main",
         }
     )
     return env
@@ -215,11 +215,11 @@ def replay_run_statuses(
         if expected.get("outcome"):
             command.extend(["--outcome", expected["outcome"]])
         write_env = dict(env)
-        write_env["GLUERUN_NOW"] = expected["at"]
+        write_env["SINGULAR_NOW"] = expected["at"]
         run(command, env=write_env)
         status_path = (
             repo
-            / ".gluerun-state"
+            / ".singular-state"
             / "runs"
             / expected["runId"]
             / "run-status.json"

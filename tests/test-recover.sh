@@ -52,14 +52,14 @@ printf '%s\n' '{"status":"running"}' >"$tmp/state/leases/TASK-0004.json"
 printf '%s\n' '{not-json' >"$tmp/state/leases/TASK-0005.json"
 
 out="$(
-  GLUERUN_ROOT="$tmp" \
-  GLUERUN_STATE_DIR="$tmp/state" \
-  GLUERUN_ORCH_DIR="$tmp/docs/orchestration" \
-  GLUERUN_TASKS_DIR="$tmp/docs/orchestration/tasks" \
-  GLUERUN_LEASES_DIR="$tmp/state/leases" \
-  GLUERUN_WORKTREES_DIR="$tmp/worktrees" \
-  GLUERUN_STALE_MINUTES=0 \
-  GLUERUN_RECOVERY_DECIDER="$tmp/fake-decider.sh" \
+  SINGULAR_ROOT="$tmp" \
+  SINGULAR_STATE_DIR="$tmp/state" \
+  SINGULAR_ORCH_DIR="$tmp/docs/orchestration" \
+  SINGULAR_TASKS_DIR="$tmp/docs/orchestration/tasks" \
+  SINGULAR_LEASES_DIR="$tmp/state/leases" \
+  SINGULAR_WORKTREES_DIR="$tmp/worktrees" \
+  SINGULAR_STALE_MINUTES=0 \
+  SINGULAR_RECOVERY_DECIDER="$tmp/fake-decider.sh" \
   "$SCRIPT_DIR/recover.sh" --scan
 )"
 

@@ -14,10 +14,10 @@ import tempfile
 from typing import Any
 
 
-REQUEST_SCHEMA = "gluerun.orchestration.human-gate.v0"
-APPROVAL_SCHEMA = "gluerun.orchestration.human-approval.v0"
-GATE_RESULT_V0 = "gluerun.orchestration.gate-result.v0"
-GATE_RESULT_V1 = "gluerun.orchestration.gate-result.v1"
+REQUEST_SCHEMA = "singular.orchestration.human-gate.v0"
+APPROVAL_SCHEMA = "singular.orchestration.human-approval.v0"
+GATE_RESULT_V0 = "singular.orchestration.gate-result.v0"
+GATE_RESULT_V1 = "singular.orchestration.gate-result.v1"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 QUESTION_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 REQUEST_FIELDS = {
@@ -67,16 +67,16 @@ def parse_time(value: str) -> dt.datetime:
 def utc_now(value: str | None = None) -> dt.datetime:
     """Current time, with an explicit argument winning over an injected clock.
 
-    GLUERUN_NOW exists because expiry evaluation reaches this module through two
+    SINGULAR_NOW exists because expiry evaluation reaches this module through two
     doors: the human-gate CLI, which takes --now, and dag.sh's frontier
     evaluation, which does not. Without an injectable clock a test fixture with
     a fixed expiresAt is a time bomb — it passes until the wall clock rolls past
     the expiry and then fails forever, with nothing in the diff to explain why.
-    Mirrors GLUERUN_CONTROL_COMMIT_NOW_EPOCH in reconcile.sh.
+    Mirrors SINGULAR_CONTROL_COMMIT_NOW_EPOCH in reconcile.sh.
     """
     if value:
         return parse_time(value)
-    injected = os.environ.get("GLUERUN_NOW")
+    injected = os.environ.get("SINGULAR_NOW")
     if injected:
         return parse_time(injected)
     return dt.datetime.now(dt.UTC)
@@ -109,7 +109,7 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def repo_schema_version(repo: Path) -> str:
     try:
-        config = read_json(repo / "gluerun.config.json")
+        config = read_json(repo / "singular.config.json")
     except (OSError, ValueError, json.JSONDecodeError):
         return ""
     value = config.get("schemaVersion")

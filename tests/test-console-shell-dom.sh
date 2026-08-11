@@ -8,8 +8,8 @@ set -uo pipefail
 # it prints a skip note and exits 0 (the DOM checks need a real renderer).
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GLUERUN="$ENGINE_HOME/cli/gluerun"
-export GLUERUN_ENGINE_HOME="$ENGINE_HOME"
+SINGULAR="$ENGINE_HOME/cli/singular"
+export SINGULAR_ENGINE_HOME="$ENGINE_HOME"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 skip() { echo "SKIP: test-console-shell-dom.sh — $*"; exit 0; }
@@ -23,8 +23,8 @@ if [[ ! -x "$CHROME" ]]; then
 fi
 [[ -n "$CHROME" && -x "$CHROME" ]] || skip "Google Chrome not found (headless DOM checks need it)"
 
-[[ -f "$GLUERUN" ]] || fail "cli/gluerun not present: $GLUERUN"
-[[ -f "$ENGINE_HOME/plugin/scripts/gluerun_graph_server.py" ]] \
+[[ -f "$SINGULAR" ]] || fail "cli/singular not present: $SINGULAR"
+[[ -f "$ENGINE_HOME/plugin/scripts/singular_graph_server.py" ]] \
   || fail "console server not present in this checkout"
 
 tmp="$(mktemp -d)"
@@ -32,7 +32,7 @@ root="$tmp/repo"
 cleanup() {
   # Kill the console the test started + any headless Chrome on our isolated
   # profile, then remove the fixture.
-  local p="$root/.gluerun-state/console.pid"
+  local p="$root/.singular-state/console.pid"
   [[ -f "$p" ]] && kill "$(tr -d '[:space:]' < "$p" 2>/dev/null)" 2>/dev/null || true
   pkill -9 -f "$tmp/chrome-profile" 2>/dev/null || true
   rm -rf "$tmp" 2>/dev/null || true
@@ -42,11 +42,11 @@ trap cleanup EXIT
 # --- fixture repo with an overflowing DAG --------------------------------------
 # 36 nodes so the N×N grid overflows the small 900×600 window on both axes and the
 # follow-diagonal toolbar is shown (hidden only when the grid fully fits).
-mkdir -p "$root/.gluerun-state" "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates"
+mkdir -p "$root/.singular-state" "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates"
 git -C "$root" init -q
 git -C "$root" checkout -q -b main
 git -C "$root" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
-cat >"$root/gluerun.config.json" <<'EOF'
+cat >"$root/singular.config.json" <<'EOF'
 {"schemaVersion": "v1", "targetBranch": "main"}
 EOF
 python3 - "$root/docs/orchestration/dag.v0.json" <<'PY'
@@ -61,13 +61,13 @@ for si, st in enumerate(stages):
                       "requiredCompletion": "done"})
         prev = nid                            # linear chain -> valid acyclic DAG
 with open(sys.argv[1], "w") as fh:
-    json.dump({"schema": "gluerun.orchestration.dag.v0", "nodes": nodes}, fh)
+    json.dump({"schema": "singular.orchestration.dag.v0", "nodes": nodes}, fh)
 PY
 cd "$root"
 
 # --- start the console server (free port, detached; killed in the trap) --------
-url="$("$GLUERUN" console --ensure)" \
-  || fail "console --ensure failed; log tail: $(tail -5 "$root/.gluerun-state/console.log" 2>/dev/null)"
+url="$("$SINGULAR" console --ensure)" \
+  || fail "console --ensure failed; log tail: $(tail -5 "$root/.singular-state/console.log" 2>/dev/null)"
 [[ "$url" == http://127.0.0.1:* ]] || fail "--ensure printed unexpected url: $url"
 
 # --- headless DOM capture at #plan/matrix --------------------------------------

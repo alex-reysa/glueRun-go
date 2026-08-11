@@ -2,7 +2,7 @@
 """Shared strict-profile provider argument policy.
 
 Provider arguments are always passed as literal argv. For providers where
-Gluerun supplies a native strict-isolation mode, they also must not replace or
+Singular supplies a native strict-isolation mode, they also must not replace or
 expand the host-owned sandbox, filesystem, tool, MCP, plugin, or approval
 boundary. Cursor and Grok are intentionally absent: their strict profiles
 require an operator-validated providerArgs isolation mechanism.

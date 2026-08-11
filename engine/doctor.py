@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Structured, read-only operator preflight for gluerun.
+"""Structured, read-only operator preflight for singular.
 
 The only write-like probe is a disposable detached Git worktree that is removed
 before the check returns. Model-cache mutation is available only through the
@@ -29,7 +29,7 @@ from capability_policy import strict_provider_arg_violation
 from provider_resolver import resolve_provider_bin
 
 
-CHECK_SCHEMA = "gluerun.doctor-report.v1"
+CHECK_SCHEMA = "singular.doctor-report.v1"
 REQUIRED_RUNNER_ARGUMENTS = {
     "--worktree",
     "--prompt-file",
@@ -55,12 +55,12 @@ PROVIDERS = {
     "grok": ("grok-run.sh", "grok"),
 }
 MODEL_ENV = {
-    "codex": ("GLUERUN_CODEX_MODEL", "gpt-5.5"),
-    "claude": ("GLUERUN_CLAUDE_MODEL", "claude-opus-4-8"),
-    "gemini": ("GLUERUN_GEMINI_MODEL", ""),
-    "opencode": ("GLUERUN_OPENCODE_MODEL", ""),
-    "cursor": ("GLUERUN_CURSOR_MODEL", ""),
-    "grok": ("GLUERUN_GROK_MODEL", "grok-build"),
+    "codex": ("SINGULAR_CODEX_MODEL", "gpt-5.5"),
+    "claude": ("SINGULAR_CLAUDE_MODEL", "claude-opus-4-8"),
+    "gemini": ("SINGULAR_GEMINI_MODEL", ""),
+    "opencode": ("SINGULAR_OPENCODE_MODEL", ""),
+    "cursor": ("SINGULAR_CURSOR_MODEL", ""),
+    "grok": ("SINGULAR_GROK_MODEL", "grok-build"),
 }
 MODEL_PATTERNS = {
     "codex": re.compile(r"^(?:gpt-|o[0-9]|codex-)"),
@@ -70,7 +70,7 @@ MODEL_PATTERNS = {
     "cursor": re.compile(r"^(?:auto$|gpt-|cursor-|claude-|sonnet|opus|o[0-9])"),
     "grok": re.compile(r"^grok-"),
 }
-# Verdict a validated GLUERUN_TEST_PID_PROBE_STATE stands in for. The state
+# Verdict a validated SINGULAR_TEST_PID_PROBE_STATE stands in for. The state
 # names match engine/ops.sh's ops_pid_probe_state so one seam vocabulary covers
 # both PID-probe surfaces; the verdicts are doctor's own.
 PID_PROBE_SEAM_VERDICTS = {
@@ -233,17 +233,17 @@ class Doctor:
                 "repo.present",
                 "warn",
                 "not in a git repo",
-                remediation="Run doctor from the repository gluerun will operate.",
+                remediation="Run doctor from the repository singular will operate.",
             )
             return
-        config_path = self.repo / "gluerun.config.json"
+        config_path = self.repo / "singular.config.json"
         if not config_path.is_file():
             self.add(
                 "repo.config",
                 "warn",
-                "no gluerun.config.json (run: gluerun init)",
+                "no singular.config.json (run: singular init)",
                 required_for=("configured-runs",),
-                remediation="Run gluerun init, then review the generated configuration.",
+                remediation="Run singular init, then review the generated configuration.",
             )
             return
         try:
@@ -263,7 +263,7 @@ class Doctor:
                 "fail",
                 f"repo config is invalid: {exc}",
                 required_for=("all-runs",),
-                remediation="Repair gluerun.config.json before starting the engine.",
+                remediation="Repair singular.config.json before starting the engine.",
             )
 
     def basic_checks(self) -> None:
@@ -283,7 +283,7 @@ class Doctor:
                 f"bash >= 4 required (found {self.bash_version}; {self.bash})",
                 required_for=("all-runs",),
                 remediation=(
-                    "Install Bash >= 4 and set GLUERUN_BASH_BIN to its absolute path "
+                    "Install Bash >= 4 and set SINGULAR_BASH_BIN to its absolute path "
                     "in the process or service environment."
                 ),
             )
@@ -331,7 +331,7 @@ class Doctor:
                 "fail",
                 f"engine has no engine/lib.sh: {self.engine}",
                 required_for=("all-runs",),
-                remediation="Install the pinned engine or correct GLUERUN_ENGINE_HOME.",
+                remediation="Install the pinned engine or correct SINGULAR_ENGINE_HOME.",
             )
         if self.repo:
             self.add(
@@ -356,8 +356,8 @@ class Doctor:
         An operator who cannot prove cleanup must not actuate unattended.
         """
         seam = ""
-        if os.environ.get("GLUERUN_TEST_PROCESS_CONTROL") == "1":
-            state = os.environ.get("GLUERUN_TEST_PROCESS_CONTROL_STATE", "")
+        if os.environ.get("SINGULAR_TEST_PROCESS_CONTROL") == "1":
+            state = os.environ.get("SINGULAR_TEST_PROCESS_CONTROL_STATE", "")
             if state in PROCESS_CONTROL_SEAM_STATES:
                 seam = state
         self.process_group_kill_check(seam)
@@ -520,8 +520,8 @@ source "$1/engine/lib.sh" >/dev/null || exit $?
 exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",":")))'
 '''
         env = dict(os.environ)
-        env["GLUERUN_ROOT"] = str(self.repo)
-        env["GLUERUN_ENGINE_HOME"] = str(self.engine)
+        env["SINGULAR_ROOT"] = str(self.repo)
+        env["SINGULAR_ENGINE_HOME"] = str(self.engine)
         result = command(
             [str(self.bash), "-c", script, "_", str(self.engine), sys.executable],
             cwd=self.repo,
@@ -534,7 +534,7 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
                 "fail",
                 f"selected runtime configuration failed to load: {detail}",
                 required_for=("all-runs",),
-                remediation="Repair the repository or local gluerun configuration.",
+                remediation="Repair the repository or local singular configuration.",
             )
             return
         try:
@@ -560,13 +560,13 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
     def config_source_conflict(self) -> None:
         """Two configuration sources, one silent winner (AXON-001).
 
-        `resources.maxConcurrent: 3` and `env: {"GLUERUN_MAX_CONCURRENT": "2"}`
+        `resources.maxConcurrent: 3` and `env: {"SINGULAR_MAX_CONCURRENT": "2"}`
         both describe the dispatch cap; the env{} map wins and nothing said so,
         so an operator who raised the structured field kept running at the old
         concurrency. Rather than re-deriving the structured->env mapping here
         (which would drift the moment engine/lib.sh gains a field), this asks
         the REAL generator what it emits and reads the duplicates: setv() in
-        gluerun_json_config_to_env appends in source order, structured fields
+        singular_json_config_to_env appends in source order, structured fields
         first and the `env` map last, and `eval` applies them in that order --
         so for any key emitted twice, the first occurrence is the structured
         field and the last is the env{} override that actually takes effect.
@@ -575,16 +575,16 @@ exec "$2" -c 'import json,os; print(json.dumps(dict(os.environ),separators=(",",
             return
         if not self.repo or not (self.engine / "engine/lib.sh").is_file():
             return
-        config_path = self.repo / "gluerun.config.json"
+        config_path = self.repo / "singular.config.json"
         if not config_path.is_file():
             return
         script = r'''
 source "$1/engine/lib.sh" >/dev/null 2>&1 || exit $?
-gluerun_json_config_to_env "$2"
+singular_json_config_to_env "$2"
 '''
         env = dict(os.environ)
-        env["GLUERUN_ROOT"] = str(self.repo)
-        env["GLUERUN_ENGINE_HOME"] = str(self.engine)
+        env["SINGULAR_ROOT"] = str(self.repo)
+        env["SINGULAR_ENGINE_HOME"] = str(self.engine)
         result = command(
             [str(self.bash), "-c", script, "_", str(self.engine), str(config_path)],
             cwd=self.repo,
@@ -599,7 +599,7 @@ gluerun_json_config_to_env "$2"
                     f"generator exited {result.returncode}"
                 ),
                 required_for=("all-runs",),
-                remediation="Repair gluerun.config.json (see runtime.config-load).",
+                remediation="Repair singular.config.json (see runtime.config-load).",
                 details={"detail": first_line(result.stderr or result.stdout)},
             )
             return
@@ -613,7 +613,7 @@ gluerun_json_config_to_env "$2"
                 "skip",
                 f"configuration export stream is unparseable: {exc}",
                 required_for=("all-runs",),
-                remediation="Inspect gluerun_json_config_to_env output by hand.",
+                remediation="Inspect singular_json_config_to_env output by hand.",
             )
             return
         emitted: dict[str, list[str]] = {}
@@ -640,7 +640,7 @@ gluerun_json_config_to_env "$2"
                 "envValue": effective,
                 "effective": effective,
             }
-            # A third source (gluerun.config.sh, .gluerun-state/config.local.sh)
+            # A third source (singular.config.sh, .singular-state/config.local.sh)
             # sources AFTER the eval, so it can beat the winner named here.
             if self.runtime_env.get(key, effective) != effective:
                 entry["runtimeDiffers"] = True
@@ -703,10 +703,10 @@ gluerun_json_config_to_env "$2"
     def pin_checks(self) -> None:
         """Which engine does this repo ask for, and is it the one being examined?
 
-        Doctor never read .gluerun-version at all: the only pin comparison in
+        Doctor never read .singular-version at all: the only pin comparison in
         the product lived in the CLI's legacy bash doctor, which nothing
-        dispatched to (PMGO-008). Mirrors repo_pin() in cli/gluerun --
-        .gluerun-version is authoritative, gluerun.config.json engineVersion is
+        dispatched to (PMGO-008). Mirrors repo_pin() in cli/singular --
+        .singular-version is authoritative, singular.config.json engineVersion is
         the fallback, and a disagreement is reported without changing which one
         wins.
         """
@@ -714,28 +714,28 @@ gluerun_json_config_to_env "$2"
             return
         try:
             file_pin = (
-                (self.repo / ".gluerun-version").read_text(encoding="utf-8").strip()
+                (self.repo / ".singular-version").read_text(encoding="utf-8").strip()
             )
         except OSError:
             file_pin = ""
         config_pin = str(self.config.get("engineVersion", "") or "").strip()
         self.repo_pin = file_pin or config_pin
         self.repo_pin_source = (
-            ".gluerun-version"
+            ".singular-version"
             if file_pin
-            else ("gluerun.config.json engineVersion" if config_pin else "")
+            else ("singular.config.json engineVersion" if config_pin else "")
         )
         if file_pin and config_pin and file_pin != config_pin:
             self.add(
                 "pin.sources",
                 "warn",
                 (
-                    f".gluerun-version ({file_pin}) and gluerun.config.json "
-                    f"engineVersion ({config_pin}) disagree; using .gluerun-version"
+                    f".singular-version ({file_pin}) and singular.config.json "
+                    f"engineVersion ({config_pin}) disagree; using .singular-version"
                 ),
                 required_for=("all-runs",),
                 remediation=(
-                    "Align gluerun.config.json engineVersion with .gluerun-version "
+                    "Align singular.config.json engineVersion with .singular-version "
                     "(or delete one of them)."
                 ),
                 details={
@@ -769,8 +769,8 @@ gluerun_json_config_to_env "$2"
                 "pin.sources",
                 "pass",
                 (
-                    "no engine pin declared (.gluerun-version, "
-                    "gluerun.config.json engineVersion)"
+                    "no engine pin declared (.singular-version, "
+                    "singular.config.json engineVersion)"
                 ),
                 required_for=("all-runs",),
                 details={"resolved": "", "source": ""},
@@ -787,7 +787,7 @@ gluerun_json_config_to_env "$2"
                 required_for=("all-runs",),
                 remediation=(
                     "Re-run doctor under the pinned engine, or repin the repo: "
-                    "gluerun update"
+                    "singular update"
                 ),
                 details={
                     "repoPin": self.repo_pin,
@@ -833,12 +833,12 @@ gluerun_json_config_to_env "$2"
                 f"schemaVersion mismatch: repo {repo_schema} vs engine {engine_schema}"
             )
             details: dict[str, Any] = {
-                "code": "GLUERUN_SCHEMA_MISMATCH",
+                "code": "SINGULAR_SCHEMA_MISMATCH",
                 "repoSchema": repo_schema,
                 "engineSchema": engine_schema,
                 "engineVersion": self.engine_version,
                 "repoPin": self.repo_pin,
-                "alternateRemediation": "Run: gluerun migrate",
+                "alternateRemediation": "Run: singular migrate",
             }
             if self.repo_pin:
                 message += (
@@ -852,14 +852,14 @@ gluerun_json_config_to_env "$2"
                 "fail",
                 message,
                 required_for=("all-runs",),
-                remediation="Run: gluerun setup",
+                remediation="Run: singular setup",
                 details=details,
             )
             # Everything downstream that reads a repository artifact reads it
             # through a schema this engine cannot interpret. Stop here.
             self.blocking = {
                 "checkId": "schema.version",
-                "code": "GLUERUN_SCHEMA_MISMATCH",
+                "code": "SINGULAR_SCHEMA_MISMATCH",
             }
         elif engine_schema:
             suffix = repo_schema or "not declared"
@@ -869,7 +869,7 @@ gluerun_json_config_to_env "$2"
                 status,
                 f"engine schema: {engine_schema}; repo schema: {suffix}",
                 required_for=("all-runs",),
-                remediation="" if repo_schema else "Declare schemaVersion in gluerun.config.json.",
+                remediation="" if repo_schema else "Declare schemaVersion in singular.config.json.",
             )
         # The bundle comparison mirrors the REPO's schemas against the engine's.
         # It used to half-suppress itself on a version mismatch by silently
@@ -1005,7 +1005,7 @@ gluerun_json_config_to_env "$2"
             )
         runner_schema = parsed.get(schema_dir / "runner-result.v0.schema.json")
         fixture = {
-            "schema": "gluerun.orchestration.runner-result.v0",
+            "schema": "singular.orchestration.runner-result.v0",
             "contractVersion": 1,
             "provider": "codex",
             "runId": "doctor-fixture",
@@ -1132,7 +1132,7 @@ gluerun_json_config_to_env "$2"
         # ESRCH is that proof, and only that verdict may suggest deleting the
         # file. Doctor itself never removes one in any verdict.
         for name in ("autonomate.pid", "console.pid"):
-            path = self.repo / ".gluerun-state" / name
+            path = self.repo / ".singular-state" / name
             if not path.is_file():
                 continue
             check_id = f"state.pidfile.{safe_slug(name)}"
@@ -1227,7 +1227,7 @@ gluerun_json_config_to_env "$2"
                 "fail",
                 f"legacy pmgo.* schema ids found: {', '.join(hits)}",
                 required_for=("all-runs",),
-                remediation="Run migrations/v0-to-v1.sh or gluerun migrate.",
+                remediation="Run migrations/v0-to-v1.sh or singular migrate.",
             )
         else:
             self.add(
@@ -1248,9 +1248,9 @@ gluerun_json_config_to_env "$2"
         quietly rewrite an operator's diagnosis. Same discipline, and the same
         state names, as ops_pid_probe_state in engine/ops.sh.
         """
-        if os.environ.get("GLUERUN_TEST_PID_PROBE") == "1":
+        if os.environ.get("SINGULAR_TEST_PID_PROBE") == "1":
             seam = PID_PROBE_SEAM_VERDICTS.get(
-                os.environ.get("GLUERUN_TEST_PID_PROBE_STATE", "")
+                os.environ.get("SINGULAR_TEST_PID_PROBE_STATE", "")
             )
             if seam:
                 return seam
@@ -1271,7 +1271,7 @@ gluerun_json_config_to_env "$2"
         if self.blocked("runner.selected"):
             return
         raw = self.runtime_env.get(
-            "GLUERUN_RUNNER", str(self.engine / "engine/codex-run.sh")
+            "SINGULAR_RUNNER", str(self.engine / "engine/codex-run.sh")
         )
         runner = Path(raw)
         if not runner.is_absolute() and self.repo:
@@ -1295,7 +1295,7 @@ gluerun_json_config_to_env "$2"
                 "fail",
                 f"selected runner is not executable: {self.runner}",
                 required_for=("provider-runs",),
-                remediation="Select an executable runner in gluerun.config.json.",
+                remediation="Select an executable runner in singular.config.json.",
             )
 
     def check_runner_contract(self) -> None:
@@ -1326,7 +1326,7 @@ gluerun_json_config_to_env "$2"
             arguments = set(contract.get("arguments", []))
             missing = sorted(REQUIRED_RUNNER_ARGUMENTS - arguments)
             errors = []
-            if contract.get("schema") != "gluerun.runner-contract.v1":
+            if contract.get("schema") != "singular.runner-contract.v1":
                 errors.append("wrong schema")
             if contract.get("version") != 1:
                 errors.append("wrong version")
@@ -1336,12 +1336,12 @@ gluerun_json_config_to_env "$2"
                 errors.append("forbidden orchestration argument --stage-dir")
             if (
                 contract.get("structuredResult")
-                != "gluerun.orchestration.runner-result.v0"
+                != "singular.orchestration.runner-result.v0"
             ):
                 errors.append("wrong structured result")
             if (
                 contract.get("structuredProviderError")
-                != "gluerun.orchestration.provider-error.v0"
+                != "singular.orchestration.provider-error.v0"
             ):
                 errors.append("wrong provider error")
             if errors:
@@ -1378,7 +1378,7 @@ gluerun_json_config_to_env "$2"
             )
             return
         command_name = PROVIDERS[self.provider][1]
-        # Shared with engine/lib.sh's gluerun_resolve_codex_bin and the console's
+        # Shared with engine/lib.sh's singular_resolve_codex_bin and the console's
         # Providers probe. All three must answer identically or the operator gets
         # a card describing an executable the orchestration is not running;
         # tests/test-provider-resolver-parity.sh pins bash against this module.
@@ -1394,7 +1394,7 @@ gluerun_json_config_to_env "$2"
                     f"{resolution.configured}",
                     required_for=("selected-provider",),
                     remediation=(
-                        "Set GLUERUN_CODEX_BIN to an absolute executable path. "
+                        "Set SINGULAR_CODEX_BIN to an absolute executable path. "
                         "An explicit broken path never falls back to PATH."
                     ),
                 )
@@ -1578,7 +1578,7 @@ gluerun_json_config_to_env "$2"
                 "skip",
                 f"Codex model inventory is unreadable: {exc}",
                 required_for=("selected-provider",),
-                remediation="Run gluerun doctor --repair-model-cache to preserve and refresh it.",
+                remediation="Run singular doctor --repair-model-cache to preserve and refresh it.",
                 dedupe_key="codex:model-cache",
             )
 
@@ -1677,7 +1677,7 @@ gluerun_json_config_to_env "$2"
                     required_for=("codex-runs",),
                     remediation=(
                         "Upgrade the selected Codex CLI or run "
-                        "gluerun doctor --repair-model-cache. Repair always keeps a backup."
+                        "singular doctor --repair-model-cache. Repair always keeps a backup."
                     ),
                     dedupe_key="codex:model-cache",
                     details={
@@ -1702,7 +1702,7 @@ gluerun_json_config_to_env "$2"
                 f"Codex model cache is invalid or unreadable: {exc}",
                 required_for=("codex-runs",),
                 remediation=(
-                    "Run gluerun doctor --repair-model-cache. The original is backed up "
+                    "Run singular doctor --repair-model-cache. The original is backed up "
                     "before Codex regenerates it."
                 ),
                 dedupe_key="codex:model-cache",
@@ -1711,7 +1711,7 @@ gluerun_json_config_to_env "$2"
     def disposable_worktree(self) -> None:
         if not self.repo:
             return
-        probe_parent = Path(tempfile.mkdtemp(prefix="gluerun-doctor-worktree-"))
+        probe_parent = Path(tempfile.mkdtemp(prefix="singular-doctor-worktree-"))
         probe = probe_parent / "checkout"
         result = command(
             ["git", "-C", str(self.repo), "worktree", "add", "--detach", str(probe), "HEAD"],
@@ -2197,7 +2197,7 @@ gluerun_json_config_to_env "$2"
             return
         config: Any = self.config.get("bootstrap")
         if config is None:
-            raw = self.runtime_env.get("GLUERUN_BOOTSTRAP_JSON", "")
+            raw = self.runtime_env.get("SINGULAR_BOOTSTRAP_JSON", "")
             if raw:
                 try:
                     config = json.loads(raw)
@@ -2207,7 +2207,7 @@ gluerun_json_config_to_env "$2"
                         "fail",
                         f"bootstrap configuration is invalid JSON: {exc}",
                         required_for=("worker-runs",),
-                        remediation="Repair GLUERUN_BOOTSTRAP_JSON.",
+                        remediation="Repair SINGULAR_BOOTSTRAP_JSON.",
                     )
                     return
         if config is None:
@@ -2224,13 +2224,13 @@ gluerun_json_config_to_env "$2"
                 "fail",
                 "bootstrap configuration must be an object",
                 required_for=("worker-runs",),
-                remediation="Repair the bootstrap section in gluerun.config.json.",
+                remediation="Repair the bootstrap section in singular.config.json.",
             )
             return
         # `required: true` with nothing to run is a no-op that reads like a
         # guarantee. The dry-run below validates it happily, so it reported as
-        # passing while bootstrapping nothing — and templates/gluerun.config.json
-        # shipped exactly this block, so every `gluerun init` inherited it.
+        # passing while bootstrapping nothing — and templates/singular.config.json
+        # shipped exactly this block, so every `singular init` inherited it.
         declared_commands = config.get("commands")
         has_commands = bool(config.get("command")) or (
             isinstance(declared_commands, list) and len(declared_commands) > 0
@@ -2250,9 +2250,9 @@ gluerun_json_config_to_env "$2"
 
         helper = self.engine / "engine/bootstrap-worktree.sh"
         env = dict(self.runtime_env)
-        env["GLUERUN_ROOT"] = str(self.repo)
-        env["GLUERUN_ENGINE_HOME"] = str(self.engine)
-        env["GLUERUN_BOOTSTRAP_JSON"] = compact(config)
+        env["SINGULAR_ROOT"] = str(self.repo)
+        env["SINGULAR_ENGINE_HOME"] = str(self.engine)
+        env["SINGULAR_BOOTSTRAP_JSON"] = compact(config)
         result = command(
             [str(helper), "--worktree", str(self.repo), "--dry-run"],
             cwd=self.repo,
@@ -2289,14 +2289,14 @@ gluerun_json_config_to_env "$2"
 
         A guard journal survives its run on purpose: SIGKILL executes no
         handler, so the journal is the only remaining record of what the tree
-        looked like before. `gluerun reconcile` sweeps the ones whose owner is
+        looked like before. `singular reconcile` sweeps the ones whose owner is
         gone. One that is still here with a dead owner means a repository is
         sitting in a state a read-only run left it in.
         """
         if not self.repo:
             return
-        base = self.repo / ".gluerun-state" / "readonly-guard"
-        raw = self.runtime_env.get("GLUERUN_STATE_DIR", "")
+        base = self.repo / ".singular-state" / "readonly-guard"
+        raw = self.runtime_env.get("SINGULAR_STATE_DIR", "")
         if raw:
             base = Path(raw) / "readonly-guard"
         if not base.is_dir():
@@ -2335,7 +2335,7 @@ gluerun_json_config_to_env "$2"
                 "warn",
                 f"{len(pending)} read-only guard journal(s) were never applied; a "
                 "worktree may still hold changes a read-only run made",
-                remediation="Run `gluerun reconcile` to apply them.",
+                remediation="Run `singular reconcile` to apply them.",
                 details={"journals": pending[:20], "inFlight": in_flight},
             )
         else:
@@ -2351,19 +2351,19 @@ gluerun_json_config_to_env "$2"
             return
         helper = self.engine / "engine/resource-plan.sh"
         env = dict(self.runtime_env)
-        env["GLUERUN_ROOT"] = str(self.repo)
+        env["SINGULAR_ROOT"] = str(self.repo)
         resources = self.config.get("resources", {})
         if isinstance(resources, dict):
             mappings = {
-                "diskReserveBytes": "GLUERUN_DISK_RESERVE_BYTES",
-                "estimatedWorktreeBytes": "GLUERUN_ESTIMATED_WORKTREE_BYTES",
+                "diskReserveBytes": "SINGULAR_DISK_RESERVE_BYTES",
+                "estimatedWorktreeBytes": "SINGULAR_ESTIMATED_WORKTREE_BYTES",
                 # engine/lib.sh maps resources.maxConcurrent to
-                # GLUERUN_MAX_CONCURRENT, and that is what reconcile.sh reads for
+                # SINGULAR_MAX_CONCURRENT, and that is what reconcile.sh reads for
                 # its dispatch cap. Mapping it to the L1 planner cap here made
                 # doctor evaluate a different slot count than the loop actually
                 # uses — L1 planners create no worktrees, so they never consume
                 # the worktree budget this check is about.
-                "maxConcurrent": "GLUERUN_MAX_CONCURRENT",
+                "maxConcurrent": "SINGULAR_MAX_CONCURRENT",
             }
             for source, target in mappings.items():
                 if source in resources and target not in os.environ:
@@ -2479,7 +2479,7 @@ gluerun_json_config_to_env "$2"
         dag.sh emits a precise diagnostic and exits non-zero; every caller in the
         loop discarded it and reported an empty frontier, so a single malformed
         gate file presented as "no work to do". The loop now says so (see
-        gluerun_dag_next_areas_json), and doctor is where an operator goes to ask
+        singular_dag_next_areas_json), and doctor is where an operator goes to ask
         why nothing is happening -- so it must answer that question directly.
         """
         if self.blocked("dag.evaluation"):
@@ -2506,7 +2506,7 @@ gluerun_json_config_to_env "$2"
                 "fail",
                 f"the DAG frontier cannot be evaluated: {detail}",
                 remediation=(
-                    "Run `gluerun next-areas` to see the full diagnostic and fix the "
+                    "Run `singular next-areas` to see the full diagnostic and fix the "
                     "offending node or gate file. Until then the loop reports an empty "
                     "frontier, which looks identical to having no ready work."
                 ),
@@ -2553,7 +2553,7 @@ gluerun_json_config_to_env "$2"
             return
 
         promoter = self._resolve_promoter()
-        shipped = self.engine / "gluerun-ext/promote-gate.sh"
+        shipped = self.engine / "singular-ext/promote-gate.sh"
         if promoter is not None and promoter.resolve() != shipped.resolve():
             # NEVER probe a promoter we did not ship. A consumer promoter takes a
             # bare NODE argument (tools/promote-gate.sh does), so `--registers X`
@@ -2604,8 +2604,8 @@ gluerun_json_config_to_env "$2"
             "warn",
             "; ".join(parts) + " — this graph cannot advance unattended",
             remediation=(
-                'Point "promoter" in gluerun.config.json at a promoter that registers '
-                "these nodes (a bare name resolves to <engine>/gluerun-ext/<name>.sh; "
+                'Point "promoter" in singular.config.json at a promoter that registers '
+                "these nodes (a bare name resolves to <engine>/singular-ext/<name>.sh; "
                 "tools/promote-gate.sh is a worked example), and/or set "
                 '"authority": "agent-review-allowed" on evaluation nodes you want '
                 "promoted from a gate-review.v0 record instead of by hand."
@@ -2619,12 +2619,12 @@ gluerun_json_config_to_env "$2"
 
     def _resolve_promoter(self):
         """The promoter the loop would actually use, env over config over default."""
-        configured = os.environ.get("GLUERUN_PROMOTER") or self.config.get("promoter")
+        configured = os.environ.get("SINGULAR_PROMOTER") or self.config.get("promoter")
         if not configured:
-            return self.engine / "gluerun-ext/promote-gate.sh"
+            return self.engine / "singular-ext/promote-gate.sh"
         candidate = Path(str(configured))
         if "/" not in str(configured):
-            candidate = self.engine / "gluerun-ext" / f"{configured}.sh"
+            candidate = self.engine / "singular-ext" / f"{configured}.sh"
         elif not candidate.is_absolute() and self.repo:
             candidate = self.repo / candidate
         return candidate if candidate.is_file() else None
@@ -2733,7 +2733,7 @@ gluerun_json_config_to_env "$2"
                 "warn",
                 "deployment-capable node is ready but no credential requirements are declared",
                 required_for=ready_ids,
-                remediation="Declare deploymentCredentials in gluerun.config.json.",
+                remediation="Declare deploymentCredentials in singular.config.json.",
             )
             return
         missing = [ident for ident, env_name in applicable if not self.runtime_env.get(env_name)]
@@ -2815,7 +2815,7 @@ gluerun_json_config_to_env "$2"
         if self.output_json:
             print(json.dumps(report, indent=2, sort_keys=False))
         else:
-            print("gluerun doctor")
+            print("singular doctor")
             markers = {"pass": "ok", "warn": "warn", "fail": "FAIL", "skip": "info"}
             for item in self.checks:
                 print(f"  {markers[item['status']]:<5} {item['message']} [{item['id']}]")
@@ -2825,7 +2825,7 @@ gluerun_json_config_to_env "$2"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Structured gluerun operator preflight")
+    parser = argparse.ArgumentParser(description="Structured singular operator preflight")
     parser.add_argument("--engine-home", required=True)
     parser.add_argument("--repo-root", default="")
     parser.add_argument("--bash", required=True)

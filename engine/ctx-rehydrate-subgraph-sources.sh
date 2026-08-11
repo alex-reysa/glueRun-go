@@ -7,7 +7,7 @@
 # path, so with it sourced the engine stays byte-identical to prior behavior
 # (OFF-parity).
 #
-#   gluerun_ctx_rehydrate_subgraph_sources [file]
+#   singular_ctx_rehydrate_subgraph_sources [file]
 #
 # Reads the SELECTED subgraph — a stream of canonical
 # schemas/context-graph.v0.schema.json NODE records (JSONL) — from stdin (or the
@@ -30,9 +30,9 @@
 #
 # The emitted source-class ids match the integrated assembler vocabulary EXACTLY
 # (the RANK in engine/ctx-rehydrate.sh, the same vocabulary as the run-dir
-# resolver gluerun_ctx_rehydrate_sources in engine/ctx-rehydrate-sources.sh), so
+# resolver singular_ctx_rehydrate_sources in engine/ctx-rehydrate-sources.sh), so
 # the resolver stdout composes directly as arguments to
-# gluerun_ctx_rehydrate_packet / gluerun_ctx_rehydrate_manifest with caps and
+# singular_ctx_rehydrate_packet / singular_ctx_rehydrate_manifest with caps and
 # manifest UNCHANGED.
 #
 # Order: PRESERVES the input record order (the selection order emitted by the
@@ -48,15 +48,15 @@
 # appends no events; and never exits non-zero on well-formed input (empty input
 # yields no specs, non-fatal). It confers NO independence and records nothing as
 # `authoritative` — the `rehydrate` strategy remains tainted per
-# gluerun_ctx_route_strategy_tainted. It only maps selected records to specs.
+# singular_ctx_route_strategy_tainted. It only maps selected records to specs.
 
-# gluerun_ctx_rehydrate_subgraph_sources [file]
-gluerun_ctx_rehydrate_subgraph_sources() {
+# singular_ctx_rehydrate_subgraph_sources [file]
+singular_ctx_rehydrate_subgraph_sources() {
   local src="${1-}"
   if [[ -n "$src" ]]; then
-    _gluerun_ctx_rehydrate_subgraph_py <"$src"
+    _singular_ctx_rehydrate_subgraph_py <"$src"
   else
-    _gluerun_ctx_rehydrate_subgraph_py
+    _singular_ctx_rehydrate_subgraph_py
   fi
 }
 
@@ -65,7 +65,7 @@ gluerun_ctx_rehydrate_subgraph_sources() {
 # spec per durable-class selected node, in INPUT order. The script is passed via
 # `-c` (NOT a heredoc) so python3 stdin stays bound to the node-record stream. No
 # I/O beyond reading stdin and writing stdout; no side effects.
-_gluerun_ctx_rehydrate_subgraph_py() {
+_singular_ctx_rehydrate_subgraph_py() {
   python3 -c '
 import json
 import sys

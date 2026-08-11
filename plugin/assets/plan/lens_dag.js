@@ -33,7 +33,7 @@ const COLUMN_W = 260;    // horizontal stride between rank columns
 const MARGIN_X = 40;     // left/right canvas pad
 const CARD_TOP = 56;     // first card top (below the wave ruler)
 const RULER_TOP = 12;    // wave-ruler row
-const FIT_KEY = "gluerun.plan.dag.fit";
+const FIT_KEY = "singular.plan.dag.fit";
 
 let pane = null;
 let sigLast = null;

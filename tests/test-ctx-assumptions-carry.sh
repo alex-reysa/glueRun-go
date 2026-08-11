@@ -2,12 +2,12 @@
 # Covers the pure per-attempt carry brick of the per-run assumption ledger
 # (stage S4-context-packets, node assumption-ledger). `engine/ctx-assumptions-carry.sh`
 # ships a PURE, present-but-uncalled helper
-#   gluerun_ctx_assumptions_carry <prior-ledger-json> <seed-ledger-json>
+#   singular_ctx_assumptions_carry <prior-ledger-json> <seed-ledger-json>
 # that merges the prior attempt's ledger into the current attempt's fresh seed so a
 # host-observed `violated` status carries forward across retries — like an open finding
 # that persists until addressed — while the current seed stays the STRUCTURAL AUTHORITY.
 # It reads BOTH JSON arguments (no file I/O, no events) and prints a ledger JSON on
-# stdout whose `schema` const is `gluerun.orchestration.ctx-assumptions.v0` with an
+# stdout whose `schema` const is `singular.orchestration.ctx-assumptions.v0` with an
 # `assumptions` array in `id` order.
 #
 #   - STRUCTURAL AUTHORITY = the seed: the output has EXACTLY the seed's assumption ids,
@@ -32,14 +32,14 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 # Invoke the real engine helper in an isolated subshell so lib.sh's `set -e` and the
-# sourced ctx-*.sh files never contaminate this test process. GLUERUN_ROOT is a scratch
+# sourced ctx-*.sh files never contaminate this test process. SINGULAR_ROOT is a scratch
 # dir; the function must NOT touch it (it is a pure JSON->JSON transform). JSON is passed
 # as positional args to avoid any quoting surprises.
 carry() {
   local prior="$1" seed="$2"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_assumptions_carry "$1" "$2"
+    singular_ctx_assumptions_carry "$1" "$2"
   ' _ "$prior" "$seed"
 }
 
@@ -54,9 +54,9 @@ PY
 
 # --- Fixtures ---------------------------------------------------------------
 
-# A fresh seed exactly in the shape gluerun_ctx_assumptions_seed emits for the current
+# A fresh seed exactly in the shape singular_ctx_assumptions_seed emits for the current
 # attempt. This is the per-run structural authority and is unchanged between attempts.
-SEED='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+SEED='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"validated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
@@ -65,25 +65,25 @@ SEED='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
 # --- Case 1: sticky violation carries forward across the retry ---------------
 # The prior attempt observed A2 violated (host-derived). A fresh seed re-seeds A2 as
 # `validated`, but the violation must carry forward like an open finding until addressed.
-PRIOR_A2_VIOLATED='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+PRIOR_A2_VIOLATED='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"violated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
 ]}'
 out1="$(carry "$PRIOR_A2_VIOLATED" "$SEED")" || fail "case1: carry exited non-zero"
-expected1='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+expected1='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"violated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
 ]}'
 json_eq "$out1" "$expected1" || fail "case1: sticky violation not carried; got [$out1]"
-assert_contains "$out1" '"gluerun.orchestration.ctx-assumptions.v0"' "case1: schema const present"
+assert_contains "$out1" '"singular.orchestration.ctx-assumptions.v0"' "case1: schema const present"
 assert_contains "$out1" '"assumptions"' "case1: assumptions array present"
 
 # --- Case 2: seed stays the structural authority for claim/basis ------------
 # The prior ledger carries a DIFFERENT claim/basis for A2 (stale from a prior packet).
 # Carry keeps A2 violated (sticky) but claim/basis MUST come from the current seed.
-PRIOR_STALE='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+PRIOR_STALE='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A2","status":"violated","claim":"STALE CLAIM","basis":"STALE BASIS"}
 ]}'
 out2="$(carry "$PRIOR_STALE" "$SEED")" || fail "case2: carry exited non-zero"
@@ -92,7 +92,7 @@ json_eq "$out2" "$expected1" || fail "case2: seed not structural authority; got 
 # --- Case 3: ids only in the prior are NOT resurrected ----------------------
 # A9 exists (violated) only in the prior; the seed never declares it. Output has exactly
 # the seed's ids A1,A2,A3 — A9 is dropped.
-PRIOR_EXTRA='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+PRIOR_EXTRA='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A9","status":"violated","claim":"gone next attempt","basis":"removed from packet"}
 ]}'
 out3="$(carry "$PRIOR_EXTRA" "$SEED")" || fail "case3: carry exited non-zero"
@@ -107,7 +107,7 @@ PY
 # --- Case 4: non-violated prior status does NOT override the seed status -----
 # A1 was `validated` in the prior but is `open` in the fresh seed. Only `violated` is
 # sticky; every other prior status is discarded in favor of the seed's status.
-PRIOR_NONVIOLATED='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+PRIOR_NONVIOLATED='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"validated","claim":"runtime is node 20","basis":"package.json engines field"}
 ]}'
 out4="$(carry "$PRIOR_NONVIOLATED" "$SEED")" || fail "case4: carry exited non-zero"
@@ -118,17 +118,17 @@ out5a="$(carry '' "$SEED")" || fail "case5a: carry exited non-zero"
 json_eq "$out5a" "$SEED" || fail "case5a: empty-string prior not identity; got [$out5a]"
 out5b="$(carry '{}' "$SEED")" || fail "case5b: carry exited non-zero"
 json_eq "$out5b" "$SEED" || fail "case5b: {} prior not identity; got [$out5b]"
-EMPTY_LEDGER='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[]}'
+EMPTY_LEDGER='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[]}'
 out5c="$(carry "$EMPTY_LEDGER" "$SEED")" || fail "case5c: carry exited non-zero"
 json_eq "$out5c" "$SEED" || fail "case5c: empty-assumptions prior not identity; got [$out5c]"
 
 # --- Case 6: new-in-seed ids keep their seed status -------------------------
 # The prior only knows A1 (violated). A2/A3 are new in the seed and keep seed status.
-PRIOR_A1='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+PRIOR_A1='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"violated","claim":"runtime is node 20","basis":"package.json engines field"}
 ]}'
 out6="$(carry "$PRIOR_A1" "$SEED")" || fail "case6: carry exited non-zero"
-expected6='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+expected6='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"violated","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"validated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
@@ -156,13 +156,13 @@ out9="$(carry "$PRIOR_A2_VIOLATED" "$EMPTY_LEDGER")" || fail "case9: carry exite
 json_eq "$out9" "$EMPTY_LEDGER" || fail "case9: empty-seed carry mismatch; got [$out9]"
 
 # --- Case 10: pure -> writes nothing to the filesystem ----------------------
-# Run with GLUERUN_ROOT pointing at an empty scratch dir and assert it stays empty:
+# Run with SINGULAR_ROOT pointing at an empty scratch dir and assert it stays empty:
 # the function performs no file I/O and emits no events.
 pure="$tmp/pure"
 mkdir -p "$pure"
-GLUERUN_ROOT="$pure" bash -c '
+SINGULAR_ROOT="$pure" bash -c '
   source "'"$LIB"'"
-  gluerun_ctx_assumptions_carry "$1" "$2"
+  singular_ctx_assumptions_carry "$1" "$2"
 ' _ "$PRIOR_A2_VIOLATED" "$SEED" >/dev/null 2>&1 || fail "case10: carry exited non-zero"
 n="$(find "$pure" -type f | wc -l | tr -d ' ')"
 [[ "$n" -eq 0 ]] || fail "case10: carry wrote $n file(s); must be a pure transform"

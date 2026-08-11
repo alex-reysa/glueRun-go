@@ -14,7 +14,7 @@
 # Both functions are PURE predicates: they print exactly one line, append no
 # events, write no files, and never exit non-zero.
 
-# gluerun_ctx_route_strategy_tainted <strategy>
+# singular_ctx_route_strategy_tainted <strategy>
 #
 # Classifies a resume strategy for the tainted=1 flag the spine will stamp:
 #   resume, rehydrate           -> 1 (tainted; carries prior-session state)
@@ -22,7 +22,7 @@
 #   anything else (incl. empty) -> 1 (fail closed; an unrecognized strategy is
 #                                     treated as tainted so it cannot slip past
 #                                     the independence pin)
-gluerun_ctx_route_strategy_tainted() {
+singular_ctx_route_strategy_tainted() {
   case "$1" in
     resume|rehydrate)     printf '1\n' ;;
     continue|fork|fresh)  printf '0\n' ;;
@@ -31,7 +31,7 @@ gluerun_ctx_route_strategy_tainted() {
   return 0
 }
 
-# gluerun_ctx_route_independence_admit <strategy> <role> <step>
+# singular_ctx_route_independence_admit <strategy> <role> <step>
 #
 # Pins the independence-required steps (the fixed documented set: final-audit,
 # paired-audit) to `fresh`. For those steps:
@@ -40,7 +40,7 @@ gluerun_ctx_route_strategy_tainted() {
 #   any other non-fresh  -> refuse pinned-fresh
 # For any non-independence-required step -> admit. The <role> is accepted for the
 # call shape and future per-role pins; the current independence set is role-generic.
-gluerun_ctx_route_independence_admit() {
+singular_ctx_route_independence_admit() {
   local strategy="$1" role="$2" step="$3"
   : "$role"  # accepted for call shape; the documented independence set is role-generic
 
@@ -51,7 +51,7 @@ gluerun_ctx_route_independence_admit() {
 
   # Independence-required step: only `fresh` is admissible. resume/rehydrate are
   # tainted; everything else is refused because the step is pinned to fresh. No
-  # GLUERUN_* knob is consulted here — the pin is structural.
+  # SINGULAR_* knob is consulted here — the pin is structural.
   case "$strategy" in
     fresh)              printf 'admit\n' ;;
     resume|rehydrate)   printf 'refuse tainted\n' ;;

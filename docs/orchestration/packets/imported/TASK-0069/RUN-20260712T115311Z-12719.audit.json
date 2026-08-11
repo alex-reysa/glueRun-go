@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0069",
   "runId": "RUN-20260712T115311Z-12719",
   "branch": "agent/routing/TASK-0069-rehydrate-e2e-guard",
@@ -25,7 +25,7 @@
     "git diff --name-only cecbb9c..6bba741 (=> tests/test-ctx-rehydrate-e2e.sh only)",
     "git merge-base --is-ancestor cecbb9c 6bba741 (=> ancestor ok)",
     "git rev-parse HEAD (=> 6bba7418e6f65cc413c98767a15a751c05a209b3)",
-    "GLUERUN_E2E_DROP_CLASS=critique-record bash tests/test-ctx-rehydrate-e2e.sh (=> exit 1, red reproduced)",
+    "SINGULAR_E2E_DROP_CLASS=critique-record bash tests/test-ctx-rehydrate-e2e.sh (=> exit 1, red reproduced)",
     "bash tests/test-ctx-rehydrate-e2e.sh (=> exit 0, green reproduced)",
     "bash tests/test-ctx-rehydrate-e2e.sh && bash tests/test-engine-clean.sh (=> exit 0, regression reproduced)"
   ],
@@ -38,6 +38,6 @@
     "Gate exit 0, secret-scan clean, worker-packet-validation ok."
   ],
   "requiredFixes": [],
-  "rationale": "Accepted with evidence. The committed diff stays strictly within the single owned file tests/test-ctx-rehydrate-e2e.sh and modifies no engine, schema, or other forbidden file (verified via git diff --name-only and scope-check.log). Test-first red/green/regression evidence is present and was independently reproduced: red exits 1 exactly on the pinned full-set assertion when critique-record is dropped (proving the guard bites and is non-tautological), green exits 0 with all composed walks A-F passing through the real driver, and the regression gate (e2e + engine-clean) exits 0. gate-check.json records exitCode 0. Every acceptance criterion \u2014 all-classes rank-ordered packet, manifest completeness/sha256/injected<->recorded consistency, quarantine exclusion via the single gluerun_ctx_artifact_exclude authority, byte determinism, OFF-parity fresh, and rehydrate-tainted independence-unreachability \u2014 is asserted in one deterministic walk and verified green. No hidden scope expansion, no branch drift (base is ancestor of head, tree clean), no failing or skipped commands, and no glueRun-go foundation violation (engine/schemas remain GLUERUN-symbol-free). No fixes required.",
+  "rationale": "Accepted with evidence. The committed diff stays strictly within the single owned file tests/test-ctx-rehydrate-e2e.sh and modifies no engine, schema, or other forbidden file (verified via git diff --name-only and scope-check.log). Test-first red/green/regression evidence is present and was independently reproduced: red exits 1 exactly on the pinned full-set assertion when critique-record is dropped (proving the guard bites and is non-tautological), green exits 0 with all composed walks A-F passing through the real driver, and the regression gate (e2e + engine-clean) exits 0. gate-check.json records exitCode 0. Every acceptance criterion \u2014 all-classes rank-ordered packet, manifest completeness/sha256/injected<->recorded consistency, quarantine exclusion via the single singular_ctx_artifact_exclude authority, byte determinism, OFF-parity fresh, and rehydrate-tainted independence-unreachability \u2014 is asserted in one deterministic walk and verified green. No hidden scope expansion, no branch drift (base is ancestor of head, tree clean), no failing or skipped commands, and no singular foundation violation (engine/schemas remain SINGULAR-symbol-free). No fixes required.",
   "findingsStatus": {}
 }

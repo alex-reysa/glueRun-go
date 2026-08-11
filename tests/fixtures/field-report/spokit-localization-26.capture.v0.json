@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.field-report-capture.v0",
+  "schema": "singular.orchestration.field-report-capture.v0",
   "capturedAt": "2026-07-24T20:55:54Z",
   "source": {
     "engineVersion": "0.11.1",

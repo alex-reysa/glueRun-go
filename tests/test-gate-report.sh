@@ -9,13 +9,13 @@ command_sha="$(printf '%s' "$command" | shasum -a 256 | awk '{print $1}')"
 printf 'known failure\n' >"$tmp/gate.log"
 cat >"$tmp/observation.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.gate-observation.v0",
+  "schema": "singular.orchestration.gate-observation.v0",
   "failures": [{"signature": "known-1", "title": "known failure"}]
 }
 JSON
 cat >"$tmp/baseline.json" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-baseline.v0",
+  "schema": "singular.orchestration.gate-baseline.v0",
   "commandSha256": "$command_sha",
   "failures": [
     {"signature": "known-1", "title": "known failure"},
@@ -109,12 +109,12 @@ fi
 # --require-observation for every gate, and gate_report.py raises before it
 # reads the exit code, so a green suite normalized to infrastructure-broken,
 # which the decider parks unconditionally. Nothing shipped or documented an
-# emitter: `gluerun init` suggests `npm test && npm run build`, which cannot
+# emitter: `singular init` suggests `npm test && npm run build`, which cannot
 # satisfy it. Every task in every fresh v2 repo parked on a passing gate.
 strict_missing_rc=0
-GLUERUN_ROOT="$ROOT" \
-GLUERUN_STATE_DIR="$tmp/state" \
-GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
+SINGULAR_ROOT="$ROOT" \
+SINGULAR_STATE_DIR="$tmp/state" \
+SINGULAR_EVENTS_FILE="$tmp/state/events.ndjson" \
   "$ROOT/engine/gate-check.sh" RUN-strict-missing \
     --task-id TASK-0001 -- true >"$tmp/strict-missing.out" 2>&1 \
   || strict_missing_rc=$?
@@ -137,10 +137,10 @@ PY
 # must still fail closed rather than silently treat acknowledged failures as
 # absent. This is the invariant the blanket requirement was over-applying.
 baseline_missing_rc=0
-GLUERUN_ROOT="$ROOT" \
-GLUERUN_STATE_DIR="$tmp/state" \
-GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
-GLUERUN_GATE_BASELINE_FILE="$tmp/baseline.json" \
+SINGULAR_ROOT="$ROOT" \
+SINGULAR_STATE_DIR="$tmp/state" \
+SINGULAR_EVENTS_FILE="$tmp/state/events.ndjson" \
+SINGULAR_GATE_BASELINE_FILE="$tmp/baseline.json" \
   "$ROOT/engine/gate-check.sh" RUN-baseline-missing \
     --task-id TASK-0001 -- true >"$tmp/baseline-missing.out" 2>&1 \
   || baseline_missing_rc=$?
@@ -161,7 +161,7 @@ PY
 # Explicit legacy schema mode retains the v0 exit-code-only adapter while old
 # consumers migrate; strict observation enforcement is a v2 write policy.
 mkdir -p "$tmp/legacy"
-cat >"$tmp/legacy/gluerun.config.json" <<'JSON'
+cat >"$tmp/legacy/singular.config.json" <<'JSON'
 {
   "schemaVersion": "v1",
   "targetBranch": "main",
@@ -169,10 +169,10 @@ cat >"$tmp/legacy/gluerun.config.json" <<'JSON'
 }
 JSON
 legacy_rc=0
-GLUERUN_ROOT="$tmp/legacy" \
-GLUERUN_ENGINE_HOME="$ROOT" \
-GLUERUN_STATE_DIR="$tmp/legacy-state" \
-GLUERUN_EVENTS_FILE="$tmp/legacy-state/events.ndjson" \
+SINGULAR_ROOT="$tmp/legacy" \
+SINGULAR_ENGINE_HOME="$ROOT" \
+SINGULAR_STATE_DIR="$tmp/legacy-state" \
+SINGULAR_EVENTS_FILE="$tmp/legacy-state/events.ndjson" \
   "$ROOT/engine/gate-check.sh" RUN-legacy \
     --task-id TASK-0001 -- true >"$tmp/legacy.out" 2>&1 \
   || legacy_rc=$?
@@ -188,15 +188,15 @@ GLUERUN_EVENTS_FILE="$tmp/legacy-state/events.ndjson" \
 # failure has disappeared from a valid strict observation.
 cat >"$tmp/resolved-gate.sh" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' '{"schema":"gluerun.orchestration.gate-observation.v0","failures":[]}' \
-  >"$GLUERUN_GATE_REPORT_FILE"
+printf '%s\n' '{"schema":"singular.orchestration.gate-observation.v0","failures":[]}' \
+  >"$SINGULAR_GATE_REPORT_FILE"
 SH
 chmod +x "$tmp/resolved-gate.sh"
 resolved_command="$tmp/resolved-gate.sh"
 resolved_command_sha="$(printf '%s' "$resolved_command" | shasum -a 256 | awk '{print $1}')"
 cat >"$tmp/resolved-baseline.json" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-baseline.v0",
+  "schema": "singular.orchestration.gate-baseline.v0",
   "commandSha256": "$resolved_command_sha",
   "failures": [{"signature": "known-1"}],
   "acknowledgedBy": "owner",
@@ -204,10 +204,10 @@ cat >"$tmp/resolved-baseline.json" <<JSON
 }
 JSON
 wrapper_output="$(
-  GLUERUN_ROOT="$ROOT" \
-  GLUERUN_STATE_DIR="$tmp/state" \
-  GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
-  GLUERUN_GATE_BASELINE_FILE="$tmp/resolved-baseline.json" \
+  SINGULAR_ROOT="$ROOT" \
+  SINGULAR_STATE_DIR="$tmp/state" \
+  SINGULAR_EVENTS_FILE="$tmp/state/events.ndjson" \
+  SINGULAR_GATE_BASELINE_FILE="$tmp/resolved-baseline.json" \
     "$ROOT/engine/gate-check.sh" RUN-resolved \
       --task-id TASK-0001 -- "$resolved_command" 2>&1
 )"
@@ -327,11 +327,11 @@ chmod +x "$tmp/hanging-gate.sh"
 hang_marker="$tmp/hang.marker"
 hang_rc=0
 hang_start=$SECONDS
-GLUERUN_ROOT="$ROOT" \
-GLUERUN_STATE_DIR="$tmp/state" \
-GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
-GLUERUN_GATE_TIMEOUT_SEC=3 \
-GLUERUN_KILL_GRACE_SEC=1 \
+SINGULAR_ROOT="$ROOT" \
+SINGULAR_STATE_DIR="$tmp/state" \
+SINGULAR_EVENTS_FILE="$tmp/state/events.ndjson" \
+SINGULAR_GATE_TIMEOUT_SEC=3 \
+SINGULAR_KILL_GRACE_SEC=1 \
   "$ROOT/engine/gate-check.sh" RUN-hang --task-id TASK-0001 -- \
     "$tmp/hanging-gate.sh" "$hang_marker" >"$tmp/hang.out" 2>&1 || hang_rc=$?
 hang_elapsed=$((SECONDS - hang_start))
@@ -362,14 +362,14 @@ sleep 4   # past nothing in particular; the grandchild had 45s of work to do
 
 # Zero disables the bound, for a consumer whose gate is legitimately unbounded.
 fast_rc=0
-GLUERUN_ROOT="$ROOT" \
-GLUERUN_STATE_DIR="$tmp/state" \
-GLUERUN_EVENTS_FILE="$tmp/state/events.ndjson" \
-GLUERUN_GATE_TIMEOUT_SEC=0 \
+SINGULAR_ROOT="$ROOT" \
+SINGULAR_STATE_DIR="$tmp/state" \
+SINGULAR_EVENTS_FILE="$tmp/state/events.ndjson" \
+SINGULAR_GATE_TIMEOUT_SEC=0 \
   "$ROOT/engine/gate-check.sh" RUN-unbounded --task-id TASK-0001 -- true \
   >"$tmp/unbounded.out" 2>&1 || fast_rc=$?
 [[ "$fast_rc" -eq 0 ]] || {
-  echo "GLUERUN_GATE_TIMEOUT_SEC=0 must run the gate unbounded and pass, got $fast_rc" >&2
+  echo "SINGULAR_GATE_TIMEOUT_SEC=0 must run the gate unbounded and pass, got $fast_rc" >&2
   cat "$tmp/unbounded.out" >&2
   exit 1
 }

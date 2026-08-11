@@ -25,13 +25,13 @@ make_repo() {
     "$root/docs/orchestration/packets/imported" \
     "$root/docs/orchestration/tasks" \
     "$root/schemas/orchestration" \
-    "$root/.gluerun-state"
+    "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/schemas/gate-result.v0.schema.json" "$root/schemas/orchestration/gate-result.v0.schema.json"
   cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     {
       "id": "D0.contract",
@@ -68,7 +68,7 @@ EOF
 EOF
   cat >"$root/docs/orchestration/gates/D0.contract.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D0.contract",
   "status": "passed",
   "authoritative": true,
@@ -92,30 +92,30 @@ with_fixture() {
   local tmp
   tmp="$(mktemp -d)"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-  export GLUERUN_TARGET_BRANCH="target"
-  # promote-gate.sh and the storage-proof red/green regime are a GLUERUN-owned
-  # extension (this test moves to gluerun-ext/ with promote-gate.sh). Declare the
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+  export SINGULAR_TARGET_BRANCH="target"
+  # promote-gate.sh and the storage-proof red/green regime are a SINGULAR-owned
+  # extension (this test moves to singular-ext/ with promote-gate.sh). Declare the
   # proof-layer config so the generic dag.sh validator applies the red/green rule.
-  export GLUERUN_PROOF_LAYERS="storage_proof"
-  export GLUERUN_PROOF_GRANDFATHER="D1.storage_proof,D2.storage_proof"
-  export GLUERUN_MODULES="storage-proof"
-  export GLUERUN_PROMOTER="$ENGINE_HOME/gluerun-ext/promote-gate.sh"
-  # GLUERUN's real gate command (a no-Go fixture makes it fail, as the prod-guard test expects)
-  export GLUERUN_DEFAULT_GATE_CMD="go build ./... && go vet ./... && go test ./..."
+  export SINGULAR_PROOF_LAYERS="storage_proof"
+  export SINGULAR_PROOF_GRANDFATHER="D1.storage_proof,D2.storage_proof"
+  export SINGULAR_MODULES="storage-proof"
+  export SINGULAR_PROMOTER="$ENGINE_HOME/singular-ext/promote-gate.sh"
+  # SINGULAR's real gate command (a no-Go fixture makes it fail, as the prod-guard test expects)
+  export SINGULAR_DEFAULT_GATE_CMD="go build ./... && go vet ./... && go test ./..."
   # Fixtures may override the storage-proof green/red commands to run offline;
   # this flag is what makes those overrides honorable (production never sets it).
-  export GLUERUN_TEST_FIXTURE=1
+  export SINGULAR_TEST_FIXTURE=1
 }
 
 	write_task() {
 	  local task_id="$1"
-	  cat >"$GLUERUN_TASKS_DIR/$task_id.md" <<EOF
+	  cat >"$SINGULAR_TASKS_DIR/$task_id.md" <<EOF
 # $task_id: fixture
 
 Status: integrated
@@ -160,7 +160,7 @@ EOF
 	    echo "Forbidden files:"
 	    echo ""
 	    echo "- Any file outside the owned scope."
-	  } >"$GLUERUN_TASKS_DIR/$task_id.md"
+	  } >"$SINGULAR_TASKS_DIR/$task_id.md"
 	}
 
 	write_service_alias_task() {
@@ -382,9 +382,9 @@ write_scheduler_contract_tasks_missing() {
 
 # Minimal valid grandfathered passing gate, for prerequisite nodes.
 write_passed_gate() {
-  cat >"$GLUERUN_ORCH_DIR/gates/$1.gate-result.json" <<EOF
+  cat >"$SINGULAR_ORCH_DIR/gates/$1.gate-result.json" <<EOF
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$1",
   "status": "passed",
   "authoritative": true,
@@ -400,11 +400,11 @@ EOF
 # command-log (no red skip-guard), to probe dag.sh's final-authority validation.
 write_green_only_storage_proof_gate() {
   local node="$1" log_ref="$2" sha="$3" head="$4"
-  python3 - "$GLUERUN_ORCH_DIR/gates/$node.gate-result.json" "$node" "$log_ref" "$sha" "$head" <<'PY'
+  python3 - "$SINGULAR_ORCH_DIR/gates/$node.gate-result.json" "$node" "$log_ref" "$sha" "$head" <<'PY'
 import json, sys
 out, node, log_ref, sha, head = sys.argv[1:6]
 gate = {
-    "schema": "gluerun.orchestration.gate-result.v0",
+    "schema": "singular.orchestration.gate-result.v0",
     "node": node, "status": "passed", "authoritative": True,
     "evidenceClass": "deterministic-proof",
     "evidence": [
@@ -423,11 +423,11 @@ PY
 # an arbitrary failed command-log that is NOT the storage-stripped skip-guard.
 write_storage_proof_gate_with_unmarked_failed_log() {
   local node="$1" log_ref="$2" sha="$3" head="$4"
-  python3 - "$GLUERUN_ORCH_DIR/gates/$node.gate-result.json" "$node" "$log_ref" "$sha" "$head" <<'PY'
+  python3 - "$SINGULAR_ORCH_DIR/gates/$node.gate-result.json" "$node" "$log_ref" "$sha" "$head" <<'PY'
 import json, sys
 out, node, log_ref, sha, head = sys.argv[1:6]
 gate = {
-    "schema": "gluerun.orchestration.gate-result.v0",
+    "schema": "singular.orchestration.gate-result.v0",
     "node": node, "status": "passed", "authoritative": True,
     "evidenceClass": "deterministic-proof",
     "evidence": [
@@ -446,17 +446,17 @@ PY
 
 write_valid_storage_proof_gate() {
   local node="$1" source_ref="$2"
-  mkdir -p "$GLUERUN_ORCH_DIR/gates/evidence"
+  mkdir -p "$SINGULAR_ORCH_DIR/gates/evidence"
   local log_ref="docs/orchestration/gates/evidence/${node}.valid-storage-proof.txt"
-  printf 'valid-storage-proof\n' > "$GLUERUN_ROOT/$log_ref"
+  printf 'valid-storage-proof\n' > "$SINGULAR_ROOT/$log_ref"
   local sha head
-  sha="$(shasum -a 256 "$GLUERUN_ROOT/$log_ref" | awk '{print $1}')"
-  head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  python3 - "$GLUERUN_ORCH_DIR/gates/$node.gate-result.json" "$node" "$source_ref" "$log_ref" "$sha" "$head" <<'PY'
+  sha="$(shasum -a 256 "$SINGULAR_ROOT/$log_ref" | awk '{print $1}')"
+  head="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  python3 - "$SINGULAR_ORCH_DIR/gates/$node.gate-result.json" "$node" "$source_ref" "$log_ref" "$sha" "$head" <<'PY'
 import json, sys
 out, node, source_ref, log_ref, sha, head = sys.argv[1:7]
 gate = {
-    "schema": "gluerun.orchestration.gate-result.v0",
+    "schema": "singular.orchestration.gate-result.v0",
     "node": node,
     "status": "passed",
     "authoritative": True,
@@ -479,9 +479,9 @@ PY
 		# A subgraph mirroring the real D1/D2/D3 frontier so promote-or-block can be
 		# exercised for storage proof, service, contract, and workflow storage spec.
 		write_subgraph_dag() {
-	  cat >"$GLUERUN_ORCH_DIR/dag.v0.json" <<'EOF'
+	  cat >"$SINGULAR_ORCH_DIR/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     { "id": "D0.contract", "stage": "D0", "area": "kernel", "layer": "contract", "kind": "contract", "dependsOn": [], "requiredCompletion": "contract_complete" },
     { "id": "D1.contract", "stage": "D1", "area": "artifact", "layer": "contract", "kind": "contract", "dependsOn": ["D0.contract"], "requiredCompletion": "contract_complete" },
@@ -515,12 +515,12 @@ test_promote_storage_substrate_gate_writes_authoritative_gate() {
   with_fixture
   write_storage_promotable_tasks
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" S0.storage_substrate_base 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" S0.storage_substrate_base 2>&1)"
   assert_contains "$out" "promoted node=S0.storage_substrate_base" "promotion reports promoted gate"
-  gate="$GLUERUN_ORCH_DIR/gates/S0.storage_substrate_base.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/S0.storage_substrate_base.gate-result.json"
   [[ -f "$gate" ]] || fail "promotion did not write S0 gate"
   "$SCRIPT_DIR/dag.sh" area-gate S0.storage_substrate_base >/dev/null
-  python3 - "$gate" "$GLUERUN_ROOT" <<'PY'
+  python3 - "$gate" "$SINGULAR_ROOT" <<'PY'
 import hashlib
 import json
 import os
@@ -548,16 +548,16 @@ PY
 test_promote_gate_refuses_missing_integrated_evidence() {
   with_fixture
   local out
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" S0.storage_substrate_base 2>&1 || true)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" S0.storage_substrate_base 2>&1 || true)"
   assert_contains "$out" "required task not integrated" "promotion refuses missing evidence tasks"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/S0.storage_substrate_base.gate-result.json" ]] || fail "promotion wrote gate despite missing evidence"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/S0.storage_substrate_base.gate-result.json" ]] || fail "promotion wrote gate despite missing evidence"
 }
 
 test_promote_gate_refuses_unknown_node() {
   with_fixture
   local out rc=0
   # D9.bogus is in no promote/block registry; D2.contract is now supported.
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D9.bogus 2>&1)" || rc=$?
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D9.bogus 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "promotion exited zero for an unsupported explicit node"
   assert_contains "$out" "unsupported gate promotion node" "promotion refuses an unregistered node"
 }
@@ -566,10 +566,10 @@ test_promote_gate_propagates_failed_command_exit() {
   with_fixture
   write_storage_promotable_tasks
   local out rc=0
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="exit 23" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" S0.storage_substrate_base 2>&1)" || rc=$?
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="exit 23" "$ENGINE_HOME/singular-ext/promote-gate.sh" S0.storage_substrate_base 2>&1)" || rc=$?
   [[ "$rc" -eq 23 ]] || fail "promotion command failure exit was not propagated: got $rc"
   assert_contains "$out" "gate promotion command failed node=S0.storage_substrate_base exit=23" "promotion reports failed command"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/S0.storage_substrate_base.gate-result.json" ]] || fail "promotion wrote gate despite failed command"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/S0.storage_substrate_base.gate-result.json" ]] || fail "promotion wrote gate despite failed command"
 }
 
 gate_status() {
@@ -590,8 +590,8 @@ test_unproven_storage_proof_stays_planner_eligible() {
   # block would exclude it from the planner frontier, but L1 must stay free to build
   # the durable proof. It is skipped (no gate) and remains planner-eligible; the
   # red/green skip-guard certifies it later at promote time.
-  "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1 || true
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D1.storage_proof.gate-result.json" ]] || fail "unproven storage_proof must not write a gate"
+  "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1 || true
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D1.storage_proof.gate-result.json" ]] || fail "unproven storage_proof must not write a gate"
   assert_contains "$("$SCRIPT_DIR/dag.sh" next-areas)" '"node":"D1.storage_proof"' "unproven storage_proof stays on the planner frontier"
   "$SCRIPT_DIR/dag.sh" node-fields D1.storage_proof >/dev/null || fail "unproven storage_proof must remain planner-eligible"
 }
@@ -604,7 +604,7 @@ test_unproven_storage_proof_does_not_advance_downstream() {
   write_passed_gate D1.storage_spec internal/artifact
   # Skipping (not promoting) an unproven storage_proof must NOT advance its
   # dependents: D1.service depends on D1.storage_proof, which is not passed.
-  "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1 || true
+  "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1 || true
   local out
   out="$("$SCRIPT_DIR/dag.sh" next-areas)"
   assert_not_contains "$out" '"node":"D1.service"' "an unproven storage_proof must not make a downstream node eligible"
@@ -623,16 +623,16 @@ test_human_provision_block_is_idempotent_and_excludes_planner() {
   # Ready proof but no resolvable DSN -> authoritative HumanProvisionRequired
   # block. That block IS authoritative, so (a) it excludes the node from the
   # planner and (b) re-running with no DSN is a no-op (already-blocked).
-  env -u GLUERUN_STORAGE_PROOF_DATABASE_URL -u GLUERUN_DATABASE_URL \
-    GLUERUN_PROMOTE_GATE_COMMAND="printf 'ok\n'" \
-    "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1 || true
+  env -u SINGULAR_STORAGE_PROOF_DATABASE_URL -u SINGULAR_DATABASE_URL \
+    SINGULAR_PROMOTE_GATE_COMMAND="printf 'ok\n'" \
+    "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1 || true
   local out rc=0
   out="$("$SCRIPT_DIR/dag.sh" node-fields D1.storage_proof 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "a HumanProvisionRequired node must not be planner eligible"
   assert_contains "$out" "node has authoritative blocked gate: D1.storage_proof" "node-fields reports the authoritative block"
-  out="$(env -u GLUERUN_STORAGE_PROOF_DATABASE_URL -u GLUERUN_DATABASE_URL \
-        GLUERUN_PROMOTE_GATE_COMMAND="printf 'ok\n'" \
-        "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof 2>&1 || true)"
+  out="$(env -u SINGULAR_STORAGE_PROOF_DATABASE_URL -u SINGULAR_DATABASE_URL \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof 2>&1 || true)"
   assert_contains "$out" "already-blocked node=D1.storage_proof" "re-running with no DSN is idempotent"
 }
 
@@ -649,13 +649,13 @@ test_generic_storage_proof_promotes_from_owned_repository_files() {
     "internal/binding/storage_repository.go" \
     "internal/binding/storage_repository_test.go"
   local out gate
-  out="$(GLUERUN_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
-        GLUERUN_PROOF_RED_COMMAND="exit 7" \
-        GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
-        "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D3.storage_proof 2>&1)"
+  out="$(SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
+        SINGULAR_PROOF_RED_COMMAND="exit 7" \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D3.storage_proof 2>&1)"
   assert_contains "$out" "promoted node=D3.storage_proof" "D3.storage_proof auto-promotes from owned durable-proof files with no per-node registry arm"
   assert_contains "$out" "skip-guard-red=" "generic storage_proof promotion records a red skip-guard log"
-  gate="$GLUERUN_ORCH_DIR/gates/D3.storage_proof.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D3.storage_proof.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "generic storage_proof promotion writes a passed gate"
   "$SCRIPT_DIR/dag.sh" area-gate D3.storage_proof >/dev/null
   python3 - "$gate" <<'PY'
@@ -680,17 +680,17 @@ test_promote_storage_proof_after_durable_task_integrated() {
   write_passed_gate D1.contract internal/artifact
   write_passed_gate S0.storage_substrate_base internal/storage
   write_passed_gate D1.storage_spec internal/artifact
-  "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1
+  "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1
   write_task TASK-0368
 
   local out gate
-  out="$(GLUERUN_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
-        GLUERUN_PROOF_RED_COMMAND="exit 7" \
-        GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
-        "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof 2>&1)"
+  out="$(SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
+        SINGULAR_PROOF_RED_COMMAND="exit 7" \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof 2>&1)"
   assert_contains "$out" "promoted node=D1.storage_proof" "integrated durable proof supersedes the blocked D1.storage_proof gate"
   assert_contains "$out" "skip-guard-red=" "promotion records a red skip-guard log"
-  gate="$GLUERUN_ORCH_DIR/gates/D1.storage_proof.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D1.storage_proof.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "storage_proof gate status is passed after durable proof"
   "$SCRIPT_DIR/dag.sh" area-gate D1.storage_proof >/dev/null
   local frontier
@@ -723,16 +723,16 @@ test_promote_d2_storage_proof_after_durable_task_integrated() {
   write_subgraph_dag
   write_passed_gate D1.storage_proof internal/artifact
   write_passed_gate D2.storage_spec internal/workflow
-  "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.storage_proof >/dev/null 2>&1
+  "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.storage_proof >/dev/null 2>&1
   write_task TASK-0470
 
   local out gate
-  out="$(GLUERUN_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
-        GLUERUN_PROOF_RED_COMMAND="exit 7" \
-        GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
-        "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.storage_proof 2>&1)"
+  out="$(SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
+        SINGULAR_PROOF_RED_COMMAND="exit 7" \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.storage_proof 2>&1)"
   assert_contains "$out" "promoted node=D2.storage_proof" "integrated durable workflow proof supersedes the blocked D2.storage_proof gate"
-  gate="$GLUERUN_ORCH_DIR/gates/D2.storage_proof.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D2.storage_proof.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D2.storage_proof gate status is passed after durable workflow proof"
   "$SCRIPT_DIR/dag.sh" area-gate D2.storage_proof >/dev/null
   local frontier
@@ -768,10 +768,10 @@ test_storage_proof_refuses_vacuous_proof_when_skip_guard_passes() {
   # The RED skip-guard "passing" (exit 0) means the proof did NOT fail without
   # real storage — it is vacuous/mocked. Promotion must be refused and no passing
   # gate written; the node stays planner-eligible for a real proof.
-  out="$(GLUERUN_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
-        GLUERUN_PROOF_RED_COMMAND="true" \
-        GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
-        "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof 2>&1)" || rc=$?
+  out="$(SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
+        SINGULAR_PROOF_RED_COMMAND="true" \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "vacuous storage proof (red passed) must not promote with exit 0"
   assert_contains "$out" "skip-guard RED passed with storage stripped" "refusal names the vacuous skip-guard"
   if "$SCRIPT_DIR/dag.sh" area-gate D1.storage_proof >/dev/null 2>&1; then
@@ -791,15 +791,15 @@ test_storage_proof_requires_external_database_when_unresolvable() {
   # No DSN in the environment and no env files in the fixture: the one
   # legitimate stop. Promotion must record an authoritative HumanProvisionRequired
   # block rather than fake or silently skip the proof.
-  out="$(env -u GLUERUN_STORAGE_PROOF_DATABASE_URL -u GLUERUN_DATABASE_URL \
-        GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
-        "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof 2>&1)"
+  out="$(env -u SINGULAR_STORAGE_PROOF_DATABASE_URL -u SINGULAR_DATABASE_URL \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof 2>&1)"
   assert_contains "$out" "blocked node=D1.storage_proof" "unresolvable DSN records a block, not a promotion"
-  gate="$GLUERUN_ORCH_DIR/gates/D1.storage_proof.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D1.storage_proof.gate-result.json"
   assert_contains "$(gate_status "$gate")" "blocked" "HumanProvisionRequired gate status is blocked"
   rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
   assert_contains "$rationale" "HumanProvisionRequired" "rationale marks an external-resource stop"
-  assert_contains "$rationale" "GLUERUN_STORAGE_PROOF_DATABASE_URL" "rationale names the exact remediation env var"
+  assert_contains "$rationale" "SINGULAR_STORAGE_PROOF_DATABASE_URL" "rationale names the exact remediation env var"
   if "$SCRIPT_DIR/dag.sh" area-gate D1.storage_proof >/dev/null 2>&1; then
     fail "a HumanProvisionRequired gate must not pass area-gate"
   fi
@@ -813,25 +813,25 @@ test_storage_proof_dsn_from_env_file_does_not_leak_or_hijack() {
   write_passed_gate D1.storage_spec internal/artifact
   write_task TASK-0368
   # The DSN is available ONLY via the dedicated proof env file, which also carries
-  # a control var (GLUERUN_PROMOTE_GATE_COMMAND) and an extra secret. Resolving the
+  # a control var (SINGULAR_PROMOTE_GATE_COMMAND) and an extra secret. Resolving the
   # DSN must NOT import the control var (which would hijack the green command) and
   # must NOT leak any secret value into output or committed evidence.
-  mkdir -p "$GLUERUN_STATE_DIR"
-  cat >"$GLUERUN_STATE_DIR/gluerun-storage-proof.env" <<'EOF'
-export GLUERUN_STORAGE_PROOF_DATABASE_URL='postgres://proof-user:topsecretvalue@db.example/proof'
-export GLUERUN_PROMOTE_GATE_COMMAND='exit 99'
+  mkdir -p "$SINGULAR_STATE_DIR"
+  cat >"$SINGULAR_STATE_DIR/singular-storage-proof.env" <<'EOF'
+export SINGULAR_STORAGE_PROOF_DATABASE_URL='postgres://proof-user:topsecretvalue@db.example/proof'
+export SINGULAR_PROMOTE_GATE_COMMAND='exit 99'
 export PGPASSWORD='another-secret-value'
 EOF
   local out gate
-  out="$(env -u GLUERUN_STORAGE_PROOF_DATABASE_URL -u GLUERUN_DATABASE_URL \
-        GLUERUN_PROOF_RED_COMMAND="exit 1" \
-        GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
-        "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.storage_proof 2>&1)"
-  # If the env file's GLUERUN_PROMOTE_GATE_COMMAND='exit 99' had leaked into the
+  out="$(env -u SINGULAR_STORAGE_PROOF_DATABASE_URL -u SINGULAR_DATABASE_URL \
+        SINGULAR_PROOF_RED_COMMAND="exit 1" \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof 2>&1)"
+  # If the env file's SINGULAR_PROMOTE_GATE_COMMAND='exit 99' had leaked into the
   # shell, the green command would fail with exit 99 instead of promoting.
   assert_contains "$out" "promoted node=D1.storage_proof" "DSN resolves from the env file without importing its control vars"
-  assert_not_contains "$out" "exit=99" "env-file GLUERUN_PROMOTE_GATE_COMMAND must not hijack the green command"
-  gate="$GLUERUN_ORCH_DIR/gates/D1.storage_proof.gate-result.json"
+  assert_not_contains "$out" "exit=99" "env-file SINGULAR_PROMOTE_GATE_COMMAND must not hijack the green command"
+  gate="$SINGULAR_ORCH_DIR/gates/D1.storage_proof.gate-result.json"
   [[ -f "$gate" ]] || fail "gate was not written under the real gates dir"
   assert_not_contains "$out" "topsecretvalue" "DSN value must not leak to promotion output"
   assert_not_contains "$(cat "$gate")" "topsecretvalue" "DSN value must not leak into committed gate evidence"
@@ -841,12 +841,12 @@ EOF
 test_dag_requires_red_skip_guard_for_non_grandfathered_storage_proof() {
   with_fixture
   write_subgraph_dag
-  mkdir -p "$GLUERUN_ORCH_DIR/gates/evidence"
+  mkdir -p "$SINGULAR_ORCH_DIR/gates/evidence"
   local log="docs/orchestration/gates/evidence/green-only.txt"
-  printf 'green-ok\n' > "$GLUERUN_ROOT/$log"
+  printf 'green-ok\n' > "$SINGULAR_ROOT/$log"
   local sha head
-  sha="$(shasum -a 256 "$GLUERUN_ROOT/$log" | awk '{print $1}')"
-  head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
+  sha="$(shasum -a 256 "$SINGULAR_ROOT/$log" | awk '{print $1}')"
+  head="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
   # dag.sh is the final authority: a green-only storage_proof gate must be
   # rejected for a non-grandfathered node, regardless of how it was produced.
   write_green_only_storage_proof_gate D3.storage_proof "$log" "$sha" "$head"
@@ -862,12 +862,12 @@ test_dag_requires_red_skip_guard_for_non_grandfathered_storage_proof() {
 test_dag_rejects_unmarked_failed_storage_proof_log() {
   with_fixture
   write_subgraph_dag
-  mkdir -p "$GLUERUN_ORCH_DIR/gates/evidence"
+  mkdir -p "$SINGULAR_ORCH_DIR/gates/evidence"
   local log="docs/orchestration/gates/evidence/green-plus-unmarked-red.txt"
-  printf 'green-and-unmarked-red\n' > "$GLUERUN_ROOT/$log"
+  printf 'green-and-unmarked-red\n' > "$SINGULAR_ROOT/$log"
   local sha head
-  sha="$(shasum -a 256 "$GLUERUN_ROOT/$log" | awk '{print $1}')"
-  head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
+  sha="$(shasum -a 256 "$SINGULAR_ROOT/$log" | awk '{print $1}')"
+  head="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
   write_storage_proof_gate_with_unmarked_failed_log D3.storage_proof "$log" "$sha" "$head"
   local out rc=0
   out="$("$SCRIPT_DIR/dag.sh" area-gate D3.storage_proof 2>&1)" || rc=$?
@@ -885,20 +885,20 @@ test_storage_proof_ignores_command_overrides_without_fixture_flag() {
     "Implement the durable binding storage proof for D3.storage_proof." \
     "internal/binding/storage_repository.go" \
     "internal/binding/storage_repository_test.go"
-  # Simulate production by removing GLUERUN_TEST_FIXTURE. The printf green override
+  # Simulate production by removing SINGULAR_TEST_FIXTURE. The printf green override
   # and the 'true' red override MUST be ignored: the real `go build/vet/test ./...`
   # green then runs in a repo with no Go module and fails, so promotion is refused
   # at the green step. (If the override leaked into production, 'true' would make
   # the red pass and a vacuous proof could promote — the failure mode this guards.)
   local out rc=0
-  out="$(env -u GLUERUN_TEST_FIXTURE \
-        GLUERUN_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
-        GLUERUN_PROOF_RED_COMMAND="true" \
-        GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
-        "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D3.storage_proof 2>&1)" || rc=$?
+  out="$(env -u SINGULAR_TEST_FIXTURE \
+        SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
+        SINGULAR_PROOF_RED_COMMAND="true" \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D3.storage_proof 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "production (no fixture flag) must not honor command overrides"
   assert_contains "$out" "gate promotion command failed" "the real green regression runs (overrides ignored) and fails in a no-module fixture"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D3.storage_proof.gate-result.json" ]] || fail "must not promote when overrides are ignored"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D3.storage_proof.gate-result.json" ]] || fail "must not promote when overrides are ignored"
 }
 
 test_promote_d2_contract_when_ready() {
@@ -907,9 +907,9 @@ test_promote_d2_contract_when_ready() {
   write_passed_gate D1.contract internal/artifact
   write_workflow_contract_tasks
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.contract 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.contract 2>&1)"
   assert_contains "$out" "promoted node=D2.contract" "ready D2.contract promotes"
-  gate="$GLUERUN_ORCH_DIR/gates/D2.contract.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D2.contract.gate-result.json"
   [[ -f "$gate" ]] || fail "promotion did not write D2.contract gate"
   assert_contains "$(gate_status "$gate")" "passed" "promoted D2.contract gate status is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D2.contract >/dev/null
@@ -921,9 +921,9 @@ test_block_d2_contract_when_not_ready() {
   write_passed_gate D1.contract internal/artifact
   write_workflow_contract_tasks_missing TASK-0048
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.contract 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.contract 2>&1)"
   assert_contains "$out" "blocked node=D2.contract" "not-ready D2.contract is blocked, not promoted"
-  gate="$GLUERUN_ORCH_DIR/gates/D2.contract.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D2.contract.gate-result.json"
   assert_contains "$(gate_status "$gate")" "blocked" "not-ready D2.contract gate status is blocked"
   local rationale
   rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
@@ -938,13 +938,13 @@ test_block_d2_contract_when_not_ready() {
   write_subgraph_dag
   write_passed_gate D1.contract internal/artifact
   write_workflow_contract_tasks_missing TASK-0048
-  GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.contract >/dev/null 2>&1
+  SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.contract >/dev/null 2>&1
   # Satisfy the readiness predicate, then re-run: the block must be superseded.
   write_task TASK-0048
   local out
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.contract 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.contract 2>&1)"
   assert_contains "$out" "promoted node=D2.contract" "a satisfied predicate supersedes a prior block"
-	  assert_contains "$(gate_status "$GLUERUN_ORCH_DIR/gates/D2.contract.gate-result.json")" "passed" "superseded gate is now passed"
+	  assert_contains "$(gate_status "$SINGULAR_ORCH_DIR/gates/D2.contract.gate-result.json")" "passed" "superseded gate is now passed"
 	}
 
 	test_block_d1_service_uses_capability_signatures_not_original_task_ids() {
@@ -955,9 +955,9 @@ test_block_d2_contract_when_not_ready() {
 	  # capability must satisfy that predicate so the block names only remaining gaps.
 	  write_service_alias_task TASK-0451
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.service 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.service 2>&1)"
 	  assert_contains "$out" "blocked node=D1.service" "incomplete D1.service writes a blocked gate"
-	  gate="$GLUERUN_ORCH_DIR/gates/D1.service.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D1.service.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "blocked" "D1.service closeout gate is blocked"
 	  local gate_json rationale
 	  gate_json="$(cat "$gate")"
@@ -981,9 +981,9 @@ test_block_d2_contract_when_not_ready() {
 	  write_service_completeness_task TASK-0437
 	  write_service_required_task TASK-0438
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.service 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.service 2>&1)"
 	  assert_contains "$out" "promoted node=D1.service" "complete D1.service promotes"
-	  gate="$GLUERUN_ORCH_DIR/gates/D1.service.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D1.service.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "passed" "D1.service gate is passed"
 	  "$SCRIPT_DIR/dag.sh" area-gate D1.service >/dev/null
 	  python3 - "$gate" <<'PY'
@@ -1006,15 +1006,15 @@ PY
 	  write_subgraph_dag
 	  write_passed_gate D1.storage_proof internal/artifact
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.service 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.service 2>&1)"
 	  assert_contains "$out" "blocked node=D1.service" "incomplete D1.service writes initial blocked gate"
 	  write_service_alias_task TASK-0451
 	  write_service_member_task TASK-0452
 	  write_service_completeness_task TASK-0437
 	  write_service_required_task TASK-0438
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D1.service 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.service 2>&1)"
 	  assert_contains "$out" "promoted node=D1.service" "preblocked D1.service promotes once capability signatures land"
-	  gate="$GLUERUN_ORCH_DIR/gates/D1.service.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D1.service.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "passed" "D1.service gate is passed after capability match"
 	  python3 - "$gate" <<'PY'
 import json, sys
@@ -1034,9 +1034,9 @@ PY
 	  write_passed_gate D1.storage_spec internal/artifact
 	  write_passed_gate D2.contract internal/workflow
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.storage_spec 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.storage_spec 2>&1)"
 	  assert_contains "$out" "blocked node=D2.storage_spec" "incomplete D2.storage_spec writes a blocked gate"
-	  gate="$GLUERUN_ORCH_DIR/gates/D2.storage_spec.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D2.storage_spec.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "blocked" "D2.storage_spec closeout gate is blocked"
 	  python3 - "$gate" <<'PY'
 import json, sys
@@ -1064,9 +1064,9 @@ test_promote_d2_storage_spec_when_all_capability_signatures_integrated() {
 	  write_workflow_exact_ref_task TASK-0441
 	  write_workflow_authority_task TASK-0442
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.storage_spec 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.storage_spec 2>&1)"
 	  assert_contains "$out" "promoted node=D2.storage_spec" "complete D2.storage_spec promotes"
-	  gate="$GLUERUN_ORCH_DIR/gates/D2.storage_spec.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D2.storage_spec.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "passed" "D2.storage_spec gate is passed"
 	  "$SCRIPT_DIR/dag.sh" area-gate D2.storage_spec >/dev/null
 	}
@@ -1077,9 +1077,9 @@ test_promote_d2_storage_spec_when_all_capability_signatures_integrated() {
 	  write_passed_gate D2.contract internal/workflow
 	  write_binding_contract_tasks_missing TASK-0369
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D3.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D3.contract 2>&1)"
 	  assert_contains "$out" "blocked node=D3.contract" "incomplete D3.contract writes a blocked gate"
-	  gate="$GLUERUN_ORCH_DIR/gates/D3.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D3.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "blocked" "D3.contract gate is blocked"
 	  local rationale
 	  rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
@@ -1105,9 +1105,9 @@ PY
 	  write_passed_gate D2.contract internal/workflow
 	  write_binding_contract_tasks
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D3.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D3.contract 2>&1)"
 	  assert_contains "$out" "promoted node=D3.contract" "complete D3.contract promotes"
-	  gate="$GLUERUN_ORCH_DIR/gates/D3.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D3.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "passed" "D3.contract gate is passed"
 	  "$SCRIPT_DIR/dag.sh" area-gate D3.contract >/dev/null
 	  python3 - "$gate" <<'PY'
@@ -1129,9 +1129,9 @@ PY
 	  write_passed_gate D3.contract internal/binding
 	  write_dispatch_contract_tasks_missing TASK-0096
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D4.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D4.contract 2>&1)"
 	  assert_contains "$out" "blocked node=D4.contract" "incomplete D4.contract writes a blocked gate"
-	  gate="$GLUERUN_ORCH_DIR/gates/D4.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D4.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "blocked" "D4.contract gate is blocked"
 	  local rationale
 	  rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
@@ -1157,9 +1157,9 @@ PY
 	  write_passed_gate D3.contract internal/binding
 	  write_dispatch_contract_tasks
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D4.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D4.contract 2>&1)"
 	  assert_contains "$out" "promoted node=D4.contract" "complete D4.contract promotes"
-	  gate="$GLUERUN_ORCH_DIR/gates/D4.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D4.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "passed" "D4.contract gate is passed"
 	  "$SCRIPT_DIR/dag.sh" area-gate D4.contract >/dev/null
 	  python3 - "$gate" <<'PY'
@@ -1181,9 +1181,9 @@ PY
 	  write_passed_gate D4.contract internal/dispatch
 	  write_evidence_contract_tasks_missing TASK-0131
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D5.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D5.contract 2>&1)"
 	  assert_contains "$out" "blocked node=D5.contract" "incomplete D5.contract writes a blocked gate"
-	  gate="$GLUERUN_ORCH_DIR/gates/D5.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D5.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "blocked" "D5.contract gate is blocked"
 	  local rationale
 	  rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
@@ -1209,9 +1209,9 @@ PY
 	  write_passed_gate D4.contract internal/dispatch
 	  write_evidence_contract_tasks
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D5.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D5.contract 2>&1)"
 	  assert_contains "$out" "promoted node=D5.contract" "complete D5.contract promotes"
-	  gate="$GLUERUN_ORCH_DIR/gates/D5.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D5.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "passed" "D5.contract gate is passed"
 	  "$SCRIPT_DIR/dag.sh" area-gate D5.contract >/dev/null
 	  python3 - "$gate" <<'PY'
@@ -1233,9 +1233,9 @@ PY
 	  write_passed_gate D5.contract internal/evidence
 	  write_recovery_contract_tasks_missing TASK-0171
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D6.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D6.contract 2>&1)"
 	  assert_contains "$out" "blocked node=D6.contract" "incomplete D6.contract writes a blocked gate"
-	  gate="$GLUERUN_ORCH_DIR/gates/D6.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D6.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "blocked" "D6.contract gate is blocked"
 	  local rationale
 	  rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
@@ -1261,9 +1261,9 @@ PY
 	  write_passed_gate D5.contract internal/evidence
 	  write_recovery_contract_tasks
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D6.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D6.contract 2>&1)"
 	  assert_contains "$out" "promoted node=D6.contract" "complete D6.contract promotes"
-	  gate="$GLUERUN_ORCH_DIR/gates/D6.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D6.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "passed" "D6.contract gate is passed"
 	  "$SCRIPT_DIR/dag.sh" area-gate D6.contract >/dev/null
 	  python3 - "$gate" <<'PY'
@@ -1285,9 +1285,9 @@ PY
 	  write_passed_gate D6.contract internal/recovery
 	  write_scheduler_contract_tasks_missing TASK-0312
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D7.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D7.contract 2>&1)"
 	  assert_contains "$out" "blocked node=D7.contract" "incomplete D7.contract writes a blocked gate"
-	  gate="$GLUERUN_ORCH_DIR/gates/D7.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D7.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "blocked" "D7.contract gate is blocked"
 	  local rationale
 	  rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
@@ -1313,9 +1313,9 @@ PY
 	  write_passed_gate D6.contract internal/recovery
 	  write_scheduler_contract_tasks
 	  local out gate
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D7.contract 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D7.contract 2>&1)"
 	  assert_contains "$out" "promoted node=D7.contract" "complete D7.contract promotes"
-	  gate="$GLUERUN_ORCH_DIR/gates/D7.contract.gate-result.json"
+	  gate="$SINGULAR_ORCH_DIR/gates/D7.contract.gate-result.json"
 	  assert_contains "$(gate_status "$gate")" "passed" "D7.contract gate is passed"
 	  "$SCRIPT_DIR/dag.sh" area-gate D7.contract >/dev/null
 	  python3 - "$gate" <<'PY'
@@ -1338,7 +1338,7 @@ PY
 	  write_passed_gate D1.storage_spec internal/artifact
 	  write_passed_gate D2.contract internal/workflow
 	  local out
-	  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" --frontier 2>&1)"
+	  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" --frontier 2>&1)"
 	  assert_contains "$out" "blocked node=D1.service" "frontier blocks service closeout instead of skipping it"
 	  assert_contains "$out" "blocked node=D2.storage_spec" "frontier blocks workflow storage-spec closeout instead of skipping it"
 	  assert_contains "$out" "blocked node=D3.contract" "frontier blocks D3.contract closeout instead of skipping it"
@@ -1353,10 +1353,10 @@ test_frontier_promotes_ready_and_skips_unproven_storage_proof() {
   write_passed_gate D1.storage_spec internal/artifact
   write_workflow_contract_tasks
   local out
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" --frontier 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" --frontier 2>&1)"
   assert_contains "$out" "promoted node=D2.contract" "frontier mode promotes the ready contract node"
   assert_not_contains "$out" "blocked node=D1.storage_proof" "an unproven storage_proof is skipped, not blocked"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D1.storage_proof.gate-result.json" ]] || fail "unproven storage_proof must not get a gate in frontier mode"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D1.storage_proof.gate-result.json" ]] || fail "unproven storage_proof must not get a gate in frontier mode"
   assert_not_contains "$out" "no promotable frontier gates" "frontier mode does not silently no-op on the real frontier"
   assert_contains "$("$SCRIPT_DIR/dag.sh" next-areas)" '"node":"D1.storage_proof"' "unproven storage_proof remains planner-eligible after a frontier pass"
 }
@@ -1365,7 +1365,7 @@ test_reconcile_auto_promotes_before_generation() {
   with_fixture
   write_storage_promotable_tasks
   local out
-  out="$(GLUERUN_AUTO_PROMOTE_GATES=1 GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" GLUERUN_GENERATE=0 "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
+  out="$(SINGULAR_AUTO_PROMOTE_GATES=1 SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" SINGULAR_GENERATE=0 "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
   assert_contains "$out" "promotion: promoted node=S0.storage_substrate_base" "reconcile auto-promotes ready candidate gate"
   "$SCRIPT_DIR/dag.sh" area-gate S0.storage_substrate_base >/dev/null
   out="$("$SCRIPT_DIR/dag.sh" next-areas)"
@@ -1405,9 +1405,9 @@ test_promote_d2_service_when_all_service_signatures_integrated() {
     service_node_run_terminal_snapshot service_workflow_run_status_event \
     service_runtime
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D2.service 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D2.service 2>&1)"
   assert_contains "$out" "promoted node=D2.service" "D2.service promotes when all 13 service capability signatures are integrated"
-  gate="$GLUERUN_ORCH_DIR/gates/D2.service.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D2.service.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D2.service gate is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D2.service >/dev/null
 }
@@ -1422,9 +1422,9 @@ test_promote_d8_contract_when_all_product_signatures_integrated() {
     canvas_node_projection canvas_edge_projection canvas_graph_projection \
     dispatch_tree_projection
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D8.contract 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D8.contract 2>&1)"
   assert_contains "$out" "promoted node=D8.contract" "D8.contract promotes when all 11 product contract signatures are integrated"
-  gate="$GLUERUN_ORCH_DIR/gates/D8.contract.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D8.contract.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D8.contract gate is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D8.contract >/dev/null
 }
@@ -1448,12 +1448,12 @@ test_d3_storage_spec_skips_not_blocks_when_required_spec_missing() {
     storage_workspace_attempt_isolation_spec storage_workspace_lease_history_spec \
     storage_workspace_snapshot_manifest_spec
   local out
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" --frontier 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" --frontier 2>&1)"
   # An incomplete storage_spec must SKIP (no gate, stays planner-eligible), never
   # block: an authoritative block would exclude it from the planner and strand
   # D3.storage_proof's eventual red/green proof.
   assert_not_contains "$out" "blocked node=D3.storage_spec" "incomplete D3.storage_spec must skip, not block"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D3.storage_spec.gate-result.json" ]] || fail "skipped D3.storage_spec must not get an authoritative gate"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D3.storage_spec.gate-result.json" ]] || fail "skipped D3.storage_spec must not get an authoritative gate"
   assert_contains "$("$SCRIPT_DIR/dag.sh" next-areas)" '"node":"D3.storage_spec"' "incomplete D3.storage_spec stays planner-eligible"
 }
 
@@ -1499,11 +1499,11 @@ test_d2_service_and_d8_contract_skip_not_block_when_a_signature_is_missing() {
     projection_staleness spec_studio_projection canvas_runtime_status_projection \
     canvas_node_projection canvas_edge_projection canvas_graph_projection
   local out
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" --frontier 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" --frontier 2>&1)"
   assert_not_contains "$out" "blocked node=D2.service" "incomplete D2.service must skip, not block"
   assert_not_contains "$out" "blocked node=D8.contract" "incomplete D8.contract must skip, not block"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D2.service.gate-result.json" ]] || fail "skipped D2.service must not get an authoritative gate"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D8.contract.gate-result.json" ]] || fail "skipped D8.contract must not get an authoritative gate"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D2.service.gate-result.json" ]] || fail "skipped D2.service must not get an authoritative gate"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D8.contract.gate-result.json" ]] || fail "skipped D8.contract must not get an authoritative gate"
   local frontier
   frontier="$("$SCRIPT_DIR/dag.sh" next-areas)"
   assert_contains "$frontier" '"node":"D2.service"' "incomplete D2.service stays planner-eligible"
@@ -1529,9 +1529,9 @@ test_promote_d3_storage_spec_when_all_capability_signatures_integrated() {
     storage_workspace_snapshot_manifest_spec storage_immutable_change_boundary_spec \
     storage_resolved_workspace_context_attachment_spec
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D3.storage_spec 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D3.storage_spec 2>&1)"
   assert_contains "$out" "promoted node=D3.storage_spec" "D3.storage_spec promotes once all 20 binding storage-spec signatures are integrated"
-  gate="$GLUERUN_ORCH_DIR/gates/D3.storage_spec.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D3.storage_spec.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D3.storage_spec gate is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D3.storage_spec >/dev/null
 }
@@ -1550,9 +1550,9 @@ test_promote_d3_binding_runtime_when_all_runtime_signatures_integrated() {
     runtime_idempotent_resolution_command runtime_reconstruction_bundle_query \
     runtime_workflow_conformance_check runtime_workspace_lease_usability_guard
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D3.binding_runtime 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D3.binding_runtime 2>&1)"
   assert_contains "$out" "promoted node=D3.binding_runtime" "D3.binding_runtime promotes when all 14 binding runtime signatures are integrated"
-  gate="$GLUERUN_ORCH_DIR/gates/D3.binding_runtime.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D3.binding_runtime.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D3.binding_runtime gate is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D3.binding_runtime >/dev/null
 }
@@ -1581,11 +1581,11 @@ test_d3_binding_runtime_and_d4_storage_spec_skip_not_block_when_a_signature_is_m
     storage_dispatch_output_artifact_refs_query_spec storage_runtime_raw_output_refs_query_spec \
     storage_dispatch_usage_rollup_inputs_query_spec
   local out frontier
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" --frontier 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" --frontier 2>&1)"
   assert_not_contains "$out" "blocked node=D3.binding_runtime" "incomplete D3.binding_runtime must skip, not block"
   assert_not_contains "$out" "blocked node=D4.storage_spec" "incomplete D4.storage_spec must skip, not block"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D3.binding_runtime.gate-result.json" ]] || fail "skipped D3.binding_runtime must not get an authoritative gate"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D4.storage_spec.gate-result.json" ]] || fail "skipped D4.storage_spec must not get an authoritative gate"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D3.binding_runtime.gate-result.json" ]] || fail "skipped D3.binding_runtime must not get an authoritative gate"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D4.storage_spec.gate-result.json" ]] || fail "skipped D4.storage_spec must not get an authoritative gate"
   frontier="$("$SCRIPT_DIR/dag.sh" next-areas)"
   assert_contains "$frontier" '"node":"D3.binding_runtime"' "incomplete D3.binding_runtime stays planner-eligible"
   assert_contains "$frontier" '"node":"D4.storage_spec"' "incomplete D4.storage_spec stays planner-eligible"
@@ -1605,9 +1605,9 @@ test_promote_d4_storage_spec_when_all_dispatch_storage_signatures_integrated() {
     storage_dispatch_output_artifact_refs_query_spec storage_runtime_raw_output_refs_query_spec \
     storage_dispatch_usage_rollup_inputs_query_spec storage_tool_side_effect_audit_query_spec
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D4.storage_spec 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D4.storage_spec 2>&1)"
   assert_contains "$out" "promoted node=D4.storage_spec" "D4.storage_spec promotes when all 14 dispatch storage-spec signatures are integrated"
-  gate="$GLUERUN_ORCH_DIR/gates/D4.storage_spec.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D4.storage_spec.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D4.storage_spec gate is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D4.storage_spec >/dev/null
 }
@@ -1620,9 +1620,9 @@ test_promote_d4_dispatch_runtime_when_all_runtime_signatures_integrated() {
   write_owned_capability_tasks dispatch \
     runtime_dispatch_start_service runtime_tool_invocation_service
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D4.dispatch_runtime 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D4.dispatch_runtime 2>&1)"
   assert_contains "$out" "promoted node=D4.dispatch_runtime" "D4.dispatch_runtime promotes when both dispatch runtime signatures are integrated"
-  gate="$GLUERUN_ORCH_DIR/gates/D4.dispatch_runtime.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D4.dispatch_runtime.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D4.dispatch_runtime gate is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D4.dispatch_runtime >/dev/null
 }
@@ -1637,9 +1637,9 @@ test_promote_d5_storage_spec_when_all_evidence_storage_signatures_integrated() {
     storage_policy_evaluation_spec storage_decision_record_spec \
     storage_gate_decision_spec storage_waiver_detail_spec
   local out gate
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D5.storage_spec 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" D5.storage_spec 2>&1)"
   assert_contains "$out" "promoted node=D5.storage_spec" "D5.storage_spec promotes when all 6 evidence storage-spec signatures are integrated"
-  gate="$GLUERUN_ORCH_DIR/gates/D5.storage_spec.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D5.storage_spec.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D5.storage_spec gate is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D5.storage_spec >/dev/null
 }
@@ -1657,11 +1657,11 @@ test_d4_dispatch_runtime_and_d5_storage_spec_skip_not_block_when_a_signature_is_
     storage_policy_evaluation_spec storage_decision_record_spec \
     storage_gate_decision_spec
   local out frontier
-  out="$(GLUERUN_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" --frontier 2>&1)"
+  out="$(SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" "$ENGINE_HOME/singular-ext/promote-gate.sh" --frontier 2>&1)"
   assert_not_contains "$out" "blocked node=D4.dispatch_runtime" "incomplete D4.dispatch_runtime must skip, not block"
   assert_not_contains "$out" "blocked node=D5.storage_spec" "incomplete D5.storage_spec must skip, not block"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D4.dispatch_runtime.gate-result.json" ]] || fail "skipped D4.dispatch_runtime must not get an authoritative gate"
-  [[ ! -f "$GLUERUN_ORCH_DIR/gates/D5.storage_spec.gate-result.json" ]] || fail "skipped D5.storage_spec must not get an authoritative gate"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D4.dispatch_runtime.gate-result.json" ]] || fail "skipped D4.dispatch_runtime must not get an authoritative gate"
+  [[ ! -f "$SINGULAR_ORCH_DIR/gates/D5.storage_spec.gate-result.json" ]] || fail "skipped D5.storage_spec must not get an authoritative gate"
   frontier="$("$SCRIPT_DIR/dag.sh" next-areas)"
   assert_contains "$frontier" '"node":"D4.dispatch_runtime"' "incomplete D4.dispatch_runtime stays planner-eligible"
   assert_contains "$frontier" '"node":"D5.storage_spec"' "incomplete D5.storage_spec stays planner-eligible"
@@ -1675,9 +1675,9 @@ test_promote_d4_storage_proof_when_dispatch_proof_signatures_integrated() {
   write_owned_capability_tasks dispatch \
     storage_agent_dispatch_repository storage_tool_invocation_repository
   local out gate
-  out="$(GLUERUN_TEST_FIXTURE=1 GLUERUN_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" GLUERUN_PROMOTE_GATE_COMMAND="printf 'green\n'" GLUERUN_PROOF_RED_COMMAND="printf 'red\n'; exit 1" "$ENGINE_HOME/gluerun-ext/promote-gate.sh" D4.storage_proof 2>&1)"
+  out="$(SINGULAR_TEST_FIXTURE=1 SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" SINGULAR_PROMOTE_GATE_COMMAND="printf 'green\n'" SINGULAR_PROOF_RED_COMMAND="printf 'red\n'; exit 1" "$ENGINE_HOME/singular-ext/promote-gate.sh" D4.storage_proof 2>&1)"
   assert_contains "$out" "promoted node=D4.storage_proof" "D4.storage_proof promotes when both dispatch durable proof signatures are integrated"
-  gate="$GLUERUN_ORCH_DIR/gates/D4.storage_proof.gate-result.json"
+  gate="$SINGULAR_ORCH_DIR/gates/D4.storage_proof.gate-result.json"
   assert_contains "$(gate_status "$gate")" "passed" "D4.storage_proof gate is passed"
   "$SCRIPT_DIR/dag.sh" area-gate D4.storage_proof >/dev/null
   python3 - "$gate" <<'PY'

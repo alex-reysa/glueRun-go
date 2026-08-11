@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Covers the sanctioned `cli/gluerun graph` subcommand: a thin driver-hook that
+# Covers the sanctioned `cli/singular graph` subcommand: a thin driver-hook that
 # delegates into the already-integrated engine/ctx-graph*.sh projector/reader
-# functions (gluerun_graph_rebuild / gluerun_graph_sync / gluerun_graph_query_*),
-# behind GLUERUN_CTX_GRAPH (default 0). Asserts:
+# functions (singular_graph_rebuild / singular_graph_sync / singular_graph_query_*),
+# behind SINGULAR_CTX_GRAPH (default 0). Asserts:
 #   * with the flag ON, `graph rebuild/sync/query ...` produce byte-identical
 #     output/corpus to the underlying engine functions over the same fixture
 #     (delegation adds no projection logic of its own);
-#   * with the flag OFF (unset or 0), `gluerun graph ...` refuses exactly as an
+#   * with the flag OFF (unset or 0), `singular graph ...` refuses exactly as an
 #     unknown command did, and usage()/help output is byte-identical to the
 #     pre-hook binary (no `graph` line leaks);
 #   * bad/missing graph subcommands produce a clear usage error, non-zero exit,
@@ -14,11 +14,11 @@
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-GLUERUN_SRC="$ENGINE_HOME/cli/gluerun"
+SINGULAR_SRC="$ENGINE_HOME/cli/singular"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-[[ -f "$GLUERUN_SRC" ]] || fail "cli/gluerun not present: $GLUERUN_SRC"
+[[ -f "$SINGULAR_SRC" ]] || fail "cli/singular not present: $SINGULAR_SRC"
 for m in "$ENGINE_HOME"/engine/ctx-graph*.sh; do
   [[ -f "$m" ]] || fail "integrated graph module missing: $m"
 done
@@ -28,14 +28,14 @@ trap 'rm -rf "$tmp"' EXIT
 
 # Hermetic engine home: only engine/lib.sh (resolver needs it) + the integrated
 # graph modules + the CLI under test. Keeps the delegation assertions independent
-# of whatever .gluerun-state the suite host happens to carry.
+# of whatever .singular-state the suite host happens to carry.
 EHOME="$tmp/engine-home"
 mkdir -p "$EHOME/engine" "$EHOME/cli"
 : > "$EHOME/engine/lib.sh"
 cp "$ENGINE_HOME"/engine/ctx-graph*.sh "$EHOME/engine/"
-cp "$GLUERUN_SRC" "$EHOME/cli/gluerun"
-GLUERUN="$EHOME/cli/gluerun"
-export GLUERUN_ENGINE_HOME="$EHOME"
+cp "$SINGULAR_SRC" "$EHOME/cli/singular"
+SINGULAR="$EHOME/cli/singular"
+export SINGULAR_ENGINE_HOME="$EHOME"
 
 # --- Fixture: a state dir exercising the record + event mappers --------------
 NODE="TASK-0080"
@@ -46,7 +46,7 @@ mkdir -p "$STATE/runs/$RUN_A/attempts" "$STATE/docs/orchestration/gates"
 
 cat > "$STATE/runs/$RUN_A/attempts/index.json" <<JSON
 {
-  "schema": "gluerun.orchestration.attempts-index.v0",
+  "schema": "singular.orchestration.attempts-index.v0",
   "runId": "$RUN_A",
   "taskId": "$NODE",
   "attempts": [
@@ -66,38 +66,38 @@ JSON
 source_graph='for g in "'"$EHOME"'"/engine/ctx-graph*.sh; do source "$g"; done'
 
 # ---------------------------------------------------------------------------
-# FLAG ON: rebuild delegates to gluerun_graph_rebuild (byte-identical corpus)
+# FLAG ON: rebuild delegates to singular_graph_rebuild (byte-identical corpus)
 # ---------------------------------------------------------------------------
 GT_GRAPH="$tmp/gt-graph"
-( set -uo pipefail; eval "$source_graph"; gluerun_graph_rebuild "$STATE" "$GT_GRAPH" ) \
-  || fail "ground-truth gluerun_graph_rebuild failed"
+( set -uo pipefail; eval "$source_graph"; singular_graph_rebuild "$STATE" "$GT_GRAPH" ) \
+  || fail "ground-truth singular_graph_rebuild failed"
 [[ -f "$GT_GRAPH/nodes.jsonl" && -f "$GT_GRAPH/edges.jsonl" ]] \
   || fail "ground-truth rebuild produced no corpus"
 
-GLUERUN_CTX_GRAPH=1 "$GLUERUN" graph rebuild "$STATE" "$GRAPHDIR" \
+SINGULAR_CTX_GRAPH=1 "$SINGULAR" graph rebuild "$STATE" "$GRAPHDIR" \
   > "$tmp/rebuild.out" 2>"$tmp/rebuild.err" \
-  || fail "gluerun graph rebuild exited non-zero: $(cat "$tmp/rebuild.err")"
+  || fail "singular graph rebuild exited non-zero: $(cat "$tmp/rebuild.err")"
 [[ -f "$GRAPHDIR/nodes.jsonl" && -f "$GRAPHDIR/edges.jsonl" ]] \
-  || fail "gluerun graph rebuild wrote no canonical corpus"
+  || fail "singular graph rebuild wrote no canonical corpus"
 cmp -s "$GT_GRAPH/nodes.jsonl" "$GRAPHDIR/nodes.jsonl" \
-  || fail "graph rebuild nodes.jsonl not byte-identical to gluerun_graph_rebuild"
+  || fail "graph rebuild nodes.jsonl not byte-identical to singular_graph_rebuild"
 cmp -s "$GT_GRAPH/edges.jsonl" "$GRAPHDIR/edges.jsonl" \
-  || fail "graph rebuild edges.jsonl not byte-identical to gluerun_graph_rebuild"
+  || fail "graph rebuild edges.jsonl not byte-identical to singular_graph_rebuild"
 
 # ---------------------------------------------------------------------------
-# FLAG ON: sync delegates to gluerun_graph_sync (byte-identical, scratch corpus)
+# FLAG ON: sync delegates to singular_graph_sync (byte-identical, scratch corpus)
 # ---------------------------------------------------------------------------
 GT_SYNC="$tmp/gt-sync"
-( set -uo pipefail; eval "$source_graph"; gluerun_graph_sync "$STATE" "$GT_SYNC" ) \
-  || fail "ground-truth gluerun_graph_sync failed"
+( set -uo pipefail; eval "$source_graph"; singular_graph_sync "$STATE" "$GT_SYNC" ) \
+  || fail "ground-truth singular_graph_sync failed"
 SYNCDIR="$tmp/graph-sync"
-GLUERUN_CTX_GRAPH=1 "$GLUERUN" graph sync "$STATE" "$SYNCDIR" \
+SINGULAR_CTX_GRAPH=1 "$SINGULAR" graph sync "$STATE" "$SYNCDIR" \
   > "$tmp/sync.out" 2>"$tmp/sync.err" \
-  || fail "gluerun graph sync exited non-zero: $(cat "$tmp/sync.err")"
+  || fail "singular graph sync exited non-zero: $(cat "$tmp/sync.err")"
 cmp -s "$GT_SYNC/nodes.jsonl" "$SYNCDIR/nodes.jsonl" \
-  || fail "graph sync nodes.jsonl not byte-identical to gluerun_graph_sync"
+  || fail "graph sync nodes.jsonl not byte-identical to singular_graph_sync"
 cmp -s "$GT_SYNC/edges.jsonl" "$SYNCDIR/edges.jsonl" \
-  || fail "graph sync edges.jsonl not byte-identical to gluerun_graph_sync"
+  || fail "graph sync edges.jsonl not byte-identical to singular_graph_sync"
 
 # ---------------------------------------------------------------------------
 # FLAG ON: query neighbors|lineage|open-contradictions delegate to the readers
@@ -113,44 +113,44 @@ for line in open(sys.argv[1], encoding="utf-8"):
 [[ -n "$QID" ]] || fail "could not extract a node id from rebuilt corpus"
 
 for q in neighbors lineage; do
-  ( set -uo pipefail; eval "$source_graph"; "gluerun_graph_query_$q" "$GRAPHDIR" "$QID" ) \
+  ( set -uo pipefail; eval "$source_graph"; "singular_graph_query_$q" "$GRAPHDIR" "$QID" ) \
     > "$tmp/gt-$q.out" 2>/dev/null || fail "ground-truth query $q failed"
-  GLUERUN_CTX_GRAPH=1 GLUERUN_CTX_GRAPH_DIR="$GRAPHDIR" "$GLUERUN" graph query "$q" "$QID" \
+  SINGULAR_CTX_GRAPH=1 SINGULAR_CTX_GRAPH_DIR="$GRAPHDIR" "$SINGULAR" graph query "$q" "$QID" \
     > "$tmp/cli-$q.out" 2>"$tmp/cli-$q.err" \
-    || fail "gluerun graph query $q exited non-zero: $(cat "$tmp/cli-$q.err")"
+    || fail "singular graph query $q exited non-zero: $(cat "$tmp/cli-$q.err")"
   cmp -s "$tmp/gt-$q.out" "$tmp/cli-$q.out" \
-    || fail "graph query $q output not byte-identical to gluerun_graph_query_$q"
+    || fail "graph query $q output not byte-identical to singular_graph_query_$q"
 done
 
-( set -uo pipefail; eval "$source_graph"; gluerun_graph_query_open_contradictions "$GRAPHDIR" ) \
+( set -uo pipefail; eval "$source_graph"; singular_graph_query_open_contradictions "$GRAPHDIR" ) \
   > "$tmp/gt-oc.out" 2>/dev/null || fail "ground-truth query open-contradictions failed"
-GLUERUN_CTX_GRAPH=1 GLUERUN_CTX_GRAPH_DIR="$GRAPHDIR" "$GLUERUN" graph query open-contradictions \
+SINGULAR_CTX_GRAPH=1 SINGULAR_CTX_GRAPH_DIR="$GRAPHDIR" "$SINGULAR" graph query open-contradictions \
   > "$tmp/cli-oc.out" 2>"$tmp/cli-oc.err" \
-  || fail "gluerun graph query open-contradictions exited non-zero: $(cat "$tmp/cli-oc.err")"
+  || fail "singular graph query open-contradictions exited non-zero: $(cat "$tmp/cli-oc.err")"
 cmp -s "$tmp/gt-oc.out" "$tmp/cli-oc.out" \
   || fail "graph query open-contradictions output not byte-identical to reader"
 
 # ---------------------------------------------------------------------------
 # FLAG ON: usage() lists a graph line
 # ---------------------------------------------------------------------------
-GLUERUN_CTX_GRAPH=1 "$GLUERUN" help > "$tmp/help-on.txt" 2>&1 \
-  || fail "gluerun help (flag on) exited non-zero"
+SINGULAR_CTX_GRAPH=1 "$SINGULAR" help > "$tmp/help-on.txt" 2>&1 \
+  || fail "singular help (flag on) exited non-zero"
 grep -q '^  graph' "$tmp/help-on.txt" \
-  || fail "graph line not listed in usage() when GLUERUN_CTX_GRAPH=1"
+  || fail "graph line not listed in usage() when SINGULAR_CTX_GRAPH=1"
 
 # ---------------------------------------------------------------------------
 # FLAG ON: bad/missing subcommand + query reader -> clear usage error, non-zero
 # ---------------------------------------------------------------------------
-if GLUERUN_CTX_GRAPH=1 "$GLUERUN" graph bogus-sub >/dev/null 2>"$tmp/badsub.err"; then
+if SINGULAR_CTX_GRAPH=1 "$SINGULAR" graph bogus-sub >/dev/null 2>"$tmp/badsub.err"; then
   fail "graph with an unknown subcommand should exit non-zero"
 fi
 grep -qi 'usage' "$tmp/badsub.err" || fail "unknown graph subcommand gave no usage hint"
 
-if GLUERUN_CTX_GRAPH=1 "$GLUERUN" graph >/dev/null 2>&1; then
+if SINGULAR_CTX_GRAPH=1 "$SINGULAR" graph >/dev/null 2>&1; then
   fail "bare 'graph' (no subcommand) should exit non-zero"
 fi
 
-if GLUERUN_CTX_GRAPH=1 "$GLUERUN" graph query not-a-reader >/dev/null 2>"$tmp/badq.err"; then
+if SINGULAR_CTX_GRAPH=1 "$SINGULAR" graph query not-a-reader >/dev/null 2>"$tmp/badq.err"; then
   fail "graph query with an unknown reader should exit non-zero"
 fi
 grep -qi 'usage' "$tmp/badq.err" || fail "unknown graph query reader gave no usage hint"
@@ -164,22 +164,22 @@ grep -qi 'usage' "$tmp/badq.err" || fail "unknown graph query reader gave no usa
 # `graph` errors with the SAME message an arbitrary unknown command produces.
 for flag in "unset" "0"; do
   if [[ "$flag" == "unset" ]]; then
-    env -u GLUERUN_CTX_GRAPH "$GLUERUN" help > "$tmp/help-off.txt" 2>&1 \
-      || fail "gluerun help (flag $flag) exited non-zero"
-    env -u GLUERUN_CTX_GRAPH "$GLUERUN" graph rebuild "$STATE" "$GRAPHDIR" \
+    env -u SINGULAR_CTX_GRAPH "$SINGULAR" help > "$tmp/help-off.txt" 2>&1 \
+      || fail "singular help (flag $flag) exited non-zero"
+    env -u SINGULAR_CTX_GRAPH "$SINGULAR" graph rebuild "$STATE" "$GRAPHDIR" \
       >/dev/null 2>"$tmp/off-graph.err" && fail "graph must refuse when flag $flag"
-    env -u GLUERUN_CTX_GRAPH "$GLUERUN" totally-unknown-xyz \
+    env -u SINGULAR_CTX_GRAPH "$SINGULAR" totally-unknown-xyz \
       >/dev/null 2>"$tmp/off-unknown.err" && fail "control unknown command should be non-zero"
   else
-    GLUERUN_CTX_GRAPH=0 "$GLUERUN" help > "$tmp/help-off.txt" 2>&1 \
-      || fail "gluerun help (flag $flag) exited non-zero"
-    GLUERUN_CTX_GRAPH=0 "$GLUERUN" graph rebuild "$STATE" "$GRAPHDIR" \
+    SINGULAR_CTX_GRAPH=0 "$SINGULAR" help > "$tmp/help-off.txt" 2>&1 \
+      || fail "singular help (flag $flag) exited non-zero"
+    SINGULAR_CTX_GRAPH=0 "$SINGULAR" graph rebuild "$STATE" "$GRAPHDIR" \
       >/dev/null 2>"$tmp/off-graph.err" && fail "graph must refuse when flag $flag"
-    GLUERUN_CTX_GRAPH=0 "$GLUERUN" totally-unknown-xyz \
+    SINGULAR_CTX_GRAPH=0 "$SINGULAR" totally-unknown-xyz \
       >/dev/null 2>"$tmp/off-unknown.err" && fail "control unknown command should be non-zero"
   fi
   grep -q 'graph' "$tmp/help-off.txt" \
-    && fail "usage() leaked a graph line when GLUERUN_CTX_GRAPH=$flag (OFF-parity broken)"
+    && fail "usage() leaked a graph line when SINGULAR_CTX_GRAPH=$flag (OFF-parity broken)"
   # graph's refusal must read exactly like an unknown command's, modulo the
   # command token (graph vs totally-unknown-xyz).
   off_graph="$(sed 's/graph/CMD/' "$tmp/off-graph.err")"
@@ -188,4 +188,4 @@ for flag in "unset" "0"; do
     || fail "graph OFF refusal differs from unknown-command refusal ($flag): [$off_graph] vs [$off_unknown]"
 done
 
-echo "gluerun-graph-cli tests passed"
+echo "singular-graph-cli tests passed"

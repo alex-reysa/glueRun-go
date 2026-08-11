@@ -285,14 +285,14 @@
 ### 2026-07-12T19:15:49Z — TASK-0088 — integrate
 
 - Run: `ORIGIN-20260712T190802Z-11588`
-- Branch: `agent/graph/TASK-0088-gluerun-graph-cli`
+- Branch: `agent/graph/TASK-0088-singular-graph-cli`
 - Authority: origin
-- Rationale: merged agent/graph/TASK-0088-gluerun-graph-cli (e0a161fe99bcdae5356d9f26966d7d9e89037be9) into agent/integration as 33615e385c192b0f771875e799e1647d62f20043; gate green; acceptance=accepted
+- Rationale: merged agent/graph/TASK-0088-singular-graph-cli (e0a161fe99bcdae5356d9f26966d7d9e89037be9) into agent/integration as 33615e385c192b0f771875e799e1647d62f20043; gate green; acceptance=accepted
 
 ### 2026-07-12T19:07:34Z — TASK-0088 — accept
 
 - Run: `RUN-20260712T184452Z-55345`
-- Branch: `agent/graph/TASK-0088-gluerun-graph-cli`
+- Branch: `agent/graph/TASK-0088-singular-graph-cli`
 - Authority: origin
 - Rationale: auditor accepted; regression gate green; scope clean
 
@@ -1197,7 +1197,7 @@
 - Run: `ORIGIN-20260711T123620Z-25578`
 - Branch: `agent/plancritic/TASK-0029-critic-recheck-resume`
 - Authority: decider
-- Rationale: integration-gate-red -> amend-scope: Both failures are false positives: the present-but-uncalled guard scans use coarse `grep -rl` substring matching, so the resume file's definition of gluerun_ctx_critic_recheck_record_strategy (a superstring of ...record) and a header comment mentioning gluerun_plan_recritic_resume_decide trip the checks even though neither function is actually called. Expand scope minimally to the two sibling guard tests so the worker can tighten them (word-boundary match, strip comments, exclude the new file), then retry — the invariant is preserved, no proof weakened.
+- Rationale: integration-gate-red -> amend-scope: Both failures are false positives: the present-but-uncalled guard scans use coarse `grep -rl` substring matching, so the resume file's definition of singular_ctx_critic_recheck_record_strategy (a superstring of ...record) and a header comment mentioning singular_plan_recritic_resume_decide trip the checks even though neither function is actually called. Expand scope minimally to the two sibling guard tests so the worker can tighten them (word-boundary match, strip comments, exclude the new file), then retry — the invariant is preserved, no proof weakened.
 
 ### 2026-07-11T12:19:36Z — TASK-0029 — accept
 
@@ -1218,7 +1218,7 @@
 - Run: `ORIGIN-20260711T115350Z-36100`
 - Branch: `agent/plancritic/TASK-0028-critic-recheck-classify`
 - Authority: decider
-- Rationale: integration-gate-red -> amend-scope: TASK-0028 correctly adds the sanctioned recorder in its own file engine/ctx-critic-recheck-classify.sh (its own test passes); the red is a stale cross-brick contract: lib.sh's ctx-loader auto-sources every engine/ctx-*.sh, so the older sibling test tests/test-ctx-critic-recheck.sh now sees gluerun_ctx_critic_recheck_record defined and trips its over-broad global 'recorder must not exist' negative assertion — the very follow-up slice its own header declared OUT OF SCOPE 'here'. Minimally expand TASK-0028's owned files to include that sibling test and narrow assertion (a) to source engine/ctx-critic-recheck.sh in isolation, then re-verify; this weakens no real guarantee and retries remain (0/3).
+- Rationale: integration-gate-red -> amend-scope: TASK-0028 correctly adds the sanctioned recorder in its own file engine/ctx-critic-recheck-classify.sh (its own test passes); the red is a stale cross-brick contract: lib.sh's ctx-loader auto-sources every engine/ctx-*.sh, so the older sibling test tests/test-ctx-critic-recheck.sh now sees singular_ctx_critic_recheck_record defined and trips its over-broad global 'recorder must not exist' negative assertion — the very follow-up slice its own header declared OUT OF SCOPE 'here'. Minimally expand TASK-0028's owned files to include that sibling test and narrow assertion (a) to source engine/ctx-critic-recheck.sh in isolation, then re-verify; this weakens no real guarantee and retries remain (0/3).
 
 ### 2026-07-11T11:53:24Z — TASK-0028 — accept
 
@@ -1566,9 +1566,9 @@
 ### 2026-07-11T00:26:56Z — TASK-0003 — integrate
 
 - Run: `ORIGIN-20260711T002339Z-82854`
-- Branch: `agent/foundation/TASK-0003-gluerun-metrics-cli`
+- Branch: `agent/foundation/TASK-0003-singular-metrics-cli`
 - Authority: origin
-- Rationale: merged agent/foundation/TASK-0003-gluerun-metrics-cli (3e13d6e81ed99a6313394b1b0d3583d035771c6d) into agent/integration as 5193434e14da1b56204433d700f991fa3daa1709; gate green; acceptance=accepted
+- Rationale: merged agent/foundation/TASK-0003-singular-metrics-cli (3e13d6e81ed99a6313394b1b0d3583d035771c6d) into agent/integration as 5193434e14da1b56204433d700f991fa3daa1709; gate green; acceptance=accepted
 
 ### 2026-07-11T00:26:15Z — TASK-0004 — accept
 
@@ -1580,14 +1580,14 @@
 ### 2026-07-11T00:04:53Z — TASK-0003 — decide:retry
 
 - Run: `ORIGIN-20260711T000113Z-13926`
-- Branch: `agent/foundation/TASK-0003-gluerun-metrics-cli`
+- Branch: `agent/foundation/TASK-0003-singular-metrics-cli`
 - Authority: decider
-- Rationale: integration-gate-red -> retry: Single deterministic failure (test-ctx-metrics-cli.sh): the metrics CLI writes a real .gluerun-state artifact, violating its no-side-effect contract — an in-scope, worker-fixable defect, not a transient flake or missing proof environment. Retries remain (0/3), so send it back to the worker to make the CLI honor the contract (no real state write) and re-run the gate.
+- Rationale: integration-gate-red -> retry: Single deterministic failure (test-ctx-metrics-cli.sh): the metrics CLI writes a real .singular-state artifact, violating its no-side-effect contract — an in-scope, worker-fixable defect, not a transient flake or missing proof environment. Retries remain (0/3), so send it back to the worker to make the CLI honor the contract (no real state write) and re-run the gate.
 
 ### 2026-07-11T00:00:32Z — TASK-0003 — accept
 
 - Run: `RUN-20260710T234736Z-29359`
-- Branch: `agent/foundation/TASK-0003-gluerun-metrics-cli`
+- Branch: `agent/foundation/TASK-0003-singular-metrics-cli`
 - Authority: origin
 - Rationale: auditor accepted; regression gate green; scope clean
 
@@ -1653,7 +1653,7 @@
   under the detached l1-drive gate (passes when stdin is /dev/null). Fixed
   fail-closed in tests/run.sh (`</dev/null` per test). Engine gap noted for a
   future hardening task: the gate command runs UNBOUNDED — no
-  GLUERUN_GATE_TIMEOUT_SEC analog to the worker's 1200s runner timeout, so a
+  SINGULAR_GATE_TIMEOUT_SEC analog to the worker's 1200s runner timeout, so a
   hung gate stalls a drive forever. Candidate: small engine_runtime task after
   S0 (not hand-patched now; engine/ changes go through the task pipeline).
 
@@ -1663,14 +1663,14 @@
   single-turn/no-background hard rule in the docked L2 prompt. (b) gate-red:
   the drive exports consumer config into env; lib.sh ${VAR:-default}
   fallbacks keep leaked values inside sandboxed gate tests (env channel of
-  the earlier config-file leak; leaked GLUERUN_RUNNER even replaced test
+  the earlier config-file leak; leaked SINGULAR_RUNNER even replaced test
   stubs with the real CLI). Fixed fail-closed in tests/run.sh (scrub
-  GLUERUN_* before running tests). Engine hardening candidates recorded:
+  SINGULAR_* before running tests). Engine hardening candidates recorded:
   gate timeout + env-scrubbed gate invocation (future task with the
   gate-timeout item).
 
 - 2026-07-11 (operator): FIRST AUDIT ESCAPE (S0 evidence). TASK-0003's CLI
-  test asserted `! -e $ENGINE_HOME/.gluerun-state` — vacuously true in the
+  test asserted `! -e $ENGINE_HOME/.singular-state` — vacuously true in the
   pristine worker worktree, always false in the ops tree. Worker gate AND
   fresh auditor both passed it (both ran in the pristine environment);
   the integrate gate on the merged tree caught it red. Operator fixup
@@ -1686,7 +1686,7 @@
   smoke test.
 
 - 2026-07-11 (operator): ab-harness gated on its requiredCompletion as
-  written (deterministic arm fn behind GLUERUN_CTX_AB, events when ON,
+  written (deterministic arm fn behind SINGULAR_CTX_AB, events when ON,
   silent OFF, tests green). The dispatch-call-site wiring rides with
   paired-audit's l1-drive hook wave (paired-audit dependsOn ab-harness —
   ordering already correct in the DAG). Note: the planner, asked to plan
@@ -1707,20 +1707,20 @@
 
 - 2026-07-11 (operator): MILESTONE M1 complete — planner-resume-gates
   gated (TASK-0009/0010/0011: decider, sha alignment, consult hook with
-  lease + rc-86 fallback + strategy events). GLUERUN_PLANNER_SESSION=1
+  lease + rc-86 fallback + strategy events). SINGULAR_PLANNER_SESSION=1
   enabled in this repo's config: the self-hosting loop now dogfoods
   planner session persistence/resume (arm-B behavior); resume events
-  observable via context.strategy_selected role=planner and gluerun
+  observable via context.strategy_selected role=planner and singular
   metrics. First live resume expected on the next multi-slice node.
 
 - 2026-07-11 (operator): LIVE RESUME-DECIDE PROVEN. Direct probe of
-  gluerun_planner_resume_decide against the live plan-critic-driver meta
+  singular_planner_resume_decide against the live plan-critic-driver meta
   returned `resume a6098c4a-…` — all 10 gates passed including the
   template-sha alignment. One anomaly logged: the 04:13 planning run's
   meta carried an empty sessionId despite its envelope holding
   session_id e729900d (one-off; the 04:46 run's meta persisted its sid
   correctly). If empty-sid recurs, suspect an envelope-parse race in
-  claude-run's meta write; watch strategy reasons via gluerun metrics.
+  claude-run's meta write; watch strategy reasons via singular metrics.
 
 - 2026-07-11 05:02Z (operator): FIRST LIVE IN-PIPELINE PLANNER RESUME —
   context.strategy_selected role=planner strategy=resume sessionId=a6098c4a
@@ -1738,7 +1738,7 @@
   planned all four slices across three consecutive live resumes,
   converging on the driver wire-in (over-decomposition suspicion raised
   at slice 3, resolved by convergence at slice 4 — heuristic candidate
-  for the automated critic). GLUERUN_PLAN_CRITIQUE stays 0 until S3
+  for the automated critic). SINGULAR_PLAN_CRITIQUE stays 0 until S3
   ships the revise-verdict consumer; note: implemented knob is
   all-or-nothing (ON = critic + enforcement) — the stage file's
   observe-only intermediate mode was not built; acceptable, recorded.
@@ -1769,24 +1769,24 @@
   assertion (behavioral no-events guarantee remains pinned); planner
   contract rule 9 added banning temporal negative assertions. Pattern
   now twice-seen (TASK-0024, TASK-0028) — candidate check for the plan
-  critic when GLUERUN_PLAN_CRITIQUE flips on.
+  critic when SINGULAR_PLAN_CRITIQUE flips on.
 
 - 2026-07-11 (CEO/CTO): singular-brain integration doc VERIFIED (0.2.0 @
   e05f259 confirmed, 98/98 tests re-run green live, zero-dep Node engine,
   SidecarMissingError guard present, PMGO-launch drift to 0.1.0 confirmed)
   and steering decision made: STEER MINIMALLY NOW — stage-5 gains the
   optional additive contextManifest ingestion slice (fixture-tested JSON
-  contract, no runtime dependency, GLUERUN_CTX_MANIFEST default 0);
+  contract, no runtime dependency, SINGULAR_CTX_MANIFEST default 0);
   stage-7 records the manifest A/B arm as a consumer-side (PMGO-launch)
-  follow-on. DEFER to post-plan: vendoring/bundling into ~/.gluerun,
-  gluerun manifest passthrough, doctor Node check, PMGO-launch resync,
+  follow-on. DEFER to post-plan: vendoring/bundling into ~/.singular,
+  singular manifest passthrough, doctor Node check, PMGO-launch resync,
   dock prompt injection. One doctrinal nuance added: manifest content is
   authored-knowledge class — never `authoritative` evidence, never
   tainted-model class; a third trust category the S6 graph must respect.
 
 - 2026-07-11 (CTO, polish backlog): teach tools/promote-gate.sh the
-  --from-reconcile --frontier interface so GLUERUN_AUTO_PROMOTE_GATES=1
-  + `gluerun auto` + the shipped launchd watchdog replace the session
+  --from-reconcile --frontier interface so SINGULAR_AUTO_PROMOTE_GATES=1
+  + `singular auto` + the shipped launchd watchdog replace the session
   master-loop entirely (built-in L0/L-1 end-to-end). Also note: second
   orphaned prompt found — templates/prompts/l0-origin.md is unwired
   (decide at polish: wire or remove).
@@ -1825,7 +1825,7 @@
   master loop exited PLANNER-FAIL-X2). Cleared the codex-scoped
   planner-backoff.json (its premise died with the runner switch; it
   would have idled the claude planner until 00:07Z for a codex quota).
-  GLUERUN_CODEX_* env knobs remain in config, inert. Session-affinity
+  SINGULAR_CODEX_* env knobs remain in config, inert. Session-affinity
   gate (runner-changed) degrades any persisted codex session metas to
   fresh claude runs — designed behavior, no action needed. Note: during
   the codex window the loop + operator completed TASK-0040/0041,
@@ -1895,7 +1895,7 @@
   the superseded-accepted audit record, integrate still early-skipped the
   task because the decider park had left the LEASE status blocked (the
   task-file and packet fixes did not touch it). Operator flipped
-  .gluerun-state/leases/TASK-0067.json status blocked->accepted; the
+  .singular-state/leases/TASK-0067.json status blocked->accepted; the
   imported-packet audit sidecar already carried the accepted verdict.
   Lesson for the runbook: resurrecting a parked task requires FOUR state
   surfaces in agreement — task file Status, packet status, run audit record,
@@ -1941,4 +1941,4 @@
   selection frozen pending the consumer subgraph-vs-flat measurement.
   Controlled A/B + manifest arm recorded as the consumer-of-record
   follow-on. Gate published manually per the operator hand-off with
-  GLUERUN_FORCE_EVAL_GATE=1 (deliberate operator authority).
+  SINGULAR_FORCE_EVAL_GATE=1 (deliberate operator authority).

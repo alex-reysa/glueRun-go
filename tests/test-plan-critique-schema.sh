@@ -2,8 +2,8 @@
 # Contract test for schemas/plan-critique.v0.schema.json — the plan-critic
 # batch verdict emitted by the S2-plan-critique skeptic node. Fail-closed:
 # the schema is an additive, closed object (additionalProperties:false) under
-# the gluerun.orchestration.*.v0 namespace, and every invalid class below is
-# rejected. Stable finding identity mirrors gluerun_finding_id in engine/lib.sh.
+# the singular.orchestration.*.v0 namespace, and every invalid class below is
+# rejected. Stable finding identity mirrors singular_finding_id in engine/lib.sh.
 #
 # No jsonschema module ships in this environment, so this test carries a tiny
 # schema-driven validator (const/enum/pattern/minLength/required/additional
@@ -79,14 +79,14 @@ assert_valid()   { printf '%s' "$1" | validates || fail "$2: should VALIDATE but
 assert_invalid() { printf '%s' "$1" | validates && fail "$2: should be REJECTED but validated"; return 0; }
 
 # Stable finding id derived from claim text via the engine helper.
-FID="$(gluerun_finding_id 'Batch slices TASK-0007 and TASK-0008 with a hidden ordering coupling')"
-[[ "$FID" =~ ^f-[0-9a-f]{12}$ ]] || fail "gluerun_finding_id shape unexpected: $FID"
+FID="$(singular_finding_id 'Batch slices TASK-0007 and TASK-0008 with a hidden ordering coupling')"
+[[ "$FID" =~ ^f-[0-9a-f]{12}$ ]] || fail "singular_finding_id shape unexpected: $FID"
 
 # --- fully-populated valid fixture (verdict approve, real finding id) ---------
 valid_fixture() { # verdict
   cat <<JSON
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "some-dag-node",
   "runId": "RUN-20260711T000000Z-00001",
   "batchTaskIds": ["TASK-0007", "TASK-0008"],
@@ -128,14 +128,14 @@ assert_invalid "$(valid_fixture reject)"  "verdict reject (not in enum)"
 
 # (a) missing a required top-level field (rationale)
 assert_invalid '{
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "n", "runId": "RUN-1", "batchTaskIds": ["TASK-0007"],
   "verdict": "approve", "findings": [], "assumptionsChallenged": []
 }' "missing required rationale"
 
 # (b) unknown extra top-level field (closed object)
 assert_invalid '{
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "n", "runId": "RUN-1", "batchTaskIds": ["TASK-0007"],
   "verdict": "approve", "findings": [], "assumptionsChallenged": [],
   "rationale": "ok", "extraField": "nope"
@@ -143,7 +143,7 @@ assert_invalid '{
 
 # (c) finding severity outside blocking | should-fix | note
 assert_invalid '{
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "n", "runId": "RUN-1", "batchTaskIds": ["TASK-0007"],
   "verdict": "approve",
   "findings": [{"id":"f-0123456789ab","severity":"critical","claim":"c","evidence":"e"}],
@@ -152,7 +152,7 @@ assert_invalid '{
 
 # (d) finding id not matching ^f-[0-9a-f]{12}$
 assert_invalid '{
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "n", "runId": "RUN-1", "batchTaskIds": ["TASK-0007"],
   "verdict": "approve",
   "findings": [{"id":"F-XYZ","severity":"note","claim":"c","evidence":"e"}],
@@ -161,7 +161,7 @@ assert_invalid '{
 
 # (e) finding missing claim
 assert_invalid '{
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "n", "runId": "RUN-1", "batchTaskIds": ["TASK-0007"],
   "verdict": "approve",
   "findings": [{"id":"f-0123456789ab","severity":"note","evidence":"e"}],
@@ -170,7 +170,7 @@ assert_invalid '{
 
 # (f) finding missing evidence
 assert_invalid '{
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "n", "runId": "RUN-1", "batchTaskIds": ["TASK-0007"],
   "verdict": "approve",
   "findings": [{"id":"f-0123456789ab","severity":"note","claim":"c"}],
@@ -179,22 +179,22 @@ assert_invalid '{
 
 # (g) batchTaskIds entry not matching ^TASK-[0-9]{4,}$
 assert_invalid '{
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "n", "runId": "RUN-1", "batchTaskIds": ["TASK-7"],
   "verdict": "approve", "findings": [], "assumptionsChallenged": [], "rationale": "ok"
 }' "batchTaskIds bad pattern"
 
 # --- stable finding identity: formatting variants map to the same id ----------
-id_a="$(gluerun_finding_id 'Parser drops nil input')"
-id_b="$(gluerun_finding_id '  parser   DROPS nil INPUT  ')"
+id_a="$(singular_finding_id 'Parser drops nil input')"
+id_b="$(singular_finding_id '  parser   DROPS nil INPUT  ')"
 [[ "$id_a" == "$id_b" ]] || fail "finding id not stable across formatting: $id_a vs $id_b"
 assert_valid "{
-  \"schema\": \"gluerun.orchestration.plan-critique.v0\",
+  \"schema\": \"singular.orchestration.plan-critique.v0\",
   \"node\": \"n\", \"runId\": \"RUN-1\", \"batchTaskIds\": [\"TASK-0007\"],
   \"verdict\": \"revise\",
   \"findings\": [{\"id\":\"$id_a\",\"severity\":\"should-fix\",\"claim\":\"Parser drops nil input\",\"evidence\":\"engine/parse.sh line 12\"}],
   \"assumptionsChallenged\": [], \"rationale\": \"reproducible id\"
-}" "derived gluerun_finding_id validates against pattern"
+}" "derived singular_finding_id validates against pattern"
 
 # --- prompt exists, is the plan-batch skeptic, and is present-but-unwired -----
 [[ -f "$PROMPT" ]] || fail "missing prompt: $PROMPT"

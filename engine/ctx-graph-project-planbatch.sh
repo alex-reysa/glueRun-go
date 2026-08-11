@@ -5,7 +5,7 @@
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines a new
 # function ONLY; NO existing engine path invokes it, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior (OFF-parity
-# when GLUERUN_CTX_GRAPH is unset or 0). The mapper writes NO file: it prints a
+# when SINGULAR_CTX_GRAPH is unset or 0). The mapper writes NO file: it prints a
 # `node` JSONL stream to stdout (one schema-valid line; every line self-identifies
 # via `kind`). This is the 12th of the 13 node types and the last with a durable
 # source; it mints a node only — the `derived_from` edge from plan-batch to `goal`
@@ -14,18 +14,18 @@
 # record is introduced.
 #
 # It composes the integrated primitives — the identity convention
-# gluerun_graph_identity (engine/ctx-graph-project.sh) plus engine/ctx-graph.sh's
-# gluerun_graph_node_id / gluerun_graph_emit_node — extending the graph-projector's
-# inner layer with the plan-batch node family. A later `gluerun graph rebuild`
-# entry point (behind GLUERUN_CTX_GRAPH, default 0) partitions the stream by `kind`
+# singular_graph_identity (engine/ctx-graph-project.sh) plus engine/ctx-graph.sh's
+# singular_graph_node_id / singular_graph_emit_node — extending the graph-projector's
+# inner layer with the plan-batch node family. A later `singular graph rebuild`
+# entry point (behind SINGULAR_CTX_GRAPH, default 0) partitions the stream by `kind`
 # and hands the node stream to the integrated corpus writer
-# gluerun_graph_write_corpus (engine/ctx-graph-corpus.sh).
+# singular_graph_write_corpus (engine/ctx-graph-corpus.sh).
 #
 # A plan-batch is model-authored, so evidenceClass is `claim` (delegated to
-# gluerun_graph_emit_node) — no input path here mints an `authoritative` node.
+# singular_graph_emit_node) — no input path here mints an `authoritative` node.
 #
 # Public function:
-#   gluerun_graph_project_plan_batch <sessionMetaRecordPath>
+#   singular_graph_project_plan_batch <sessionMetaRecordPath>
 #       -> reads a durable S1 planner session-meta record (the `planner-session-
 #          meta/planner.out` line carrying `node=`, `runId=`, `stage=`, `area=`,
 #          and `staged:TASK-*` entries) and emits one `plan-batch` node (claim)
@@ -42,7 +42,7 @@
 # there is nothing to key, so the mapper emits no line and returns zero.
 # Deterministic and idempotent: the same source emits byte-identical lines. Pure
 # stdout — writes no file.
-gluerun_graph_project_plan_batch() {
+singular_graph_project_plan_batch() {
   local record_path="$1"
   local node run_id stage area count content_b64 content
   # Newline-delimited fields; the base64 content is a single line (no newlines).
@@ -54,12 +54,12 @@ gluerun_graph_project_plan_batch() {
     read -r area
     read -r count
     read -r content_b64
-  } < <(GLUERUN_GP_PATH="$record_path" python3 -c '
+  } < <(SINGULAR_GP_PATH="$record_path" python3 -c '
 import json, os, base64
 node = run_id = stage = area = ""
 count = 0
 try:
-    with open(os.environ["GLUERUN_GP_PATH"], encoding="utf-8") as f:
+    with open(os.environ["SINGULAR_GP_PATH"], encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line.startswith("node="):
@@ -94,18 +94,18 @@ print(base64.b64encode(content.encode()).decode())
   local attrs
   # Always project the staged-task count; project stage/area only when present
   # (a missing optional field is skipped, not emitted).
-  attrs="$(GLUERUN_GP_STAGE="$stage" GLUERUN_GP_AREA="$area" GLUERUN_GP_COUNT="$count" python3 -c '
+  attrs="$(SINGULAR_GP_STAGE="$stage" SINGULAR_GP_AREA="$area" SINGULAR_GP_COUNT="$count" python3 -c '
 import json, os
-a = {"stagedTaskCount": int(os.environ.get("GLUERUN_GP_COUNT") or 0)}
-stage = os.environ.get("GLUERUN_GP_STAGE", "")
+a = {"stagedTaskCount": int(os.environ.get("SINGULAR_GP_COUNT") or 0)}
+stage = os.environ.get("SINGULAR_GP_STAGE", "")
 if stage:
     a["stage"] = stage
-area = os.environ.get("GLUERUN_GP_AREA", "")
+area = os.environ.get("SINGULAR_GP_AREA", "")
 if area:
     a["area"] = area
 print(json.dumps(a, sort_keys=True, separators=(",", ":")))')"
 
   local ident
-  ident="$(gluerun_graph_identity plan-batch "$node" "$run_id")"
-  gluerun_graph_emit_node plan-batch "$ident" "$record_path" "$content" "" "$attrs"
+  ident="$(singular_graph_identity plan-batch "$node" "$run_id")"
+  singular_graph_emit_node plan-batch "$ident" "$record_path" "$content" "" "$attrs"
 }

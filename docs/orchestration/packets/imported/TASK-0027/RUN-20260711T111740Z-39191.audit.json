@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0027",
   "runId": "RUN-20260711T111740Z-39191",
   "branch": "agent/plancritic/TASK-0027-recheck-sampling-gate",
@@ -11,7 +11,7 @@
     "worker-evidence/red.log (FAIL: engine not present yet \u2014 genuine RED against absent implementation)",
     "worker-evidence/green.log (ctx-critic-recheck tests passed)",
     "worker-evidence/regression.log (48 passed, 0 failed; new test listed)",
-    "engine/ctx-critic-recheck.sh (pure bucket + should_sample; default-OFF GLUERUN_CRITIC_RECHECK_PCT; no recorder, no runner, no state/event writes, no driver hook)",
+    "engine/ctx-critic-recheck.sh (pure bucket + should_sample; default-OFF SINGULAR_CRITIC_RECHECK_PCT; no recorder, no runner, no state/event writes, no driver hook)",
     "tests/test-ctx-critic-recheck.sh (asserts auto-source, OFF-by-default no event/file/state, PCT=100 all, mid-value proper subset==bucket<P, garbage fail-safe OFF, cross-process determinism, recorder absent)",
     "engine/lib.sh ctx-loader block lines 3851-3857 (auto-sources engine/ctx-*.sh; unmodified)"
   ],

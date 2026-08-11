@@ -3,9 +3,9 @@ set -euo pipefail
 
 # Require bash >= 4 (mapfile). macOS /bin/bash is 3.2; re-exec under Homebrew bash.
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "l1-drive.sh requires bash >= 4 (mapfile); install via 'brew install bash'" >&2
@@ -23,15 +23,15 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-# Worker/auditor runner. Defaults to the codex runner; set GLUERUN_RUNNER to a
+# Worker/auditor runner. Defaults to the codex runner; set SINGULAR_RUNNER to a
 # drop-in (e.g. claude-run.sh) to dispatch a different CLI. Same flag surface
 # and same --output-last-message contract is required of any runner.
-GLUERUN_RUNNER_BIN="${GLUERUN_RUNNER:-$SCRIPT_DIR/codex-run.sh}"
+SINGULAR_RUNNER_BIN="${SINGULAR_RUNNER:-$SCRIPT_DIR/codex-run.sh}"
 
 task_id=""
 dry_run="no"
 reset="no"
-require_audit="${GLUERUN_REQUIRE_AUDIT:-1}"
+require_audit="${SINGULAR_REQUIRE_AUDIT:-1}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,24 +49,24 @@ if [[ -z "$task_id" ]]; then
   exit 2
 fi
 
-gluerun_ensure_state_dirs
-gluerun_require_target_branch
+singular_ensure_state_dirs
+singular_require_target_branch
 
 # Honor the kill switch at the dispatch entry point, not only in the loop
 # wrappers, so a manual `make orch-drive` cannot dispatch a worker while frozen.
-if gluerun_stop_requested; then
-  gluerun_append_event "l1.frozen" "STOP sentinel present; refusing to dispatch" "{\"taskId\":\"$task_id\"}"
-  echo "frozen (STOP sentinel present; $GLUERUN_STOP_FILE); refusing to dispatch $task_id"
+if singular_stop_requested; then
+  singular_append_event "l1.frozen" "STOP sentinel present; refusing to dispatch" "{\"taskId\":\"$task_id\"}"
+  echo "frozen (STOP sentinel present; $SINGULAR_STOP_FILE); refusing to dispatch $task_id"
   exit 0
 fi
 
-task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+task_file="$SINGULAR_TASKS_DIR/$task_id.md"
 if [[ ! -f "$task_file" ]]; then
   echo "task file not found: $task_file" >&2
   exit 2
 fi
 
-task_json="$(gluerun_task_json "$task_file")"
+task_json="$(singular_task_json "$task_file")"
 tf() { printf '%s' "$task_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d[sys.argv[1]]; print(json.dumps(v) if isinstance(v,(list,dict)) else v)' "$1"; }
 
 area="$(tf area)"
@@ -74,10 +74,10 @@ worker_branch="$(tf workerBranch)"
 target_branch="$(tf targetBranch)"
 test_policy="$(tf testPolicy)"
 gate_cmd="$(tf gateCommand)"
-[[ -n "$gate_cmd" ]] || gate_cmd="$GLUERUN_DEFAULT_GATE_CMD"
-[[ -n "$target_branch" ]] || target_branch="$GLUERUN_TARGET_BRANCH"
-dispatch_batch_id="${GLUERUN_DISPATCH_BATCH_ID:-}"
-dispatch_base_sha="${GLUERUN_DISPATCH_BASE_SHA:-}"
+[[ -n "$gate_cmd" ]] || gate_cmd="$SINGULAR_DEFAULT_GATE_CMD"
+[[ -n "$target_branch" ]] || target_branch="$SINGULAR_TARGET_BRANCH"
+dispatch_batch_id="${SINGULAR_DISPATCH_BATCH_ID:-}"
+dispatch_base_sha="${SINGULAR_DISPATCH_BASE_SHA:-}"
 branch_base="${dispatch_base_sha:-$target_branch}"
 packet_base_ref="${dispatch_base_sha:-$target_branch}"
 
@@ -88,11 +88,11 @@ mapfile -t forbidden_files < <(printf '%s' "$task_json" | python3 -c 'import jso
 # Absorbs the historical ad-hoc refusals (empty gate command [fail closed: a
 # task with no gate command would otherwise run `bash -c ""`, which exits 0 and
 # silently passes the regression check], empty owned files) plus the structural
-# checks gluerun_task_preflight enforces. Dry-run keeps its historical exemption
+# checks singular_task_preflight enforces. Dry-run keeps its historical exemption
 # from the empty-gate refusal only.
 preflight_require_gate=1
 [[ "$dry_run" == "yes" ]] && preflight_require_gate=0
-if ! preflight_reasons="$(gluerun_task_preflight "$task_json" "$gate_cmd" "$target_branch" "$preflight_require_gate")"; then
+if ! preflight_reasons="$(singular_task_preflight "$task_json" "$gate_cmd" "$target_branch" "$preflight_require_gate")"; then
   echo "refusing to dispatch $task_id: task preflight failed:" >&2
   printf '%s\n' "$preflight_reasons" >&2
   if [[ "$dry_run" == "yes" ]]; then
@@ -100,22 +100,22 @@ if ! preflight_reasons="$(gluerun_task_preflight "$task_json" "$gate_cmd" "$targ
     exit 3
   fi
   preflight_joined="$(printf '%s' "$preflight_reasons" | python3 -c 'import sys; print("; ".join(l.strip() for l in sys.stdin if l.strip()))')"
-  gluerun_task_set_status "$task_file" "blocked" || true
+  singular_task_set_status "$task_file" "blocked" || true
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "escalate-parked" \
     --rationale "task preflight failed: $preflight_joined" --run "preflight" \
     --branch "$worker_branch" --authority l1 || true
   preflight_event="$(printf '%s\n' "$preflight_reasons" | python3 -c 'import json,sys
 print(json.dumps({"taskId": sys.argv[1], "reasons": [l.strip() for l in sys.stdin if l.strip()]}, separators=(",", ":")))' "$task_id")"
-  gluerun_append_event "l1.preflight_failed" "task preflight failed" "$preflight_event"
+  singular_append_event "l1.preflight_failed" "task preflight failed" "$preflight_event"
   exit 3
 fi
 
-run_id="$(gluerun_worker_run_id)"
-run_dir="$(gluerun_run_dir "$run_id")"
+run_id="$(singular_worker_run_id)"
+run_dir="$(singular_run_dir "$run_id")"
 mkdir -p "$run_dir"
-worktree="$GLUERUN_WORKTREES_DIR/$task_id"
-max_retries="${GLUERUN_MAX_RETRIES:-3}"
-repo_schema_version="$(python3 - "$GLUERUN_ROOT/gluerun.config.json" <<'PY' 2>/dev/null || true
+worktree="$SINGULAR_WORKTREES_DIR/$task_id"
+max_retries="${SINGULAR_MAX_RETRIES:-3}"
+repo_schema_version="$(python3 - "$SINGULAR_ROOT/singular.config.json" <<'PY' 2>/dev/null || true
 import json
 import sys
 try:
@@ -125,12 +125,12 @@ except Exception:
 PY
 )"
 audit_write_contract="v0"
-audit_write_schema="gluerun.orchestration.audit-verdict.v0"
-audit_write_schema_path="$GLUERUN_SCHEMA_DIR/audit-verdict.v0.schema.json"
+audit_write_schema="singular.orchestration.audit-verdict.v0"
+audit_write_schema_path="$SINGULAR_SCHEMA_DIR/audit-verdict.v0.schema.json"
 if [[ "$repo_schema_version" == "v2" ]]; then
   audit_write_contract="v1"
-  audit_write_schema="gluerun.orchestration.audit-verdict.v1"
-  audit_write_schema_path="$GLUERUN_SCHEMA_DIR/audit-verdict.v1.schema.json"
+  audit_write_schema="singular.orchestration.audit-verdict.v1"
+  audit_write_schema_path="$SINGULAR_SCHEMA_DIR/audit-verdict.v1.schema.json"
 fi
 l1_pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
 [[ "$l1_pgid" =~ ^[1-9][0-9]*$ ]] || l1_pgid="$$"
@@ -162,12 +162,12 @@ echo "  gate_cmd=$gate_cmd  max_retries=$max_retries"
 
 # ---- L2 base prompt assembly ----
 # A project module may append extra worker-contract obligations (generic: none).
-export GLUERUN_WORKER_CONTRACT_EXTRA="$(gluerun_worker_contract_extra "$task_file" "$task_id" 2>/dev/null || true)"
+export SINGULAR_WORKER_CONTRACT_EXTRA="$(singular_worker_contract_extra "$task_file" "$task_id" 2>/dev/null || true)"
 # A project module may redirect the red-evidence log to a task-specific artifact
 # (generic: empty -> the prompt keeps its default red log path).
-export GLUERUN_WORKER_RED_LOG="$(gluerun_worker_red_log "$task_file" "$task_id" 2>/dev/null || true)"
+export SINGULAR_WORKER_RED_LOG="$(singular_worker_red_log "$task_file" "$task_id" 2>/dev/null || true)"
 l2_prompt="$run_dir/l2-prompt.md"
-python3 - "$GLUERUN_ORCH_DIR/prompts/l2-test-first-developer.md" "$l2_prompt" "$task_json" "$run_id" "$packet_base_ref" <<'PY'
+python3 - "$SINGULAR_ORCH_DIR/prompts/l2-test-first-developer.md" "$l2_prompt" "$task_json" "$run_id" "$packet_base_ref" <<'PY'
 import json
 import sys
 
@@ -177,9 +177,9 @@ with open(template_path, "r", encoding="utf-8") as f:
     tmpl = f.read()
 import os
 owned = t["ownedFiles"]; forbidden = t["forbiddenFiles"]; accept = t["acceptanceCriteria"]
-red_log = os.environ.get("GLUERUN_WORKER_RED_LOG") or ".gluerun-evidence/red.log"
+red_log = os.environ.get("SINGULAR_WORKER_RED_LOG") or ".singular-evidence/red.log"
 # Extra obligations contributed by an enabled project module (generic: empty).
-extra_module_contract = os.environ.get("GLUERUN_WORKER_CONTRACT_EXTRA", "")
+extra_module_contract = os.environ.get("SINGULAR_WORKER_CONTRACT_EXTRA", "")
 if extra_module_contract and not extra_module_contract.endswith("\n"):
     extra_module_contract += "\n"
 subs = {
@@ -202,14 +202,14 @@ working directory is the worktree for this task.
 
 - Edit ONLY these owned files: {", ".join(owned)}. Out-of-scope edits are rejected.
 - Test-first: write `{red_log}` (failing test before impl),
-  `.gluerun-evidence/green.log` (passing after impl), `.gluerun-evidence/regression.log`
+  `.singular-evidence/green.log` (passing after impl), `.singular-evidence/regression.log`
   (`{t['gateCommand'] or '(your gate command)'}`).
 {extra_module_contract}- Do NOT run git. Leave changes uncommitted; the L1 driver commits.
 - Do NOT broaden architecture beyond the objective.
 
 Your FINAL message MUST be a single JSON object matching the state packet schema
 reference `schemas/orchestration/state-packet.v0.schema.json`. Set
-schema exactly to "gluerun.orchestration.state-packet.v0" and include: packetId,
+schema exactly to "singular.orchestration.state-packet.v0" and include: packetId,
 runId "{run_id}", taskId "{t['taskId']}", area "{t['area']}", role "l2-developer",
 status "needs-review", baseRef "{base_ref}", branch "{t['workerBranch']}",
 headSha "uncommitted", workspace (abs worktree path), ownedFiles {json.dumps(owned)},
@@ -231,7 +231,7 @@ PY
 
 # ---- Auditor prompt assembly ----
 audit_prompt="$run_dir/auditor-prompt.md"
-python3 - "$GLUERUN_ORCH_DIR/prompts/auditor.md" "$audit_prompt" "$task_json" "$run_id" \
+python3 - "$SINGULAR_ORCH_DIR/prompts/auditor.md" "$audit_prompt" "$task_json" "$run_id" \
   "$run_dir" "$SCRIPT_DIR" "$audit_write_contract" <<'PY'
 import json
 import sys
@@ -243,7 +243,7 @@ forbidden = ", ".join(t["forbiddenFiles"]) if t["forbiddenFiles"] else "(none)"
 if audit_contract == "v1":
     verdict_contract = f"""Your FINAL message MUST be a single JSON object matching
 `schemas/orchestration/audit-verdict.v1.schema.json`: schema
-"gluerun.orchestration.audit-verdict.v1", taskId "{t['taskId']}", runId
+"singular.orchestration.audit-verdict.v1", taskId "{t['taskId']}", runId
 "{run_id}", branch "{t['workerBranch']}", verdict
 (accepted|needs-fix|blocked|needs-human), evidenceReviewed[],
 verificationResults[{{status, command, evidenceRefs, rationale}}], commandsRun[],
@@ -259,7 +259,7 @@ object."""
 else:
     verdict_contract = f"""Your FINAL message MUST be a single JSON object matching
 `schemas/orchestration/audit-verdict.v0.schema.json`: schema
-"gluerun.orchestration.audit-verdict.v0", taskId "{t['taskId']}", runId
+"singular.orchestration.audit-verdict.v0", taskId "{t['taskId']}", runId
 "{run_id}", branch "{t['workerBranch']}", verdict
 (accepted|needs-fix|blocked|needs-human), evidenceReviewed[], commandsRun[],
 findings[], requiredFixes[], rationale. Reproduce the host gate classification
@@ -294,7 +294,7 @@ PY
 if [[ "$dry_run" == "yes" ]]; then
   echo ""
   echo "DRY RUN — no worktree, no codex, no commit. Prompts assembled at $run_dir."
-  gluerun_append_event "l1.dry_run" "l1 drive dry run" "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
+  singular_append_event "l1.dry_run" "l1 drive dry run" "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
   l1_status terminal completed "Dry-run context assembly completed" true \
     "No action required" "dry-run"
   exit 0
@@ -315,15 +315,15 @@ l1_on_exit() {
     # the next dispatch self-heals via accept-existing-packet (0.4.0 marked
     # the lease failed here, orphaning accepted work behind an exit-2
     # re-dispatch loop).
-    gluerun_record_recovery "accepted work stranded before inbox placement; next dispatch auto-heals via accept-existing-packet" \
+    singular_record_recovery "accepted work stranded before inbox placement; next dispatch auto-heals via accept-existing-packet" \
       "$task_id" "$worker_branch" "accept-existing-packet" "origin" "auto-heal on next dispatch" "origin" || true
-    gluerun_append_event "l1.accept_interrupted" "l1 drive died between acceptance and inbox placement" \
+    singular_append_event "l1.accept_interrupted" "l1 drive died between acceptance and inbox placement" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"code\":$code}" || true
   elif [[ "$_l1_outcome" == "incomplete" && "$_l1_lease_written" == "yes" ]]; then
-    gluerun_lease_set_status "$task_id" "failed" 2>/dev/null || true
-    gluerun_record_recovery "l1-drive exited before a terminal outcome (code $code)" \
+    singular_lease_set_status "$task_id" "failed" 2>/dev/null || true
+    singular_record_recovery "l1-drive exited before a terminal outcome (code $code)" \
       "$task_id" "$worker_branch" "rebuild-context" "origin" "rerun or decide" "origin" || true
-    gluerun_append_event "l1.aborted" "l1 drive aborted" \
+    singular_append_event "l1.aborted" "l1 drive aborted" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"code\":$code}" || true
   fi
 }
@@ -333,18 +333,18 @@ l1_status implementing active "Preparing the isolated worker workspace" false \
 
 # ---- Worktree lifecycle: reset / orphan auto-recovery ----
 remove_worktree() {
-  gluerun_git_lock_acquire
-  if gluerun_worktree_registered "$worktree"; then
-    git -C "$GLUERUN_ROOT" worktree remove --force "$worktree" 2>/dev/null || true
+  singular_git_lock_acquire
+  if singular_worktree_registered "$worktree"; then
+    git -C "$SINGULAR_ROOT" worktree remove --force "$worktree" 2>/dev/null || true
   fi
   rm -rf "$worktree"
-  git -C "$GLUERUN_ROOT" worktree prune 2>/dev/null || true
-  gluerun_git_lock_release
+  git -C "$SINGULAR_ROOT" worktree prune 2>/dev/null || true
+  singular_git_lock_release
 }
 
 if [[ "$reset" == "yes" ]]; then
   remove_worktree
-  gluerun_with_git_lock git -C "$GLUERUN_ROOT" branch -D "$worker_branch" 2>/dev/null || true
+  singular_with_git_lock git -C "$SINGULAR_ROOT" branch -D "$worker_branch" 2>/dev/null || true
 fi
 
 # A deterministic refusal that repeats forever starves the loop (0.4.0: a
@@ -352,20 +352,20 @@ fi
 # the breaker halted the run). Count refusals per task; at the threshold,
 # park the task as a DECIDED outcome (exit 3) so the frontier stops
 # re-selecting it and an operator sees exactly why.
-l1_refusals_file="$GLUERUN_DISPATCH_DIR/$task_id.refusals"
+l1_refusals_file="$SINGULAR_DISPATCH_DIR/$task_id.refusals"
 l1_note_refusal_and_maybe_park() {
   local reason="$1" n=0
-  mkdir -p "$GLUERUN_DISPATCH_DIR"
+  mkdir -p "$SINGULAR_DISPATCH_DIR"
   [[ -f "$l1_refusals_file" ]] && n="$(head -1 "$l1_refusals_file" 2>/dev/null | tr -d '[:space:]')"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
   n=$((n + 1))
   printf '%s\n' "$n" >"$l1_refusals_file"
-  if (( n >= ${GLUERUN_REFUSAL_PARK_THRESHOLD:-3} )); then
-    gluerun_task_set_status "$task_file" "blocked" 2>/dev/null || true
+  if (( n >= ${SINGULAR_REFUSAL_PARK_THRESHOLD:-3} )); then
+    singular_task_set_status "$task_file" "blocked" 2>/dev/null || true
     "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "escalate-parked" \
       --rationale "repeated dispatch refusal x$n: $reason" --run "$run_id" \
       --authority "l1-driver" 2>/dev/null || true
-    gluerun_append_event "l1.refusal_parked" "task parked after repeated dispatch refusals" \
+    singular_append_event "l1.refusal_parked" "task parked after repeated dispatch refusals" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"refusals\":$n,\"reason\":\"$reason\"}"
     rm -f "$l1_refusals_file"
     echo "parked $task_id after $n refusals: $reason" >&2
@@ -379,25 +379,25 @@ l1_note_refusal_and_maybe_park() {
 # run's packet exists and validates, accept it deterministically and enqueue —
 # no worker/auditor re-run.
 l1_try_auto_accept_existing() {
-  [[ "${GLUERUN_AUTO_ACCEPT_EXISTING:-1}" == "1" ]] || return 1
+  [[ "${SINGULAR_AUTO_ACCEPT_EXISTING:-1}" == "1" ]] || return 1
   local prev_run cand
-  prev_run="$(gluerun_lease_field "$task_id" runId 2>/dev/null || true)"
+  prev_run="$(singular_lease_field "$task_id" runId 2>/dev/null || true)"
   [[ -n "$prev_run" ]] || return 1
   # Already queued or imported: the work is in flight — dispatch is a no-op.
-  if [[ -f "$GLUERUN_INBOX_DIR/$prev_run.json" ]]     || find "$GLUERUN_ORCH_DIR/packets/imported/$task_id" -maxdepth 1 -name '*.json'          -not -name '*.audit.json' -type f 2>/dev/null | grep -q .; then
+  if [[ -f "$SINGULAR_INBOX_DIR/$prev_run.json" ]]     || find "$SINGULAR_ORCH_DIR/packets/imported/$task_id" -maxdepth 1 -name '*.json'          -not -name '*.audit.json' -type f 2>/dev/null | grep -q .; then
     echo "accepted packet for $task_id already queued/imported; dispatch is a no-op"
     _l1_outcome="accepted"
     l1_status terminal completed "Existing accepted packet is already queued or imported" true \
       "Continue origin reconciliation" "accepted-existing"
     exit 0
   fi
-  cand="$GLUERUN_RUNS_DIR/$prev_run/packet.json"
+  cand="$SINGULAR_RUNS_DIR/$prev_run/packet.json"
   [[ -f "$cand" ]] || return 1
-  [[ "$(gluerun_json_field "$cand" taskId 2>/dev/null || true)" == "$task_id" ]] || return 1
+  [[ "$(singular_json_field "$cand" taskId 2>/dev/null || true)" == "$task_id" ]] || return 1
   if "$SCRIPT_DIR/accept-existing-packet.sh" "$cand"; then
-    cp "$cand" "$GLUERUN_INBOX_DIR/$prev_run.json.tmp" \
-      && mv "$GLUERUN_INBOX_DIR/$prev_run.json.tmp" "$GLUERUN_INBOX_DIR/$prev_run.json"
-    gluerun_append_event "l1.auto_accepted_existing" "stranded accepted packet re-accepted and enqueued" \
+    cp "$cand" "$SINGULAR_INBOX_DIR/$prev_run.json.tmp" \
+      && mv "$SINGULAR_INBOX_DIR/$prev_run.json.tmp" "$SINGULAR_INBOX_DIR/$prev_run.json"
+    singular_append_event "l1.auto_accepted_existing" "stranded accepted packet re-accepted and enqueued" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$prev_run\",\"packet\":\"$cand\"}"
     echo "auto-accepted stranded packet for $task_id (run $prev_run); enqueued to inbox"
     _l1_outcome="accepted"
@@ -408,8 +408,8 @@ l1_try_auto_accept_existing() {
   return 1
 }
 
-if gluerun_worktree_registered "$worktree" || [[ -e "$worktree" ]]; then
-  existing_lease="$(gluerun_lease_status "$task_id" 2>/dev/null || echo none)"
+if singular_worktree_registered "$worktree" || [[ -e "$worktree" ]]; then
+  existing_lease="$(singular_lease_status "$task_id" 2>/dev/null || echo none)"
   case "$existing_lease" in
     accepted)
       l1_try_auto_accept_existing || true
@@ -423,8 +423,8 @@ if gluerun_worktree_registered "$worktree" || [[ -e "$worktree" ]]; then
     *)
       echo "auto-recovering orphaned worktree for $task_id (lease: $existing_lease)"
       remove_worktree
-      gluerun_with_git_lock git -C "$GLUERUN_ROOT" branch -D "$worker_branch" 2>/dev/null || true
-      gluerun_append_event "l1.orphan_recovered" "reclaimed orphaned worktree" \
+      singular_with_git_lock git -C "$SINGULAR_ROOT" branch -D "$worker_branch" 2>/dev/null || true
+      singular_append_event "l1.orphan_recovered" "reclaimed orphaned worktree" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"priorLease\":\"$existing_lease\"}" ;;
   esac
 fi
@@ -432,49 +432,49 @@ fi
 # ---- Lease + branch + worktree ----
 owned_json="$(printf '%s\n' "${owned_files[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
 forbidden_json="$(printf '%s\n' "${forbidden_files[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
-gluerun_lease_write "$task_id" "$worker_branch" "$area" "l2-developer" "${owned_files[*]}" \
+singular_lease_write "$task_id" "$worker_branch" "$area" "l2-developer" "${owned_files[*]}" \
   "running" "$run_id" "$worktree" "$packet_base_ref" "$dispatch_batch_id" "$owned_json" "$forbidden_json"
 _l1_lease_written="yes"
 rm -f "$l1_refusals_file" 2>/dev/null || true  # a successful dispatch clears refusal history
-gluerun_append_event "l1.dispatch_started" "l1 dispatch started" \
+singular_append_event "l1.dispatch_started" "l1 dispatch started" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$worker_branch\",\"baseSha\":\"$packet_base_ref\",\"batchId\":\"$dispatch_batch_id\"}"
-gluerun_git_lock_acquire
+singular_git_lock_acquire
 git_ec=0
 set +e
-if ! git -C "$GLUERUN_ROOT" rev-parse --verify --quiet "$worker_branch" >/dev/null; then
-  git -C "$GLUERUN_ROOT" branch "$worker_branch" "$branch_base"
+if ! git -C "$SINGULAR_ROOT" rev-parse --verify --quiet "$worker_branch" >/dev/null; then
+  git -C "$SINGULAR_ROOT" branch "$worker_branch" "$branch_base"
   git_ec=$?
 fi
 if [[ "$git_ec" -eq 0 ]]; then
-  mkdir -p "$GLUERUN_WORKTREES_DIR"
-  git -C "$GLUERUN_ROOT" worktree add "$worktree" "$worker_branch"
+  mkdir -p "$SINGULAR_WORKTREES_DIR"
+  git -C "$SINGULAR_ROOT" worktree add "$worktree" "$worker_branch"
   git_ec=$?
 fi
 set -e
-gluerun_git_lock_release
+singular_git_lock_release
 if [[ "$git_ec" -ne 0 ]]; then
   echo "failed to create worker branch/worktree for $task_id from $branch_base" >&2
   exit "$git_ec"
 fi
-gluerun_append_event "l1.worktree_created" "worker worktree created" \
+singular_append_event "l1.worktree_created" "worker worktree created" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"worktree\":\"$worktree\"}"
 provision_log="$run_dir/worktree-provision.log"
 # The shared preparer, so the worker worktree and the auditor's disposable
 # worktree are built the same way by construction. Bootstrap stays non-fatal
 # here (it is fatal in the audit path) and the failure is reported through
-# GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED below.
-GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FATAL=no
-if ! gluerun_worktree_prepare "$worktree" "$run_dir" "$GLUERUN_ROOT" "$provision_log"; then
+# SINGULAR_WORKTREE_PREPARE_BOOTSTRAP_FAILED below.
+SINGULAR_WORKTREE_PREPARE_BOOTSTRAP_FATAL=no
+if ! singular_worktree_prepare "$worktree" "$run_dir" "$SINGULAR_ROOT" "$provision_log"; then
   provision_out="$(cat "$provision_log" 2>/dev/null || true)"
   _l1_outcome="terminal"
   l1_status terminal failed "Worker workspace provisioning failed" true \
     "Inspect worktree-provision.log and repair the host dependency" "provision-failed"
-  gluerun_lease_set_status "$task_id" "blocked" 2>/dev/null || true
-  gluerun_task_set_status "$task_file" "blocked" || true
+  singular_lease_set_status "$task_id" "blocked" 2>/dev/null || true
+  singular_task_set_status "$task_file" "blocked" || true
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "escalate-parked" \
     --rationale "worktree provisioning failed before runner invocation; see $provision_log" \
     --run "$run_id" --branch "$worker_branch" --authority l1 >/dev/null 2>&1 || true
-  gluerun_append_event "l1.provision_failed" "worktree provisioning failed" \
+  singular_append_event "l1.provision_failed" "worktree provisioning failed" \
     "$(python3 - "$task_id" "$run_id" "$provision_log" "$provision_out" <<'PY'
 import json, sys
 task_id, run_id, log, reason = sys.argv[1:5]
@@ -484,8 +484,8 @@ PY
   echo "worktree provisioning failed for $task_id (see $provision_log)" >&2
   exit 3
 fi
-gluerun_append_event "l1.provisioned" "worktree provisioning completed" \
-  "$(python3 - "$task_id" "$run_id" "${GLUERUN_WORKTREE_ENV_FILE:-}" <<'PY'
+singular_append_event "l1.provisioned" "worktree provisioning completed" \
+  "$(python3 - "$task_id" "$run_id" "${SINGULAR_WORKTREE_ENV_FILE:-}" <<'PY'
 import json, sys
 task_id, run_id, env_file = sys.argv[1:4]
 print(json.dumps({"taskId": task_id, "runId": run_id, "envFile": env_file}, separators=(",", ":")))
@@ -493,13 +493,13 @@ PY
 )"
 bootstrap_failure=""
 bootstrap_log="$provision_log"
-if [[ "$GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED" == "yes" ]]; then
+if [[ "$SINGULAR_WORKTREE_PREPARE_BOOTSTRAP_FAILED" == "yes" ]]; then
   bootstrap_failure="required-bootstrap-failed"
-  gluerun_append_event "l1.bootstrap_failed" \
+  singular_append_event "l1.bootstrap_failed" \
     "required worktree bootstrap failed (infrastructure)" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"log\":\"$bootstrap_log\"}" || true
 else
-  gluerun_append_event "l1.bootstrap_completed" "worktree bootstrap completed" \
+  singular_append_event "l1.bootstrap_completed" "worktree bootstrap completed" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"log\":\"$bootstrap_log\"}" || true
 fi
 
@@ -509,7 +509,7 @@ fi
 # on — later waves branch on timeout/resume codes such as 124/86).
 head_sha=""
 packet="$run_dir/packet.json"
-audit_record="$(gluerun_audit_record_path "$run_id")"
+audit_record="$(singular_audit_record_path "$run_id")"
 verdict="unknown"
 attempt_failure=""
 attempt_ctx=""
@@ -528,8 +528,8 @@ reviewer_strategy_reason="init"
 
 # Durable `decision-record` extra spec (node rehydrate-path, layer engine_runtime).
 # The repo-level decision log lives OUTSIDE run_dir, so the pure resolver
-# gluerun_ctx_rehydrate_sources never emits it; it is supplied as a class-tagged
-# extra computed by the pure leaf over GLUERUN_ROOT. It is snapshotted ONCE here at
+# singular_ctx_rehydrate_sources never emits it; it is supplied as a class-tagged
+# extra computed by the pure leaf over SINGULAR_ROOT. It is snapshotted ONCE here at
 # drive start (existence-gated) so a rehydrate attempt rehydrates the decision log
 # as it stood when the run began — NOT this run's own in-flight decider appends
 # (record-decision.sh mutates docs/orchestration/decisions.md between attempts, and
@@ -537,15 +537,15 @@ reviewer_strategy_reason="init"
 # drive start. Both rehydrate sites reference this identical spec, so the injected
 # packet and the recorded manifest carry the SAME decision record (id + content
 # hash) by construction. Its CONTENT is hashed/rendered later at rehydrate time.
-decision_source_extra="$(gluerun_ctx_rehydrate_decision_source "$GLUERUN_ROOT" 2>/dev/null || true)"
+decision_source_extra="$(singular_ctx_rehydrate_decision_source "$SINGULAR_ROOT" 2>/dev/null || true)"
 
-# Worker-runner selection (gluerun_select_l2_runner): generic engine returns the
+# Worker-runner selection (singular_select_l2_runner): generic engine returns the
 # default runner; an enabled module may route specific tasks to an alternate
-# runner (3rd arg). An explicit GLUERUN_RUNNER override always wins.
-l2_runner="$(gluerun_select_l2_runner "$task_file" "$GLUERUN_RUNNER_BIN" "$SCRIPT_DIR/claude-run.sh")"
-if [[ "$l2_runner" != "$GLUERUN_RUNNER_BIN" ]]; then
+# runner (3rd arg). An explicit SINGULAR_RUNNER override always wins.
+l2_runner="$(singular_select_l2_runner "$task_file" "$SINGULAR_RUNNER_BIN" "$SCRIPT_DIR/claude-run.sh")"
+if [[ "$l2_runner" != "$SINGULAR_RUNNER_BIN" ]]; then
   echo "  module-routed L2 worker -> $(basename "$l2_runner")"
-  gluerun_append_event "l1.worker_runner_selected" "worker routed to alternate runner" \
+  singular_append_event "l1.worker_runner_selected" "worker routed to alternate runner" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"runner\":\"$(basename "$l2_runner")\"}"
 fi
 
@@ -570,17 +570,17 @@ prepare_worker_prompt() {
   # Structured fix prompt (T-E3): authoritative findings + scoped evidence. On a
   # renderer failure, fall back to the legacy fix_hints path verbatim. The
   # fix_hints global keeps being set in the retry loop so the legacy path (and
-  # GLUERUN_FIX_PROMPT_STRUCTURED=0) stays byte-identical to today.
-  if [[ "${GLUERUN_FIX_PROMPT_STRUCTURED:-1}" == "1" ]]; then
+  # SINGULAR_FIX_PROMPT_STRUCTURED=0) stays byte-identical to today.
+  if [[ "${SINGULAR_FIX_PROMPT_STRUCTURED:-1}" == "1" ]]; then
     local cur_owned_json cur_forbidden_json
     cur_owned_json="$(printf '%s\n' "${owned_files[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
     cur_forbidden_json="$(printf '%s\n' "${forbidden_files[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
-    if gluerun_render_fix_prompt "$active_prompt" "$l2_prompt" "$run_dir" "$n" \
+    if singular_render_fix_prompt "$active_prompt" "$l2_prompt" "$run_dir" "$n" \
          "${prev_failure_class:-unknown}" "${prev_attempt_ctx:-/dev/null}" \
          "$cur_owned_json" "$cur_forbidden_json" 2>/dev/null; then
       return 0
     fi
-    gluerun_append_event "l1.fix_prompt_fallback" "structured fix prompt render failed; using legacy hints" \
+    singular_append_event "l1.fix_prompt_fallback" "structured fix prompt render failed; using legacy hints" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
   fi
   cp "$l2_prompt" "$active_prompt"
@@ -591,13 +591,13 @@ prepare_worker_prompt() {
 
 # Inject the assembled durable-context rehydration packet into the implementer's
 # already-rendered active prompt when the routing decision upgraded a refused
-# resume to `rehydrate` (only behind GLUERUN_REHYDRATE=1; the spine never yields
+# resume to `rehydrate` (only behind SINGULAR_REHYDRATE=1; the spine never yields
 # `rehydrate` otherwise, so with the flag unset this is a no-op and $active_prompt
 # stays byte-identical). The run stays FRESH (worker_resume_id empty -> no
 # --resume-session): a fresh session PLUS injected durable context, not a resume.
 # The packet is assembled by delegating into the integrated pure bricks —
-# gluerun_ctx_rehydrate_packet over gluerun_ctx_rehydrate_sources "$run_dir" — so
-# determinism, the per-section GLUERUN_CONTEXT_SECTION_MAX_CHARS cap, and
+# singular_ctx_rehydrate_packet over singular_ctx_rehydrate_sources "$run_dir" — so
+# determinism, the per-section SINGULAR_CONTEXT_SECTION_MAX_CHARS cap, and
 # quarantine exclusion all come for free; no rehydration/resolution logic is
 # inlined here. The section is headed as injected durable context from a
 # refused-resume lineage — reference-only, NOT authoritative — because rehydrated
@@ -613,7 +613,7 @@ rehydrate_inject_packet() {
   # record site passes the IDENTICAL spec, so the injected packet and the recorded
   # manifest carry the SAME decision record. Empty when the decision log was absent
   # at drive start.
-  # SUBGRAPH branch (node subgraph-rehydrate; behind GLUERUN_CTX_SUBGRAPH_REHYDRATE
+  # SUBGRAPH branch (node subgraph-rehydrate; behind SINGULAR_CTX_SUBGRAPH_REHYDRATE
   # and only on the treatment arm with a present non-empty corpus). The shared
   # selector yields the contradictions-first subgraph packet keyed on the SAME
   # task_id / arm-mode / node the manifest-record site (ctx-rehydrate-event.sh)
@@ -624,7 +624,7 @@ rehydrate_inject_packet() {
   # the flat path below runs unchanged (byte-identical to today).
   local packet=""
   local subgraph_packet
-  if subgraph_packet="$(gluerun_ctx_route_subgraph_render "$task_id" packet 2>/dev/null)" \
+  if subgraph_packet="$(singular_ctx_route_subgraph_render "$task_id" packet 2>/dev/null)" \
      && [[ -n "$subgraph_packet" ]]; then
     packet="$subgraph_packet"
   else
@@ -632,8 +632,8 @@ rehydrate_inject_packet() {
     local line
     while IFS= read -r line; do
       [[ -n "$line" ]] && specs+=("$line")
-    done < <(gluerun_ctx_rehydrate_sources "$run_dir" ${decision_source_extra:+"$decision_source_extra"} 2>/dev/null)
-    packet="$(gluerun_ctx_rehydrate_packet ${specs[@]+"${specs[@]}"} 2>/dev/null)" || return 0
+    done < <(singular_ctx_rehydrate_sources "$run_dir" ${decision_source_extra:+"$decision_source_extra"} 2>/dev/null)
+    packet="$(singular_ctx_rehydrate_packet ${specs[@]+"${specs[@]}"} 2>/dev/null)" || return 0
   fi
   [[ -n "$packet" ]] || return 0
   {
@@ -654,11 +654,11 @@ rehydrate_inject_packet() {
   # authored-knowledge entries under a reference-only / NOT-authoritative wrapper.
   # The hook is a minimal delegating append into the integrated config-gated
   # render (TASK-0058–0061); no config/selection/render logic is inlined here.
-  # The render internally gates on GLUERUN_CTX_MANIFEST (default 0) and the
-  # OPTIONAL gluerun.config.json `contextManifest` field, so with either OFF it
+  # The render internally gates on SINGULAR_CTX_MANIFEST (default 0) and the
+  # OPTIONAL singular.config.json `contextManifest` field, so with either OFF it
   # returns empty and nothing is appended — the durable-only injection is
   # byte-identical. The trigger set comes from the pure builder
-  # gluerun_ctx_rehydrate_authored_triggers (TASK-0064): the run's deterministic,
+  # singular_ctx_rehydrate_authored_triggers (TASK-0064): the run's deterministic,
   # de-duplicated `load-when` tokens (role `implementer`, step `implement`, task
   # id) rather than the bare literal `implement`, so authored entries scoped to a
   # role or task — not only the literal step — become eligible. The enriched set
@@ -670,7 +670,7 @@ rehydrate_inject_packet() {
   # Non-fatal: on any error nothing is appended.
   #
   # NODE dimension (TASK-0066 -> TASK-0067): resolve the run's executable DAG node
-  # via the pure read-only resolver gluerun_ctx_rehydrate_authored_node "$task_id"
+  # via the pure read-only resolver singular_ctx_rehydrate_authored_node "$task_id"
   # and thread it into the builder's position-3 [node] slot so node-scoped
   # `load-when` entries (e.g. ["rehydrate-path"]) become eligible. The resolver
   # returns empty (fail-safe) on an absent or ambiguous task->node association;
@@ -679,14 +679,14 @@ rehydrate_inject_packet() {
   # manifest-record site resolves the node from the SAME task_id via the SAME
   # deterministic resolver, so both derive the identical token and identical set.
   local node
-  node="$(gluerun_ctx_rehydrate_authored_node "$task_id" 2>/dev/null)" || node=""
+  node="$(singular_ctx_rehydrate_authored_node "$task_id" 2>/dev/null)" || node=""
   local -a authored_triggers=()
   local trigger
   while IFS= read -r trigger; do
     [[ -n "$trigger" ]] && authored_triggers+=("$trigger")
-  done < <(gluerun_ctx_rehydrate_authored_triggers implementer implement "$node" "$task_id" 2>/dev/null)
+  done < <(singular_ctx_rehydrate_authored_triggers implementer implement "$node" "$task_id" 2>/dev/null)
   local authored
-  authored="$(gluerun_ctx_rehydrate_authored_config_render ${authored_triggers[@]+"${authored_triggers[@]}"} 2>/dev/null)" || authored=""
+  authored="$(singular_ctx_rehydrate_authored_config_render ${authored_triggers[@]+"${authored_triggers[@]}"} 2>/dev/null)" || authored=""
   [[ -n "$authored" ]] || return 0
   {
     echo ""
@@ -720,16 +720,16 @@ run_worker_phase() {
 
   # ---- Worker runner with bounded infra-retry (T-E6) ------------------------
   # A worker "infra failure" is the runner itself failing/timing out — rc 124
-  # (claude-run kills the tree on GLUERUN_CLAUDE_TIMEOUT_SEC), or rc!=0 with a truly
+  # (claude-run kills the tree on SINGULAR_CLAUDE_TIMEOUT_SEC), or rc!=0 with a truly
   # empty/missing last-message file. That is distinct from worker-no-packet (the
   # model ran fine and emitted prose: output EXISTS but carries no packet) — which
   # the packet-validation path below already classifies. We re-run ONLY the worker
-  # up to GLUERUN_WORKER_INFRA_MAX extra times; this never bumps the lease retryCount.
-  # QUOTA GUARD: gluerun_planner_failure_class returns "quota" (priority over timeout/
+  # up to SINGULAR_WORKER_INFRA_MAX extra times; this never bumps the lease retryCount.
+  # QUOTA GUARD: singular_planner_failure_class returns "quota" (priority over timeout/
   # empty) when the log carries a usage/rate-limit marker; we must NOT swallow that
   # as worker-infra, so a quota classification falls through to the normal path
   # (the breaker/quota-backoff machinery owns it).
-  local worker_infra_max="${GLUERUN_WORKER_INFRA_MAX:-1}"
+  local worker_infra_max="${SINGULAR_WORKER_INFRA_MAX:-1}"
   [[ "$worker_infra_max" =~ ^[0-9]+$ ]] || worker_infra_max=1
   local worker_try worker_fc worker_result_file
 
@@ -740,22 +740,22 @@ run_worker_phase() {
   local l2_runner_basename worker_prompt_sha worker_resume_id="" worker_decision
   local worker_capability_profile
   l2_runner_basename="$(basename "$l2_runner")"
-  worker_prompt_sha="$(gluerun_prompt_sha "$l2_prompt" 2>/dev/null || true)"
+  worker_prompt_sha="$(singular_prompt_sha "$l2_prompt" 2>/dev/null || true)"
   local worktree_head; worktree_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
-  # Routed through the ctx-* adapter (GLUERUN_CTX_ROUTING; default 0 -> OFF-parity,
+  # Routed through the ctx-* adapter (SINGULAR_CTX_ROUTING; default 0 -> OFF-parity,
   # byte-identical to the direct decider call). Step `implement` is not an
   # independence-required step, so the routing gates (window/diff/lease) may apply.
-  worker_decision="$(gluerun_ctx_route_decide implementer implement "$session_meta_implementer" \
+  worker_decision="$(singular_ctx_route_decide implementer implement "$session_meta_implementer" \
     "$task_id" "$run_id" "$l2_runner_basename" "$worker_prompt_sha" "$worktree" "$worktree_head" 2>/dev/null || echo "fresh decide-error")"
   worker_strategy="${worker_decision%% *}"
   worker_strategy_reason="${worker_decision#* }"
   if [[ "$worker_strategy" == "resume" ]]; then
     worker_resume_id="$worker_strategy_reason"; worker_strategy_reason="resume"
-    gluerun_append_event "context.strategy_selected" "session resume strategy selected" \
+    singular_append_event "context.strategy_selected" "session resume strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"strategy\":\"resume\",\"reason\":\"resume\",\"sessionId\":\"$worker_resume_id\"}" || true
   elif [[ "$worker_strategy" == "rehydrate" ]]; then
     # A refused-resume lineage step upgraded to rehydrate (only behind
-    # GLUERUN_REHYDRATE=1; the routing spine never yields `rehydrate` otherwise).
+    # SINGULAR_REHYDRATE=1; the routing spine never yields `rehydrate` otherwise).
     # Record strategy=rehydrate, the refusal reason, and the NESTED packet manifest
     # (ids + hashes only) by delegating into the integrated pure assembler over the
     # durable-artifact root run_dir. No resume session is reused (rehydrate is a
@@ -765,23 +765,23 @@ run_worker_phase() {
     # class-tagged extra so the recorded manifest carries the SAME decision record
     # (id + content hash) the packet-injection hook injects — both reference the
     # identical drive-start `decision_source_extra`, so they agree by construction.
-    gluerun_append_event "context.strategy_selected" "rehydrate strategy selected" \
-      "$(gluerun_ctx_rehydrate_event_data implementer "$task_id" "$run_id" "$n" "$worker_strategy_reason" "$run_dir" ${decision_source_extra:+"$decision_source_extra"})" || true
+    singular_append_event "context.strategy_selected" "rehydrate strategy selected" \
+      "$(singular_ctx_rehydrate_event_data implementer "$task_id" "$run_id" "$n" "$worker_strategy_reason" "$run_dir" ${decision_source_extra:+"$decision_source_extra"})" || true
   else
-    gluerun_append_event "context.strategy_selected" "fresh-run strategy selected" \
+    singular_append_event "context.strategy_selected" "fresh-run strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"strategy\":\"fresh\",\"reason\":\"$worker_strategy_reason\"}" || true
   fi
 
-  # ---- Rehydrate packet injection (node rehydrate-path; behind GLUERUN_REHYDRATE)
+  # ---- Rehydrate packet injection (node rehydrate-path; behind SINGULAR_REHYDRATE)
   # On a `rehydrate` decision, append the assembled durable-context packet to the
   # already-rendered active prompt ONCE, before the (fresh) worker try loop. No-op
-  # for resume/fresh, so with GLUERUN_REHYDRATE unset $active_prompt is unchanged.
+  # for resume/fresh, so with SINGULAR_REHYDRATE unset $active_prompt is unchanged.
   rehydrate_inject_packet "$active_prompt"
 
   local worker_resume_failed="no"
   for ((worker_try=0; worker_try<=worker_infra_max; worker_try++)); do
     if [[ "$worker_try" -gt 0 ]]; then
-      gluerun_append_event "worker.infra_retry" "worker infra failure; re-running worker only" \
+      singular_append_event "worker.infra_retry" "worker infra failure; re-running worker only" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$worker_try,\"reason\":\"$worker_fc\"}"
       echo "  worker infra retry $worker_try/$worker_infra_max ($worker_fc)..."
     fi
@@ -798,13 +798,13 @@ run_worker_phase() {
       worker_result_file="$run_dir/implementer-attempt-${n}-try-${worker_try}-runner-result.json"
     fi
     worker_rc=0
-    worker_capability_profile="${GLUERUN_IMPLEMENTER_CAPABILITY_PROFILE:-implementer-core}"
-    gluerun_runner_contract_prepare \
+    worker_capability_profile="${SINGULAR_IMPLEMENTER_CAPABILITY_PROFILE:-implementer-core}"
+    singular_runner_contract_prepare \
       "$l2_runner" implementer "$worker_capability_profile" "$worker_result_file"
-    GLUERUN_RUNNER_ROLE=implementer \
-    GLUERUN_RUNNER_CAPABILITY_PROFILE="$worker_capability_profile" \
-    GLUERUN_RUNNER_RESULT_FILE="$worker_result_file" \
-      "$l2_runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    SINGULAR_RUNNER_ROLE=implementer \
+    SINGULAR_RUNNER_CAPABILITY_PROFILE="$worker_capability_profile" \
+    SINGULAR_RUNNER_RESULT_FILE="$worker_result_file" \
+      "$l2_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
         "${worker_run_args[@]}" >"$run_dir/worker-codex.log" 2>&1 || worker_rc=$?
 
     # Resume-refused (86) or resume-failure (86): the runner could not reuse the
@@ -813,18 +813,18 @@ run_worker_phase() {
     # is unchanged.
     if [[ "$worker_rc" -eq 86 && -n "$worker_resume_id" && "$worker_resume_failed" == "no" ]]; then
       worker_resume_failed="yes"
-      gluerun_append_event "context.resume_failed" "implementer resume failed; re-running fresh" \
+      singular_append_event "context.resume_failed" "implementer resume failed; re-running fresh" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"sessionId\":\"$worker_resume_id\"}" || true
       worker_strategy="fresh"; worker_strategy_reason="resume-failed"
       echo "  worker resume failed; falling back to fresh run..."
       worker_result_file="$run_dir/implementer-attempt-${n}-try-${worker_try}-resume-fallback-runner-result.json"
       worker_rc=0
-      gluerun_runner_contract_prepare \
+      singular_runner_contract_prepare \
         "$l2_runner" implementer "$worker_capability_profile" "$worker_result_file"
-      GLUERUN_RUNNER_ROLE=implementer \
-      GLUERUN_RUNNER_CAPABILITY_PROFILE="$worker_capability_profile" \
-      GLUERUN_RUNNER_RESULT_FILE="$worker_result_file" \
-        "$l2_runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+      SINGULAR_RUNNER_ROLE=implementer \
+      SINGULAR_RUNNER_CAPABILITY_PROFILE="$worker_capability_profile" \
+      SINGULAR_RUNNER_RESULT_FILE="$worker_result_file" \
+        "$l2_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
           --level l2 -C "$worktree" --run-id "$run_id" \
           --prompt-file "$active_prompt" --output-last-message "$run_dir/last-message.json" \
           --session-meta "$session_meta_implementer" >"$run_dir/worker-codex.log" 2>&1 || worker_rc=$?
@@ -834,7 +834,7 @@ run_worker_phase() {
     # it). timeout(rc 124)/empty-output(rc!=0, empty file) -> infra: retry the
     # worker only. invalid-output (output exists, rc 0) -> NOT infra; that is a
     # potential worker-no-packet handled by packet validation below.
-    worker_fc="$(gluerun_planner_failure_class "$run_dir/worker-codex.log" "$worker_rc" \
+    worker_fc="$(singular_planner_failure_class "$run_dir/worker-codex.log" "$worker_rc" \
       "$run_dir/last-message.json" "$worker_result_file")"
     # "empty-output" only counts as infra when the runner itself failed (rc!=0);
     # a rc-0 run that emitted an empty file is a clean run with no packet (prose),
@@ -845,7 +845,7 @@ run_worker_phase() {
       *) break ;;                         # quota / codex-exit-with-output / clean: stop retrying
     esac
   done
-  gluerun_append_event "l1.worker_completed" "l2 worker completed" \
+  singular_append_event "l1.worker_completed" "l2 worker completed" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
   # Persisted worker infra failure (still timeout/empty after the retry budget):
   # surface worker-infra so the fast-path decider parks it; retryCount untouched.
@@ -856,7 +856,7 @@ run_worker_phase() {
 
   local worker_packet_log="$run_dir/worker-packet-validation.log"
   local worker_packet_ec=0
-  gluerun_l1_prepare_worker_packet "$run_dir/last-message.json" "$run_dir/last-message.json" "$worker_packet_log" \
+  singular_l1_prepare_worker_packet "$run_dir/last-message.json" "$run_dir/last-message.json" "$worker_packet_log" \
     || worker_packet_ec=$?
   if [[ "$worker_packet_ec" -ne 0 ]]; then
     case "$worker_packet_ec" in
@@ -868,11 +868,11 @@ run_worker_phase() {
     return 1
   fi
 
-  if [[ -d "$worktree/.gluerun-evidence" ]]; then
-    rm -rf "$run_dir/worker-evidence"; cp -R "$worktree/.gluerun-evidence" "$run_dir/worker-evidence"
+  if [[ -d "$worktree/.singular-evidence" ]]; then
+    rm -rf "$run_dir/worker-evidence"; cp -R "$worktree/.singular-evidence" "$run_dir/worker-evidence"
   fi
   local storage_guard_log="$run_dir/module-packet-guard.log"
-  if ! gluerun_packet_module_guard "$run_dir/last-message.json" "$task_file" "$worktree" "$run_dir" >"$storage_guard_log" 2>&1; then
+  if ! singular_packet_module_guard "$run_dir/last-message.json" "$task_file" "$worktree" "$run_dir" >"$storage_guard_log" 2>&1; then
     attempt_failure="packet-invalid"; attempt_ctx="$storage_guard_log"; return 1
   fi
 
@@ -884,13 +884,13 @@ run_worker_phase() {
   local scope_rc=0
   "$SCRIPT_DIR/scope-check.sh" "${scope_args[@]}" >"$run_dir/scope-check.log" 2>&1 \
     || scope_rc=$?
-  gluerun_check_result_write "$run_dir/scope-check-result.json" scope \
+  singular_check_result_write "$run_dir/scope-check-result.json" scope \
     "$([[ "$scope_rc" -eq 0 ]] && echo passed || echo failed)" \
     "$scope_rc" "$run_dir/scope-check.log"
   if [[ "$scope_rc" -ne 0 ]]; then
     attempt_failure="scope-violation"; attempt_ctx="$run_dir/scope-check.log"; return 1
   fi
-  if gluerun_strict_proof_skip_detected "$task_file" "$worktree" "${owned_files[@]}"; then
+  if singular_strict_proof_skip_detected "$task_file" "$worktree" "${owned_files[@]}"; then
     {
       echo "strict proof task introduced a skipped proof path"
       echo "task=$task_id"
@@ -904,23 +904,23 @@ run_worker_phase() {
   local gate_exit=0
   l1_status gating active "Running the worker regression gate for attempt $n" false \
     "Classify the gate and commit verified content" "" "gate-controller"
-  gluerun_run_in_worktree_env "$worktree" "$SCRIPT_DIR/gate-check.sh" "$run_id" \
+  singular_run_in_worktree_env "$worktree" "$SCRIPT_DIR/gate-check.sh" "$run_id" \
     --task-id "$task_id" --phase worker --workspace-kind worker -- \
-    "$(gluerun_bash_bin)" -c "$gate_cmd" || gate_exit=$?
+    "$(singular_bash_bin)" -c "$gate_cmd" || gate_exit=$?
   local gate_outcome
-  gate_outcome="$(gluerun_json_field "$run_dir/gate-report.json" outcome 2>/dev/null || true)"
+  gate_outcome="$(singular_json_field "$run_dir/gate-report.json" outcome 2>/dev/null || true)"
   if [[ "$gate_exit" -ne 0 ]]; then
     if [[ "$gate_outcome" == "inconclusive-infrastructure" || -z "$gate_outcome" ]]; then
       attempt_failure="audit-infra"; attempt_ctx="$run_dir/gate-report.json"; return 1
     fi
     attempt_failure="gate-red"; attempt_ctx="$run_dir/gate-check.log"; return 1
   fi
-  gluerun_append_event "l1.gate_passed" "regression gate passed" \
+  singular_append_event "l1.gate_passed" "regression gate passed" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"outcome\":\"$gate_outcome\"}"
 
   # Secret-scan staged-to-be content (working changes), then stage owned + commit.
   for f in "${owned_files[@]}"; do [[ -e "$worktree/$f" ]] && git -C "$worktree" add -- "$f"; done
-  gluerun_check_result_write "$run_dir/secret-scan-result.json" secret \
+  singular_check_result_write "$run_dir/secret-scan-result.json" secret \
     not-run 0 ""
   if git -C "$worktree" diff --cached --quiet; then
     # Empty staged diff. If the owned files at HEAD already differ from the
@@ -934,7 +934,7 @@ run_worker_phase() {
     git -C "$worktree" diff --quiet "$packet_base_ref"...HEAD -- "${owned_files[@]}" 2>/dev/null \
       || owned_diff_rc=$?
     if [[ "$owned_diff_rc" -eq 1 ]]; then
-      gluerun_append_event "l1.no_changes_reconciled" \
+      singular_append_event "l1.no_changes_reconciled" \
         "gate green and owned content already committed at HEAD; proceeding with empty diff" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"headSha\":\"$(git -C "$worktree" rev-parse HEAD)\"}"
       head_sha="$(git -C "$worktree" rev-parse HEAD)"
@@ -946,27 +946,27 @@ run_worker_phase() {
     local secret_rc=0
     "$SCRIPT_DIR/secret-scan.sh" --worktree "$worktree" --staged \
       >"$run_dir/secret-scan.log" 2>&1 || secret_rc=$?
-    gluerun_check_result_write "$run_dir/secret-scan-result.json" secret \
+    singular_check_result_write "$run_dir/secret-scan-result.json" secret \
       "$([[ "$secret_rc" -eq 0 ]] && echo passed || echo failed)" \
       "$secret_rc" "$run_dir/secret-scan.log"
     if [[ "$secret_rc" -ne 0 ]]; then
       git -C "$worktree" reset -q
       attempt_failure="secret-detected"; attempt_ctx="$run_dir/secret-scan.log"; return 1
     fi
-    gluerun_git_lock_acquire
+    singular_git_lock_acquire
     local commit_ec=0
     set +e
-    git -C "$worktree" -c user.name="$GLUERUN_GIT_L1_NAME" -c user.email="$GLUERUN_GIT_L1_EMAIL" \
+    git -C "$worktree" -c user.name="$SINGULAR_GIT_L1_NAME" -c user.email="$SINGULAR_GIT_L1_EMAIL" \
       commit -q -m "$task_id: ${test_policy} worker output (run $run_id)" \
       -m "Driven by L1 from $packet_base_ref. Owned: ${owned_files[*]}."
     commit_ec=$?
     set -e
-    gluerun_git_lock_release
+    singular_git_lock_release
     if [[ "$commit_ec" -ne 0 ]]; then
       attempt_failure="commit-failed"; attempt_ctx="$run_dir/worker-codex.log"; return 1
     fi
     head_sha="$(git -C "$worktree" rev-parse HEAD)"
-    gluerun_append_event "l1.committed" "worker branch committed" \
+    singular_append_event "l1.committed" "worker branch committed" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"headSha\":\"$head_sha\"}"
   fi
 
@@ -987,7 +987,7 @@ run_worker_phase() {
 import json, sys
 (src,dst,run_id,task_id,area,branch,base_ref,head_sha,workspace,owned_json,changed_json)=sys.argv[1:12]
 with open(src) as f: p=json.load(f)
-p["schema"]="gluerun.orchestration.state-packet.v0"; p["runId"]=run_id; p["taskId"]=task_id
+p["schema"]="singular.orchestration.state-packet.v0"; p["runId"]=run_id; p["taskId"]=task_id
 p["area"]=area; p["role"]=p.get("role") or "l2-developer"; p["baseRef"]=base_ref
 p["branch"]=branch; p["headSha"]=head_sha; p["workspace"]=workspace
 p["ownedFiles"]=json.loads(owned_json)
@@ -999,7 +999,7 @@ p.setdefault("nextAction","await auditor verdict"); p.setdefault("status","needs
 p["evidence"].append({"kind":"gate-report","ref":f"runs/{run_id}/gate-report.json"})
 with open(dst,"w") as f: json.dump(p,f,indent=2); f.write("\n")
 PY
-  gluerun_validate_packet_basic "$packet" >/dev/null 2>&1 || { attempt_failure="packet-invalid"; attempt_ctx="$packet"; return 1; }
+  singular_validate_packet_basic "$packet" >/dev/null 2>&1 || { attempt_failure="packet-invalid"; attempt_ctx="$packet"; return 1; }
 
   # Compact, hash-bound reviewer input. Full raw evidence remains available
   # only through evidence-show.sh's declared-reference and byte-budget checks.
@@ -1015,11 +1015,11 @@ PY
   local capsule_owned capsule_forbidden
   capsule_owned="$(printf '%s\n' "${owned_files[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
   capsule_forbidden="$(printf '%s\n' "${forbidden_files[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
-  gluerun_capsule_write_implementer "$run_dir" "$n" "$packet" "$head_sha" "$capsule_owned" "$capsule_forbidden" >/dev/null 2>&1 \
-    || gluerun_append_event "l1.capsule_write_failed" "implementer capsule write failed (non-fatal)" \
+  singular_capsule_write_implementer "$run_dir" "$n" "$packet" "$head_sha" "$capsule_owned" "$capsule_forbidden" >/dev/null 2>&1 \
+    || singular_append_event "l1.capsule_write_failed" "implementer capsule write failed (non-fatal)" \
          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n}" || true
 
-  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): record this
+  # Assumption ledger (node assumption-ledger; behind SINGULAR_CTX_PACKET): record this
   # attempt's ledger (assumption statuses) alongside the implementer capsule write,
   # additively and non-fatally. No-op when OFF.
   assumptions_record_capsule "$n" || true
@@ -1027,7 +1027,7 @@ PY
   # Session affinity (T-E5): merge host-authority fields into the runner-written
   # implementer meta so the NEXT attempt can resume it. headShaAtCreate = the
   # committed head (the lineage anchor the resume decider checks). Never fatal.
-  gluerun_session_meta_finalize "$session_meta_implementer" implementer "$task_id" "$run_id" \
+  singular_session_meta_finalize "$session_meta_implementer" implementer "$task_id" "$run_id" \
     "$l2_runner_basename" "$worker_prompt_sha" "$head_sha" "$n" >/dev/null 2>&1 || true
   return 0
 }
@@ -1035,18 +1035,18 @@ PY
 # Dual-read the legacy v0 audit contract and the v1 verification contract.
 validate_audit_record() {
   local record="$1" schema
-  schema="$(gluerun_json_field "$record" schema 2>/dev/null || true)"
-  if [[ "$schema" == "gluerun.orchestration.audit-verdict.v1" ]]; then
-    GLUERUN_AUDIT_SCHEMA="$GLUERUN_SCHEMA_DIR/audit-verdict.v1.schema.json" \
-      gluerun_validate_audit_verdict "$record" "$task_id" "$run_id"
+  schema="$(singular_json_field "$record" schema 2>/dev/null || true)"
+  if [[ "$schema" == "singular.orchestration.audit-verdict.v1" ]]; then
+    SINGULAR_AUDIT_SCHEMA="$SINGULAR_SCHEMA_DIR/audit-verdict.v1.schema.json" \
+      singular_validate_audit_verdict "$record" "$task_id" "$run_id"
   else
-    gluerun_validate_audit_verdict "$record" "$task_id" "$run_id"
+    singular_validate_audit_verdict "$record" "$task_id" "$run_id"
   fi
 }
 
 # Render a fresh auditor repair prompt after a structurally parseable response
 # fails schema validation or host binding. The retry count remains owned by the
-# existing GLUERUN_AUDIT_INFRA_MAX loop; this helper only makes the next retry
+# existing SINGULAR_AUDIT_INFRA_MAX loop; this helper only makes the next retry
 # actionable instead of replaying an unchanged prompt.
 render_audit_repair_prompt() {
   local base_prompt="$1" output_prompt="$2" error_file="$3"
@@ -1170,7 +1170,7 @@ verification = {
 if isinstance(exit_code, int):
     verification["exitCode"] = exit_code
 data = {
-    "schema": f"gluerun.orchestration.audit-verdict.{contract}",
+    "schema": f"singular.orchestration.audit-verdict.{contract}",
     "taskId": task_id,
     "runId": run_id,
     "branch": branch,
@@ -1208,25 +1208,25 @@ run_audit_phase() {
   # plain copy (byte-identical to the base audit prompt). Renderer failure ->
   # warning event + fall back to the base audit prompt.
   local prior_head active_audit_prompt="$run_dir/auditor-active-prompt.md"
-  prior_head="$(gluerun_json_field "$run_dir/reviewer-capsule.json" auditedHeadSha 2>/dev/null || true)"
-  if gluerun_render_reaudit_prompt "$active_audit_prompt" "$audit_prompt" "$run_dir" "$n" \
+  prior_head="$(singular_json_field "$run_dir/reviewer-capsule.json" auditedHeadSha 2>/dev/null || true)"
+  if singular_render_reaudit_prompt "$active_audit_prompt" "$audit_prompt" "$run_dir" "$n" \
        "$prior_head" "$head_sha" "$worktree" 2>/dev/null; then
     :
   else
-    gluerun_append_event "l1.reaudit_prompt_fallback" "re-audit prompt render failed; using base audit prompt" \
+    singular_append_event "l1.reaudit_prompt_fallback" "re-audit prompt render failed; using base audit prompt" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
     cp "$audit_prompt" "$active_audit_prompt" 2>/dev/null || active_audit_prompt="$audit_prompt"
   fi
 
-  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): inject the
+  # Assumption ledger (node assumption-ledger; behind SINGULAR_CTX_PACKET): inject the
   # assembled auditSection (staged at attempt-open) into the per-attempt auditor prompt
   # so the auditor verifies the assumptions and flags violations citing the assumption
   # id. No-op when OFF (byte-identical) and never aborts the drive.
   assumptions_inject_audit "$active_audit_prompt" || true
 
-  local audit_infra_max="${GLUERUN_AUDIT_INFRA_MAX:-2}"
+  local audit_infra_max="${SINGULAR_AUDIT_INFRA_MAX:-2}"
   [[ "$audit_infra_max" =~ ^[0-9]+$ ]] || audit_infra_max=2
-  local verify_infra_max="${GLUERUN_AUDIT_VERIFY_INFRA_MAX:-$audit_infra_max}"
+  local verify_infra_max="${SINGULAR_AUDIT_VERIFY_INFRA_MAX:-$audit_infra_max}"
   [[ "$verify_infra_max" =~ ^[0-9]+$ ]] || verify_infra_max="$audit_infra_max"
   local verification_outcome="" verification_integrity="" verification_rc=0
   local host_verification_status=""
@@ -1234,10 +1234,10 @@ run_audit_phase() {
 
   # Re-run the committed gate in a disposable writable worktree. Cache and log
   # writes are isolated there; the original audited worktree remains untouched.
-  if [[ "${GLUERUN_AUDIT_VERIFY:-1}" == "1" ]]; then
+  if [[ "${SINGULAR_AUDIT_VERIFY:-1}" == "1" ]]; then
     for ((verification_try=0; verification_try<=verify_infra_max; verification_try++)); do
       if [[ "$verification_try" -gt 0 ]]; then
-        gluerun_append_event "audit.verification_infra_retry" \
+        singular_append_event "audit.verification_infra_retry" \
           "audit verification infrastructure failure; retrying disposable gate only" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$verification_try}" || true
       fi
@@ -1248,9 +1248,9 @@ run_audit_phase() {
         --worker-gate-report "$run_dir/gate-report.json" \
         --attempt "$n" --try "$verification_try" \
         >"$run_dir/audit-verification-driver.log" 2>&1 || verification_rc=$?
-      verification_outcome="$(gluerun_json_field "$run_dir/audit-verification.json" outcome 2>/dev/null || true)"
+      verification_outcome="$(singular_json_field "$run_dir/audit-verification.json" outcome 2>/dev/null || true)"
       verification_integrity="$(
-        gluerun_json_field "$run_dir/audit-verification.json" sourceIntegrity.status \
+        singular_json_field "$run_dir/audit-verification.json" sourceIntegrity.status \
           2>/dev/null || true
       )"
       if [[ "$verification_integrity" == "violation" ]]; then
@@ -1261,7 +1261,7 @@ run_audit_phase() {
           "The independently rerun gate attempted to mutate committed source; the disposable worktree was discarded and evidence-only substitution is forbidden."
         verdict="blocked"
         append_audit_evidence
-        gluerun_append_event "audit.source_integrity_violation" \
+        singular_append_event "audit.source_integrity_violation" \
           "audit gate attempted source mutation; task parked without evidence-only fallback" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$verification_try}" \
           || true
@@ -1279,7 +1279,7 @@ run_audit_phase() {
             "The independently rerun gate failed with a product-test signal at the committed head."
           verdict="needs-fix"
           append_audit_evidence
-          gluerun_append_event "l1.audit_completed" "host audit verification found a product failure" \
+          singular_append_event "l1.audit_completed" "host audit verification found a product failure" \
             "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"verdict\":\"needs-fix\",\"verification\":\"failed-product\"}"
           attempt_failure="audit-needs-fix"
           attempt_ctx="$run_dir/audit-verification.json"
@@ -1300,12 +1300,12 @@ run_audit_phase() {
       --run-dir "$run_dir" --task-id "$task_id" --source-worktree "$worktree" \
       --head-sha "$head_sha" --gate-command "$gate_cmd" \
       --worker-gate-report "$run_dir/gate-report.json" \
-      --worker-gate-command "$(gluerun_bash_bin) -c $gate_cmd" --evidence-only \
+      --worker-gate-command "$(singular_bash_bin) -c $gate_cmd" --evidence-only \
       >"$run_dir/audit-verification-evidence-only.log" 2>&1 || verification_rc=$?
-    verification_outcome="$(gluerun_json_field "$run_dir/audit-verification.json" outcome 2>/dev/null || true)"
+    verification_outcome="$(singular_json_field "$run_dir/audit-verification.json" outcome 2>/dev/null || true)"
     if [[ "$verification_rc" -eq 0 && "$verification_outcome" == "not-rerun-evidence-verified" ]]; then
       verification_ready="yes"
-      gluerun_append_event "audit.evidence_only_verified" \
+      singular_append_event "audit.evidence_only_verified" \
         "disposable rerun inconclusive; hash-bound worker gate evidence verified" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
     else
@@ -1313,7 +1313,7 @@ run_audit_phase() {
         "The gate could not be rerun in a disposable workspace and the original gate evidence did not verify."
       verdict="blocked"
       append_audit_evidence
-      gluerun_append_event "l1.audit_completed" "audit verification infrastructure failure" \
+      singular_append_event "l1.audit_completed" "audit verification infrastructure failure" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"verdict\":\"infra\",\"verification\":\"inconclusive-infrastructure\"}"
       attempt_failure="audit-infra"
       attempt_ctx="$run_dir/audit-verification.json"
@@ -1387,34 +1387,34 @@ PY
   # (later-wave rc 86), the record file never appearing, or output that carries no
   # parseable JSON verdict (broken/empty model output, the l1.audit_unparseable
   # path) — distinct from a real needs-fix verdict. We re-run ONLY the auditor,
-  # fresh (no session reuse), up to GLUERUN_AUDIT_INFRA_MAX extra times. This never
+  # fresh (no session reuse), up to SINGULAR_AUDIT_INFRA_MAX extra times. This never
   # bumps the lease retryCount and never re-runs the worker. If a parseable verdict
   # appears on any try, we proceed to the normal ledger/capsule/verdict handling;
   # if exhausted, the attempt fails as audit-infra and the (fast-path) decider parks it.
   verdict="unknown"
 
   # ---- Session affinity (T-E5): reviewer resume decision (first try only) ----
-  # The auditor runs on GLUERUN_RUNNER_BIN (cross-model independence preserved). It
+  # The auditor runs on SINGULAR_RUNNER_BIN (cross-model independence preserved). It
   # uses a SEPARATE per-role meta file + role gate, so the reviewer can NEVER be
   # offered the implementer's session. Lineage head = head_sha (the audited head).
   # prompt_sha is the BASE auditor prompt (the active prompt is per-attempt delta).
   local audit_runner_basename reviewer_prompt_sha reviewer_resume_id="" reviewer_decision
-  audit_runner_basename="$(basename "$GLUERUN_RUNNER_BIN")"
-  reviewer_prompt_sha="$(gluerun_prompt_sha "$audit_prompt" 2>/dev/null || true)"
-  # Routed through the ctx-* adapter (GLUERUN_CTX_ROUTING; default 0 -> OFF-parity,
+  audit_runner_basename="$(basename "$SINGULAR_RUNNER_BIN")"
+  reviewer_prompt_sha="$(singular_prompt_sha "$audit_prompt" 2>/dev/null || true)"
+  # Routed through the ctx-* adapter (SINGULAR_CTX_ROUTING; default 0 -> OFF-parity,
   # byte-identical to the direct decider call). Step `final-audit` is an
   # independence-required step, so ON the taint pin binds here: a would-be resume
   # is refused as `fresh tainted` regardless of routing knob values.
-  reviewer_decision="$(gluerun_ctx_route_decide reviewer final-audit "$session_meta_reviewer" \
+  reviewer_decision="$(singular_ctx_route_decide reviewer final-audit "$session_meta_reviewer" \
     "$task_id" "$run_id" "$audit_runner_basename" "$reviewer_prompt_sha" "$worktree" "$head_sha" 2>/dev/null || echo "fresh decide-error")"
   reviewer_strategy="${reviewer_decision%% *}"
   reviewer_strategy_reason="${reviewer_decision#* }"
   if [[ "$reviewer_strategy" == "resume" ]]; then
     reviewer_resume_id="$reviewer_strategy_reason"; reviewer_strategy_reason="resume"
-    gluerun_append_event "context.strategy_selected" "session resume strategy selected" \
+    singular_append_event "context.strategy_selected" "session resume strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"reviewer\",\"attempt\":$n,\"strategy\":\"resume\",\"reason\":\"resume\",\"sessionId\":\"$reviewer_resume_id\"}" || true
   else
-    gluerun_append_event "context.strategy_selected" "fresh-run strategy selected" \
+    singular_append_event "context.strategy_selected" "fresh-run strategy selected" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"reviewer\",\"attempt\":$n,\"strategy\":\"fresh\",\"reason\":\"$reviewer_strategy_reason\"}" || true
   fi
   local reviewer_resume_failed="no"
@@ -1430,7 +1430,7 @@ PY
   local auditor_log="$run_dir/auditor-codex.log"
   for ((audit_try=0; audit_try<=audit_infra_max; audit_try++)); do
     if [[ "$audit_try" -gt 0 ]]; then
-      gluerun_append_event "audit.infra_retry" "auditor infra failure; re-running auditor only" \
+      singular_append_event "audit.infra_retry" "auditor infra failure; re-running auditor only" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try,\"reason\":\"$infra_reason\"}"
       echo "  auditor infra retry $audit_try/$audit_infra_max ($infra_reason)..."
     fi
@@ -1442,14 +1442,14 @@ PY
           "$audit_repair_error_file" "$audit_repair_response_file" \
           "$audit_write_contract"; then
         infra_reason="repair-prompt-failed"
-        gluerun_append_event "l1.audit_repair_prompt_failed" \
+        singular_append_event "l1.audit_repair_prompt_failed" \
           "auditor validation-feedback repair prompt could not be rendered" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try}" \
           || true
         break
       fi
       audit_prompt_for_try="$repair_prompt"
-      gluerun_append_event "l1.audit_repair_retry" \
+      singular_append_event "l1.audit_repair_retry" \
         "auditor validation-feedback repair retry prepared" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$audit_try,\"reason\":\"$infra_reason\"}" \
         || true
@@ -1469,13 +1469,13 @@ PY
     audit_rc=0
     rm -f "$audit_record"
     printf -- '--- auditor try %s (attempt %s) ---\n' "$audit_try" "$n" >>"$auditor_log" || true
-    audit_capability_profile="${GLUERUN_AUDITOR_CAPABILITY_PROFILE:-audit-core}"
-    gluerun_runner_contract_prepare \
-      "$GLUERUN_RUNNER_BIN" auditor "$audit_capability_profile" "$audit_result_file"
-    GLUERUN_RUNNER_ROLE=auditor \
-    GLUERUN_RUNNER_CAPABILITY_PROFILE="$audit_capability_profile" \
-    GLUERUN_RUNNER_RESULT_FILE="$audit_result_file" \
-      "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    audit_capability_profile="${SINGULAR_AUDITOR_CAPABILITY_PROFILE:-audit-core}"
+    singular_runner_contract_prepare \
+      "$SINGULAR_RUNNER_BIN" auditor "$audit_capability_profile" "$audit_result_file"
+    SINGULAR_RUNNER_ROLE=auditor \
+    SINGULAR_RUNNER_CAPABILITY_PROFILE="$audit_capability_profile" \
+    SINGULAR_RUNNER_RESULT_FILE="$audit_result_file" \
+      "$SINGULAR_RUNNER_BIN" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
         "${audit_run_args[@]}" >>"$auditor_log" 2>&1 &
     audit_pid="$!"
     audit_child_pgid="$(ps -o pgid= -p "$audit_pid" 2>/dev/null | tr -d '[:space:]' || true)"
@@ -1494,7 +1494,7 @@ PY
     # consume an infra retry on a resume miss). Pure optimization miss.
     if [[ "$audit_rc" -eq 86 && -n "$reviewer_resume_id" && "$reviewer_resume_failed" == "no" ]]; then
       reviewer_resume_failed="yes"
-      gluerun_append_event "context.resume_failed" "reviewer resume failed; re-running fresh" \
+      singular_append_event "context.resume_failed" "reviewer resume failed; re-running fresh" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"reviewer\",\"attempt\":$n,\"sessionId\":\"$reviewer_resume_id\"}" || true
       reviewer_strategy="fresh"; reviewer_strategy_reason="resume-failed"
       echo "  auditor resume failed; falling back to fresh run..."
@@ -1502,12 +1502,12 @@ PY
       audit_rc=0
       rm -f "$audit_record"
       printf -- '--- auditor resume-fallback (attempt %s) ---\n' "$n" >>"$auditor_log" || true
-      gluerun_runner_contract_prepare \
-        "$GLUERUN_RUNNER_BIN" auditor "$audit_capability_profile" "$audit_result_file"
-      GLUERUN_RUNNER_ROLE=auditor \
-      GLUERUN_RUNNER_CAPABILITY_PROFILE="$audit_capability_profile" \
-      GLUERUN_RUNNER_RESULT_FILE="$audit_result_file" \
-        "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+      singular_runner_contract_prepare \
+        "$SINGULAR_RUNNER_BIN" auditor "$audit_capability_profile" "$audit_result_file"
+      SINGULAR_RUNNER_ROLE=auditor \
+      SINGULAR_RUNNER_CAPABILITY_PROFILE="$audit_capability_profile" \
+      SINGULAR_RUNNER_RESULT_FILE="$audit_result_file" \
+        "$SINGULAR_RUNNER_BIN" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
           --level readonly -C "$worktree" --run-id "$run_id" \
           --prompt-file "$active_audit_prompt" --output-last-message "$audit_record" \
           --session-meta "$session_meta_reviewer" >>"$auditor_log" 2>&1 &
@@ -1524,7 +1524,7 @@ PY
       l1_status auditing active "Classifying the auditor response for attempt $n" true \
         "Validate the audit verdict" "" "audit-controller"
     fi
-    audit_fc="$(gluerun_planner_failure_class "$auditor_log" "$audit_rc" \
+    audit_fc="$(singular_planner_failure_class "$auditor_log" "$audit_rc" \
       "$audit_record" "$audit_result_file")"
     # Structured provider results take precedence. Neither provider-window class
     # is retried here; the cycle-level validated-provider-evidence path owns any
@@ -1539,18 +1539,18 @@ PY
       infra_reason="provider-exit"
     elif [[ ! -f "$audit_record" ]]; then
       infra_reason="no-record"
-    elif ! gluerun_extract_json "$audit_record" "$audit_record" 2>/dev/null; then
+    elif ! singular_extract_json "$audit_record" "$audit_record" 2>/dev/null; then
       # No parseable JSON verdict (prose-only, refusal, or truncated output). Keep
       # the existing l1.audit_unparseable signal firing per infra try.
       infra_reason="unparseable"
-      gluerun_append_event "l1.audit_unparseable" "auditor produced no parseable JSON verdict" \
+      singular_append_event "l1.audit_unparseable" "auditor produced no parseable JSON verdict" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}"
     else
-      audit_schema="$(gluerun_json_field "$audit_record" schema 2>/dev/null || true)"
+      audit_schema="$(singular_json_field "$audit_record" schema 2>/dev/null || true)"
       audit_validation_rc=0
       validate_audit_record "$audit_record" 2>"$run_dir/audit-validate.err" \
         || audit_validation_rc=$?
-      if [[ "$audit_schema" == "gluerun.orchestration.audit-verdict.v1" \
+      if [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" \
           && "$audit_validation_rc" -ne 0 ]]; then
         # v1 is captured as plain provider output because the public schema is
         # richer than provider strict-output subsets. Host validation is always
@@ -1561,11 +1561,11 @@ PY
         cp "$audit_record" "$audit_repair_response_file"
         cp "$run_dir/audit-validate.err" "$audit_repair_error_file"
         cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
-        gluerun_append_event "l1.audit_invalid_verdict" "auditor v1 verdict failed host schema validation" \
+        singular_append_event "l1.audit_invalid_verdict" "auditor v1 verdict failed host schema validation" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}"
       elif [[ -n "$audit_schema" \
-          && "$audit_schema" != "gluerun.orchestration.audit-verdict.v1" \
-          && "$audit_schema" != "gluerun.orchestration.audit-verdict.v0" \
+          && "$audit_schema" != "singular.orchestration.audit-verdict.v1" \
+          && "$audit_schema" != "singular.orchestration.audit-verdict.v0" \
           && "$audit_schema" != "pmgo.orchestration.audit-verdict.v0" ]]; then
         infra_reason="unsupported-verdict-schema"
         audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
@@ -1580,7 +1580,7 @@ PY
         cp "$audit_record" "$audit_repair_response_file"
         printf 'audit verdict schema is missing; expected %s\n' \
           "$audit_write_schema" >"$audit_repair_error_file"
-      elif [[ "${GLUERUN_AUDIT_VERDICT_VALIDATE:-warn}" == "strict" \
+      elif [[ "${SINGULAR_AUDIT_VERDICT_VALIDATE:-warn}" == "strict" \
           && "$audit_validation_rc" -ne 0 ]]; then
         infra_reason="invalid-verdict"
         audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"
@@ -1588,9 +1588,9 @@ PY
         cp "$audit_record" "$audit_repair_response_file"
         cp "$run_dir/audit-validate.err" "$audit_repair_error_file"
         cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
-        gluerun_append_event "l1.audit_invalid_verdict" "legacy auditor verdict failed schema validation" \
+        singular_append_event "l1.audit_invalid_verdict" "legacy auditor verdict failed schema validation" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}"
-      elif [[ "$audit_schema" == "gluerun.orchestration.audit-verdict.v1" ]]; then
+      elif [[ "$audit_schema" == "singular.orchestration.audit-verdict.v1" ]]; then
         # Schema validity is not enough: the model must reproduce the
         # host-owned verification aggregate exactly. A model cannot upgrade
         # hash-verified evidence-only validation into a real rerun pass.
@@ -1609,15 +1609,15 @@ PY
           cp "$audit_record" "$audit_repair_response_file"
           cp "$run_dir/audit-verification-bind.err" "$audit_repair_error_file"
           cp "$audit_record" "$audit_record.invalid.json" 2>/dev/null || true
-          gluerun_append_event "l1.audit_verification_mismatch" \
+          singular_append_event "l1.audit_verification_mismatch" \
             "auditor verification classification did not match the host report" \
             "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"hostVerification\":\"$host_verification_status\",\"detail\":\"$(head -1 "$run_dir/audit-verification-bind.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}" \
             || true
         fi
       else
-        if [[ "${GLUERUN_AUDIT_VERDICT_VALIDATE:-warn}" == "warn" \
+        if [[ "${SINGULAR_AUDIT_VERDICT_VALIDATE:-warn}" == "warn" \
             && "$audit_validation_rc" -ne 0 ]]; then
-        gluerun_append_event "l1.audit_verdict_warned" "auditor verdict failed schema validation (warn mode; proceeding)" \
+        singular_append_event "l1.audit_verdict_warned" "auditor verdict failed schema validation (warn mode; proceeding)" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"detail\":\"$(head -1 "$run_dir/audit-validate.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}" || true
         fi
         audit_parsed="yes"
@@ -1627,13 +1627,13 @@ PY
   done
   if [[ "$audit_parsed" == "yes" ]]; then
     {
-      verdict="$(gluerun_json_field "$audit_record" verdict 2>/dev/null || echo unknown)"
+      verdict="$(singular_json_field "$audit_record" verdict 2>/dev/null || echo unknown)"
       # Findings ledger + reviewer capsule on every parseable verdict (additive
       # observability; never aborts the drive). prior_head is the previous
       # attempt's auditedHeadSha when a reviewer capsule already exists.
       local ledger_out ledger_event
-      ledger_out="$(gluerun_findings_ledger_update "$run_dir" "$n" "$audit_record" 2>/dev/null)" \
-        || { ledger_out=""; gluerun_append_event "l1.findings_ledger_failed" "findings ledger update failed (non-fatal)" \
+      ledger_out="$(singular_findings_ledger_update "$run_dir" "$n" "$audit_record" 2>/dev/null)" \
+        || { ledger_out=""; singular_append_event "l1.findings_ledger_failed" "findings ledger update failed (non-fatal)" \
                "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true; }
       if [[ -n "$ledger_out" ]]; then
         ledger_event="$(python3 -c 'import json,sys
@@ -1642,37 +1642,37 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
                   "open": int(parts.get("open", 0)), "resolved": int(parts.get("resolved", 0)),
                   "new": int(parts.get("new", 0))}, separators=(",", ":")))' \
           "$task_id" "$run_id" "$ledger_out" "$n" 2>/dev/null || true)"
-        [[ -n "$ledger_event" ]] && { gluerun_append_event "findings.ledger_updated" "findings ledger updated" "$ledger_event" || true; }
+        [[ -n "$ledger_event" ]] && { singular_append_event "findings.ledger_updated" "findings ledger updated" "$ledger_event" || true; }
       fi
       # prior_head was captured at the top of run_audit_phase (before this
       # attempt overwrites the reviewer capsule); reuse it for the diffRange.
-      gluerun_capsule_write_reviewer "$run_dir" "$n" "$audit_record" "$prior_head" "$head_sha" >/dev/null 2>&1 \
-        || gluerun_append_event "l1.capsule_write_failed" "reviewer capsule write failed (non-fatal)" \
+      singular_capsule_write_reviewer "$run_dir" "$n" "$audit_record" "$prior_head" "$head_sha" >/dev/null 2>&1 \
+        || singular_append_event "l1.capsule_write_failed" "reviewer capsule write failed (non-fatal)" \
              "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"reviewer\",\"attempt\":$n}" || true
       # Session affinity (T-E5): merge host-authority fields into the reviewer meta
       # so a later audit try (this run) can resume it. headShaAtCreate = head_sha
       # (the audited head). Never fatal.
-      gluerun_session_meta_finalize "$session_meta_reviewer" reviewer "$task_id" "$run_id" \
+      singular_session_meta_finalize "$session_meta_reviewer" reviewer "$task_id" "$run_id" \
         "$audit_runner_basename" "$reviewer_prompt_sha" "$head_sha" "$n" >/dev/null 2>&1 || true
       # Assumption ledger attempt-close (node assumption-ledger; behind
-      # GLUERUN_CTX_PACKET): fold the auditor findings (which cite assumption ids) into
+      # SINGULAR_CTX_PACKET): fold the auditor findings (which cite assumption ids) into
       # this attempt's input ledger via the integrated host-derived transition and
       # persist the updated ledger to the run_dir sidecar, so the NEXT attempt's
       # assemble carries sticky `violated` statuses. No-op when OFF; never fatal.
       assumptions_attempt_close "$audit_record" || true
     }
   else
-    # Auditor infra failure persisted across GLUERUN_AUDIT_INFRA_MAX fresh re-runs:
+    # Auditor infra failure persisted across SINGULAR_AUDIT_INFRA_MAX fresh re-runs:
     # a model decider cannot fix broken/empty auditor output. Surface as
     # audit-infra so the (fast-path) decider parks it; retryCount stays untouched.
-    gluerun_append_event "l1.audit_completed" "auditor completed (infra failure)" \
+    singular_append_event "l1.audit_completed" "auditor completed (infra failure)" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"verdict\":\"infra\"}"
     attempt_failure="audit-infra"; attempt_ctx="$run_dir/worker-codex.log"
     [[ -f "$audit_record" ]] && attempt_ctx="$audit_record"
     return 1
   fi
   echo "  auditor verdict=$verdict"
-  gluerun_append_event "l1.audit_completed" "auditor completed" \
+  singular_append_event "l1.audit_completed" "auditor completed" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"verdict\":\"$verdict\",\"verification\":\"${model_verification_status:-legacy}\"}"
   append_audit_evidence
   # Persist the final provider usage and every per-try runner sidecar after the
@@ -1700,30 +1700,30 @@ print(json.dumps({"taskId": sys.argv[1], "runId": sys.argv[2], "attempt": int(sy
   return 0
 }
 
-# Archive one attempt's artifacts (T-E1): wraps gluerun_attempt_archive with the
+# Archive one attempt's artifacts (T-E1): wraps singular_attempt_archive with the
 # driver's globals; a failure here NEVER aborts the drive.
 # args: n failure_class decider_action authority
 archive_attempt() {
-  GLUERUN_ATTEMPT_TASK_ID="$task_id" GLUERUN_ATTEMPT_STARTED_AT="$attempt_started_at" \
-    GLUERUN_ATTEMPT_WORKER_STRATEGY="${worker_strategy:-}" \
-    GLUERUN_ATTEMPT_REVIEWER_STRATEGY="${reviewer_strategy:-}" \
-    gluerun_attempt_archive "$run_dir" "$1" "$2" "$verdict" "$head_sha" "$3" "$4" >/dev/null 2>&1 \
-    || { gluerun_append_event "l1.attempt_archive_failed" "attempt archive failed (non-fatal)" \
+  SINGULAR_ATTEMPT_TASK_ID="$task_id" SINGULAR_ATTEMPT_STARTED_AT="$attempt_started_at" \
+    SINGULAR_ATTEMPT_WORKER_STRATEGY="${worker_strategy:-}" \
+    SINGULAR_ATTEMPT_REVIEWER_STRATEGY="${reviewer_strategy:-}" \
+    singular_attempt_archive "$run_dir" "$1" "$2" "$verdict" "$head_sha" "$3" "$4" >/dev/null 2>&1 \
+    || { singular_append_event "l1.attempt_archive_failed" "attempt archive failed (non-fatal)" \
            "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"n\":$1}" 2>/dev/null || true; }
 }
 
-# ---- Assumption ledger wire-in (node assumption-ledger; behind GLUERUN_CTX_PACKET) --
+# ---- Assumption ledger wire-in (node assumption-ledger; behind SINGULAR_CTX_PACKET) --
 # Terminal driver wire-in for the S4-context-packets assumption-ledger node. Every
-# site below is a no-op unless GLUERUN_CTX_PACKET is set to a non-zero value (default
+# site below is a no-op unless SINGULAR_CTX_PACKET is set to a non-zero value (default
 # 0), so with the flag unset/0 l1-drive.sh renders byte-identical prompts, writes no
 # ledger sidecar / section files, and emits no assumptions events. Each site delegates
-# into the integrated PURE bricks (gluerun_ctx_assumptions_assemble at attempt-open,
-# gluerun_ctx_assumptions_transition at attempt-close) and adds no rendering of its
+# into the integrated PURE bricks (singular_ctx_assumptions_assemble at attempt-open,
+# singular_ctx_assumptions_transition at attempt-close) and adds no rendering of its
 # own. Fail-closed: on any error the attempt proceeds WITHOUT injection (non-fatal),
 # preserving the run. These sites are additive and disjoint from the post-acceptance
 # paired-audit (TASK-0006) and critic-recheck (TASK-0033) hooks, so this node's
 # l1-drive.sh ownership does not collide with theirs.
-assumptions_ctx_enabled() { [[ -n "${GLUERUN_CTX_PACKET:-}" && "${GLUERUN_CTX_PACKET}" != "0" ]]; }
+assumptions_ctx_enabled() { [[ -n "${SINGULAR_CTX_PACKET:-}" && "${SINGULAR_CTX_PACKET}" != "0" ]]; }
 assumptions_ledger_sidecar="$run_dir/assumptions-ledger.json"
 assumptions_fix_section_file="$run_dir/assumptions-fix-section.md"
 assumptions_audit_section_file="$run_dir/assumptions-audit-section.md"
@@ -1739,7 +1739,7 @@ assumptions_attempt_open() {
     "$assumptions_attempt_ledger_file" 2>/dev/null || true
   local prior='' envelope
   [[ -f "$assumptions_ledger_sidecar" ]] && prior="$(cat "$assumptions_ledger_sidecar" 2>/dev/null || true)"
-  envelope="$(gluerun_ctx_assumptions_assemble "$task_file" "$prior" 2>/dev/null)" || return 0
+  envelope="$(singular_ctx_assumptions_assemble "$task_file" "$prior" 2>/dev/null)" || return 0
   [[ -n "$envelope" ]] || return 0
   python3 - "$envelope" "$assumptions_fix_section_file" "$assumptions_audit_section_file" \
     "$assumptions_attempt_ledger_file" <<'PY' 2>/dev/null || return 0
@@ -1789,7 +1789,7 @@ assumptions_record_capsule() {
   assumptions_ctx_enabled || return 0
   [[ -f "$assumptions_attempt_ledger_file" ]] || return 0
   cp "$assumptions_attempt_ledger_file" "$run_dir/assumptions-attempt-$n.json" 2>/dev/null \
-    || gluerun_append_event "l1.assumptions_record_failed" "per-attempt assumption ledger record failed (non-fatal)" \
+    || singular_append_event "l1.assumptions_record_failed" "per-attempt assumption ledger record failed (non-fatal)" \
          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n}" || true
   return 0
 }
@@ -1816,7 +1816,7 @@ f = r.get("findings") if isinstance(r, dict) else None
 sys.stdout.write(json.dumps(f if isinstance(f, list) else []))
 PY
 )" || return 0
-  updated="$(gluerun_ctx_assumptions_transition "$ledger" "$findings" 2>/dev/null)" || return 0
+  updated="$(singular_ctx_assumptions_transition "$ledger" "$findings" 2>/dev/null)" || return 0
   [[ -n "$updated" ]] || return 0
   printf '%s\n' "$updated" > "$assumptions_ledger_sidecar.tmp" 2>/dev/null \
     && mv "$assumptions_ledger_sidecar.tmp" "$assumptions_ledger_sidecar" 2>/dev/null || true
@@ -1835,11 +1835,11 @@ attempt_started_at=""
 for ((attempt=0; attempt<=max_retries; attempt++)); do
   [[ "$attempt" -gt 0 ]] && echo "  retry attempt $attempt/$max_retries (last: $attempt_failure)"
   n=$((attempt + 1))
-  attempt_started_at="$(gluerun_timestamp)"
+  attempt_started_at="$(singular_timestamp)"
   attempt_failure=""; attempt_ctx=""
   verdict="unknown"; head_sha=""
   attempt_ok="no"
-  # Assumption ledger (node assumption-ledger; behind GLUERUN_CTX_PACKET): assemble
+  # Assumption ledger (node assumption-ledger; behind SINGULAR_CTX_PACKET): assemble
   # this attempt's ledger from the task packet + per-run prior sidecar BEFORE the
   # prompt is rendered, then inject the assembled fixSection into the already-rendered
   # active/fix prompt. Both no-op when OFF (byte-identical) and never abort the drive.
@@ -1859,7 +1859,7 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
     break
   fi
 
-  blocker_rationale="$(gluerun_terminal_blocker_rationale "$attempt_failure" "${attempt_ctx:-/dev/null}" 2>/dev/null || true)"
+  blocker_rationale="$(singular_terminal_blocker_rationale "$attempt_failure" "${attempt_ctx:-/dev/null}" 2>/dev/null || true)"
   if [[ -n "$blocker_rationale" ]]; then
     terminal_action="escalate-parked"
     terminal_authority="l1"
@@ -1876,16 +1876,16 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
   #
   # Parked with a reason of its own, not as a product failure, because the two
   # call for opposite responses: a product failure wants another attempt, this
-  # wants a human or a changed environment. `gluerun unpark` is how it comes
+  # wants a human or a changed environment. `singular unpark` is how it comes
   # back once something outside the loop is different.
-  progress_signature="$(gluerun_attempt_progress_signature \
+  progress_signature="$(singular_attempt_progress_signature \
     "$worktree" "$attempt_failure" "$head_sha" "$run_dir/gate-report.json" 2>/dev/null || true)"
   if [[ -n "$progress_signature" && "$progress_signature" == "$prev_progress_signature" ]]; then
     terminal_action="escalate-parked"
     terminal_authority="l1"
     terminal_rationale="no progress: attempt $n reproduced attempt $((n - 1)) exactly — same head ($([[ -n "$head_sha" ]] && echo "${head_sha:0:12}" || echo "no commit")), same uncommitted changes, same $attempt_failure failure. A further retry cannot differ; unpark once the environment or the task changes."
     echo "  $attempt_failure: parking (no progress since the previous attempt)"
-    gluerun_append_event "l1.no_progress_parked" \
+    singular_append_event "l1.no_progress_parked" \
       "task parked because an attempt reproduced the previous one exactly" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"failureClass\":\"$attempt_failure\",\"headSha\":\"$head_sha\"}" || true
     archive_attempt "$n" "$attempt_failure" "escalate-parked" "l1"
@@ -1907,7 +1907,7 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
   fi
   l1_status deciding active "Selecting the recovery action for $attempt_failure" true \
     "Retry within policy or record a terminal decision" "" "decision-controller"
-  fast_action="$(gluerun_decider_fast_action "$attempt_failure" "$attempt" "$max_retries" "$prev_failure_class")"
+  fast_action="$(singular_decider_fast_action "$attempt_failure" "$attempt" "$max_retries" "$prev_failure_class")"
   if [[ -n "$fast_action" ]]; then
     action="$fast_action"
     decider_authority="policy"
@@ -1915,7 +1915,7 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
     "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "decide:$action" \
       --rationale "fast-path: $attempt_failure -> $action" --run "$run_id" \
       --branch "$worker_branch" --authority policy >/dev/null 2>&1 || true
-    gluerun_append_event "decider.fast_path" "decider fast-path resolved a failure" \
+    singular_append_event "decider.fast_path" "decider fast-path resolved a failure" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"failureClass\":\"$attempt_failure\",\"action\":\"$action\",\"retryCount\":$attempt}"
   else
     # Failure -> consult the autonomous decider.
@@ -1935,7 +1935,7 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
         archive_attempt "$n" "$attempt_failure" "escalate-parked" "l1"
         break
       fi
-      gluerun_lease_bump_retry "$task_id" >/dev/null 2>&1 || true
+      singular_lease_bump_retry "$task_id" >/dev/null 2>&1 || true
       # Feed the failure context back to the worker as fix hints. prev_* mirror
       # this for the structured fix prompt (read after the per-iteration reset).
       fix_hints="The previous attempt failed with: $attempt_failure. Address it. Findings:"$'\n'"$(tail -c 3000 "${attempt_ctx:-/dev/null}" 2>/dev/null || true)"
@@ -1946,7 +1946,7 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
         while IFS= read -r p; do
           p="$(echo "$p" | sed 's/^ *//')"
           [[ -n "$p" ]] || continue
-          if ! gluerun_scope_amendment_path_allowed "$p"; then
+          if ! singular_scope_amendment_path_allowed "$p"; then
             echo "  amend-scope: ignored generated/local path $p"
             continue
           fi
@@ -1961,12 +1961,12 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
         # scope-overlap guard (which reads lease.ownedFiles) cannot dispatch a
         # concurrent task that collides with a path this drive just took ownership of.
         amended_owned_json="$(printf '%s\n' "${owned_files[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
-        gluerun_lease_update_owned "$task_id" "$amended_owned_json" 2>/dev/null || true
+        singular_lease_update_owned "$task_id" "$amended_owned_json" 2>/dev/null || true
       fi
       archive_attempt "$n" "$attempt_failure" "$action" "$decider_authority"
       continue ;;
     accept-waiver)
-      if gluerun_unbound_waivers_enabled; then
+      if singular_unbound_waivers_enabled; then
         accepted="yes"; waiver="yes"
         _l1_outcome="accept-pending"
         archive_attempt "$n" "$attempt_failure" "accept-waiver" "$decider_authority"
@@ -1975,7 +1975,7 @@ for ((attempt=0; attempt<=max_retries; attempt++)); do
         terminal_authority="policy"
         terminal_rationale="unbound accept-waiver is disabled; record an exact-artifact human approval or repair the product failure"
         archive_attempt "$n" "$attempt_failure" "$terminal_action" "$terminal_authority"
-        gluerun_append_event "governance.unbound_waiver_rejected" \
+        singular_append_event "governance.unbound_waiver_rejected" \
           "legacy unbound waiver rejected; exact-artifact approval required" \
           "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"failureClass\":\"$attempt_failure\"}" \
           || true
@@ -1995,7 +1995,7 @@ if [[ "$accepted" != "yes" ]]; then
   [[ -n "$terminal_action" ]] || terminal_action="escalate-parked"
   if [[ -z "$terminal_rationale" ]]; then
     if [[ "$terminal_action" == "escalate-infra" ]]; then
-      terminal_rationale="environment failure ($attempt_failure), not a product defect: the workspace could not run the gate. Repair the environment, then \`gluerun unpark $task_id\`."
+      terminal_rationale="environment failure ($attempt_failure), not a product defect: the workspace could not run the gate. Repair the environment, then \`singular unpark $task_id\`."
     else
       terminal_rationale="decider terminal action after $attempt_failure"
     fi
@@ -2003,14 +2003,14 @@ if [[ "$accepted" != "yes" ]]; then
   l1_status terminal failed "Task ended without acceptance: $terminal_action" true \
     "Inspect the decision and referenced failure evidence" "$terminal_action"
   case "$terminal_action" in
-    supersede) gluerun_lease_set_status "$task_id" "superseded" 2>/dev/null || true; gluerun_task_set_status "$task_file" "superseded" || true ;;
-    cancel)    gluerun_lease_set_status "$task_id" "cancelled"  2>/dev/null || true; gluerun_task_set_status "$task_file" "cancelled"  || true ;;
-    split-task|fork) gluerun_lease_set_status "$task_id" "blocked" 2>/dev/null || true; gluerun_task_set_status "$task_file" "blocked" || true ;;
-    *)         gluerun_lease_set_status "$task_id" "blocked" 2>/dev/null || true; gluerun_task_set_status "$task_file" "blocked" || true ;;
+    supersede) singular_lease_set_status "$task_id" "superseded" 2>/dev/null || true; singular_task_set_status "$task_file" "superseded" || true ;;
+    cancel)    singular_lease_set_status "$task_id" "cancelled"  2>/dev/null || true; singular_task_set_status "$task_file" "cancelled"  || true ;;
+    split-task|fork) singular_lease_set_status "$task_id" "blocked" 2>/dev/null || true; singular_task_set_status "$task_file" "blocked" || true ;;
+    *)         singular_lease_set_status "$task_id" "blocked" 2>/dev/null || true; singular_task_set_status "$task_file" "blocked" || true ;;
   esac
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "$terminal_action" \
     --rationale "$terminal_rationale" --run "$run_id" --branch "$worker_branch" --authority "$terminal_authority" || true
-  gluerun_append_event "l1.task_terminal" "l1 task ended without acceptance" \
+  singular_append_event "l1.task_terminal" "l1 task ended without acceptance" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"action\":\"$terminal_action\",\"lastFailure\":\"$attempt_failure\"}"
   echo ""
   echo "NOT ACCEPTED ($terminal_action): $task_id — recorded and parked; loop continues elsewhere."
@@ -2030,40 +2030,40 @@ if waiver=="yes":
 with open(packet,"w") as f: json.dump(p,f,indent=2); f.write("\n")
 PY
 
-gluerun_lease_set_status "$task_id" "accepted"
-gluerun_task_set_status "$task_file" "accepted"
+singular_lease_set_status "$task_id" "accepted"
+singular_task_set_status "$task_file" "accepted"
 dec_rationale="auditor accepted; regression gate green; scope clean"
 [[ "$waiver" == "yes" ]] && dec_rationale="accepted via decider waiver (auditor: $verdict); gate green"
 "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "accept" \
   --rationale "$dec_rationale" --run "$run_id" --branch "$worker_branch"
 
-inbox_packet="$GLUERUN_INBOX_DIR/$run_id.json"
+inbox_packet="$SINGULAR_INBOX_DIR/$run_id.json"
 cp "$packet" "$inbox_packet.tmp"
 mv "$inbox_packet.tmp" "$inbox_packet"
 _l1_outcome="accepted"
 l1_status integrating active "Accepted packet queued for origin integration" true \
   "Finish acceptance bookkeeping and let origin reconcile"
-gluerun_append_event "l1.task_accepted" "l1 task accepted" \
+singular_append_event "l1.task_accepted" "l1 task accepted" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$worker_branch\",\"headSha\":\"$head_sha\",\"waiver\":\"$waiver\"}"
 
 # ---- Artifact secret-scan finalize hook (DAG node artifact-secret-scan, layer
-# engine_runtime; behind the default-OFF GLUERUN_CTX_ARTIFACT_SCAN knob) --------
+# engine_runtime; behind the default-OFF SINGULAR_CTX_ARTIFACT_SCAN knob) --------
 # Strictly AFTER acceptance is finalized above and placed BEFORE the
 # post-acceptance paired-audit fresh-audit prompt is assembled from durable
-# artifacts (the gluerun_ctx_paired_audit_record hook below), beside the paired-
+# artifacts (the singular_ctx_paired_audit_record hook below), beside the paired-
 # audit / critic-recheck hooks. When the knob is unset or "0" this whole block is
 # a no-op: no scan, no rename, no ctx.artifact_secret event, no manifest — so the
 # accepted flow is byte-identical to pre-hook behavior. When ON it delegates into
 # the integrated, already-tested containment bricks (ctx-artifact-quarantine.sh,
 # ctx-artifact-exclude.sh, ctx-artifact-scan.sh) and adds no scan/exclude logic
 # of its own:
-#   1. gluerun_ctx_artifact_quarantine "$run_dir" renames any durable context
+#   1. singular_ctx_artifact_quarantine "$run_dir" renames any durable context
 #      artifact whose content matches a secret pattern to `<path>.quarantined`
 #      (evidence-preserving; content never deleted), records exactly one
 #      ctx.artifact_secret event per hit, and leaves the accept/reject outcome
 #      untouched. The rename already removes the artifact from its canonical path.
 #   2. As belt-and-suspenders beyond the rename, enumerate the durable artifacts
-#      (gluerun_ctx_artifact_scan_paths) and apply gluerun_ctx_artifact_exclude so
+#      (singular_ctx_artifact_scan_paths) and apply singular_ctx_artifact_exclude so
 #      any quarantined artifact is dropped from the durable-artifact set that
 #      feeds downstream rendered prompt assembly; the surviving safe set is staged
 #      to $run_dir/durable-artifacts.manifest.
@@ -2071,35 +2071,35 @@ gluerun_append_event "l1.task_accepted" "l1 task accepted" \
 # any quarantine error it logs an l1.artifact_scan_failed event and NEVER aborts
 # the drive. The quarantine/exclude result NEVER feeds back into the accept
 # decision or the exit status.
-if [[ -n "${GLUERUN_CTX_ARTIFACT_SCAN:-}" && "${GLUERUN_CTX_ARTIFACT_SCAN}" != "0" ]]; then
-  # gluerun_secret_scan_patterns now lives in lib.sh (reading
+if [[ -n "${SINGULAR_CTX_ARTIFACT_SCAN:-}" && "${SINGULAR_CTX_ARTIFACT_SCAN}" != "0" ]]; then
+  # singular_secret_scan_patterns now lives in lib.sh (reading
   # engine/secret-patterns.tsv), so it is already defined here. It used to live
   # inside secret-scan.sh — a self-executing script lib.sh does not source —
   # which forced this branch to sed the function body out and eval it.
-  if ! gluerun_ctx_artifact_quarantine "$run_dir" >/dev/null 2>&1; then
-    gluerun_append_event "l1.artifact_scan_failed" "artifact secret-scan quarantine failed (non-fatal)" \
+  if ! singular_ctx_artifact_quarantine "$run_dir" >/dev/null 2>&1; then
+    singular_append_event "l1.artifact_scan_failed" "artifact secret-scan quarantine failed (non-fatal)" \
       "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\"}" || true
   fi
   # Belt-and-suspenders: the durable-artifact set that feeds downstream prompt
   # assembly, with every quarantined artifact excluded. Non-fatal.
-  gluerun_ctx_artifact_scan_paths "$run_dir" 2>/dev/null \
-    | gluerun_ctx_artifact_exclude > "$run_dir/durable-artifacts.manifest" 2>/dev/null \
+  singular_ctx_artifact_scan_paths "$run_dir" 2>/dev/null \
+    | singular_ctx_artifact_exclude > "$run_dir/durable-artifacts.manifest" 2>/dev/null \
     || true
 fi
 
 # Post-acceptance paired audit (observability only). Strictly AFTER acceptance is
-# finalized above; self-guards on the default-OFF GLUERUN_PAIRED_AUDIT_PCT knob
+# finalized above; self-guards on the default-OFF SINGULAR_PAIRED_AUDIT_PCT knob
 # (unset/0 -> no fresh audit, no event, no file) so the accepted flow is
 # byte-identical when disabled. The paired verdict NEVER feeds back into the
 # accept decision or the exit status; a recorder/runner failure is non-fatal.
-gluerun_ctx_paired_audit_record "$run_id" "$task_id" "$run_dir" "$worktree" || true
+singular_ctx_paired_audit_record "$run_id" "$task_id" "$run_dir" "$worktree" || true
 
 # Post-acceptance critic recheck (read-only; observability only). Strictly AFTER
 # acceptance is finalized above, beside the paired-audit hook. Minimal delegation
 # per the planner driver-hook rule: resolve the node and the prior plan-critique
 # record via the pure/read-only locators (TASK-0032), and only when BOTH resolve
 # invoke the recheck runner (TASK-0031). The runner self-guards on the default-OFF
-# GLUERUN_CRITIC_RECHECK_PCT sampling gate (unset/0 -> no ctx.critic_recheck event,
+# SINGULAR_CRITIC_RECHECK_PCT sampling gate (unset/0 -> no ctx.critic_recheck event,
 # no recheck files, no state write) so the accepted flow is byte-identical when
 # disabled. The recheck verdict/dispositions NEVER feed back into the accept
 # decision or the exit status; a locator or runner failure is non-fatal (guarded).
@@ -2110,7 +2110,7 @@ gluerun_ctx_paired_audit_record "$run_id" "$task_id" "$run_dir" "$worktree" || t
 # uncalled" under its own literal-substring invariance grep while a later slice
 # (this hook) legitimately composes it (planner-contract rule 9). The delegation
 # adds no recheck logic of its own.
-_cr_pfx=gluerun_ctx_critic_recheck_
+_cr_pfx=singular_ctx_critic_recheck_
 critic_recheck_node="$("${_cr_pfx}locate_node" "$task_id" "$worktree" 2>/dev/null || true)"
 if [[ -n "$critic_recheck_node" ]]; then
   critic_recheck_record="$("${_cr_pfx}locate_record" "$critic_recheck_node" "$task_id" "$worktree" 2>/dev/null || true)"
@@ -2121,25 +2121,25 @@ fi
 unset _cr_pfx
 
 # ---- Experiment arm knob-state finalize hook (DAG node experiment-run, layer
-# evaluation; behind the default-OFF GLUERUN_CTX_ARMSTATE knob) ----------------
-# Beside the sibling per-run provenance blocks above (the GLUERUN_CTX_ARTIFACT_SCAN
+# evaluation; behind the default-OFF SINGULAR_CTX_ARMSTATE knob) ----------------
+# Beside the sibling per-run provenance blocks above (the SINGULAR_CTX_ARTIFACT_SCAN
 # durable-artifacts block, the paired-audit recorder, and the critic-recheck
 # block): durably RECORD this run's observed continuity knob-state so the
 # experiment report's per-arm attribution (control = M0 knob-state vs treatment)
 # is auditable on disk. TASK-0093 shipped the pure read-only emitter
-# gluerun_ctx_experiment_armstate_json but left it present-but-uncalled; this hook
+# singular_ctx_experiment_armstate_json but left it present-but-uncalled; this hook
 # is the separable driver wire-in that emitter's context packet deferred.
 #
 # Minimal delegating call site — it inlines NO knob-state logic and only forwards
 # to the integrated emitter, writing its output (for the run's environment) to a
 # durable arm-knob-state.json under the run directory, non-fatal (|| true),
-# mirroring the GLUERUN_CTX_ARTIFACT_SCAN block that writes durable-artifacts.manifest.
+# mirroring the SINGULAR_CTX_ARTIFACT_SCAN block that writes durable-artifacts.manifest.
 # When the knob is unset or "0" this whole block is a no-op: no file, no event,
 # no state write — the accepted flow is byte-identical to pre-hook behavior. The
 # recorded knob-state NEVER feeds back into the accept decision or the exit status
 # (evidence invariance; it only writes an auditable file).
-if [[ -n "${GLUERUN_CTX_ARMSTATE:-}" && "${GLUERUN_CTX_ARMSTATE}" != "0" ]]; then
-  gluerun_ctx_experiment_armstate_json > "$run_dir/arm-knob-state.json" 2>/dev/null || true
+if [[ -n "${SINGULAR_CTX_ARMSTATE:-}" && "${SINGULAR_CTX_ARMSTATE}" != "0" ]]; then
+  singular_ctx_experiment_armstate_json > "$run_dir/arm-knob-state.json" 2>/dev/null || true
 fi
 
 l1_status terminal completed "Accepted packet and audit evidence are durable" true \

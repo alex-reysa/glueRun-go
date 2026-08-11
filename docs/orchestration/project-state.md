@@ -1,10 +1,10 @@
 # Project State
 
-glueRun-go self-hosted context-evolution build — COMPLETE (0.4.0, 2026-07-13). Snapshot block below is machine-maintained. Reconcile snapshots will be maintained below.
+singular self-hosted context-evolution build — COMPLETE (0.4.0, 2026-07-13). Snapshot block below is machine-maintained. Reconcile snapshots will be maintained below.
 
 ## Latest Reconcile Snapshot
 
-<!-- gluerun:reconcile-snapshot:start -->
+<!-- singular:reconcile-snapshot:start -->
 Updated: 2026-07-13T02:44:35Z
 Run: `ORIGIN-20260713T023224Z-78099`
 Mode: `actuate`
@@ -28,8 +28,8 @@ L1 import rejections this run: 2
 
 Actions:
 
-- Dry-run validates inbox packet shape and writes this snapshot to `.gluerun-state/runs/ORIGIN-20260713T023224Z-78099/reconcile-snapshot.md`.
+- Dry-run validates inbox packet shape and writes this snapshot to `.singular-state/runs/ORIGIN-20260713T023224Z-78099/reconcile-snapshot.md`.
 - Apply mode imports valid inbox packets into `docs/orchestration/packets/imported/**`.
 - Keep L1/L2 worker launch disabled during Phase 2/3 dry-run scaffolding.
 - Continue toward one manual artifact-area proof loop after scaffolding is accepted.
-<!-- gluerun:reconcile-snapshot:end -->
+<!-- singular:reconcile-snapshot:end -->

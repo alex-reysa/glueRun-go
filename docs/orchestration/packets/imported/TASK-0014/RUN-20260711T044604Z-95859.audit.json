@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0014",
   "runId": "RUN-20260711T044604Z-95859",
   "branch": "agent/plancritic/TASK-0014-plan-critic-context",
@@ -23,7 +23,7 @@
     "git status --porcelain",
     "git show --stat --oneline HEAD",
     "grep -n 'ctx-' engine/lib.sh",
-    "grep -rn 'gluerun_ctx_plan_critic_context|gluerun_ctx_plan_critic_stage_file' engine tests --include=*.sh (excluding owned files)"
+    "grep -rn 'singular_ctx_plan_critic_context|singular_ctx_plan_critic_stage_file' engine tests --include=*.sh (excluding owned files)"
   ],
   "findings": [
     "File scope clean: HEAD commit 89d3900 modifies only the two owned files; git diff and git show confirm no forbidden file was touched and the working tree is clean.",

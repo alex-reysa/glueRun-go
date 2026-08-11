@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.test-run.v0",
-  "title": "gluerun Supervised Test Run v0",
-  "description": "Durable manifest for one supervised regression-suite run (`gluerun test`). Written atomically by the run supervisor and reconciled by any later reader that finds the supervisor gone: the file, not a live process, is the record of what happened.",
+  "$id": "singular.test-run.v0",
+  "title": "singular Supervised Test Run v0",
+  "description": "Durable manifest for one supervised regression-suite run (`singular test`). Written atomically by the run supervisor and reconciled by any later reader that finds the supervisor gone: the file, not a live process, is the record of what happened.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,7 @@
     "failed"
   ],
   "properties": {
-    "schema": { "const": "gluerun.test-run.v0" },
+    "schema": { "const": "singular.test-run.v0" },
     "runId": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{4}$" },
     "status": {
       "type": "string",

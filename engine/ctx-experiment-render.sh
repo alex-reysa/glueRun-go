@@ -2,7 +2,7 @@
 # ctx-experiment-render.sh — read-only PRESENTATION capstone for the
 # `experiment-run` executable DAG node (layer evaluation). This brick ships NO
 # metric of its own: it RENDERS the already-computed values of the integrated
-# summary bundle (gluerun.orchestration.ctx-experiment-summary.v0, produced by
+# summary bundle (singular.orchestration.ctx-experiment-summary.v0, produced by
 # engine/ctx-experiment-summary.sh) into the deterministic markdown metrics
 # tables the operator drops into experiment-report.md (the exit gate requires the
 # report merged with raw metrics artifacts referenced).
@@ -16,7 +16,7 @@
 #
 # STRICTLY STDOUT-ONLY / READ-ONLY: it consumes a summary-bundle JSON source (a
 # file path, or `-` for stdin); when no source is supplied it obtains the bundle
-# by delegating to gluerun_ctx_experiment_summary_json with the standard env
+# by delegating to singular_ctx_experiment_summary_json with the standard env
 # defaults. It formats the bundle's already-computed values VERBATIM (no
 # recomputation, no reclassification) and emits markdown to STDOUT ONLY. It
 # creates, moves, or mutates NOTHING — no run artifact, index, event, lease, or
@@ -32,9 +32,9 @@
 # and a zero exit, never an error or partial output.
 #
 # Public entry point:
-#   gluerun_ctx_experiment_render_md [summary_source]
+#   singular_ctx_experiment_render_md [summary_source]
 #     summary_source is a bundle JSON file path, or `-` for stdin. When omitted,
-#     the bundle is obtained by delegating to gluerun_ctx_experiment_summary_json
+#     the bundle is obtained by delegating to singular_ctx_experiment_summary_json
 #     (standard env defaults). Emits ONE deterministic markdown fragment to
 #     stdout: the per-arm primary table, the bias table, the resume/rehydrate
 #     hit-rate table (by arm and by role), and the gate-refusal reason-mix table.
@@ -43,7 +43,7 @@
 # Renders escape rate, cost (tokens + wall-clock per accepted task),
 # attempts-to-accept (mean), and findings-per-attempt (mean) for arms A and B,
 # reading each value verbatim from the bundle on stdin. Emits to stdout.
-gluerun_ctx_experiment_render_primary() {
+singular_ctx_experiment_render_primary() {
   python3 - <<'PY' || true
 import json, os, sys
 
@@ -56,7 +56,7 @@ def fmt(x):
         return str(int(x)) if x.is_integer() else str(x)
     return str(x)
 
-b = json.loads(os.environ.get("GLUERUN_RENDER_BUNDLE", ""))
+b = json.loads(os.environ.get("SINGULAR_RENDER_BUNDLE", ""))
 arms = b["report"]["arms"]
 A, B = arms["A"], arms["B"]
 att = b["attempts"]
@@ -84,7 +84,7 @@ PY
 # directional-disagreement rate), the resume/rehydrate hit-rate table (by arm and
 # by role), and the gate-refusal reason-mix table. Reads the bundle on stdin;
 # emits to stdout. Values are formatted verbatim.
-gluerun_ctx_experiment_render_bias_strategy() {
+singular_ctx_experiment_render_bias_strategy() {
   python3 - <<'PY' || true
 import json, os, sys
 
@@ -97,7 +97,7 @@ def fmt(x):
         return str(int(x)) if x.is_integer() else str(x)
     return str(x)
 
-b = json.loads(os.environ.get("GLUERUN_RENDER_BUNDLE", ""))
+b = json.loads(os.environ.get("SINGULAR_RENDER_BUNDLE", ""))
 bias = b["report"]["bias"]
 hit = b["strategy"]["hitRates"]
 refusal = b["strategy"]["refusalMix"]
@@ -138,9 +138,9 @@ PY
 
 # --- Slice 3: composed public entry ------------------------------------------
 # Obtains the bundle (from the file/stdin arg, else by delegating to
-# gluerun_ctx_experiment_summary_json), then renders all sections in a stable
+# singular_ctx_experiment_summary_json), then renders all sections in a stable
 # order to stdout as ONE markdown fragment. Fail-safe / always exit 0.
-gluerun_ctx_experiment_render_md() {
+singular_ctx_experiment_render_md() {
   local source="${1-}"
   local bundle
 
@@ -148,7 +148,7 @@ gluerun_ctx_experiment_render_md() {
     # No source supplied: delegate to the summary composer (standard env
     # defaults). The composer is itself fail-safe and emits a zeroed bundle when
     # its inputs are missing.
-    bundle="$(gluerun_ctx_experiment_summary_json)"
+    bundle="$(singular_ctx_experiment_summary_json)"
   elif [[ "$source" == "-" ]]; then
     bundle="$(cat)"
   else
@@ -158,8 +158,8 @@ gluerun_ctx_experiment_render_md() {
   # Render all sections in a stable order. Each slice reads the bundle from the
   # environment (arbitrary JSON, never re-parsed by the shell).
   printf '## Experiment metrics\n\n'
-  GLUERUN_RENDER_BUNDLE="$bundle" gluerun_ctx_experiment_render_primary
+  SINGULAR_RENDER_BUNDLE="$bundle" singular_ctx_experiment_render_primary
   printf '\n'
-  GLUERUN_RENDER_BUNDLE="$bundle" gluerun_ctx_experiment_render_bias_strategy
+  SINGULAR_RENDER_BUNDLE="$bundle" singular_ctx_experiment_render_bias_strategy
   return 0
 }

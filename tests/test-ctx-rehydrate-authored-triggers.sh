@@ -4,7 +4,7 @@
 # `engine/ctx-rehydrate-authored-triggers.sh` ships a PURE, read-only,
 # present-but-uncalled trigger-set builder
 #
-#   gluerun_ctx_rehydrate_authored_triggers <role> <step> [node] [task-id]
+#   singular_ctx_rehydrate_authored_triggers <role> <step> [node] [task-id]
 #
 # that emits the deterministic, order-stable, de-duplicated set of `load-when`
 # trigger tokens for the run — one per line — drawn from the run's identifying
@@ -40,7 +40,7 @@ trap 'rm -rf "$tmp"' EXIT
 triggers() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_authored_triggers "$@"
+    singular_ctx_rehydrate_authored_triggers "$@"
   ' _ "$@"
 }
 
@@ -112,7 +112,7 @@ after="$(find "$sentinel" -type f | wc -l | tr -d ' ')"
 
 # --- Case 7: OFF-parity — the leaf DEFINES a function only, present-but-uncalled
 # The file must not invoke the function it defines (no live call site here).
-grep -Eq '^[[:space:]]*gluerun_ctx_rehydrate_authored_triggers[[:space:]]' "$LEAF" \
-  && fail "case7: leaf invokes gluerun_ctx_rehydrate_authored_triggers (must be present-but-uncalled). file:[$LEAF]"
+grep -Eq '^[[:space:]]*singular_ctx_rehydrate_authored_triggers[[:space:]]' "$LEAF" \
+  && fail "case7: leaf invokes singular_ctx_rehydrate_authored_triggers (must be present-but-uncalled). file:[$LEAF]"
 
 echo "ctx-rehydrate-authored-triggers tests passed"

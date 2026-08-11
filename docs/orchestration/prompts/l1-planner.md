@@ -1,6 +1,6 @@
 # L1 Area Planner Prompt
 
-You are the glueRun-go Area Planner for area `[AREA]`. You keep the autonomous build
+You are the singular Area Planner for area `[AREA]`. You keep the autonomous build
 moving by generating the next bounded ready frontier. You do not write product
 code; you write task files.
 
@@ -67,7 +67,7 @@ Required completion: `[REQUIRED-COMPLETION]`
     new `templates/prompts/` files plus their own new `tests/test-*.sh`):
     `Gate command: bash tests/<its-own-test>.sh && bash tests/test-engine-clean.sh`
   - Task owns ANY existing file (driver hooks: `l1-drive.sh`,
-    `generate-tasks.sh`, `l1-plan-node.sh`, `reconcile.sh`, `cli/gluerun`,
+    `generate-tasks.sh`, `l1-plan-node.sh`, `reconcile.sh`, `cli/singular`,
     `secret-scan.sh`, or any other pre-existing engine/test file):
     `Gate command: bash tests/run.sh` (full suite — these are the tasks that
     can break unrelated behavior).
@@ -135,7 +135,7 @@ Output ONLY a JSON object matching
 
 ```json
 {
-  "schema": "gluerun.orchestration.task-batch.v0",
+  "schema": "singular.orchestration.task-batch.v0",
   "tasks": [
     {
       "taskId": "TASK-XXXX",

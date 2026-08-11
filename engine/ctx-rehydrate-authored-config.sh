@@ -9,28 +9,28 @@
 #
 # This is the FOURTH slice of the explicitly-OPTIONAL authored-knowledge
 # deliverable. TASK-0058 (select), TASK-0059 (eligible), and TASK-0060 (render /
-# manifest — `gluerun_ctx_rehydrate_authored_render` /
-# `gluerun_ctx_rehydrate_authored_manifest`) reduce and compose a FIXTURE authored
-# manifest over a manifest PATH. This slice folds the GLUERUN_CTX_MANIFEST knob and
-# the OPTIONAL `gluerun.config.json` `contextManifest` field into a single decision
+# manifest — `singular_ctx_rehydrate_authored_render` /
+# `singular_ctx_rehydrate_authored_manifest`) reduce and compose a FIXTURE authored
+# manifest over a manifest PATH. This slice folds the SINGULAR_CTX_MANIFEST knob and
+# the OPTIONAL `singular.config.json` `contextManifest` field into a single decision
 # so the eventual driver wire-in becomes two one-line delegations rather than
 # duplicating the gate across two scarce driver files. It is NOT part of the
 # `rehydrate-path` node's requiredCompletion and does NOT gate the node.
-# GLUERUN_CTX_MANIFEST (default 0) gates this feature; with it unset the entry
+# SINGULAR_CTX_MANIFEST (default 0) gates this feature; with it unset the entry
 # point emits nothing. It takes NO dependency on any singular-brain runtime.
 #
-#   gluerun_ctx_rehydrate_authored_config_render   [trigger ...]
-#   gluerun_ctx_rehydrate_authored_config_manifest [trigger ...]
+#   singular_ctx_rehydrate_authored_config_render   [trigger ...]
+#   singular_ctx_rehydrate_authored_config_manifest [trigger ...]
 #
 # Both emit the authored packet section / manifest entries ONLY when
-# GLUERUN_CTX_MANIFEST=1 AND gluerun.config.json declares a readable
+# SINGULAR_CTX_MANIFEST=1 AND singular.config.json declares a readable
 # `contextManifest` path — by resolving that path and delegating to
-# `gluerun_ctx_rehydrate_authored_render <resolved> [trigger ...]` /
-# `gluerun_ctx_rehydrate_authored_manifest <resolved> [trigger ...]`; otherwise
+# `singular_ctx_rehydrate_authored_render <resolved> [trigger ...]` /
+# `singular_ctx_rehydrate_authored_manifest <resolved> [trigger ...]`; otherwise
 # they emit nothing.
 #
-# `contextManifest` is an OPTIONAL ADDITIVE field read via `gluerun_json_field`
-# over GLUERUN_JSON_CONFIG_FILE (engine/lib.sh); there is no config schema file, so
+# `contextManifest` is an OPTIONAL ADDITIVE field read via `singular_json_field`
+# over SINGULAR_JSON_CONFIG_FILE (engine/lib.sh); there is no config schema file, so
 # no schema change is needed and the field's absence is the OFF default. A relative
 # value resolves against the config file's own directory; an absolute value is used
 # as-is.
@@ -43,16 +43,16 @@
 # Internal: apply the gate and echo the resolved, readable manifest path on
 # success; emit nothing and return 1 when any precondition is unmet. Pure and
 # read-only — it only reads the config file and stats the resolved path.
-_gluerun_ctx_rehydrate_authored_config_path() {
-  [[ "${GLUERUN_CTX_MANIFEST:-0}" == "1" ]] || return 1
+_singular_ctx_rehydrate_authored_config_path() {
+  [[ "${SINGULAR_CTX_MANIFEST:-0}" == "1" ]] || return 1
 
-  local cfg="${GLUERUN_JSON_CONFIG_FILE:-}"
+  local cfg="${SINGULAR_JSON_CONFIG_FILE:-}"
   [[ -n "$cfg" && -f "$cfg" && -r "$cfg" ]] || return 1
 
-  # OPTIONAL ADDITIVE field; its absence (gluerun_json_field exits non-zero) is the
+  # OPTIONAL ADDITIVE field; its absence (singular_json_field exits non-zero) is the
   # OFF default. Errors are swallowed so a malformed/absent field is fail-soft.
   local rel
-  rel="$(gluerun_json_field "$cfg" contextManifest 2>/dev/null)" || return 1
+  rel="$(singular_json_field "$cfg" contextManifest 2>/dev/null)" || return 1
   [[ -n "$rel" ]] || return 1
 
   local resolved
@@ -65,16 +65,16 @@ _gluerun_ctx_rehydrate_authored_config_path() {
   printf '%s\n' "$resolved"
 }
 
-# gluerun_ctx_rehydrate_authored_config_render [trigger ...]
-gluerun_ctx_rehydrate_authored_config_render() {
+# singular_ctx_rehydrate_authored_config_render [trigger ...]
+singular_ctx_rehydrate_authored_config_render() {
   local resolved
-  resolved="$(_gluerun_ctx_rehydrate_authored_config_path)" || return 0
-  gluerun_ctx_rehydrate_authored_render "$resolved" "$@"
+  resolved="$(_singular_ctx_rehydrate_authored_config_path)" || return 0
+  singular_ctx_rehydrate_authored_render "$resolved" "$@"
 }
 
-# gluerun_ctx_rehydrate_authored_config_manifest [trigger ...]
-gluerun_ctx_rehydrate_authored_config_manifest() {
+# singular_ctx_rehydrate_authored_config_manifest [trigger ...]
+singular_ctx_rehydrate_authored_config_manifest() {
   local resolved
-  resolved="$(_gluerun_ctx_rehydrate_authored_config_path)" || return 0
-  gluerun_ctx_rehydrate_authored_manifest "$resolved" "$@"
+  resolved="$(_singular_ctx_rehydrate_authored_config_path)" || return 0
+  singular_ctx_rehydrate_authored_manifest "$resolved" "$@"
 }

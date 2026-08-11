@@ -28,7 +28,7 @@ ref = sys.argv[2]
 requested = int(sys.argv[3])
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 state_key = hashlib.sha256(str(manifest_path).encode("utf-8")).hexdigest()
-state_root = pathlib.Path("/tmp/gluerun-evidence-retrieval-v0")
+state_root = pathlib.Path("/tmp/singular-evidence-retrieval-v0")
 state_root.mkdir(mode=0o700, parents=True, exist_ok=True)
 try:
     state_root.chmod(0o700)

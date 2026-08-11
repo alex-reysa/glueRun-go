@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Phase E (0.8.0): "plan threads" — gluerun plan archive / list. A completed DAG
-# is archived as a browsable mini-repo under .gluerun-state/plans/<id>/ (both
-# docs/orchestration/ and .gluerun-state/ subtrees) and the live tree is reset
+# Phase E (0.8.0): "plan threads" — singular plan archive / list. A completed DAG
+# is archived as a browsable mini-repo under .singular-state/plans/<id>/ (both
+# docs/orchestration/ and .singular-state/ subtrees) and the live tree is reset
 # to a starter DAG. Preconditions (live autonomate / origin lock / live dispatch
 # / incomplete frontier / leftover worktrees) are refusable only with --force.
 
@@ -23,7 +23,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/repo"
 orch="$root/docs/orchestration"
-state="$root/.gluerun-state"
+state="$root/.singular-state"
 plans="$state/plans"
 mkdir -p "$orch/tasks" "$orch/gates" "$orch/areas/core" "$orch/packets/imported" \
   "$orch/prompts" "$state/runs" "$state/dispatch" "$state/leases" "$state/inbox"
@@ -32,21 +32,21 @@ git -C "$root" init -q
 git -C "$root" checkout -q -b target
 
 ops() {
-  env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$state" \
-    GLUERUN_ORCH_DIR="$orch" GLUERUN_TASKS_DIR="$orch/tasks" \
-    GLUERUN_LEASES_DIR="$state/leases" GLUERUN_INBOX_DIR="$state/inbox" \
-    GLUERUN_DISPATCH_DIR="$state/dispatch" GLUERUN_RUNS_DIR="$state/runs" \
-    GLUERUN_WORKTREES_DIR="$root/.worktrees" \
-    GLUERUN_EVENTS_FILE="$state/events.ndjson" \
-    GLUERUN_GATE_SCHEMA="$ENGINE_HOME/schemas/gate-result.v0.schema.json" \
-    GLUERUN_TARGET_BRANCH=target \
+  env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$state" \
+    SINGULAR_ORCH_DIR="$orch" SINGULAR_TASKS_DIR="$orch/tasks" \
+    SINGULAR_LEASES_DIR="$state/leases" SINGULAR_INBOX_DIR="$state/inbox" \
+    SINGULAR_DISPATCH_DIR="$state/dispatch" SINGULAR_RUNS_DIR="$state/runs" \
+    SINGULAR_WORKTREES_DIR="$root/.worktrees" \
+    SINGULAR_EVENTS_FILE="$state/events.ndjson" \
+    SINGULAR_GATE_SCHEMA="$ENGINE_HOME/schemas/gate-result.v0.schema.json" \
+    SINGULAR_TARGET_BRANCH=target \
     bash "$SCRIPT_DIR/ops.sh" plan "$@"
 }
 
 seed_dag() {
   cat >"$orch/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "layers": ["scaffold", "domain"],
   "kinds": ["build", "test"],
   "nodes": [
@@ -61,7 +61,7 @@ seed_gate() {
   local node="$1"
   cat >"$orch/gates/$node.gate-result.json" <<EOF
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$node",
   "status": "passed",
   "authoritative": true,
@@ -133,16 +133,16 @@ adir="$plans/$id1"
 [[ -d "$adir/docs/orchestration/gates" ]] || fail "archive gates/"
 [[ -f "$adir/docs/orchestration/prompts/l1-planner.md" ]] || fail "archive prompts copy"
 [[ -f "$adir/docs/orchestration/decisions.md" ]] || fail "archive decisions copy"
-[[ -f "$adir/.gluerun-state/events.ndjson" ]] || fail "archive events.ndjson"
-[[ -d "$adir/.gluerun-state/runs" ]] || fail "archive runs/"
-[[ -f "$adir/.gluerun-state/runs/RUN-1/log.txt" ]] || fail "archive run payload"
-[[ -d "$adir/.gluerun-state/dispatch" ]] || fail "archive dispatch/"
+[[ -f "$adir/.singular-state/events.ndjson" ]] || fail "archive events.ndjson"
+[[ -d "$adir/.singular-state/runs" ]] || fail "archive runs/"
+[[ -f "$adir/.singular-state/runs/RUN-1/log.txt" ]] || fail "archive run payload"
+[[ -d "$adir/.singular-state/dispatch" ]] || fail "archive dispatch/"
 
 # Manifest fields.
 [[ -f "$adir/manifest.json" ]] || fail "manifest.json present"
 mfields="$(python3 -c 'import json,sys
 m=json.load(open(sys.argv[1]))
-assert m["schema"]=="gluerun.plan.manifest.v0", m.get("schema")
+assert m["schema"]=="singular.plan.manifest.v0", m.get("schema")
 assert m["id"], "id"
 assert m["name"]==m["id"], "name defaults to id"
 assert m["gates"]=={"passed":2,"total":2}, m["gates"]
@@ -158,7 +158,7 @@ assert_contains "$mfields" "ok" "manifest fields"
 [[ -f "$plans/index.json" ]] || fail "index.json present"
 icheck="$(python3 -c 'import json,sys
 idx=json.load(open(sys.argv[1]))
-assert idx["schema"]=="gluerun.plans.index.v0"
+assert idx["schema"]=="singular.plans.index.v0"
 ids=[p["id"] for p in idx["plans"]]
 assert sys.argv[2] in ids, (sys.argv[2], ids)
 print(len(idx["plans"]))' "$plans/index.json" "$id1")"
@@ -211,7 +211,7 @@ name2="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["name"]
 listjson="$(ops list --json)"
 lcount="$(printf '%s' "$listjson" | python3 -c 'import json,sys
 d=json.load(sys.stdin)
-assert d["schema"]=="gluerun.plans.index.v0"
+assert d["schema"]=="singular.plans.index.v0"
 print(len(d["plans"]))')"
 [[ "$lcount" == "2" ]] || fail "plan list --json shows 2 plans (got $lcount)"
 

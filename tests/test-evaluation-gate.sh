@@ -21,14 +21,14 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/repo"
 mkdir -p "$root/docs/orchestration/gates/evidence" "$root/docs/orchestration/tasks" \
-  "$root/docs/readiness" "$root/.gluerun-state" "$root/schemas/orchestration"
+  "$root/docs/readiness" "$root/.singular-state" "$root/schemas/orchestration"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 cp "$ENGINE_HOME/schemas/gate-result.v0.schema.json" "$root/schemas/orchestration/"
 cp "$ENGINE_HOME/schemas/dag.v0.schema.json" "$root/schemas/orchestration/"
 cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     { "id": "review-opted-in", "stage": "S9", "area": "release", "layer": "evaluation", "kind": "evaluation", "authority": "agent-review-allowed", "dependsOn": [], "requiredCompletion": "reviewed" },
     { "id": "review-operator-only", "stage": "S9", "area": "release", "layer": "evaluation", "kind": "evaluation", "dependsOn": [], "requiredCompletion": "reviewed" }
@@ -42,9 +42,9 @@ head="$(git -C "$root" rev-parse HEAD)"
 promote() {
   # args: node extra-args...
   local node="$1"; shift
-  ( cd "$root" && env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-      GLUERUN_ENGINE_HOME="$ENGINE_HOME" GLUERUN_TARGET_BRANCH=target \
-      bash "$ENGINE_HOME/gluerun-ext/promote-gate.sh" "$node" "$@" 2>&1 )
+  ( cd "$root" && env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+      SINGULAR_ENGINE_HOME="$ENGINE_HOME" SINGULAR_TARGET_BRANCH=target \
+      bash "$ENGINE_HOME/singular-ext/promote-gate.sh" "$node" "$@" 2>&1 )
 }
 
 write_review() {
@@ -58,7 +58,7 @@ path, node, verdict, head, recorded = sys.argv[1:6]
 if not recorded:
     recorded = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 json.dump({
-    "schema": "gluerun.orchestration.gate-review.v0",
+    "schema": "singular.orchestration.gate-review.v0",
     "node": node,
     "reviewer": {"kind": "subagent", "id": "review-agent-1"},
     "verdict": verdict,
@@ -71,7 +71,7 @@ PY
 }
 
 # 1. dag.sh accepts the additive authority field.
-out="$(cd "$root" && env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
+out="$(cd "$root" && env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
   bash "$ENGINE_HOME/engine/dag.sh" validate-dag 2>&1)" || fail "authority field must validate ($out)"
 
 # 2. Opted-in node + valid passing review -> agent-review promotion.
@@ -110,7 +110,7 @@ rc=0; out="$(promote review-opted-in)" || rc=$?
 assert_contains "$out" "older than" "staleness named"
 
 # 6. Schema v2 rejects the unbound operator bypass by default.
-cat >"$root/gluerun.config.json" <<'EOF'
+cat >"$root/singular.config.json" <<'EOF'
 {
   "schemaVersion": "v2",
   "targetBranch": "target",
@@ -139,7 +139,7 @@ import sys
 gate_path, root_raw = sys.argv[1:3]
 root = pathlib.Path(root_raw)
 gate = json.load(open(gate_path, encoding="utf-8"))
-assert gate["schema"] == "gluerun.orchestration.gate-result.v1", gate
+assert gate["schema"] == "singular.orchestration.gate-result.v1", gate
 assert gate["evidenceClass"] == "agent-review"
 assert gate["verificationClassification"] == "not-rerun-evidence-verified"
 assert all(len(item["sha256"]) == 64 for item in gate["evidence"])
@@ -156,9 +156,9 @@ rc=0
 out="$(
   cd "$root"
   env \
-    GLUERUN_ROOT="$root" \
-    GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+    SINGULAR_ROOT="$root" \
+    SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
     bash "$ENGINE_HOME/engine/dag.sh" area-gate review-opted-in 2>&1
 )" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "mutated agent-review evidence must invalidate the v1 gate"
@@ -166,7 +166,7 @@ printf '%s\n' "evidence body" >"$root/docs/readiness/evidence.md"
 
 # 8. An explicit legacy-compatibility selection restores the operator route,
 # but schema-v2 output is still gate-result.v1 with exact evidence hashes.
-python3 - "$root/gluerun.config.json" <<'PY'
+python3 - "$root/singular.config.json" <<'PY'
 import json
 import sys
 
@@ -188,7 +188,7 @@ import sys
 gate_path, root_raw = sys.argv[1:3]
 root = pathlib.Path(root_raw)
 gate = json.load(open(gate_path, encoding="utf-8"))
-assert gate["schema"] == "gluerun.orchestration.gate-result.v1", gate
+assert gate["schema"] == "singular.orchestration.gate-result.v1", gate
 assert gate["evidenceClass"] == "operator-review"
 assert gate["verificationClassification"] == "not-rerun-evidence-verified"
 assert len(gate["evidence"]) == 1

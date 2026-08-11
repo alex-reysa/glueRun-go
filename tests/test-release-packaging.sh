@@ -11,11 +11,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # apart, and that holds whatever the version is.
 VERSION="$(tr -d '[:space:]' <"$ROOT/VERSION")"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-[[ "$(tr -d '[:space:]' <"$ROOT/.gluerun-version")" == "$VERSION" ]]
+[[ "$(tr -d '[:space:]' <"$ROOT/.singular-version")" == "$VERSION" ]]
 [[ "$(tr -d '[:space:]' <"$ROOT/SCHEMA_VERSION")" == "v2" ]]
 [[ -x "$ROOT/migrations/v1-to-v2.sh" ]]
 
-python3 - "$VERSION" "$ROOT/gluerun.config.json" "$ROOT/templates/gluerun.config.json" <<'PY'
+python3 - "$VERSION" "$ROOT/singular.config.json" "$ROOT/templates/singular.config.json" <<'PY'
 import json
 import sys
 
@@ -56,7 +56,7 @@ for config in configs:
     }
     # required is False, not True. `required: true` with zero commands is a
     # promise that guarantees nothing, and doctor reported it as passing — so
-    # every `gluerun init` inherited an empty promise from this very template.
+    # every `singular init` inherited an empty promise from this very template.
     # A consumer that adds real commands sets it back to true, and doctor now
     # warns if they set it true without any.
     assert config["bootstrap"] == {

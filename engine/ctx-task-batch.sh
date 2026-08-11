@@ -7,7 +7,7 @@
 # set in a private directory, and (for revision) transactionally replace the
 # staged set only after every candidate passes validation.
 #
-# Return codes from gluerun_task_batch_materialize:
+# Return codes from singular_task_batch_materialize:
 #   0  valid non-empty batch materialized
 #   2  parseable batch failed schema/identity/task validation
 #   3  no JSON object could be recovered
@@ -17,7 +17,7 @@
 # revision publications use an immutable generation selected by the atomically
 # replaced .candidate-current.json pointer. Direct files are accepted only as a
 # legacy, pre-publication fallback.
-gluerun_task_batch_candidate_dir() {
+singular_task_batch_candidate_dir() {
   local stage_dir="${1:-}"
   [[ -d "$stage_dir" ]] || return 2
   if [[ ! -e "$stage_dir/.candidate-current.json" \
@@ -27,21 +27,21 @@ gluerun_task_batch_candidate_dir() {
     printf '%s\n' "$stage_dir"
     return 0
   fi
-  python3 "$GLUERUN_ENGINE_DIR/task_batch_publish.py" resolve \
+  python3 "$SINGULAR_ENGINE_DIR/task_batch_publish.py" resolve \
     --stage-dir "$stage_dir"
 }
 
-gluerun_task_batch_has_candidates() {
+singular_task_batch_has_candidates() {
   local stage_dir="${1:-}" resolved
-  resolved="$(gluerun_task_batch_candidate_dir "$stage_dir" 2>/dev/null)" || return 1
+  resolved="$(singular_task_batch_candidate_dir "$stage_dir" 2>/dev/null)" || return 1
   find "$resolved" -maxdepth 1 -name 'TASK-*.candidate.md' -type f \
     -print -quit 2>/dev/null | grep -q .
 }
 
-gluerun_task_batch_materialize() {
+singular_task_batch_materialize() {
   local raw_message="${1:-}" normalized_batch="${2:-}" candidate_dir="${3:-}"
   local expected_area="${4:-}" expected_ids_json="${5:-[]}" identity_mode="${6:-assign}"
-  local schema_path="${7:-${GLUERUN_TASKBATCH_SCHEMA:-}}"
+  local schema_path="${7:-${SINGULAR_TASKBATCH_SCHEMA:-}}"
 
   [[ -f "$raw_message" && -n "$normalized_batch" && -n "$candidate_dir" ]] || return 2
   [[ "$candidate_dir" != "/" && "$candidate_dir" != "." ]] || return 2
@@ -54,7 +54,7 @@ gluerun_task_batch_materialize() {
   rm -rf -- "$candidate_dir"
   mkdir -p "$candidate_dir"
   local extracted="$candidate_dir/.extracted.json"
-  if ! gluerun_extract_json "$raw_message" "$extracted" 2>/dev/null; then
+  if ! singular_extract_json "$raw_message" "$extracted" 2>/dev/null; then
     rm -rf -- "$candidate_dir"
     return 3
   fi
@@ -95,7 +95,7 @@ if schema.get("additionalProperties") is False and set(data) - allowed_batch_fie
         file=sys.stderr,
     )
     sys.exit(2)
-if data.get("schema") != "gluerun.orchestration.task-batch.v0":
+if data.get("schema") != "singular.orchestration.task-batch.v0":
     print("unsupported task batch schema", file=sys.stderr)
     sys.exit(2)
 tasks = data.get("tasks")
@@ -188,7 +188,7 @@ with open(manifest_path, "w", encoding="utf-8") as manifest:
 
 with open(output_path, "w", encoding="utf-8") as f:
     json.dump(
-        {"schema": "gluerun.orchestration.task-batch.v0", "tasks": normalized_tasks},
+        {"schema": "singular.orchestration.task-batch.v0", "tasks": normalized_tasks},
         f,
         indent=2,
     )
@@ -220,25 +220,25 @@ PY
   while IFS=$'\t' read -r destination_id source_id; do
     [[ -n "$destination_id" && -n "$source_id" ]] || continue
     candidate="$candidate_dir/$destination_id.candidate.md"
-    v_id="$(gluerun_task_field "$candidate" taskId 2>/dev/null || true)"
+    v_id="$(singular_task_field "$candidate" taskId 2>/dev/null || true)"
     if [[ -z "$v_id" || "$v_id" != "$source_id" ]]; then
       echo "batch/markdown task id mismatch: batch=$source_id markdown=$v_id" >&2
       rm -rf -- "$candidate_dir"
       return 2
     fi
     if [[ "$identity_mode" == "assign" && "$source_id" != "$destination_id" ]]; then
-      gluerun_rewrite_task_id_token "$candidate" "$source_id" "$destination_id" || {
+      singular_rewrite_task_id_token "$candidate" "$source_id" "$destination_id" || {
         rm -rf -- "$candidate_dir"
         return 2
       }
     fi
 
-    v_id="$(gluerun_task_field "$candidate" taskId 2>/dev/null || true)"
-    v_status="$(gluerun_task_field "$candidate" status 2>/dev/null || true)"
-    v_area="$(gluerun_task_field "$candidate" area 2>/dev/null || true)"
-    v_owned="$(gluerun_task_field "$candidate" ownedFiles 2>/dev/null || echo '[]')"
-    v_mode="$(gluerun_task_field "$candidate" dispatchMode 2>/dev/null || true)"
-    v_deps="$(gluerun_task_field "$candidate" dependsOn 2>/dev/null || echo '[]')"
+    v_id="$(singular_task_field "$candidate" taskId 2>/dev/null || true)"
+    v_status="$(singular_task_field "$candidate" status 2>/dev/null || true)"
+    v_area="$(singular_task_field "$candidate" area 2>/dev/null || true)"
+    v_owned="$(singular_task_field "$candidate" ownedFiles 2>/dev/null || echo '[]')"
+    v_mode="$(singular_task_field "$candidate" dispatchMode 2>/dev/null || true)"
+    v_deps="$(singular_task_field "$candidate" dependsOn 2>/dev/null || echo '[]')"
     internal_dep="$(python3 - "$v_deps" "$source_ids_json" "$destination_ids_json" <<'PY'
 import json
 import sys
@@ -278,7 +278,7 @@ with open(manifest_path, "r", encoding="utf-8") as f:
         ) as candidate:
             tasks.append({"taskId": destination_id, "markdown": candidate.read().strip()})
 with open(output_path, "w", encoding="utf-8") as f:
-    json.dump({"schema": "gluerun.orchestration.task-batch.v0", "tasks": tasks}, f, indent=2)
+    json.dump({"schema": "singular.orchestration.task-batch.v0", "tasks": tasks}, f, indent=2)
     f.write("\n")
 PY
   then
@@ -292,11 +292,11 @@ PY
 
 # Capture the immutable identity contract of the currently staged candidate set.
 # The filename, markdown task id, count, and area must all agree.
-gluerun_task_batch_stage_contract() {
+singular_task_batch_stage_contract() {
   local stage_dir="${1:-}" output_path="${2:-}"
   [[ -d "$stage_dir" && -n "$output_path" ]] || return 2
   local candidate_batch_dir
-  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
+  candidate_batch_dir="$(singular_task_batch_candidate_dir "$stage_dir")" || return 2
   local -a candidates=()
   mapfile -t candidates < <(find "$candidate_batch_dir" -maxdepth 1 \
     -name 'TASK-*.candidate.md' -type f 2>/dev/null | sort)
@@ -307,8 +307,8 @@ gluerun_task_batch_stage_contract() {
   : >"$ids_file"
   for candidate in "${candidates[@]}"; do
     filename_id="$(basename "$candidate" .candidate.md)"
-    markdown_id="$(gluerun_task_field "$candidate" taskId 2>/dev/null || true)"
-    area="$(gluerun_task_field "$candidate" area 2>/dev/null || true)"
+    markdown_id="$(singular_task_field "$candidate" taskId 2>/dev/null || true)"
+    area="$(singular_task_field "$candidate" area 2>/dev/null || true)"
     if [[ ! "$filename_id" =~ ^TASK-[0-9]{4,}$ || "$markdown_id" != "$filename_id" || -z "$area" ]]; then
       rm -f "$ids_file"
       return 2
@@ -353,13 +353,13 @@ PY
 # generation once, so a concurrent reader sees either the complete prior batch
 # or the complete replacement. Legacy direct files are never rewritten and
 # remain available to readers that resolved them before the first publication.
-gluerun_task_batch_replace_stage() {
+singular_task_batch_replace_stage() {
   local candidate_dir="${1:-}" stage_dir="${2:-}"
   [[ -d "$candidate_dir" && -d "$stage_dir" ]] || return 2
   [[ "$candidate_dir" != "$stage_dir" && "$stage_dir" != "/" && "$stage_dir" != "." ]] || return 2
 
   local current_dir
-  current_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
+  current_dir="$(singular_task_batch_candidate_dir "$stage_dir")" || return 2
   local -a replacement=() current=()
   mapfile -t replacement < <(find "$candidate_dir" -maxdepth 1 -name 'TASK-*.candidate.md' -type f 2>/dev/null | sort)
   mapfile -t current < <(find "$current_dir" -maxdepth 1 -name 'TASK-*.candidate.md' -type f 2>/dev/null | sort)
@@ -372,7 +372,7 @@ gluerun_task_batch_replace_stage() {
     [[ -f "$target" ]] || return 2
   done
 
-  if ! python3 "$GLUERUN_ENGINE_DIR/task_batch_publish.py" publish \
+  if ! python3 "$SINGULAR_ENGINE_DIR/task_batch_publish.py" publish \
     --stage-dir "$stage_dir" --candidate-dir "$candidate_dir" >/dev/null; then
     return 2
   fi

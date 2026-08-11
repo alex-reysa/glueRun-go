@@ -5,9 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
-configured="${GLUERUN_MAX_CONCURRENT:-${GLUERUN_MAX_L1_CONCURRENT:-3}}"
-reserve="${GLUERUN_DISK_RESERVE_BYTES:-2147483648}"
-estimate="${GLUERUN_ESTIMATED_WORKTREE_BYTES:-}"
+configured="${SINGULAR_MAX_CONCURRENT:-${SINGULAR_MAX_L1_CONCURRENT:-3}}"
+reserve="${SINGULAR_DISK_RESERVE_BYTES:-2147483648}"
+estimate="${SINGULAR_ESTIMATED_WORKTREE_BYTES:-}"
 free_bytes=""
 json="no"
 
@@ -27,13 +27,13 @@ done
   exit 2
 }
 if [[ -z "$estimate" ]]; then
-  estimate="$(python3 - "$GLUERUN_ROOT" <<'PY'
+  estimate="$(python3 - "$SINGULAR_ROOT" <<'PY'
 import os
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-excluded = {".git", ".worktrees", ".gluerun-state"}
+excluded = {".git", ".worktrees", ".singular-state"}
 total = 0
 for base, dirs, files in os.walk(root):
     dirs[:] = [name for name in dirs if name not in excluded]
@@ -53,7 +53,7 @@ fi
   exit 2
 }
 if [[ -z "$free_bytes" ]]; then
-  free_bytes="$(python3 - "$GLUERUN_ROOT" <<'PY'
+  free_bytes="$(python3 - "$SINGULAR_ROOT" <<'PY'
 import shutil, sys
 print(shutil.disk_usage(sys.argv[1]).free)
 PY
@@ -68,11 +68,11 @@ fi
 # disabled this prints nothing, no state is created, and the record below is
 # byte-identical to the pre-0.17.0 plan.
 pressure_json=""
-if gluerun_provider_pressure_enabled; then
+if singular_provider_pressure_enabled; then
   # Hand the controller the very baseline this plan is using, so its stored cap
   # is bounded by the same configured ceiling the min() below applies.
-  pressure_json="$(GLUERUN_MAX_CONCURRENT="$configured" \
-    gluerun_provider_pressure_status_json 2>/dev/null || true)"
+  pressure_json="$(SINGULAR_MAX_CONCURRENT="$configured" \
+    singular_provider_pressure_status_json 2>/dev/null || true)"
 fi
 
 python3 - "$configured" "$reserve" "$estimate" "$free_bytes" "$json" "$pressure_json" <<'PY'
@@ -89,7 +89,7 @@ elif effective == 0:
 else:
     reason = "disk-limited-concurrency"
 record = {
-    "schema": "gluerun.orchestration.resource-plan.v0",
+    "schema": "singular.orchestration.resource-plan.v0",
     "configuredSlots": configured,
     "effectiveSlots": effective,
     "freeBytes": free,

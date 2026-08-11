@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Covers the deterministic pure-projection primitives in engine/ctx-graph.sh —
 # the atom every later graph-projector capability composes:
-#   gluerun_graph_content_hash  source content            -> sha256:<64-hex>
-#   gluerun_graph_node_id       source-record identity    -> n-<12-hex>
-#   gluerun_graph_edge_id       (fromId, edgeType, toId)  -> e-<12-hex>
-#   gluerun_graph_emit_node     -> one nodes.jsonl line valid vs the shipped schema
-#   gluerun_graph_emit_edge     -> one edges.jsonl line valid vs the shipped schema
+#   singular_graph_content_hash  source content            -> sha256:<64-hex>
+#   singular_graph_node_id       source-record identity    -> n-<12-hex>
+#   singular_graph_edge_id       (fromId, edgeType, toId)  -> e-<12-hex>
+#   singular_graph_emit_node     -> one nodes.jsonl line valid vs the shipped schema
+#   singular_graph_emit_edge     -> one edges.jsonl line valid vs the shipped schema
 #
 # Asserts: byte-identical output for identical input and distinct output for
 # distinct identities; the id/hash shapes; fail-closed evidenceClass
 # (authoritative ONLY for commit/gate-result, claim for every other type
-# including audit); the emitted edge id == gluerun_graph_edge_id(from,type,to);
+# including audit); the emitted edge id == singular_graph_edge_id(from,type,to);
 # schema validity of every emitted line (via a tiny schema-driven validator that
 # reads the ACTUAL shipped schema, mirroring test-context-graph-schema.sh); and
 # OFF-parity/no-writes — sourcing the file and calling the emitters creates no
@@ -19,8 +19,8 @@
 #
 # CAPSTONE (requiredCompletion walk): beyond the primitives above, this file is
 # the composed end-to-end guard for the graph-projector node. Slice 4 composes the
-# INTEGRATED engine functions (gluerun_graph_rebuild / gluerun_graph_sync /
-# gluerun_graph_query_* over the mappers + loss-free writer) across a single
+# INTEGRATED engine functions (singular_graph_rebuild / singular_graph_sync /
+# singular_graph_query_* over the mappers + loss-free writer) across a single
 # fixture <stateDir> spanning several source families — an authoritative commit +
 # gate-result plus claim nodes — and asserts, strict-test-first: rebuild
 # determinism (byte-identical nodes.jsonl + edges.jsonl on repeat), graph deletable
@@ -30,8 +30,8 @@
 # documented outputs (neighbors, lineage, open-contradictions), the
 # authoritative/claim split (commit + gate-result authoritative, every other node
 # claim) with every corpus line valid vs the SHIPPED schema, and OFF-parity
-# end-to-end (with GLUERUN_CTX_GRAPH unset/0 sourcing every composed module invokes
-# nothing and writes no file, and `gluerun graph ...` refuses exactly as an unknown
+# end-to-end (with SINGULAR_CTX_GRAPH unset/0 sourcing every composed module invokes
+# nothing and writes no file, and `singular graph ...` refuses exactly as an unknown
 # command did — both pinned behaviorally by directory snapshots, never by an
 # absence-grep). The guard only asserts requiredCompletion behaviors over the
 # integrated functions; it re-implements no projection logic.
@@ -49,7 +49,7 @@ GG_CORPUS="$ENGINE_HOME/engine/ctx-graph-corpus.sh"
 GG_REBUILD="$ENGINE_HOME/engine/ctx-graph-rebuild.sh"
 GG_SYNC="$ENGINE_HOME/engine/ctx-graph-sync.sh"
 GG_QUERY="$ENGINE_HOME/engine/ctx-graph-query.sh"
-GLUERUN_SRC="$ENGINE_HOME/cli/gluerun"
+SINGULAR_SRC="$ENGINE_HOME/cli/singular"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -58,12 +58,12 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ -f "$CTX_GRAPH" ]] || fail "impl not present yet: $CTX_GRAPH (strict-test-first RED)"
 
 # OFF-parity / no-writes: sourcing the file must invoke nothing and write no
-# file. Snapshot an empty cwd around the source, and confirm GLUERUN_CTX_GRAPH is
+# file. Snapshot an empty cwd around the source, and confirm SINGULAR_CTX_GRAPH is
 # not required (default OFF).
 snap_dir="$(mktemp -d)"
 trap 'rm -rf "$snap_dir" "$VALIDATOR"' EXIT
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$snap_dir" && source "$CTX_GRAPH" ) || fail "sourcing $CTX_GRAPH failed"
 after="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
@@ -71,34 +71,34 @@ after="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
 
 # shellcheck disable=SC1090
 source "$CTX_GRAPH" || fail "sourcing $CTX_GRAPH failed"
-for fn in gluerun_graph_content_hash gluerun_graph_node_id gluerun_graph_edge_id \
-          gluerun_graph_emit_node gluerun_graph_emit_edge; do
+for fn in singular_graph_content_hash singular_graph_node_id singular_graph_edge_id \
+          singular_graph_emit_node singular_graph_emit_edge; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $CTX_GRAPH"
 done
 
 # --- Slice 1: deterministic identity primitives ------------------------------
 
 # content hash: shape + determinism + distinctness
-h1="$(gluerun_graph_content_hash 'canonical content A')"
-h1b="$(gluerun_graph_content_hash 'canonical content A')"
-h2="$(gluerun_graph_content_hash 'canonical content B')"
+h1="$(singular_graph_content_hash 'canonical content A')"
+h1b="$(singular_graph_content_hash 'canonical content A')"
+h2="$(singular_graph_content_hash 'canonical content B')"
 [[ "$h1" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "content hash bad shape: '$h1'"
 [[ "$h1" == "$h1b" ]] || fail "content hash not deterministic: '$h1' vs '$h1b'"
 [[ "$h1" != "$h2" ]] || fail "distinct content produced identical hash"
 
 # node id: shape + determinism + distinctness
-n1="$(gluerun_graph_node_id 'task:TASK-0001')"
-n1b="$(gluerun_graph_node_id 'task:TASK-0001')"
-n2="$(gluerun_graph_node_id 'task:TASK-0002')"
+n1="$(singular_graph_node_id 'task:TASK-0001')"
+n1b="$(singular_graph_node_id 'task:TASK-0001')"
+n2="$(singular_graph_node_id 'task:TASK-0002')"
 [[ "$n1" =~ ^n-[0-9a-f]{12}$ ]] || fail "node id bad shape: '$n1'"
 [[ "$n1" == "$n1b" ]] || fail "node id not deterministic: '$n1' vs '$n1b'"
 [[ "$n1" != "$n2" ]] || fail "distinct node identity produced identical id"
 
 # edge id: shape + determinism + distinctness (each triple slot matters)
-e1="$(gluerun_graph_edge_id "$n1" implements "$n2")"
-e1b="$(gluerun_graph_edge_id "$n1" implements "$n2")"
-e_type="$(gluerun_graph_edge_id "$n1" verifies "$n2")"
-e_dir="$(gluerun_graph_edge_id "$n2" implements "$n1")"
+e1="$(singular_graph_edge_id "$n1" implements "$n2")"
+e1b="$(singular_graph_edge_id "$n1" implements "$n2")"
+e_type="$(singular_graph_edge_id "$n1" verifies "$n2")"
+e_dir="$(singular_graph_edge_id "$n2" implements "$n1")"
 [[ "$e1" =~ ^e-[0-9a-f]{12}$ ]] || fail "edge id bad shape: '$e1'"
 [[ "$e1" == "$e1b" ]] || fail "edge id not deterministic: '$e1' vs '$e1b'"
 [[ "$e1" != "$e_type" ]] || fail "distinct edge type produced identical id"
@@ -172,29 +172,29 @@ validates() { python3 "$VALIDATOR" "$SCHEMA" >/dev/null 2>&1; }
 # --- Slice 2: node emitter ---------------------------------------------------
 
 # A claim-class node (finding): validates, correct id + hash, evidenceClass claim.
-node_line="$(gluerun_graph_emit_node finding 'finding:F1' 'docs/critique/F1.md' \
+node_line="$(singular_graph_emit_node finding 'finding:F1' 'docs/critique/F1.md' \
              'the finding body' 'a finding')"
 [[ -n "$node_line" ]] || fail "emit_node produced no output"
 printf '%s' "$node_line" | validates || fail "emit_node line failed schema validation: $node_line"
 got_id="$(printf '%s' "$node_line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
-[[ "$got_id" == "$(gluerun_graph_node_id 'finding:F1')" ]] \
-  || fail "emitted node id != gluerun_graph_node_id(identity)"
+[[ "$got_id" == "$(singular_graph_node_id 'finding:F1')" ]] \
+  || fail "emitted node id != singular_graph_node_id(identity)"
 got_ev="$(printf '%s' "$node_line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["evidenceClass"])')"
 [[ "$got_ev" == "claim" ]] || fail "finding node evidenceClass should be claim, got '$got_ev'"
 got_ch="$(printf '%s' "$node_line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["provenance"]["contentHash"])')"
-[[ "$got_ch" == "$(gluerun_graph_content_hash 'the finding body')" ]] \
-  || fail "emitted node contentHash != gluerun_graph_content_hash(content)"
+[[ "$got_ch" == "$(singular_graph_content_hash 'the finding body')" ]] \
+  || fail "emitted node contentHash != singular_graph_content_hash(content)"
 got_sp="$(printf '%s' "$node_line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["provenance"]["sourcePath"])')"
 [[ "$got_sp" == "docs/critique/F1.md" ]] || fail "emitted node sourcePath wrong: '$got_sp'"
 
 # Determinism: identical inputs -> byte-identical line.
-node_line_b="$(gluerun_graph_emit_node finding 'finding:F1' 'docs/critique/F1.md' \
+node_line_b="$(singular_graph_emit_node finding 'finding:F1' 'docs/critique/F1.md' \
                'the finding body' 'a finding')"
 [[ "$node_line" == "$node_line_b" ]] || fail "emit_node is not deterministic"
 
 # Evidence invariance (fail-closed): authoritative ONLY for commit + gate-result.
 node_ev() {
-  gluerun_graph_emit_node "$1" "id:$1" "src/$1" "content-$1" \
+  singular_graph_emit_node "$1" "id:$1" "src/$1" "content-$1" \
     | python3 -c 'import json,sys;print(json.load(sys.stdin)["evidenceClass"])'
 }
 [[ "$(node_ev commit)" == "authoritative" ]]      || fail "commit node must be authoritative"
@@ -206,31 +206,31 @@ for t in goal plan-batch plan-version critique finding assumption task attempt d
 done
 
 # Optional attributes are projected as a nested object and still validate.
-attr_line="$(gluerun_graph_emit_node gate-result 'gate:G1' '.gluerun-state/gates/G1.json' \
+attr_line="$(singular_graph_emit_node gate-result 'gate:G1' '.singular-state/gates/G1.json' \
              'gate body' 'gate G1' '{"verdict":"pass"}')"
 printf '%s' "$attr_line" | validates || fail "emit_node with attributes failed validation: $attr_line"
 [[ "$(printf '%s' "$attr_line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["attributes"]["verdict"])')" == "pass" ]] \
   || fail "emit_node did not project attributes.verdict"
 
 # --- Slice 3: edge emitter ---------------------------------------------------
-from_id="$(gluerun_graph_node_id 'task:TASK-0001')"
-to_id="$(gluerun_graph_node_id 'attempt:TASK-0001#1')"
-edge_line="$(gluerun_graph_emit_edge implements "$from_id" "$to_id" \
-             '.gluerun-state/events/log.jsonl' 'edge source content')"
+from_id="$(singular_graph_node_id 'task:TASK-0001')"
+to_id="$(singular_graph_node_id 'attempt:TASK-0001#1')"
+edge_line="$(singular_graph_emit_edge implements "$from_id" "$to_id" \
+             '.singular-state/events/log.jsonl' 'edge source content')"
 [[ -n "$edge_line" ]] || fail "emit_edge produced no output"
 printf '%s' "$edge_line" | validates || fail "emit_edge line failed schema validation: $edge_line"
 got_eid="$(printf '%s' "$edge_line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
-[[ "$got_eid" == "$(gluerun_graph_edge_id "$from_id" implements "$to_id")" ]] \
-  || fail "emitted edge id != gluerun_graph_edge_id(from,type,to)"
+[[ "$got_eid" == "$(singular_graph_edge_id "$from_id" implements "$to_id")" ]] \
+  || fail "emitted edge id != singular_graph_edge_id(from,type,to)"
 got_from="$(printf '%s' "$edge_line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["from"])')"
 got_to="$(printf '%s' "$edge_line" | python3 -c 'import json,sys;print(json.load(sys.stdin)["to"])')"
 [[ "$got_from" == "$from_id" && "$got_to" == "$to_id" ]] || fail "emit_edge did not preserve from/to"
 # Determinism.
-edge_line_b="$(gluerun_graph_emit_edge implements "$from_id" "$to_id" \
-               '.gluerun-state/events/log.jsonl' 'edge source content')"
+edge_line_b="$(singular_graph_emit_edge implements "$from_id" "$to_id" \
+               '.singular-state/events/log.jsonl' 'edge source content')"
 [[ "$edge_line" == "$edge_line_b" ]] || fail "emit_edge is not deterministic"
 # Optional edge attributes still validate.
-edge_attr="$(gluerun_graph_emit_edge accepts_observation "$from_id" "$to_id" \
+edge_attr="$(singular_graph_emit_edge accepts_observation "$from_id" "$to_id" \
              'src/obs' 'obs' '{"disposition":"accept"}')"
 printf '%s' "$edge_attr" | validates || fail "emit_edge with attributes failed validation: $edge_attr"
 
@@ -238,8 +238,8 @@ printf '%s' "$edge_attr" | validates || fail "emit_edge with attributes failed v
 work="$(mktemp -d)"
 w_before="$(cd "$work" && find . | LC_ALL=C sort)"
 ( cd "$work" && \
-  gluerun_graph_emit_node commit 'commit:abc' 'refs/commit' 'body' >/dev/null && \
-  gluerun_graph_emit_edge verifies "$from_id" "$to_id" 'src' 'body' >/dev/null )
+  singular_graph_emit_node commit 'commit:abc' 'refs/commit' 'body' >/dev/null && \
+  singular_graph_emit_edge verifies "$from_id" "$to_id" 'src' 'body' >/dev/null )
 w_after="$(cd "$work" && find . | LC_ALL=C sort)"
 [[ "$w_before" == "$w_after" ]] || fail "emitters wrote filesystem artifacts (must be pure stdout)"
 rm -rf "$work"
@@ -264,7 +264,7 @@ rm -rf "$work"
 [[ -f "$GG_REBUILD" ]] || fail "impl not present yet: $GG_REBUILD (strict-test-first RED)"
 [[ -f "$GG_SYNC" ]]    || fail "impl not present yet: $GG_SYNC (strict-test-first RED)"
 [[ -f "$GG_QUERY" ]]   || fail "impl not present yet: $GG_QUERY (strict-test-first RED)"
-[[ -f "$GLUERUN_SRC" ]] || fail "impl not present yet: $GLUERUN_SRC (strict-test-first RED)"
+[[ -f "$SINGULAR_SRC" ]] || fail "impl not present yet: $SINGULAR_SRC (strict-test-first RED)"
 
 E2E_ROOT="$(mktemp -d)"
 E2E_SNAP="$(mktemp -d)"
@@ -272,11 +272,11 @@ E2E_EHOME="$(mktemp -d)"
 # Widen the EXIT trap to also clean the Slice 4 scratch dirs.
 trap 'rm -rf "$snap_dir" "$VALIDATOR" "$E2E_ROOT" "$E2E_SNAP" "$E2E_EHOME"' EXIT
 
-# --- OFF-parity (sourcing): with GLUERUN_CTX_GRAPH unset, sourcing EVERY composed
+# --- OFF-parity (sourcing): with SINGULAR_CTX_GRAPH unset, sourcing EVERY composed
 #     module invokes nothing and writes no file — pinned by a dir snapshot, not an
 #     absence-grep.
 off_before="$(cd "$E2E_SNAP" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$E2E_SNAP" \
     && source "$CTX_GRAPH" && source "$GG_PROJECT" && source "$GG_PLANS" \
@@ -304,9 +304,9 @@ source "$GG_REBUILD" || fail "sourcing $GG_REBUILD failed"
 source "$GG_SYNC"    || fail "sourcing $GG_SYNC failed"
 # shellcheck disable=SC1090
 source "$GG_QUERY"   || fail "sourcing $GG_QUERY failed"
-for fn in gluerun_graph_rebuild gluerun_graph_sync \
-          gluerun_graph_query_neighbors gluerun_graph_query_lineage \
-          gluerun_graph_query_open_contradictions; do
+for fn in singular_graph_rebuild singular_graph_sync \
+          singular_graph_query_neighbors singular_graph_query_lineage \
+          singular_graph_query_open_contradictions; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "composed function not defined: $fn"
 done
 
@@ -328,7 +328,7 @@ e2e_build_state() { # <stateDir>
 
   cat > "$STATE/runs/$E2E_RUN_A/attempts/index.json" <<JSON
 {
-  "schema": "gluerun.orchestration.attempts-index.v0",
+  "schema": "singular.orchestration.attempts-index.v0",
   "runId": "$E2E_RUN_A",
   "taskId": "$E2E_NODE",
   "attempts": [
@@ -340,7 +340,7 @@ JSON
 
   cat > "$STATE/runs/$E2E_RUN_A/paired-audit.json" <<JSON
 {
-  "schema": "gluerun.orchestration.paired-audit.v0",
+  "schema": "singular.orchestration.paired-audit.v0",
   "runId": "$E2E_RUN_A",
   "taskId": "$E2E_NODE",
   "sampled": true,
@@ -355,7 +355,7 @@ JSON
 
   cat > "$STATE/runs/$E2E_RUN_A/plan-critique.json" <<JSON
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "$E2E_NODE",
   "runId": "$E2E_RUN_A",
   "batchTaskIds": ["TASK-0078"],
@@ -372,7 +372,7 @@ JSON
   # Passed gate on E2E_NODE -> gate-result (authoritative) + verifies edge.
   cat > "$STATE/docs/orchestration/gates/$E2E_NODE.gate-result.json" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$E2E_NODE",
   "status": "passed",
   "authoritative": true,
@@ -389,7 +389,7 @@ JSON
   # invalidated target (task node) is NOT superseded, so it is an OPEN contradiction.
   cat > "$STATE/docs/orchestration/gates/$E2E_NODE2.gate-result.json" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$E2E_NODE2",
   "status": "failed",
   "authoritative": true,
@@ -421,7 +421,7 @@ MD
   # mints capsule nodes over the runs/*/{implementer,reviewer}-capsule.json walk.
   cat > "$STATE/runs/$E2E_RUN_A/implementer-capsule.json" <<JSON
 {
-  "schema": "gluerun.orchestration.context-capsule.v0",
+  "schema": "singular.orchestration.context-capsule.v0",
   "role": "implementer",
   "taskId": "$E2E_NODE",
   "runId": "$E2E_RUN_A",
@@ -433,7 +433,7 @@ JSON
 
   cat > "$STATE/runs/$E2E_RUN_A/reviewer-capsule.json" <<JSON
 {
-  "schema": "gluerun.orchestration.context-capsule.v0",
+  "schema": "singular.orchestration.context-capsule.v0",
   "role": "reviewer",
   "taskId": "$E2E_NODE",
   "runId": "$E2E_RUN_A",
@@ -494,7 +494,7 @@ GDIR_R="$E2E_ROOT/graph-rebuild"
 
 # --- rebuild: writes only under <graphDir>, leaving <stateDir> byte-identical ---
 state_before="$(cd "$STATE" && find . | LC_ALL=C sort)"
-gluerun_graph_rebuild "$STATE" "$GDIR_R" || fail "gluerun_graph_rebuild failed"
+singular_graph_rebuild "$STATE" "$GDIR_R" || fail "singular_graph_rebuild failed"
 state_after="$(cd "$STATE" && find . | LC_ALL=C sort)"
 [[ "$state_before" == "$state_after" ]] || fail "rebuild wrote under <stateDir> (must write only under <graphDir>)"
 NODES_R="$GDIR_R/nodes.jsonl"; EDGES_R="$GDIR_R/edges.jsonl"
@@ -549,19 +549,19 @@ done
 # --- rebuild determinism: repeat run is byte-identical ------------------------
 NODES_SNAP="$E2E_ROOT/nodes-run1.jsonl"; EDGES_SNAP="$E2E_ROOT/edges-run1.jsonl"
 cp "$NODES_R" "$NODES_SNAP"; cp "$EDGES_R" "$EDGES_SNAP"
-gluerun_graph_rebuild "$STATE" "$GDIR_R" || fail "second gluerun_graph_rebuild failed"
+singular_graph_rebuild "$STATE" "$GDIR_R" || fail "second singular_graph_rebuild failed"
 diff -q "$NODES_SNAP" "$NODES_R" >/dev/null || fail "nodes.jsonl not byte-identical on repeat rebuild"
 diff -q "$EDGES_SNAP" "$EDGES_R" >/dev/null || fail "edges.jsonl not byte-identical on repeat rebuild"
 
 # --- loss-free: delete the graph dir, rebuild, byte-identical corpus ----------
 rm -rf "$GDIR_R"
-gluerun_graph_rebuild "$STATE" "$GDIR_R" || fail "rebuild after delete failed"
+singular_graph_rebuild "$STATE" "$GDIR_R" || fail "rebuild after delete failed"
 diff -q "$NODES_SNAP" "$NODES_R" >/dev/null || fail "nodes.jsonl not reproduced loss-free after delete"
 diff -q "$EDGES_SNAP" "$EDGES_R" >/dev/null || fail "edges.jsonl not reproduced loss-free after delete"
 
 # --- sync equals rebuild: FROM SCRATCH ----------------------------------------
 GDIR_S="$E2E_ROOT/graph-sync"
-gluerun_graph_sync "$STATE" "$GDIR_S" || fail "gluerun_graph_sync (from scratch) failed"
+singular_graph_sync "$STATE" "$GDIR_S" || fail "singular_graph_sync (from scratch) failed"
 diff -q "$NODES_R" "$GDIR_S/nodes.jsonl" >/dev/null || fail "sync != rebuild (nodes.jsonl) from scratch"
 diff -q "$EDGES_R" "$GDIR_S/edges.jsonl" >/dev/null || fail "sync != rebuild (edges.jsonl) from scratch"
 # The wired context families survive sync-equals-rebuild (present in sync corpus).
@@ -574,8 +574,8 @@ done
 STATE_I="$E2E_ROOT/state-inc"
 e2e_build_state "$STATE_I"
 GDIR_I="$E2E_ROOT/graph-inc"
-gluerun_graph_rebuild "$STATE_I" "$GDIR_I" || fail "incremental: initial rebuild failed"
-gluerun_graph_sync "$STATE_I" "$GDIR_I" || fail "incremental: adopt-sync after rebuild failed"
+singular_graph_rebuild "$STATE_I" "$GDIR_I" || fail "incremental: initial rebuild failed"
+singular_graph_sync "$STATE_I" "$GDIR_I" || fail "incremental: adopt-sync after rebuild failed"
 # Append brand-new events beyond the cursor, then sync only the delta.
 E2E_RUN_C="RUN-20260712T120000Z-00003"
 E2E_SHA_B="89abcdef0123456789abcdef0123456789abcdef"
@@ -584,10 +584,10 @@ cat >> "$STATE_I/events.ndjson" <<JSON
 {"ts":"2026-07-12T12:05:00Z","type":"decision.recorded","message":"m","data":{"node":"$E2E_NODE2","runId":"$E2E_RUN_C"}}
 {"ts":"2026-07-12T12:10:00Z","type":"l1.committed","message":"m","data":{"node":"$E2E_NODE2","runId":"$E2E_RUN_C","headSha":"$E2E_SHA_B"}}
 JSON
-gluerun_graph_sync "$STATE_I" "$GDIR_I" || fail "incremental sync failed"
+singular_graph_sync "$STATE_I" "$GDIR_I" || fail "incremental sync failed"
 # The incrementally-synced corpus equals a FRESH full rebuild over the augmented state.
 GDIR_FRESH="$E2E_ROOT/graph-fresh"
-gluerun_graph_rebuild "$STATE_I" "$GDIR_FRESH" || fail "fresh rebuild over augmented state failed"
+singular_graph_rebuild "$STATE_I" "$GDIR_FRESH" || fail "fresh rebuild over augmented state failed"
 diff -q "$GDIR_FRESH/nodes.jsonl" "$GDIR_I/nodes.jsonl" >/dev/null \
   || fail "incremental sync != fresh rebuild (nodes.jsonl)"
 diff -q "$GDIR_FRESH/edges.jsonl" "$GDIR_I/edges.jsonl" >/dev/null \
@@ -600,7 +600,7 @@ TASK_ID="$(e2e_node_ids_of_type "$NODES_R" task | head -1)"
 
 # neighbors(task): non-empty; every incident edge is incident to TASK_ID; the
 # adjacent node set is exactly the incident edges' other-end node records.
-neigh="$(gluerun_graph_query_neighbors "$GDIR_R" "$TASK_ID")" || fail "neighbors(task) nonzero exit"
+neigh="$(singular_graph_query_neighbors "$GDIR_R" "$TASK_ID")" || fail "neighbors(task) nonzero exit"
 [[ -n "$neigh" ]] || fail "neighbors(task) unexpectedly empty over a connected corpus"
 printf '%s\n' "$neigh" | GG_ID="$TASK_ID" python3 -c '
 import json, os, sys
@@ -630,13 +630,13 @@ if not got_nodes <= others:
     print("neighbors returned a non-adjacent node", file=sys.stderr); sys.exit(1)
 ' || fail "neighbors(task) output is not the documented incident-edges + adjacent-nodes projection"
 # Determinism.
-neigh2="$(gluerun_graph_query_neighbors "$GDIR_R" "$TASK_ID")" || fail "neighbors(task) repeat nonzero exit"
+neigh2="$(singular_graph_query_neighbors "$GDIR_R" "$TASK_ID")" || fail "neighbors(task) repeat nonzero exit"
 [[ "$neigh" == "$neigh2" ]] || fail "neighbors(task) not byte-identical on repeat"
 
 # lineage(task): reaches the connected provenance component — contains the start
 # plus the attempt nodes (implements) and the passed gate-result (verifies), and
 # terminates (returns) despite the revises cycle among plan-versions.
-lin="$(gluerun_graph_query_lineage "$GDIR_R" "$TASK_ID")" || fail "lineage(task) nonzero exit"
+lin="$(singular_graph_query_lineage "$GDIR_R" "$TASK_ID")" || fail "lineage(task) nonzero exit"
 lin_ids="$(printf '%s\n' "$lin" | python3 -c '
 import json, sys
 for line in sys.stdin:
@@ -650,14 +650,14 @@ for att in $(e2e_node_ids_of_type "$NODES_R" attempt); do
     || fail "lineage(task) omits attempt node $att reachable via implements"
 done
 # Determinism.
-lin2="$(gluerun_graph_query_lineage "$GDIR_R" "$TASK_ID")" || fail "lineage(task) repeat nonzero exit"
+lin2="$(singular_graph_query_lineage "$GDIR_R" "$TASK_ID")" || fail "lineage(task) repeat nonzero exit"
 [[ "$lin" == "$lin2" ]] || fail "lineage(task) not byte-identical on repeat"
 
 # open-contradictions: exactly the unresolved contradicts/invalidates edges. The
 # failed gate on E2E_NODE2 emits an invalidates edge whose target is NOT
 # superseded, so the result is non-empty; every returned edge is a
 # contradicts/invalidates edge; the passed-gate verifies edge is NOT returned.
-oc="$(gluerun_graph_query_open_contradictions "$GDIR_R")" || fail "open-contradictions nonzero exit"
+oc="$(singular_graph_query_open_contradictions "$GDIR_R")" || fail "open-contradictions nonzero exit"
 [[ -n "$oc" ]] || fail "open-contradictions unexpectedly empty (fixture has an unresolved invalidates edge)"
 printf '%s\n' "$oc" | python3 -c '
 import json, sys
@@ -680,36 +680,36 @@ for line in sys.stdin:
         sys.exit(1)
 ' || fail "open-contradictions leaked a verifies edge"
 # Determinism.
-oc2="$(gluerun_graph_query_open_contradictions "$GDIR_R")" || fail "open-contradictions repeat nonzero exit"
+oc2="$(singular_graph_query_open_contradictions "$GDIR_R")" || fail "open-contradictions repeat nonzero exit"
 [[ "$oc" == "$oc2" ]] || fail "open-contradictions not byte-identical on repeat"
 
-# --- OFF-parity end-to-end: `gluerun graph ...` refuses as an unknown command --
+# --- OFF-parity end-to-end: `singular graph ...` refuses as an unknown command --
 #     did, and writes no corpus. Hermetic engine home (empty lib.sh stub + the
 #     integrated graph modules + the CLI) so the delegation/refusal is independent
-#     of whatever .gluerun-state the suite host carries. Pinned behaviorally by a
+#     of whatever .singular-state the suite host carries. Pinned behaviorally by a
 #     directory snapshot + a refusal-equivalence comparison, never an absence-grep.
 mkdir -p "$E2E_EHOME/engine" "$E2E_EHOME/cli"
 : > "$E2E_EHOME/engine/lib.sh"
 cp "$ENGINE_HOME"/engine/ctx-graph*.sh "$E2E_EHOME/engine/"
-cp "$GLUERUN_SRC" "$E2E_EHOME/cli/gluerun"
-E2E_CLI="$E2E_EHOME/cli/gluerun"
+cp "$SINGULAR_SRC" "$E2E_EHOME/cli/singular"
+E2E_CLI="$E2E_EHOME/cli/singular"
 OFF_STATE="$E2E_ROOT/off-state"; e2e_build_state "$OFF_STATE"
 OFF_GRAPH="$E2E_ROOT/off-graph"   # must never be created while the flag is OFF
 
 for flag in unset 0; do
   off_dir_before="$(cd "$E2E_ROOT" && find off-graph 2>/dev/null | LC_ALL=C sort)"
   if [[ "$flag" == unset ]]; then
-    env -u GLUERUN_CTX_GRAPH GLUERUN_ENGINE_HOME="$E2E_EHOME" "$E2E_CLI" \
+    env -u SINGULAR_CTX_GRAPH SINGULAR_ENGINE_HOME="$E2E_EHOME" "$E2E_CLI" \
       graph rebuild "$OFF_STATE" "$OFF_GRAPH" >/dev/null 2>"$E2E_ROOT/off-graph.err" \
-      && fail "gluerun graph must refuse when GLUERUN_CTX_GRAPH is $flag"
-    env -u GLUERUN_CTX_GRAPH GLUERUN_ENGINE_HOME="$E2E_EHOME" "$E2E_CLI" \
+      && fail "singular graph must refuse when SINGULAR_CTX_GRAPH is $flag"
+    env -u SINGULAR_CTX_GRAPH SINGULAR_ENGINE_HOME="$E2E_EHOME" "$E2E_CLI" \
       totally-unknown-xyz >/dev/null 2>"$E2E_ROOT/off-unknown.err" \
       && fail "control unknown command should exit non-zero ($flag)"
   else
-    GLUERUN_CTX_GRAPH=0 GLUERUN_ENGINE_HOME="$E2E_EHOME" "$E2E_CLI" \
+    SINGULAR_CTX_GRAPH=0 SINGULAR_ENGINE_HOME="$E2E_EHOME" "$E2E_CLI" \
       graph rebuild "$OFF_STATE" "$OFF_GRAPH" >/dev/null 2>"$E2E_ROOT/off-graph.err" \
-      && fail "gluerun graph must refuse when GLUERUN_CTX_GRAPH is $flag"
-    GLUERUN_CTX_GRAPH=0 GLUERUN_ENGINE_HOME="$E2E_EHOME" "$E2E_CLI" \
+      && fail "singular graph must refuse when SINGULAR_CTX_GRAPH is $flag"
+    SINGULAR_CTX_GRAPH=0 SINGULAR_ENGINE_HOME="$E2E_EHOME" "$E2E_CLI" \
       totally-unknown-xyz >/dev/null 2>"$E2E_ROOT/off-unknown.err" \
       && fail "control unknown command should exit non-zero ($flag)"
   fi
@@ -721,8 +721,8 @@ for flag in unset 0; do
   # Behavioral no-write pin: the graph dir was not created by the refused command.
   off_dir_after="$(cd "$E2E_ROOT" && find off-graph 2>/dev/null | LC_ALL=C sort)"
   [[ "$off_dir_before" == "$off_dir_after" ]] \
-    || fail "refused 'gluerun graph' wrote a corpus dir when flag is $flag (OFF-parity)"
-  [[ ! -e "$OFF_GRAPH" ]] || fail "refused 'gluerun graph' created $OFF_GRAPH (flag $flag)"
+    || fail "refused 'singular graph' wrote a corpus dir when flag is $flag (OFF-parity)"
+  [[ ! -e "$OFF_GRAPH" ]] || fail "refused 'singular graph' created $OFF_GRAPH (flag $flag)"
 done
 
 echo "test-ctx-graph: all assertions passed"

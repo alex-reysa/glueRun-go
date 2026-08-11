@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0096",
   "runId": "RUN-20260712T215042Z-34522",
   "branch": "agent/graph/TASK-0096-graph-project-planbatch",
@@ -11,10 +11,10 @@
     "worker-evidence/green.log: 'test-ctx-graph-project-planbatch: all assertions passed' exit 0",
     "worker-evidence/regression.log + gate-check.log: worker test + engine-clean both pass exit 0",
     "git diff 810c3ba..HEAD --name-status: A engine/ctx-graph-project-planbatch.sh, A tests/test-ctx-graph-project-planbatch.sh (367 insertions, 2 files) \u2014 nothing else",
-    "engine/ctx-graph-project-planbatch.sh: gluerun_graph_project_plan_batch, node-only plan-batch (claim), pure stdout, fail-safe on empty/malformed/missing, derived_from->goal deferred",
+    "engine/ctx-graph-project-planbatch.sh: singular_graph_project_plan_batch, node-only plan-batch (claim), pure stdout, fail-safe on empty/malformed/missing, derived_from->goal deferred",
     "tests/test-ctx-graph-project-planbatch.sh: RED precondition guard, OFF-parity/no-writes, schema-validated node, id agreement, attribute projection, tolerance, fail-safe, evidence invariance, determinism/canonicalize",
     "schemas/context-graph.v0.schema.json: 'plan-batch' present in node type enum; evidenceClass enum authoritative|claim",
-    "engine/ctx-graph.sh: gluerun_graph_emit_node signature <type> <identity> <sourcePath> <content> [label] [attributesJson]; evidenceClass fail-closed (authoritative only for commit/gate-result); deps ctx-graph.sh/ctx-graph-project.sh/ctx-graph-corpus.sh present"
+    "engine/ctx-graph.sh: singular_graph_emit_node signature <type> <identity> <sourcePath> <content> [label] [attributesJson]; evidenceClass fail-closed (authoritative only for commit/gate-result); deps ctx-graph.sh/ctx-graph-project.sh/ctx-graph-corpus.sh present"
   ],
   "commandsRun": [
     "git branch --show-current; git log --oneline -5; git status --short",
@@ -33,7 +33,7 @@
     "Gate exit 0 confirmed in gate-check.json and reproduced locally.",
     "Schema/type/provenance consistent: plan-batch is a valid node type; node emitted as evidenceClass=claim via emit_node fail-closed rule (only commit/gate-result are authoritative); emit_node called with correct arg order (label='' , attributes=$attrs); id == node_id(identity('plan-batch', node, runId)); node validates against the shipped schema.",
     "Test coverage thorough: happy path, schema validation, id agreement, attribute projection (stage/area/stagedTaskCount), optional-field tolerance, fail-safe (empty/malformed/missing -> no node, exit 0), evidence invariance (no authoritative node), determinism/idempotence + canonicalize stability, OFF-parity and no-writes.",
-    "No hidden scope expansion: node-only mapper; derived_from->goal edge explicitly deferred with documented rationale (no durable goal source). Mapper is defined-but-uncalled (OFF-parity when GLUERUN_CTX_GRAPH unset/0).",
+    "No hidden scope expansion: node-only mapper; derived_from->goal edge explicitly deferred with documented rationale (no durable goal source). Mapper is defined-but-uncalled (OFF-parity when SINGULAR_CTX_GRAPH unset/0).",
     "Minor packet staleness (non-blocking): nextAction says 'L1 driver commits the uncommitted changes' but the changes are already committed as e7897f7; forward-looking narrative only, no defect.",
     "No branch drift: baseRef == HEAD^ == 810c3ba; single worker commit on top. No failing or skipped commands."
   ],

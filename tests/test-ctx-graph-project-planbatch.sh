@@ -6,7 +6,7 @@
 # `staged:TASK-*` entries) into a projected context-graph.v0 JSONL node line by
 # composing the integrated identity convention + emitters (engine/ctx-graph.sh,
 # engine/ctx-graph-project.sh):
-#   gluerun_graph_project_plan_batch <sessionMetaRecordPath> -> one plan-batch node (claim)
+#   singular_graph_project_plan_batch <sessionMetaRecordPath> -> one plan-batch node (claim)
 #
 # Asserts: a fixture session-meta record yields exactly one claim `plan-batch`
 # node whose id equals node_id(identity('plan-batch', node, runId)), carrying
@@ -15,7 +15,7 @@
 # record yields no node and a zero exit — no crash, no partial line); evidence
 # invariance (fail-closed — the plan-batch node is claim; no input path mints an
 # authoritative node); determinism/idempotence (re-running emits byte-identical
-# lines, so gluerun_graph_canonicalize collapses to the same canonical set); node
+# lines, so singular_graph_canonicalize collapses to the same canonical set); node
 # only (the derived_from edge to `goal` is deferred — no durable goal source); and
 # OFF-parity/no-writes — sourcing the file invokes nothing and the mapper touches
 # NO filesystem.
@@ -38,14 +38,14 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ -f "$PLANBATCH" ]] || fail "impl not present yet: $PLANBATCH (strict-test-first RED)"
 
 # OFF-parity / no-writes: sourcing the file must invoke nothing and write no
-# file. Snapshot an empty cwd around the source; confirm GLUERUN_CTX_GRAPH is
+# file. Snapshot an empty cwd around the source; confirm SINGULAR_CTX_GRAPH is
 # not required (default OFF).
 snap_dir="$(mktemp -d)"
 VALIDATOR="$(mktemp)"
 work_root="$(mktemp -d)"
 trap 'rm -rf "$snap_dir" "$VALIDATOR" "$work_root"' EXIT
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$snap_dir" && source "$GRAPH" && source "$PROJECT" && source "$PLANBATCH" ) \
   || fail "sourcing $PLANBATCH failed"
@@ -60,8 +60,8 @@ source "$PROJECT"   || fail "sourcing $PROJECT failed"
 source "$CORPUS"    || fail "sourcing $CORPUS failed"
 # shellcheck disable=SC1090
 source "$PLANBATCH" || fail "sourcing $PLANBATCH failed"
-[[ "$(type -t gluerun_graph_project_plan_batch)" == "function" ]] \
-  || fail "gluerun_graph_project_plan_batch is not defined by $PLANBATCH"
+[[ "$(type -t singular_graph_project_plan_batch)" == "function" ]] \
+  || fail "singular_graph_project_plan_batch is not defined by $PLANBATCH"
 
 # --- minimal schema-driven validator (resolves $ref/$defs + oneOf) -----------
 # Mirrors tests/test-ctx-graph-project-records.sh: validates against the SHIPPED file.
@@ -167,7 +167,7 @@ staged:TASK-0103
 planner: done
 REC
 
-pb_out="$(gluerun_graph_project_plan_batch "$rec")" || fail "project_plan_batch failed"
+pb_out="$(singular_graph_project_plan_batch "$rec")" || fail "project_plan_batch failed"
 [[ -n "$pb_out" ]] || fail "project_plan_batch produced no output"
 printf '%s\n' "$pb_out" | validates || fail "the plan-batch line failed schema validation:
 $pb_out"
@@ -178,7 +178,7 @@ $pb_out"
 # claim — a planner session-meta record is model-authored.
 [[ "$(count_where "$pb_out" evidenceClass claim)" == "1" ]] || fail "plan-batch node must be claim"
 # Id agreement: node id == node_id(identity('plan-batch', node, runId)).
-pb_node="$(gluerun_graph_node_id "$(gluerun_graph_identity plan-batch "$NODE" "$RUN")")"
+pb_node="$(singular_graph_node_id "$(singular_graph_identity plan-batch "$NODE" "$RUN")")"
 [[ "$(printf '%s' "$pb_out" | jq_field id)" == "$pb_node" ]] \
   || fail "plan-batch node id != node_id(identity('plan-batch', node, runId))"
 # attributes project stage/area and the staged-task count.
@@ -189,7 +189,7 @@ pb_node="$(gluerun_graph_node_id "$(gluerun_graph_identity plan-batch "$NODE" "$
 [[ "$(printf '%s' "$pb_out" | attr_field stagedTaskCount)" == "3" ]] \
   || fail "plan-batch node must project attributes.stagedTaskCount"
 # Idempotence.
-pb_out_b="$(gluerun_graph_project_plan_batch "$rec")" || fail "second project_plan_batch failed"
+pb_out_b="$(singular_graph_project_plan_batch "$rec")" || fail "second project_plan_batch failed"
 [[ "$pb_out" == "$pb_out_b" ]] || fail "project_plan_batch is not idempotent"
 
 # --- Tolerance: a missing optional field is skipped, not fatal ----------------
@@ -201,7 +201,7 @@ node=$NODE
 runId=$RUN
 staged:TASK-0201
 REC
-pt_out="$(gluerun_graph_project_plan_batch "$rec_partial")" || fail "project_plan_batch (partial) failed"
+pt_out="$(singular_graph_project_plan_batch "$rec_partial")" || fail "project_plan_batch (partial) failed"
 [[ "$(count_where "$pt_out" kind node)" == "1" ]] || fail "partial record must still emit one node"
 printf '%s\n' "$pt_out" | validates || fail "the partial plan-batch line failed schema validation:
 $pt_out"
@@ -214,7 +214,7 @@ $pt_out"
 
 # --- Fail-safe: malformed, empty, or missing record -> no node, zero exit -----
 rec_empty="$work_root/planner-empty.out"; : > "$rec_empty"
-es_out="$(gluerun_graph_project_plan_batch "$rec_empty")"; es_rc=$?
+es_out="$(singular_graph_project_plan_batch "$rec_empty")"; es_rc=$?
 [[ $es_rc -eq 0 ]] || fail "empty record must exit zero (fail-safe), got $es_rc"
 [[ -z "$es_out" ]] || fail "empty record must yield no node (no partial line)"
 
@@ -224,11 +224,11 @@ this is not a session-meta record
 just some free-form planner chatter
 no identifiable node token here
 REC
-mf_out="$(gluerun_graph_project_plan_batch "$rec_malformed")"; mf_rc=$?
+mf_out="$(singular_graph_project_plan_batch "$rec_malformed")"; mf_rc=$?
 [[ $mf_rc -eq 0 ]] || fail "malformed record must exit zero (fail-safe), got $mf_rc"
 [[ -z "$mf_out" ]] || fail "malformed record must yield no node (no partial line)"
 
-missing_out="$(gluerun_graph_project_plan_batch "$work_root/does-not-exist.out")"; missing_rc=$?
+missing_out="$(singular_graph_project_plan_batch "$work_root/does-not-exist.out")"; missing_rc=$?
 [[ $missing_rc -eq 0 ]] || fail "missing record must exit zero (fail-safe), got $missing_rc"
 [[ -z "$missing_out" ]] || fail "missing record must yield no node (no crash)"
 
@@ -238,8 +238,8 @@ missing_out="$(gluerun_graph_project_plan_batch "$work_root/does-not-exist.out")
   || fail "plan-batch mapper minted an authoritative node (evidence invariance breach)"
 
 # --- Determinism through the canonicalizer: same set collapses identically ----
-canon_a="$(printf '%s\n' "$pb_out"   | gluerun_graph_canonicalize)"
-canon_b="$(printf '%s\n' "$pb_out_b" | gluerun_graph_canonicalize)"
+canon_a="$(printf '%s\n' "$pb_out"   | singular_graph_canonicalize)"
+canon_b="$(printf '%s\n' "$pb_out_b" | singular_graph_canonicalize)"
 [[ "$canon_a" == "$canon_b" ]] || fail "canonicalize over repeated projection is not stable"
 [[ "$(count_where "$canon_a" kind node)" == "1" ]] \
   || fail "re-projected plan-batch node must collapse to one under canonicalize"
@@ -248,8 +248,8 @@ canon_b="$(printf '%s\n' "$pb_out_b" | gluerun_graph_canonicalize)"
 w="$work_root/nowrite"; mkdir -p "$w"
 w_before="$(cd "$w" && find . | LC_ALL=C sort)"
 ( cd "$w" \
-  && gluerun_graph_project_plan_batch "$rec" >/dev/null \
-  && gluerun_graph_project_plan_batch "$rec_empty" >/dev/null )
+  && singular_graph_project_plan_batch "$rec" >/dev/null \
+  && singular_graph_project_plan_batch "$rec_empty" >/dev/null )
 w_after="$(cd "$w" && find . | LC_ALL=C sort)"
 [[ "$w_before" == "$w_after" ]] || fail "the mapper wrote filesystem artifacts (must be pure stdout)"
 

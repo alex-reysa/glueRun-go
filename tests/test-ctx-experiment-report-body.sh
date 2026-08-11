@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Covers the read-only experiment REPORT-BODY composer
 # engine/ctx-experiment-report-body.sh. Two corpus renderers are already
-# integrated — gluerun_ctx_experiment_pipeline_md (TASK-0087: the per-arm
+# integrated — singular_ctx_experiment_pipeline_md (TASK-0087: the per-arm
 # escape/cost/bias, strategy, and attempts tables) and
-# gluerun_ctx_experiment_render_result_md (TASK-0098: the treatment-effect delta
+# singular_ctx_experiment_render_result_md (TASK-0098: the treatment-effect delta
 # and arm-integrity audit tables) — but to author experiment-report.md the
 # operator must invoke BOTH separately and hand-order/concatenate their output.
 # This brick composes them into ONE ordered report-body markdown the operator
@@ -16,21 +16,21 @@
 # corpus args.
 #
 # Two chained slices, all inside engine/ctx-experiment-report-body.sh:
-#   1. gluerun_ctx_experiment_report_body_compose <pipeline_md> <result_md>
+#   1. singular_ctx_experiment_report_body_compose <pipeline_md> <result_md>
 #      — assemble the two rendered fragments under stable section headers in a
 #        fixed order (per-arm metrics first, then treatment-effect + arm-integrity),
 #        preserving each fragment's content verbatim.
-#   2. gluerun_ctx_experiment_report_body_md [runs_dir] [events_file] [metrics_file]
-#      — obtain both fragments by delegating to gluerun_ctx_experiment_pipeline_md
-#        and gluerun_ctx_experiment_render_result_md over the SAME resolved corpus
+#   2. singular_ctx_experiment_report_body_md [runs_dir] [events_file] [metrics_file]
+#      — obtain both fragments by delegating to singular_ctx_experiment_pipeline_md
+#        and singular_ctx_experiment_render_result_md over the SAME resolved corpus
 #        args, compose them via the helper, and emit the complete body to stdout.
 #
 # Guarantees pinned BEHAVIORALLY over a synthetic corpus (no absence greps,
 # planner-contract rule 9):
 #   - byte-identical composition: the per-arm section is byte-identical to
-#     gluerun_ctx_experiment_pipeline_md over the same resolved inputs, and the
+#     singular_ctx_experiment_pipeline_md over the same resolved inputs, and the
 #     treatment-effect/arm-integrity section is byte-identical to
-#     gluerun_ctx_experiment_render_result_md over the same inputs, in a stable
+#     singular_ctx_experiment_render_result_md over the same inputs, in a stable
 #     order under section headers (per-arm first).
 #   - determinism: the body is byte-identical across repeated runs on one corpus.
 #   - no-arg env-default delegation renders identically to the threaded-arg form.
@@ -97,8 +97,8 @@ source "$SIB_PIPELINE"     || fail "sourcing $SIB_PIPELINE failed"
 source "$SIB_RENDER_DELTA" || fail "sourcing $SIB_RENDER_DELTA failed"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-for fn in gluerun_ctx_experiment_report_body_compose \
-          gluerun_ctx_experiment_report_body_md; do
+for fn in singular_ctx_experiment_report_body_compose \
+          singular_ctx_experiment_report_body_md; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $TOOL"
 done
 
@@ -115,7 +115,7 @@ mkdir -p "$indir"
 # ============================================================================
 frag_a=$'## Per-arm demo\n\n| Arm | X |\n| --- | --- |\n| A | 1 |'
 frag_b=$'## Result demo\n\n| Metric | D |\n| --- | --- |\n| escapeRate | 0 |'
-composed_helper="$(gluerun_ctx_experiment_report_body_compose "$frag_a" "$frag_b")" \
+composed_helper="$(singular_ctx_experiment_report_body_compose "$frag_a" "$frag_b")" \
   || fail "compose helper exited non-zero on valid fragments"
 [[ -n "$composed_helper" ]] || fail "compose helper produced empty output"
 # Both fragments appear verbatim as substrings.
@@ -130,7 +130,7 @@ assert md.index("## Per-arm demo") < md.index("## Result demo"), "per-arm fragme
 print("helper-order-ok")
 PY
 # Determinism of the helper.
-composed_helper2="$(gluerun_ctx_experiment_report_body_compose "$frag_a" "$frag_b")"
+composed_helper2="$(singular_ctx_experiment_report_body_compose "$frag_a" "$frag_b")"
 [[ "$composed_helper" == "$composed_helper2" ]] || fail "compose helper not deterministic"
 
 # ============================================================================
@@ -156,12 +156,12 @@ mk_armstate() { # runId  [KNOB=value ...]
   local rid="$1"; shift
   mkdir -p "$runs/$rid"
   (
-    unset GLUERUN_CTX_PACKET GLUERUN_CTX_ROUTING GLUERUN_REHYDRATE \
-          GLUERUN_PAIRED_AUDIT_PCT GLUERUN_CRITIC_RECHECK_PCT \
-          GLUERUN_CTX_ARTIFACT_SCAN GLUERUN_CTX_MANIFEST
+    unset SINGULAR_CTX_PACKET SINGULAR_CTX_ROUTING SINGULAR_REHYDRATE \
+          SINGULAR_PAIRED_AUDIT_PCT SINGULAR_CRITIC_RECHECK_PCT \
+          SINGULAR_CTX_ARTIFACT_SCAN SINGULAR_CTX_MANIFEST
     local kv
     for kv in "$@"; do export "$kv"; done
-    gluerun_ctx_experiment_armstate_json
+    singular_ctx_experiment_armstate_json
   ) > "$runs/$rid/arm-knob-state.json"
 }
 
@@ -170,8 +170,8 @@ mk_index R2 T2 '[{"n":1,"failureClass":"none","findings":["f1"]}]'
 mk_index R3 T3 '[{"n":1,"failureClass":"window","findings":["f1","f2","f3"]},{"n":2,"failureClass":"taint","findings":[]}]'
 mk_index R4 T4 '[{"n":1,"failureClass":""},{"n":2,"failureClass":"accepted","findings":["f1"]}]'
 mk_armstate R1                                            # arm A, M0
-mk_armstate R2 GLUERUN_CTX_PACKET=1                       # arm A, contaminated
-mk_armstate R3 GLUERUN_CTX_PACKET=1 GLUERUN_CTX_ROUTING=1 # arm B, active
+mk_armstate R2 SINGULAR_CTX_PACKET=1                       # arm A, contaminated
+mk_armstate R3 SINGULAR_CTX_PACKET=1 SINGULAR_CTX_ROUTING=1 # arm B, active
 mk_armstate R4                                            # arm B, M0 (misconfigured)
 
 cat > "$events" <<'EOF'
@@ -213,15 +213,15 @@ report_before="$(report_state)"
 
 # The two delegated fragments, obtained DIRECTLY from the integrated composers
 # over the same resolved corpus args.
-direct_pipeline="$(gluerun_ctx_experiment_pipeline_md "$runs" "$events" "$metrics")" \
+direct_pipeline="$(singular_ctx_experiment_pipeline_md "$runs" "$events" "$metrics")" \
   || fail "pipeline_md exited non-zero on the corpus"
-direct_result="$(gluerun_ctx_experiment_render_result_md "$runs" "$events" "$metrics")" \
+direct_result="$(singular_ctx_experiment_render_result_md "$runs" "$events" "$metrics")" \
   || fail "render_result_md exited non-zero on the corpus"
 [[ -n "$direct_pipeline" ]] || fail "pipeline_md produced empty output"
 [[ -n "$direct_result" ]]   || fail "render_result_md produced empty output"
 
 # The composed entry, threading the same corpus args.
-body="$(gluerun_ctx_experiment_report_body_md "$runs" "$events" "$metrics")" \
+body="$(singular_ctx_experiment_report_body_md "$runs" "$events" "$metrics")" \
   || fail "report_body_md exited non-zero on the corpus"
 [[ -n "$body" ]] || fail "report_body_md produced empty output on a valid corpus"
 printf '%s\n' "$body" > "$tmp/body.md"
@@ -253,13 +253,13 @@ print("body-order-ok")
 PY
 
 # Determinism of the composed entry.
-body2="$(gluerun_ctx_experiment_report_body_md "$runs" "$events" "$metrics")"
+body2="$(singular_ctx_experiment_report_body_md "$runs" "$events" "$metrics")"
 [[ "$body" == "$body2" ]] || fail "report_body_md not deterministic across identical runs"
 
 # No-arg env-default delegation renders identically to the threaded-arg form.
-env_body="$(GLUERUN_RUNS_DIR="$runs" GLUERUN_EVENTS_FILE="$events" \
-  GLUERUN_CTX_EXPERIMENT_METRICS_FILE="$metrics" \
-  gluerun_ctx_experiment_report_body_md)" \
+env_body="$(SINGULAR_RUNS_DIR="$runs" SINGULAR_EVENTS_FILE="$events" \
+  SINGULAR_CTX_EXPERIMENT_METRICS_FILE="$metrics" \
+  singular_ctx_experiment_report_body_md)" \
   || fail "no-arg report_body_md exited non-zero (should delegate over env defaults)"
 [[ "$env_body" == "$body" ]] \
   || fail "no-arg env-default body differs from threaded-arg body"
@@ -268,14 +268,14 @@ env_body="$(GLUERUN_RUNS_DIR="$runs" GLUERUN_EVENTS_FILE="$events" \
 # Fail-safe: an empty / missing corpus renders a well-formed body with zeroed
 # tables and a zero exit, never an error or partial output.
 # ============================================================================
-zero_body="$(gluerun_ctx_experiment_report_body_md "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")" \
+zero_body="$(singular_ctx_experiment_report_body_md "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")" \
   || fail "report_body_md non-zero on a missing corpus (should fail safe)"
 [[ -n "$zero_body" ]] || fail "missing-corpus body produced empty output (not well-formed)"
 # The zeroed body is byte-identical to composing the two delegated zeroed
 # fragments — every value still traces to a delegated renderer.
-zero_pipeline="$(gluerun_ctx_experiment_pipeline_md "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")"
-zero_result="$(gluerun_ctx_experiment_render_result_md "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")"
-expect_zero_body="$(gluerun_ctx_experiment_report_body_compose "$zero_pipeline" "$zero_result")"
+zero_pipeline="$(singular_ctx_experiment_pipeline_md "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")"
+zero_result="$(singular_ctx_experiment_render_result_md "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")"
+expect_zero_body="$(singular_ctx_experiment_report_body_compose "$zero_pipeline" "$zero_result")"
 [[ "$zero_body" == "$expect_zero_body" ]] \
   || fail "missing-corpus body is not the composition of the two delegated zeroed fragments"
 printf '%s\n' "$zero_body" > "$tmp/zero.md"

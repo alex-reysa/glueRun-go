@@ -15,7 +15,7 @@ printf '.shared/\n' >"$repo/.gitignore"
 git -C "$repo" add lockfile .gitignore
 git -C "$repo" commit -qm init
 
-plan="$(GLUERUN_ROOT="$repo" "$ROOT/engine/resource-plan.sh" \
+plan="$(SINGULAR_ROOT="$repo" "$ROOT/engine/resource-plan.sh" \
   --configured-slots 5 --reserve-bytes 100 --estimated-worktree-bytes 100 \
   --free-bytes 350 --json)"
 python3 - "$plan" <<'PY'
@@ -35,10 +35,10 @@ PY
 
 pressure_state="$tmp/provider-pressure.json"
 plan_env=(
-  GLUERUN_ROOT="$repo"
-  GLUERUN_STATE_DIR="$repo/.gluerun-state"
-  GLUERUN_PROVIDER_PRESSURE_FILE="$pressure_state"
-  GLUERUN_RUNNER="$ROOT/engine/codex-run.sh"
+  SINGULAR_ROOT="$repo"
+  SINGULAR_STATE_DIR="$repo/.singular-state"
+  SINGULAR_PROVIDER_PRESSURE_FILE="$pressure_state"
+  SINGULAR_RUNNER="$ROOT/engine/codex-run.sh"
 )
 run_plan() {
   env "${plan_env[@]}" "$@" "$ROOT/engine/resource-plan.sh" \
@@ -51,7 +51,7 @@ import json, sys
 path, provider, cap = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump({
-        "schema": "gluerun.orchestration.provider-pressure.v0",
+        "schema": "singular.orchestration.provider-pressure.v0",
         "updatedAt": "2026-01-01T00:00:00Z",
         "providers": {provider: {
             "cap": None if cap == "null" else int(cap),
@@ -72,7 +72,7 @@ baseline_plan="$(run_plan)"
   || { echo "disabled adaptation emitted providerPressure" >&2; exit 1; }
 
 # Enabling it must not, by itself, change any number or create durable state.
-enabled_plan="$(run_plan GLUERUN_PROVIDER_PRESSURE_ADAPT=1)"
+enabled_plan="$(run_plan SINGULAR_PROVIDER_PRESSURE_ADAPT=1)"
 [[ ! -e "$pressure_state" ]] \
   || { echo "planning created provider-pressure state" >&2; exit 1; }
 python3 - "$enabled_plan" "$baseline_plan" <<'PY'
@@ -89,7 +89,7 @@ PY
 
 # A stored cap below the disk answer lowers it and renames the reason.
 seed_pressure codex 1
-python3 - "$(run_plan GLUERUN_PROVIDER_PRESSURE_ADAPT=1)" <<'PY'
+python3 - "$(run_plan SINGULAR_PROVIDER_PRESSURE_ADAPT=1)" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
 assert data["effectiveSlots"] == 1, data
@@ -102,7 +102,7 @@ PY
 # recovery can never buy back slots the disk cannot afford.
 for cap in 2 3 5; do
   seed_pressure codex "$cap"
-  python3 - "$(run_plan GLUERUN_PROVIDER_PRESSURE_ADAPT=1)" "$cap" <<'PY'
+  python3 - "$(run_plan SINGULAR_PROVIDER_PRESSURE_ADAPT=1)" "$cap" <<'PY'
 import json, sys
 data, cap = json.loads(sys.argv[1]), sys.argv[2]
 assert data["effectiveSlots"] == 2, (cap, data)
@@ -114,7 +114,7 @@ done
 # Another provider's cap is not this provider's ceiling, and a basename-
 # colliding custom wrapper cannot collect one either.
 seed_pressure claude 1
-python3 - "$(run_plan GLUERUN_PROVIDER_PRESSURE_ADAPT=1)" <<'PY'
+python3 - "$(run_plan SINGULAR_PROVIDER_PRESSURE_ADAPT=1)" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
 assert data["effectiveSlots"] == 2, data
@@ -126,7 +126,7 @@ mkdir -p "$(dirname "$collision")"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$collision"
 chmod +x "$collision"
 seed_pressure codex 1
-python3 - "$(env "${plan_env[@]}" GLUERUN_PROVIDER_PRESSURE_ADAPT=1 GLUERUN_RUNNER="$collision" \
+python3 - "$(env "${plan_env[@]}" SINGULAR_PROVIDER_PRESSURE_ADAPT=1 SINGULAR_RUNNER="$collision" \
   "$ROOT/engine/resource-plan.sh" --configured-slots 5 --reserve-bytes 100 \
   --estimated-worktree-bytes 100 --free-bytes 350 --json)" <<'PY'
 import json, sys
@@ -139,14 +139,14 @@ PY
 # controller that can zero the scheduler is worse than one that never ran.
 for bad in \
   'not json at all' \
-  '{"schema":"gluerun.orchestration.provider-pressure.v0","providers":' \
+  '{"schema":"singular.orchestration.provider-pressure.v0","providers":' \
   '{"schema":"other","providers":{"codex":{"cap":1}}}' \
-  '{"schema":"gluerun.orchestration.provider-pressure.v0","providers":{"codex":{"cap":0}}}' \
-  '{"schema":"gluerun.orchestration.provider-pressure.v0","providers":{"codex":{"cap":-3}}}' \
-  '{"schema":"gluerun.orchestration.provider-pressure.v0","providers":{"codex":{"cap":"1"}}}' \
-  '{"schema":"gluerun.orchestration.provider-pressure.v0","providers":[]}'; do
+  '{"schema":"singular.orchestration.provider-pressure.v0","providers":{"codex":{"cap":0}}}' \
+  '{"schema":"singular.orchestration.provider-pressure.v0","providers":{"codex":{"cap":-3}}}' \
+  '{"schema":"singular.orchestration.provider-pressure.v0","providers":{"codex":{"cap":"1"}}}' \
+  '{"schema":"singular.orchestration.provider-pressure.v0","providers":[]}'; do
   printf '%s' "$bad" >"$pressure_state"
-  python3 - "$(run_plan GLUERUN_PROVIDER_PRESSURE_ADAPT=1)" "$bad" <<'PY'
+  python3 - "$(run_plan SINGULAR_PROVIDER_PRESSURE_ADAPT=1)" "$bad" <<'PY'
 import json, sys
 data = json.loads(sys.argv[1])
 assert data["effectiveSlots"] == 2, (sys.argv[2], data)
@@ -159,7 +159,7 @@ rm -f "$pressure_state"
 # The floor holds through the plan too: even a one-slot disk answer keeps its
 # slot, so runnable work is never starved by pressure.
 seed_pressure codex 1
-python3 - "$(env "${plan_env[@]}" GLUERUN_PROVIDER_PRESSURE_ADAPT=1 \
+python3 - "$(env "${plan_env[@]}" SINGULAR_PROVIDER_PRESSURE_ADAPT=1 \
   "$ROOT/engine/resource-plan.sh" --configured-slots 5 --reserve-bytes 100 \
   --estimated-worktree-bytes 100 --free-bytes 250 --json)" <<'PY'
 import json, sys
@@ -192,9 +192,9 @@ print(json.dumps({
 PY
 )"
 base_env=(
-  GLUERUN_ROOT="$repo"
-  GLUERUN_STATE_DIR="$repo/.gluerun-state"
-  GLUERUN_BOOTSTRAP_JSON="$config"
+  SINGULAR_ROOT="$repo"
+  SINGULAR_STATE_DIR="$repo/.singular-state"
+  SINGULAR_BOOTSTRAP_JSON="$config"
 )
 env "${base_env[@]}" "$ROOT/engine/bootstrap-worktree.sh" --worktree "$repo" >/dev/null
 env "${base_env[@]}" "$ROOT/engine/bootstrap-worktree.sh" --worktree "$repo" >/dev/null
@@ -214,7 +214,7 @@ env "${base_env[@]}" "$ROOT/engine/bootstrap-worktree.sh" --worktree "$repo" >/d
 env "${base_env[@]}" "$ROOT/engine/bootstrap-worktree.sh" --worktree "$repo" >/dev/null
 [[ "$(cat "$store/cache/bootstrap-count")" == "firstsecondfirstsecondfirstsecond" ]]
 
-marker="$(find "$repo/.gluerun-state/bootstrap" -type f -name '*.json' -print -quit)"
+marker="$(find "$repo/.singular-state/bootstrap" -type f -name '*.json' -print -quit)"
 python3 - "$marker" "$repo" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 marker, repo = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
@@ -237,24 +237,24 @@ print(json.dumps({
 }))
 PY
 )"
-if env GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$repo/.gluerun-state" \
-  GLUERUN_BOOTSTRAP_JSON="$bad" "$ROOT/engine/bootstrap-worktree.sh" \
+if env SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$repo/.singular-state" \
+  SINGULAR_BOOTSTRAP_JSON="$bad" "$ROOT/engine/bootstrap-worktree.sh" \
   --worktree "$repo" --dry-run >/dev/null 2>&1; then
   echo "shared link traversal must be rejected" >&2
   exit 1
 fi
 
 failing='{"required":true,"command":"exit 19","lockfiles":["lockfile"]}'
-if env GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$repo/.gluerun-state" \
-  GLUERUN_BOOTSTRAP_JSON="$failing" "$ROOT/engine/bootstrap-worktree.sh" \
+if env SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$repo/.singular-state" \
+  SINGULAR_BOOTSTRAP_JSON="$failing" "$ROOT/engine/bootstrap-worktree.sh" \
   --worktree "$repo" >/dev/null 2>&1; then
   echo "required bootstrap failure must fail closed" >&2
   exit 1
 fi
 
 optional='{"commands":[{"command":"exit 17","required":false,"lockfiles":["lockfile"]},{"command":"printf continued > optional-result","required":true,"lockfiles":["lockfile"]}]}'
-env GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$tmp/optional-state" \
-  GLUERUN_BOOTSTRAP_JSON="$optional" "$ROOT/engine/bootstrap-worktree.sh" \
+env SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$tmp/optional-state" \
+  SINGULAR_BOOTSTRAP_JSON="$optional" "$ROOT/engine/bootstrap-worktree.sh" \
   --worktree "$repo" >/dev/null
 [[ "$(cat "$repo/optional-result")" == "continued" ]]
 

@@ -15,36 +15,36 @@ set -euo pipefail
 #
 # The composed contract asserted in one walk:
 #   (A) All-classes packet, through the real driver. On a refused-resume lineage
-#       step with GLUERUN_CTX_ROUTING=1 + GLUERUN_REHYDRATE=1 and a fixture run_dir
+#       step with SINGULAR_CTX_ROUTING=1 + SINGULAR_REHYDRATE=1 and a fixture run_dir
 #       populated with EVERY durable source class (task packet, implementer/reviewer
 #       capsules, findings + assumption ledgers, critique record) plus a fixture
 #       repo decision log, the routing spine yields `rehydrate` and the injected
 #       $active_prompt durable-context section contains every present durable class
 #       in the assembler's fixed rank order (ranks 0..6), each body capped to at most
-#       GLUERUN_CONTEXT_SECTION_MAX_CHARS.
+#       SINGULAR_CONTEXT_SECTION_MAX_CHARS.
 #   (B) Manifest completeness + injected<->recorded consistency. The recorded
 #       context.strategy_selected event's manifest.sources lists EXACTLY the same
 #       class ids injected into $active_prompt, each with a sha256.
-#   (C) Quarantine exclusion, through the single gluerun_ctx_artifact_exclude
+#   (C) Quarantine exclusion, through the single singular_ctx_artifact_exclude
 #       authority: a class with a `.quarantined` sibling is absent from BOTH the
 #       injected packet and the recorded manifest.
 #   (D) Determinism: two assemblies over identical fixture bytes yield byte-identical
 #       injected packet and byte-identical event data.
-#   (E) OFF-parity: with GLUERUN_REHYDRATE unset, no `rehydrate` strategy, no durable
+#   (E) OFF-parity: with SINGULAR_REHYDRATE unset, no `rehydrate` strategy, no durable
 #       section injected, recorded strategy is `fresh` and carries no manifest.
-#   (F) Taint independence: gluerun_ctx_route_independence_admit rehydrate at the
+#   (F) Taint independence: singular_ctx_route_independence_admit rehydrate at the
 #       independence-pinned steps (final-audit, paired-audit) returns `refuse tainted`
 #       under ANY knob values, so a rehydrated (tainted) session is provably never
 #       eligible for an independence-required step.
 #
 # GENUINE-GUARD (non-tautology): assertion (A)/(B) pin the injected/recorded id set
 # to the FIXED full 7-class set, not to whatever the resolver happens to return.
-# Running with GLUERUN_E2E_DROP_CLASS=critique-record drops that durable class from
+# Running with SINGULAR_E2E_DROP_CLASS=critique-record drops that durable class from
 # the fixture so the set assertion FAILS (red) — proving the guard bites when a
 # source class is dropped from the packet or manifest. Unset (the normal run) it
 # passes green against the integrated stack.
 #
-#   $ GLUERUN_E2E_DROP_CLASS=critique-record bash tests/test-ctx-rehydrate-e2e.sh
+#   $ SINGULAR_E2E_DROP_CLASS=critique-record bash tests/test-ctx-rehydrate-e2e.sh
 #   FAIL: A: injected classes in fixed rank order (full set): ...  # exit 1 (red)
 #
 # critique-record (plan-critique.json) is the canonical drop target because it is
@@ -64,39 +64,39 @@ fi
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
-# Capture the harness-only knobs BEFORE the hermetic scrub wipes every GLUERUN_*.
-# GLUERUN_E2E_DROP_CLASS is the optional non-tautology mutation: drop one durable
+# Capture the harness-only knobs BEFORE the hermetic scrub wipes every SINGULAR_*.
+# SINGULAR_E2E_DROP_CLASS is the optional non-tautology mutation: drop one durable
 # class (canonically critique-record — see the GENUINE-GUARD note above) from the
 # fixture so the full-set assertions in walks (A)/(B) MUST fail — this is how red.log
-# is produced without touching any engine file. GLUERUN_E2E_KEEP keeps the sandbox
+# is produced without touching any engine file. SINGULAR_E2E_KEEP keeps the sandbox
 # for debugging.
-DROP_CLASS="${GLUERUN_E2E_DROP_CLASS:-}"
-KEEP="${GLUERUN_E2E_KEEP:-}"
+DROP_CLASS="${SINGULAR_E2E_DROP_CLASS:-}"
+KEEP="${SINGULAR_E2E_KEEP:-}"
 
-# Hermetic guard: scrub inherited GLUERUN_* so a leaked knob can't poison the sandbox.
-while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+# Hermetic guard: scrub inherited SINGULAR_* so a leaked knob can't poison the sandbox.
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: want '$2' got '$1'"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-rehydrate-e2e.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-rehydrate-e2e.XXXXXX")"
 trap '[[ -n "$KEEP" ]] || rm -rf "$workroot"' EXIT
 [[ -n "$KEEP" ]] && echo "workroot=$workroot" >&2
 
 # Source lib.sh (auto-sources the ctx-*.sh bricks) so the harness composes the SAME
 # pure helpers the driver delegates into.
-export GLUERUN_ROOT="$workroot/libroot"
-export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-export GLUERUN_TARGET_BRANCH="target"
-mkdir -p "$GLUERUN_STATE_DIR"
+export SINGULAR_ROOT="$workroot/libroot"
+export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+export SINGULAR_TARGET_BRANCH="target"
+mkdir -p "$SINGULAR_STATE_DIR"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
-for fn in gluerun_ctx_rehydrate_sources gluerun_ctx_rehydrate_packet \
-          gluerun_ctx_rehydrate_manifest gluerun_ctx_rehydrate_event_data \
-          gluerun_ctx_rehydrate_decision_source gluerun_ctx_artifact_exclude \
-          gluerun_ctx_route_independence_admit; do
+for fn in singular_ctx_rehydrate_sources singular_ctx_rehydrate_packet \
+          singular_ctx_rehydrate_manifest singular_ctx_rehydrate_event_data \
+          singular_ctx_rehydrate_decision_source singular_ctx_artifact_exclude \
+          singular_ctx_route_independence_admit; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "integrated brick missing: $fn"
 done
 
@@ -138,7 +138,7 @@ PY
 # ===========================================================================
 drv_root="$workroot/drv"
 mkdir -p "$drv_root/docs/orchestration/prompts" "$drv_root/docs/orchestration/tasks" \
-  "$drv_root/.gluerun-state" "$drv_root/internal/widget"
+  "$drv_root/.singular-state" "$drv_root/internal/widget"
 git -C "$drv_root" init -q
 git -C "$drv_root" config user.email t@t; git -C "$drv_root" config user.name t
 git -C "$drv_root" checkout -q -b target
@@ -180,9 +180,9 @@ git -C "$drv_root" add .
 git -C "$drv_root" commit -qm init
 
 TASK_MD="$drv_root/docs/orchestration/tasks/TASK-0001.md"
-EVENTS="$drv_root/.gluerun-state/events.ndjson"
+EVENTS="$drv_root/.singular-state/events.ndjson"
 # The repo decision log — the rank-6 `decision-record` durable class, supplied to
-# both rehydrate sites via gluerun_ctx_rehydrate_decision_source at drive start.
+# both rehydrate sites via singular_ctx_rehydrate_decision_source at drive start.
 DECISIONS_MD="$drv_root/docs/orchestration/decisions.md"
 
 # Mock runner. L2 (implementer): on attempt 1 it seeds EVERY run_dir-resolved durable
@@ -233,15 +233,15 @@ if [[ "\$level" == "l2" ]]; then
   mkdir -p "\$worktree/internal/widget"
   printf 'package widget\n// attempt %s\n' "\$c" > "\$worktree/internal/widget/parser.go"
   [[ -n "\$out" ]] && cat > "\$out" <<'PKT'
-{"schema":"gluerun.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.state-packet.v0","packetId":"p","runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"0","workspace":"w","ownedFiles":["internal/widget/parser.go"],"changedFiles":[],"commands":[],"tests":[],"evidence":[],"blockers":[],"nextAction":"await auditor verdict","createdAt":"2026-01-01T00:00:00Z"}
 PKT
-  [[ -n "\$meta" ]] && gluerun_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$worktree" 0
+  [[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$worktree" 0
   exit 0
 fi
 # read-only: the auditor.
 ac=0; [[ -f "\${AUDIT_COUNT_FILE:-/dev/null}" ]] && ac="\$(cat "\$AUDIT_COUNT_FILE" 2>/dev/null || echo 0)"
 ac=\$((ac+1)); [[ -n "\${AUDIT_COUNT_FILE:-}" ]] && echo "\$ac" > "\$AUDIT_COUNT_FILE"
-[[ -n "\$meta" ]] && gluerun_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$worktree" 0
+[[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$worktree" 0
 if [[ "\${SCENARIO:-accept}" == "needs-fix-first" && "\$ac" -eq 1 ]]; then
   [[ -n "\$out" ]] && printf '{"verdict":"needs-fix","findings":[{"summary":"fix it"}]}\n' > "\$out"
   exit 0
@@ -253,8 +253,8 @@ chmod +x "$mock_runner"
 
 reset_state() {
   git -C "$drv_root" checkout -q target 2>/dev/null || true
-  rm -rf "$drv_root/.gluerun-state/runs" "$drv_root/.gluerun-state/leases" \
-    "$drv_root/.gluerun-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
+  rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" \
+    "$drv_root/.singular-state/inbox" "$drv_root/.worktrees" 2>/dev/null || true
   : > "$EVENTS"
   rm -f "$workroot/l2-count" "$workroot/audit-count" 2>/dev/null || true
   # Re-plant the repo decision log (rank-6 decision-record) each run.
@@ -270,16 +270,16 @@ PY
 }
 
 run_drive() {
-  ( cd "$drv_root" && env GLUERUN_ROOT="$drv_root" GLUERUN_STATE_DIR="$drv_root/.gluerun-state" \
-      GLUERUN_ORCH_DIR="$drv_root/docs/orchestration" GLUERUN_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
-      GLUERUN_TARGET_BRANCH=target GLUERUN_RUNNER="$mock_runner" GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+  ( cd "$drv_root" && env SINGULAR_ROOT="$drv_root" SINGULAR_STATE_DIR="$drv_root/.singular-state" \
+      SINGULAR_ORCH_DIR="$drv_root/docs/orchestration" SINGULAR_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
+      SINGULAR_TARGET_BRANCH=target SINGULAR_RUNNER="$mock_runner" SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
       L2_COUNT_FILE="$workroot/l2-count" AUDIT_COUNT_FILE="$workroot/audit-count" \
       E2E_DROP_CLASS="$DROP_CLASS" \
-      GLUERUN_MAX_RETRIES=1 \
+      SINGULAR_MAX_RETRIES=1 \
       "$@" "$SCRIPT_DIR/l1-drive.sh" TASK-0001 ) || true
 }
 
-run_dir_of() { ls -d "$drv_root"/.gluerun-state/runs/RUN-* 2>/dev/null | head -1; }
+run_dir_of() { ls -d "$drv_root"/.singular-state/runs/RUN-* 2>/dev/null | head -1; }
 
 # The LAST implementer context.strategy_selected event's `data` object (compact JSON).
 last_impl_strategy_data() {
@@ -326,7 +326,7 @@ runfile_of() {
 }
 
 # The FULL fixed id set the packet/manifest MUST carry. This is pinned to the whole
-# FULL_CLASSES set and is INDEPENDENT of GLUERUN_E2E_DROP_CLASS: the mutation removes
+# FULL_CLASSES set and is INDEPENDENT of SINGULAR_E2E_DROP_CLASS: the mutation removes
 # a class only from the FIXTURE, never from the expectation, so a dropped class makes
 # the actual set (short one) diverge from this — the guard bites (red).
 expected_id_set() { printf '%s\n' "${FULL_CLASSES[@]}" | sort; }
@@ -337,7 +337,7 @@ expected_id_order() { printf '%s ' "${FULL_CLASSES[@]}"; }
 # consistency, THROUGH THE REAL DRIVER, on one refused-resume run.
 # ===========================================================================
 reset_state
-run_drive GLUERUN_CTX_ROUTING=1 GLUERUN_REHYDRATE=1 GLUERUN_SESSION_WINDOW_MAX_PCT=0 \
+run_drive SINGULAR_CTX_ROUTING=1 SINGULAR_REHYDRATE=1 SINGULAR_SESSION_WINDOW_MAX_PCT=0 \
   SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "A: no run dir produced"
 active_prompt="$run_dir/l2-active-prompt.md"
@@ -360,8 +360,8 @@ assert_eq "${injected_ids[*]} " "$(expected_id_order)" "A: injected classes in f
 assert_eq "$(printf '%s\n' "${injected_ids[@]}" | sort)" "$(expected_id_set)" "A: injected id set == full durable class set"
 pass "(A) all durable classes injected into \$active_prompt in fixed rank order (through the real driver)"
 
-# Each injected section body is capped to at most GLUERUN_CONTEXT_SECTION_MAX_CHARS.
-python3 - "$inj_region" "${GLUERUN_CONTEXT_SECTION_MAX_CHARS:-4000}" <<'PY' || fail "A: a section body exceeds the per-section cap"
+# Each injected section body is capped to at most SINGULAR_CONTEXT_SECTION_MAX_CHARS.
+python3 - "$inj_region" "${SINGULAR_CONTEXT_SECTION_MAX_CHARS:-4000}" <<'PY' || fail "A: a section body exceeds the per-section cap"
 import re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
 cap = int(sys.argv[2])
@@ -373,7 +373,7 @@ for i, m in enumerate(hdrs):
     body = text[start:end]
     assert len(body) <= cap + 1, "section %s body %d exceeds cap %d" % (m.group(0), len(body), cap)
 PY
-pass "(A) each injected section body capped to GLUERUN_CONTEXT_SECTION_MAX_CHARS"
+pass "(A) each injected section body capped to SINGULAR_CONTEXT_SECTION_MAX_CHARS"
 
 # Body fidelity: each FROZEN run_dir-resolved class's on-disk bytes reached the packet
 # verbatim (the six run_dir files are frozen at attempt-1 state; the rank-6
@@ -410,11 +410,11 @@ PY
 pass "(B) manifest.sources == injected classes, each with sha256 (injected<->recorded consistency)"
 
 # ===========================================================================
-# WALK (E): OFF-parity — GLUERUN_REHYDRATE unset -> no rehydrate strategy, no
+# WALK (E): OFF-parity — SINGULAR_REHYDRATE unset -> no rehydrate strategy, no
 # injected section, recorded strategy=fresh with no manifest.
 # ===========================================================================
 reset_state
-run_drive GLUERUN_CTX_ROUTING=1 GLUERUN_SESSION_WINDOW_MAX_PCT=0 \
+run_drive SINGULAR_CTX_ROUTING=1 SINGULAR_SESSION_WINDOW_MAX_PCT=0 \
   SCENARIO=needs-fix-first WORKER_FAIL_ON=2 >/dev/null 2>&1
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "E: no run dir produced"
 active_prompt="$run_dir/l2-active-prompt.md"
@@ -432,7 +432,7 @@ pass "(E) OFF-parity: no rehydrate strategy, no injected section, recorded strat
 # both the single quarantine authority and byte-determinism are exercised reliably.
 # ===========================================================================
 fx="$workroot/fixture"; fx_run_dir="$fx/run"; mkdir -p "$fx_run_dir"
-printf '%s' '{"schema":"gluerun.orchestration.state-packet.v0","taskId":"TASK-0001"}' > "$fx_run_dir/packet.json"
+printf '%s' '{"schema":"singular.orchestration.state-packet.v0","taskId":"TASK-0001"}' > "$fx_run_dir/packet.json"
 printf '%s' '{"role":"implementer","note":"fx impl"}'   > "$fx_run_dir/implementer-capsule.json"
 printf '%s' '{"role":"reviewer","note":"fx reviewer"}'  > "$fx_run_dir/reviewer-capsule.json"
 printf '%s' '{"findings":[{"id":"F1"}]}'                > "$fx_run_dir/findings-status.json"
@@ -443,15 +443,15 @@ printf '# Decisions\n- D1 fixture.\n' > "$fx_decisions"
 fx_decision_extra="decision-record=$fx_decisions"
 
 # Quarantine one durable class (reviewer-capsule) via a `.quarantined` sibling — the
-# single gluerun_ctx_artifact_exclude authority the assembler composes.
+# single singular_ctx_artifact_exclude authority the assembler composes.
 printf 'quarantined\n' > "$fx_run_dir/reviewer-capsule.json.quarantined"
 
 fx_specs=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && fx_specs+=("$line")
-done < <(gluerun_ctx_rehydrate_sources "$fx_run_dir" "$fx_decision_extra")
-gluerun_ctx_rehydrate_packet "${fx_specs[@]}" > "$fx/packet.txt"
-fx_event="$(gluerun_ctx_rehydrate_event_data implementer TASK-0001 RUN-FIX 2 window-pressure "$fx_run_dir" "$fx_decision_extra")"
+done < <(singular_ctx_rehydrate_sources "$fx_run_dir" "$fx_decision_extra")
+singular_ctx_rehydrate_packet "${fx_specs[@]}" > "$fx/packet.txt"
+fx_event="$(singular_ctx_rehydrate_event_data implementer TASK-0001 RUN-FIX 2 window-pressure "$fx_run_dir" "$fx_decision_extra")"
 
 # reviewer-capsule is absent from BOTH the packet and the manifest; the other six
 # survive.
@@ -465,8 +465,8 @@ assert_eq "$(manifest_source_ids "$fx_event" | sort)" "$fx_want" "C: manifest se
 pass "(C) quarantine exclusion: quarantined class absent from BOTH packet and manifest (single authority)"
 
 # (D) Determinism: reassembling over identical fixture bytes is byte-identical.
-gluerun_ctx_rehydrate_packet "${fx_specs[@]}" > "$fx/packet2.txt"
-fx_event2="$(gluerun_ctx_rehydrate_event_data implementer TASK-0001 RUN-FIX 2 window-pressure "$fx_run_dir" "$fx_decision_extra")"
+singular_ctx_rehydrate_packet "${fx_specs[@]}" > "$fx/packet2.txt"
+fx_event2="$(singular_ctx_rehydrate_event_data implementer TASK-0001 RUN-FIX 2 window-pressure "$fx_run_dir" "$fx_decision_extra")"
 assert_eq "$(cat "$fx/packet2.txt")" "$(cat "$fx/packet.txt")" "D: injected packet byte-identical across runs"
 cmp -s "$fx/packet.txt" "$fx/packet2.txt" || fail "D: injected packet not byte-identical across runs"
 assert_eq "$fx_event2" "$fx_event" "D: event data byte-identical across runs"
@@ -478,19 +478,19 @@ pass "(D) determinism: identical fixture bytes -> byte-identical packet and even
 # ===========================================================================
 # Positive control: `fresh` is admitted at an independence step (the refuse is not
 # vacuous), and rehydrate is admitted at a NON-independence step.
-assert_eq "$(gluerun_ctx_route_independence_admit fresh implementer final-audit)" "admit" \
+assert_eq "$(singular_ctx_route_independence_admit fresh implementer final-audit)" "admit" \
   "F: control — fresh admitted at independence step"
-assert_eq "$(gluerun_ctx_route_independence_admit rehydrate implementer implement)" "admit" \
+assert_eq "$(singular_ctx_route_independence_admit rehydrate implementer implement)" "admit" \
   "F: control — rehydrate admitted at a non-independence step"
 # The pin: rehydrate is refused as tainted at BOTH independence-required steps, under
 # a spread of knob values (the pin is structural — no knob may reroute it).
 for step in final-audit paired-audit; do
   for knobs in \
     "" \
-    "GLUERUN_REHYDRATE=1" \
-    "GLUERUN_REHYDRATE=1 GLUERUN_SESSION_WINDOW_MAX_PCT=99 GLUERUN_CTX_ROUTING=1" \
-    "GLUERUN_REHYDRATE=0 GLUERUN_MAX_RETRIES=9"; do
-    got="$(env $knobs bash -c 'source "$1"; gluerun_ctx_route_independence_admit rehydrate implementer "$2"' _ "$SCRIPT_DIR/lib.sh" "$step" 2>/dev/null)"
+    "SINGULAR_REHYDRATE=1" \
+    "SINGULAR_REHYDRATE=1 SINGULAR_SESSION_WINDOW_MAX_PCT=99 SINGULAR_CTX_ROUTING=1" \
+    "SINGULAR_REHYDRATE=0 SINGULAR_MAX_RETRIES=9"; do
+    got="$(env $knobs bash -c 'source "$1"; singular_ctx_route_independence_admit rehydrate implementer "$2"' _ "$SCRIPT_DIR/lib.sh" "$step" 2>/dev/null)"
     assert_eq "$got" "refuse tainted" "F: rehydrate refused tainted at $step (knobs: ${knobs:-none})"
   done
 done

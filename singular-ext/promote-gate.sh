@@ -8,14 +8,14 @@ if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# GLUERUN-ext module: resolve the engine install (GLUERUN_ENGINE_HOME) or the sibling
+# SINGULAR-ext module: resolve the engine install (SINGULAR_ENGINE_HOME) or the sibling
 # engine/ dir when run from a source checkout. ENGINE_BIN locates engine scripts
 # (dag.sh, etc.) since this promoter no longer lives beside them.
-if [[ -z "${GLUERUN_ENGINE_HOME:-}" || ! -f "$GLUERUN_ENGINE_HOME/engine/lib.sh" ]]; then
-  GLUERUN_ENGINE_HOME="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -z "${SINGULAR_ENGINE_HOME:-}" || ! -f "$SINGULAR_ENGINE_HOME/engine/lib.sh" ]]; then
+  SINGULAR_ENGINE_HOME="$(cd "$SCRIPT_DIR/.." && pwd)"
 fi
-export GLUERUN_ENGINE_HOME
-ENGINE_BIN="$GLUERUN_ENGINE_HOME/engine"
+export SINGULAR_ENGINE_HOME
+ENGINE_BIN="$SINGULAR_ENGINE_HOME/engine"
 source "$ENGINE_BIN/lib.sh"
 
 from_reconcile="no"
@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
       operator_evidence+=("$2"); shift 2 ;;
     --registers)
       # Registry query (0.16.0): exit 0 iff this promoter would act on NODE.
-      # `gluerun doctor` asks the CONFIGURED promoter rather than reimplementing
+      # `singular doctor` asks the CONFIGURED promoter rather than reimplementing
       # its registry, so a project promoter answers for itself and the check can
       # never drift from the thing it describes. Answered after the registry
       # functions are defined, below; side-effect free.
@@ -66,27 +66,27 @@ if [[ "$frontier_mode" != "yes" && -z "$registers_query" && "${#requested_nodes[
   exit 2
 fi
 
-gluerun_ensure_state_dirs
-gates_dir="${GLUERUN_GATES_DIR:-$GLUERUN_ORCH_DIR/gates}"
+singular_ensure_state_dirs
+gates_dir="${SINGULAR_GATES_DIR:-$SINGULAR_ORCH_DIR/gates}"
 evidence_dir="$gates_dir/evidence"
-dag_file="${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}"
+dag_file="${SINGULAR_DAG_FILE:-$SINGULAR_ORCH_DIR/dag.v0.json}"
 
 # --registers is a pure lookup: no target branch, no branch check, no origin
-# lock, no directories created. `gluerun doctor` runs it against a live repo and
+# lock, no directories created. `singular doctor` runs it against a live repo and
 # must not contend with a running loop for the origin lock, nor refuse to answer
 # because the operator happens to be on a feature branch.
 if [[ -z "$registers_query" ]]; then
-  gluerun_require_target_branch
+  singular_require_target_branch
 
-  if [[ "$(gluerun_current_branch)" != "$GLUERUN_TARGET_BRANCH" ]]; then
-    echo "refuse: current branch must be target branch $GLUERUN_TARGET_BRANCH" >&2
+  if [[ "$(singular_current_branch)" != "$SINGULAR_TARGET_BRANCH" ]]; then
+    echo "refuse: current branch must be target branch $SINGULAR_TARGET_BRANCH" >&2
     exit 2
   fi
 
-  run_id="$(gluerun_run_id)"
+  run_id="$(singular_run_id)"
   if [[ "$from_reconcile" != "yes" ]]; then
-    gluerun_acquire_lock "$run_id"
-    trap 'gluerun_release_lock "$run_id"' EXIT
+    singular_acquire_lock "$run_id"
+    trap 'singular_release_lock "$run_id"' EXIT
   fi
 
   mkdir -p "$gates_dir" "$evidence_dir"
@@ -95,10 +95,10 @@ fi
 # Schema-v2 consumers write only the hash-bound gate-result.v1 contract.
 # Pre-v2 consumers continue to write v0 so existing projects remain compatible.
 gate_result_schema_id() {
-  if [[ "${GLUERUN_CONFIG_SCHEMA_VERSION:-}" == "v2" ]]; then
-    printf '%s\n' "gluerun.orchestration.gate-result.v1"
+  if [[ "${SINGULAR_CONFIG_SCHEMA_VERSION:-}" == "v2" ]]; then
+    printf '%s\n' "singular.orchestration.gate-result.v1"
   else
-    printf '%s\n' "gluerun.orchestration.gate-result.v0"
+    printf '%s\n' "singular.orchestration.gate-result.v0"
   fi
 }
 
@@ -108,7 +108,7 @@ gate_result_schema_id() {
 # and symlink (the link text itself, never its target).
 gate_source_sha256() {
   local ref="$1"
-  python3 - "$GLUERUN_ROOT" "$ref" <<'PY'
+  python3 - "$SINGULAR_ROOT" "$ref" <<'PY'
 import hashlib
 import os
 import pathlib
@@ -154,7 +154,7 @@ if stat.S_ISREG(mode):
     raise SystemExit(0)
 if stat.S_ISLNK(mode):
     digest = hashlib.sha256()
-    digest.update(b"gluerun-symlink.v0\0")
+    digest.update(b"singular-symlink.v0\0")
     digest.update(os.fsencode(os.readlink(target)))
     print(digest.hexdigest())
     raise SystemExit(0)
@@ -162,7 +162,7 @@ if not stat.S_ISDIR(mode):
     raise SystemExit(f"unsupported gate evidence artifact type: {ref}")
 
 digest = hashlib.sha256()
-digest.update(b"gluerun-tree.v0\0")
+digest.update(b"singular-tree.v0\0")
 
 def frame(kind, relative, payload=b""):
     body = kind + b"\0" + os.fsencode(relative) + b"\0" + payload
@@ -228,13 +228,13 @@ write_strict_gate_report() {
     return 2
   fi
 
-  local baseline_ref="" baseline_raw="${GLUERUN_GATE_BASELINE_FILE:-}"
+  local baseline_ref="" baseline_raw="${SINGULAR_GATE_BASELINE_FILE:-}"
   if [[ -z "$baseline_raw" ]]; then
     local default_baseline="docs/orchestration/gate-baselines/$node.gate-baseline.json"
-    [[ -f "$GLUERUN_ROOT/$default_baseline" ]] && baseline_raw="$default_baseline"
+    [[ -f "$SINGULAR_ROOT/$default_baseline" ]] && baseline_raw="$default_baseline"
   fi
   if [[ -n "$baseline_raw" ]]; then
-    if ! baseline_ref="$(python3 - "$GLUERUN_ROOT" "$baseline_raw" <<'PY'
+    if ! baseline_ref="$(python3 - "$SINGULAR_ROOT" "$baseline_raw" <<'PY'
 from pathlib import Path, PurePath
 import sys
 
@@ -277,19 +277,19 @@ PY
   )
   [[ -n "$baseline_ref" ]] && normalize_args+=(--baseline "$baseline_ref")
 
-  rm -f "$GLUERUN_ROOT/$report_ref"
-  if ! (cd "$GLUERUN_ROOT" && python3 "$ENGINE_BIN/gate_report.py" "${normalize_args[@]}") \
+  rm -f "$SINGULAR_ROOT/$report_ref"
+  if ! (cd "$SINGULAR_ROOT" && python3 "$ENGINE_BIN/gate_report.py" "${normalize_args[@]}") \
     >/dev/null; then
     return 2
   fi
-  local report_path="$GLUERUN_ROOT/$report_ref" report_json
+  local report_path="$SINGULAR_ROOT/$report_ref" report_json
   [[ -f "$report_path" ]] || return 2
   report_json="$(<"$report_path")"
-  gluerun_json_schema_check \
+  singular_json_schema_check \
     "$report_json" \
-    "$GLUERUN_ENGINE_HOME/schemas/gate-report.v0.schema.json" \
+    "$SINGULAR_ENGINE_HOME/schemas/gate-report.v0.schema.json" \
     "strict gate report" >/dev/null || return 2
-  strict_gate_report_outcome="$(gluerun_json_field "$report_path" outcome)"
+  strict_gate_report_outcome="$(singular_json_field "$report_path" outcome)"
   strict_gate_report_sha="$(gate_source_sha256 "$report_ref")" || return 2
 }
 
@@ -849,7 +849,7 @@ gate_promoter_config() {
       gate_task_ref="recovery-durable-storage-proof-tasks"
       gate_command_ref="recovery-storage-proof-regression-command"
       gate_upstream="$(node_static_field "$node" dependsOn || true)"
-      gate_rationale="D6.storage_proof storage_proof_complete is promoted from integrated durable recovery repository proofs covering recovery plans/actions, replay requests, recovery attempts/events, and replay results/deviations. The completion predicate is keyed to the integrated owned-file proof surface under internal/recovery and is certified by L0's deterministic red/green skip-guard: the proofs pass against real PostgreSQL storage and FAIL when that storage is stripped (GLUERUN_STORAGE_PROOF_DATABASE_URL/GLUERUN_DATABASE_URL unset)."
+      gate_rationale="D6.storage_proof storage_proof_complete is promoted from integrated durable recovery repository proofs covering recovery plans/actions, replay requests, recovery attempts/events, and replay results/deviations. The completion predicate is keyed to the integrated owned-file proof surface under internal/recovery and is certified by L0's deterministic red/green skip-guard: the proofs pass against real PostgreSQL storage and FAIL when that storage is stripped (SINGULAR_STORAGE_PROOF_DATABASE_URL/SINGULAR_DATABASE_URL unset)."
       gate_signature_labels=(
         "durable recovery plan/action repository round-trip proof"
         "durable replay request repository round-trip proof"
@@ -993,14 +993,14 @@ gate_promoter_config() {
 }
 
 task_integrated() {
-  local task_id="$1" task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+  local task_id="$1" task_file="$SINGULAR_TASKS_DIR/$task_id.md"
   # Superseded tasks are archived under tasks/superseded/ (0.5.0 convention).
-  [[ -f "$task_file" ]] || task_file="$GLUERUN_TASKS_DIR/superseded/$task_id.md"
+  [[ -f "$task_file" ]] || task_file="$SINGULAR_TASKS_DIR/superseded/$task_id.md"
   [[ -f "$task_file" ]] || return 1
   grep -Eq '^Status:[[:space:]]+integrated[[:space:]]*$' "$task_file"
 }
 
-# Terminal-predecessor tolerance (0.5.0, GLUERUN_PROMOTE_TOLERATE_TERMINAL=1).
+# Terminal-predecessor tolerance (0.5.0, SINGULAR_PROMOTE_TOLERATE_TERMINAL=1).
 # 0.4.0's promoter counted only `Status: integrated` tasks, so superseded or
 # blocked predecessors of an integrated successor kept a finished node
 # permanently `node-tasks-not-integrated` (field audit: every gate needed a
@@ -1011,13 +1011,13 @@ task_integrated() {
 task_satisfied() {
   local task_id="$1"
   task_integrated "$task_id" && return 0
-  [[ "${GLUERUN_PROMOTE_TOLERATE_TERMINAL:-1}" == "1" ]] || return 1
-  local task_file="$GLUERUN_TASKS_DIR/$task_id.md"
-  [[ -f "$task_file" ]] || task_file="$GLUERUN_TASKS_DIR/superseded/$task_id.md"
+  [[ "${SINGULAR_PROMOTE_TOLERATE_TERMINAL:-1}" == "1" ]] || return 1
+  local task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+  [[ -f "$task_file" ]] || task_file="$SINGULAR_TASKS_DIR/superseded/$task_id.md"
   [[ -f "$task_file" ]] || return 1
   local node
-  node="$(gluerun_task_node "$task_file" 2>/dev/null || true)"
-  python3 - "$task_id" "$(gluerun_node_task_index_json "$node" 2>/dev/null || echo '[]')" <<'PY'
+  node="$(singular_task_node "$task_file" 2>/dev/null || true)"
+  python3 - "$task_id" "$(singular_node_task_index_json "$node" 2>/dev/null || echo '[]')" <<'PY'
 import json
 import sys
 
@@ -1056,7 +1056,7 @@ integrated_task_signature_index_json() {
     printf '%s\n' "$gate_task_index_json"
     return 0
   fi
-  gate_task_index_json="$(python3 - "$GLUERUN_TASKS_DIR" <<'PY'
+  gate_task_index_json="$(python3 - "$SINGULAR_TASKS_DIR" <<'PY'
 import json
 import os
 import re
@@ -1251,7 +1251,7 @@ write_gate_json() {
   local tasks_json schema_id source_sha="" task_set_sha=""
   tasks_json="$(printf '%s\n' "${gate_evidence_tasks[@]}" | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')"
   schema_id="$(gate_result_schema_id)"
-  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+  if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
     source_sha="$(gate_source_sha256 "$gate_source_path")" || return 1
     task_set_sha="$(gate_task_set_sha256 "$gate_task_ref" "$tasks_json")" || return 1
   fi
@@ -1314,7 +1314,7 @@ evidence = [
         "headSha": head_sha,
     },
 ]
-if schema_id == "gluerun.orchestration.gate-result.v1":
+if schema_id == "singular.orchestration.gate-result.v1":
     if report_outcome not in ("passed", "passed-with-acknowledged-baseline"):
         raise SystemExit("gate-result.v1 requires a passing strict gate-report outcome")
     if not report_ref or len(report_sha) != 64:
@@ -1337,7 +1337,7 @@ if red_command:
         {
             "kind": "command-log",
             "ref": f"{command_ref}-skip-guard-red",
-            "description": "Storage-stripped skip-guard: the durable round-trip proof run with GLUERUN_STORAGE_PROOF_DATABASE_URL/GLUERUN_DATABASE_URL unset; it MUST fail (non-zero), proving the proof exercises real storage and is not vacuous.",
+            "description": "Storage-stripped skip-guard: the durable round-trip proof run with SINGULAR_STORAGE_PROOF_DATABASE_URL/SINGULAR_DATABASE_URL unset; it MUST fail (non-zero), proving the proof exercises real storage and is not vacuous.",
             "command": red_command,
             "exitCode": int(red_exit),
             "logRef": red_log_ref,
@@ -1377,7 +1377,7 @@ validate_gate_candidate_file() {
     cp "$gates_dir"/*.gate-result.json "$tmp_gates/"
   fi
   cp "$gate_file" "$tmp_gates/$node.gate-result.json"
-  GLUERUN_GATES_DIR="$tmp_gates" "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
+  SINGULAR_GATES_DIR="$tmp_gates" "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
   rm -rf "$tmp_gates"
 }
 
@@ -1385,9 +1385,9 @@ write_blocked_gate_json() {
   # node source_path source_desc rationale upstream missing_tasks_json out_path
   local node="$1" source_path="$2" source_desc="$3" rationale="$4" upstream="$5" missing_json="$6" out_path="$7" recorded_at
   local schema_id source_sha="" task_set_sha=""
-  recorded_at="$(gluerun_timestamp)"
+  recorded_at="$(singular_timestamp)"
   schema_id="$(gate_result_schema_id)"
-  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+  if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
     source_sha="$(gate_source_sha256 "$source_path")" || return 1
     if [[ -n "$missing_json" && "$missing_json" != "[]" ]]; then
       task_set_sha="$(gate_task_set_sha256 "${node}-unmet-readiness-tasks" "$missing_json")" || return 1
@@ -1428,7 +1428,7 @@ if missing:
             "taskIds": missing,
         }
     )
-if schema_id == "gluerun.orchestration.gate-result.v1":
+if schema_id == "singular.orchestration.gate-result.v1":
     evidence[0]["sha256"] = source_sha
     if missing:
         evidence[1]["sha256"] = task_set_sha
@@ -1477,7 +1477,7 @@ if gate.get("authoritative") is not True:
     raise SystemExit("blocked gate must be authoritative")
 PY
   local out rc=0
-  out="$(GLUERUN_GATES_DIR="$tmp_gates" "$ENGINE_BIN/dag.sh" area-gate "$node" 2>&1)" || rc=$?
+  out="$(SINGULAR_GATES_DIR="$tmp_gates" "$ENGINE_BIN/dag.sh" area-gate "$node" 2>&1)" || rc=$?
   rm -rf "$tmp_gates"
   if [[ "$rc" -eq 0 ]]; then
     echo "blocked gate unexpectedly passes area-gate node=$node" >&2
@@ -1511,7 +1511,7 @@ block_with() {
     return 2
   fi
   mv "$tmp_gate" "$gate_path"
-  gluerun_append_event "gate_promotion.blocked" "gate blocked" \
+  singular_append_event "gate_promotion.blocked" "gate blocked" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
   blocked_total=$((blocked_total + 1))
   echo "blocked node=$node gate=$gate_path"
@@ -1567,8 +1567,8 @@ PY
 }
 
 # Extract ONLY the storage-proof DSN from an env file by sourcing it in a
-# SUBSHELL, so the file's other assignments — control vars (GLUERUN_ROOT,
-# GLUERUN_GATES_DIR, GLUERUN_PROMOTE_GATE_COMMAND, ...) and the ~dozen unrelated
+# SUBSHELL, so the file's other assignments — control vars (SINGULAR_ROOT,
+# SINGULAR_GATES_DIR, SINGULAR_PROMOTE_GATE_COMMAND, ...) and the ~dozen unrelated
 # PG*/POSTGRES* secrets — never enter the promotion shell or the proof's command
 # environment. Echoes the DSN value on stdout; callers MUST capture it into a
 # variable, never to a visible stream.
@@ -1576,7 +1576,7 @@ extract_storage_proof_dsn_from_file() {
   local f="$1"
   ( # shellcheck disable=SC1090
     source "$f" >/dev/null 2>&1
-    printf '%s' "${GLUERUN_STORAGE_PROOF_DATABASE_URL:-${GLUERUN_DATABASE_URL:-}}" ) || true
+    printf '%s' "${SINGULAR_STORAGE_PROOF_DATABASE_URL:-${SINGULAR_DATABASE_URL:-}}" ) || true
 }
 
 # DSN resolution ladder for storage proofs: environment -> dedicated proof env
@@ -1585,29 +1585,29 @@ extract_storage_proof_dsn_from_file() {
 # it. NEVER prints any DSN value, and never lets an env file's non-DSN
 # assignments leak into the promotion shell. Returns 0 once a DSN is exported.
 resolve_storage_proof_dsn() {
-  proof_dsn_attempts=("env:GLUERUN_STORAGE_PROOF_DATABASE_URL/GLUERUN_DATABASE_URL")
-  [[ -n "${GLUERUN_STORAGE_PROOF_DATABASE_URL:-}" || -n "${GLUERUN_DATABASE_URL:-}" ]] && return 0
+  proof_dsn_attempts=("env:SINGULAR_STORAGE_PROOF_DATABASE_URL/SINGULAR_DATABASE_URL")
+  [[ -n "${SINGULAR_STORAGE_PROOF_DATABASE_URL:-}" || -n "${SINGULAR_DATABASE_URL:-}" ]] && return 0
   local f dsn
-  for f in "$GLUERUN_ROOT/.gluerun-state/gluerun-storage-proof.env" "$GLUERUN_ROOT/.gluerun-state/.env"; do
+  for f in "$SINGULAR_ROOT/.singular-state/singular-storage-proof.env" "$SINGULAR_ROOT/.singular-state/.env"; do
     if [[ -f "$f" ]]; then
-      proof_dsn_attempts+=("source:${f#"$GLUERUN_ROOT/"}")
+      proof_dsn_attempts+=("source:${f#"$SINGULAR_ROOT/"}")
       dsn="$(extract_storage_proof_dsn_from_file "$f")"
       if [[ -n "$dsn" ]]; then
-        export GLUERUN_STORAGE_PROOF_DATABASE_URL="$dsn"
+        export SINGULAR_STORAGE_PROOF_DATABASE_URL="$dsn"
         return 0
       fi
     fi
   done
   # Opt-in local provisioning (default OFF: host :5432 may be occupied and
   # bringing up containers is a side effect the loop must not take silently).
-  if [[ "${GLUERUN_PROOF_ALLOW_LOCAL_DB:-0}" == "1" ]]; then
+  if [[ "${SINGULAR_PROOF_ALLOW_LOCAL_DB:-0}" == "1" ]]; then
     proof_dsn_attempts+=("local:make deps-up")
-    if ( cd "$GLUERUN_ROOT" && make deps-up >/dev/null 2>&1 ); then
-      f="$GLUERUN_ROOT/.gluerun-state/gluerun-storage-proof.env"
+    if ( cd "$SINGULAR_ROOT" && make deps-up >/dev/null 2>&1 ); then
+      f="$SINGULAR_ROOT/.singular-state/singular-storage-proof.env"
       if [[ -f "$f" ]]; then
         dsn="$(extract_storage_proof_dsn_from_file "$f")"
         if [[ -n "$dsn" ]]; then
-          export GLUERUN_STORAGE_PROOF_DATABASE_URL="$dsn"
+          export SINGULAR_STORAGE_PROOF_DATABASE_URL="$dsn"
           return 0
         fi
       fi
@@ -1623,7 +1623,7 @@ human_provision_required_block() {
   local node="$1" area="$2" upstream="$3"
   local source_desc rationale
   source_desc="$node storage_proof needs an external PostgreSQL database that agents cannot self-provision; the durable round-trip proof for internal/$area cannot run without it."
-  rationale="HumanProvisionRequired: $node storage_proof_complete cannot be certified because no reachable PostgreSQL database is available for the durable round-trip proof. Local self-service was attempted and failed (${proof_dsn_attempts[*]:-none}). This is an EXTERNAL-RESOURCE stop, not a trust or readiness block: provide a PostgreSQL DSN via GLUERUN_STORAGE_PROOF_DATABASE_URL (or GLUERUN_DATABASE_URL) — e.g. set it in .gluerun-state/gluerun-storage-proof.env, or run 'make deps-up' for a local Postgres and export its URL — then re-run promotion. Validation after provisioning: go test ./internal/$area -run StorageRepositoryDurableRoundTrip -count=1."
+  rationale="HumanProvisionRequired: $node storage_proof_complete cannot be certified because no reachable PostgreSQL database is available for the durable round-trip proof. Local self-service was attempted and failed (${proof_dsn_attempts[*]:-none}). This is an EXTERNAL-RESOURCE stop, not a trust or readiness block: provide a PostgreSQL DSN via SINGULAR_STORAGE_PROOF_DATABASE_URL (or SINGULAR_DATABASE_URL) — e.g. set it in .singular-state/singular-storage-proof.env, or run 'make deps-up' for a local Postgres and export its URL — then re-run promotion. Validation after provisioning: go test ./internal/$area -run StorageRepositoryDurableRoundTrip -count=1."
   block_with "$node" "internal/$area" "$source_desc" "$rationale" "$upstream" ""
 }
 
@@ -1657,53 +1657,53 @@ promote_storage_proof_node() {
   done
 
   # The green/red commands may be overridden ONLY by test fixtures under
-  # GLUERUN_TEST_FIXTURE=1. In production these env vars are ignored, so a stray
-  # GLUERUN_PROOF_RED_COMMAND in a launch environment cannot neuter the skip-guard:
+  # SINGULAR_TEST_FIXTURE=1. In production these env vars are ignored, so a stray
+  # SINGULAR_PROOF_RED_COMMAND in a launch environment cannot neuter the skip-guard:
   # production always runs the real full regression (green) and the real targeted
   # durable round-trip with storage stripped (red).
   local fixture_overrides="no"
-  [[ "${GLUERUN_TEST_FIXTURE:-0}" == "1" ]] && fixture_overrides="yes"
+  [[ "${SINGULAR_TEST_FIXTURE:-0}" == "1" ]] && fixture_overrides="yes"
 
   local green_command green_log_ref green_log_path
-  if [[ "$fixture_overrides" == "yes" && -n "${GLUERUN_PROMOTE_GATE_COMMAND:-}" ]]; then
-    green_command="$GLUERUN_PROMOTE_GATE_COMMAND"
+  if [[ "$fixture_overrides" == "yes" && -n "${SINGULAR_PROMOTE_GATE_COMMAND:-}" ]]; then
+    green_command="$SINGULAR_PROMOTE_GATE_COMMAND"
   else
-    green_command="$GLUERUN_DEFAULT_GATE_CMD"
+    green_command="$SINGULAR_DEFAULT_GATE_CMD"
   fi
   green_log_ref="docs/orchestration/gates/evidence/$node.regression.txt"
-  green_log_path="$GLUERUN_ROOT/$green_log_ref"
+  green_log_path="$SINGULAR_ROOT/$green_log_ref"
   local observation_ref="docs/orchestration/gates/evidence/$node.gate-observation.json"
-  local observation_path="$GLUERUN_ROOT/$observation_ref"
+  local observation_path="$SINGULAR_ROOT/$observation_ref"
   local report_ref="docs/orchestration/gates/evidence/$node.gate-report.json"
   local schema_id
   schema_id="$(gate_result_schema_id)"
 
   local red_command red_log_ref red_log_path
-  if [[ "$fixture_overrides" == "yes" && -n "${GLUERUN_PROOF_RED_COMMAND:-}" ]]; then
-    red_command="$GLUERUN_PROOF_RED_COMMAND"
+  if [[ "$fixture_overrides" == "yes" && -n "${SINGULAR_PROOF_RED_COMMAND:-}" ]]; then
+    red_command="$SINGULAR_PROOF_RED_COMMAND"
   elif [[ -n "$gate_storage_proof_red_command" ]]; then
     red_command="$gate_storage_proof_red_command"
   else
     red_command="go test ./internal/$area -run StorageRepositoryDurableRoundTrip -count=1"
   fi
   red_log_ref="docs/orchestration/gates/evidence/$node.skip-guard-red.txt"
-  red_log_path="$GLUERUN_ROOT/$red_log_ref"
+  red_log_path="$SINGULAR_ROOT/$red_log_ref"
 
   local tmp_gate
   tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
-  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
-    rm -f "$observation_path" "$GLUERUN_ROOT/$report_ref"
+  if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
+    rm -f "$observation_path" "$SINGULAR_ROOT/$report_ref"
   fi
 
-  gluerun_append_event "gate_promotion.started" "gate promotion started" \
+  singular_append_event "gate_promotion.started" "gate promotion started" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\",\"layer\":\"storage_proof\"}"
 
   # 1) GREEN: full regression with real storage present must pass.
   local green_exit=0
   local -a green_env=()
-  [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]] \
-    && green_env=(env "GLUERUN_GATE_REPORT_FILE=$observation_path")
-  if ( cd "$GLUERUN_ROOT" && "${green_env[@]}" bash -c "$green_command" ) >"$green_log_path" 2>&1; then
+  [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]] \
+    && green_env=(env "SINGULAR_GATE_REPORT_FILE=$observation_path")
+  if ( cd "$SINGULAR_ROOT" && "${green_env[@]}" bash -c "$green_command" ) >"$green_log_path" 2>&1; then
     green_exit=0
   else
     green_exit=$?
@@ -1711,13 +1711,13 @@ promote_storage_proof_node() {
 
   local green_sha head_sha report_sha="" report_outcome=""
   green_sha="$(shasum -a 256 "$green_log_path" | awk '{print $1}')"
-  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+  head_sha="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
     if ! write_strict_gate_report \
       "$node" "$green_command" "$green_exit" "$green_log_ref" "$head_sha" \
       "$observation_ref" "$report_ref"; then
       rm -f "$tmp_gate"
-      gluerun_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
+      singular_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"inconclusive-infrastructure\",\"logRef\":\"$green_log_ref\"}"
       echo "refusing to promote node=$node: strict gate report is missing or invalid" >&2
       return 2
@@ -1727,7 +1727,7 @@ promote_storage_proof_node() {
     if [[ "$report_outcome" != "passed" \
       && "$report_outcome" != "passed-with-acknowledged-baseline" ]]; then
       rm -f "$tmp_gate"
-      gluerun_append_event "gate_promotion.failed" "strict gate report did not pass" \
+      singular_append_event "gate_promotion.failed" "strict gate report did not pass" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"$report_outcome\",\"exitCode\":$green_exit,\"logRef\":\"$green_log_ref\",\"gateReportRef\":\"$report_ref\"}"
       echo "gate promotion did not pass node=$node classification=$report_outcome log=$green_log_ref report=$report_ref" >&2
       [[ "$green_exit" -ne 0 ]] && return "$green_exit"
@@ -1735,7 +1735,7 @@ promote_storage_proof_node() {
     fi
   elif [[ "$green_exit" -ne 0 ]]; then
     rm -f "$tmp_gate"
-    gluerun_append_event "gate_promotion.failed" "gate promotion command failed" \
+    singular_append_event "gate_promotion.failed" "gate promotion command failed" \
       "{\"runId\":\"$run_id\",\"node\":\"$node\",\"exitCode\":$green_exit,\"logRef\":\"$green_log_ref\"}"
     echo "gate promotion command failed node=$node exit=$green_exit log=$green_log_ref" >&2
     return "$green_exit"
@@ -1744,14 +1744,14 @@ promote_storage_proof_node() {
   # 2) RED skip-guard: the durable proof with the storage DSN stripped MUST fail.
   #    exit 0 here == the proof passes without real storage == vacuous == refuse.
   local red_exit=0
-  if ( cd "$GLUERUN_ROOT" && env -u GLUERUN_STORAGE_PROOF_DATABASE_URL -u GLUERUN_DATABASE_URL bash -c "$red_command" ) >"$red_log_path" 2>&1; then
+  if ( cd "$SINGULAR_ROOT" && env -u SINGULAR_STORAGE_PROOF_DATABASE_URL -u SINGULAR_DATABASE_URL bash -c "$red_command" ) >"$red_log_path" 2>&1; then
     red_exit=0
   else
     red_exit=$?
   fi
   if [[ "$red_exit" -eq 0 ]]; then
     rm -f "$tmp_gate"
-    gluerun_append_event "gate_promotion.failed" "storage_proof skip-guard passed without storage" \
+    singular_append_event "gate_promotion.failed" "storage_proof skip-guard passed without storage" \
       "{\"runId\":\"$run_id\",\"node\":\"$node\",\"redExitCode\":0,\"logRef\":\"$red_log_ref\"}"
     echo "refusing to promote node=$node: skip-guard RED passed with storage stripped (vacuous/mocked proof); see $red_log_ref" >&2
     return 2
@@ -1759,7 +1759,7 @@ promote_storage_proof_node() {
 
   local red_sha recorded_at
   red_sha="$(shasum -a 256 "$red_log_path" | awk '{print $1}')"
-  recorded_at="$(gluerun_timestamp)"
+  recorded_at="$(singular_timestamp)"
   if ! write_gate_json "$node" "$green_command" "$green_log_ref" "$green_sha" "$head_sha" "$recorded_at" "$tmp_gate" \
     "$green_exit" "$red_command" "$red_log_ref" "$red_sha" "$red_exit" \
     "$report_ref" "$report_sha" "$report_outcome"; then
@@ -1770,7 +1770,7 @@ promote_storage_proof_node() {
   validate_gate_candidate_file "$node" "$tmp_gate"
   mv "$tmp_gate" "$gates_dir/$node.gate-result.json"
   "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
-  gluerun_append_event "gate_promotion.completed" "gate promoted" \
+  singular_append_event "gate_promotion.completed" "gate promoted" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\",\"logRef\":\"$green_log_ref\",\"redLogRef\":\"$red_log_ref\",\"headSha\":\"$head_sha\"}"
   promoted_total=$((promoted_total + 1))
   echo "promoted node=$node gate=$gates_dir/$node.gate-result.json log=$green_log_ref skip-guard-red=$red_log_ref"
@@ -1783,13 +1783,13 @@ unsupported gate promotion node: $node
   This promoter promotes only nodes in its registry (gate_promoter_config).
   Options:
     - register $node in your project promoter (config key "promoter" in
-      gluerun.config.json points at it)
-    - inspect eligibility: gluerun next-areas --explain
+      singular.config.json points at it)
+    - inspect eligibility: singular next-areas --explain
 EOF
 }
 
 # Run a promotion gate command with a stderr progress heartbeat every
-# GLUERUN_PROMOTE_PROGRESS_SECS (default 15; 0 disables). The field run's
+# SINGULAR_PROMOTE_PROGRESS_SECS (default 15; 0 disables). The field run's
 # promoter was silent for its full 17-47s regression runtime, so operators
 # repeatedly mistook a healthy promotion for a hang. stdout stays byte-
 # identical (parsed by reconcile); the heartbeat goes to stderr only.
@@ -1798,15 +1798,15 @@ run_gate_command_with_progress() {
   local command="$1" log_path="$2" observation_path="${3:-}"
   local -a command_env=()
   [[ -n "$observation_path" ]] \
-    && command_env=(env "GLUERUN_GATE_REPORT_FILE=$observation_path")
-  local interval="${GLUERUN_PROMOTE_PROGRESS_SECS:-15}"
+    && command_env=(env "SINGULAR_GATE_REPORT_FILE=$observation_path")
+  local interval="${SINGULAR_PROMOTE_PROGRESS_SECS:-15}"
   [[ "$interval" =~ ^[0-9]+$ ]] || interval=15
   local ec=0
   if (( interval == 0 )); then
-    (cd "$GLUERUN_ROOT" && "${command_env[@]}" bash -c "$command") >"$log_path" 2>&1 || ec=$?
+    (cd "$SINGULAR_ROOT" && "${command_env[@]}" bash -c "$command") >"$log_path" 2>&1 || ec=$?
     return "$ec"
   fi
-  (cd "$GLUERUN_ROOT" && "${command_env[@]}" bash -c "$command") >"$log_path" 2>&1 &
+  (cd "$SINGULAR_ROOT" && "${command_env[@]}" bash -c "$command") >"$log_path" 2>&1 &
   local child=$! started=$SECONDS
   while kill -0 "$child" 2>/dev/null; do
     sleep 1
@@ -1892,40 +1892,40 @@ promote_node() {
     "$ENGINE_BIN/dag.sh" area-gate "$upstream_node" >/dev/null
   done
 
-  local command="${GLUERUN_PROMOTE_GATE_COMMAND:-$GLUERUN_DEFAULT_GATE_CMD}"
+  local command="${SINGULAR_PROMOTE_GATE_COMMAND:-$SINGULAR_DEFAULT_GATE_CMD}"
   local log_ref="docs/orchestration/gates/evidence/$node.regression.txt"
-  local log_path="$GLUERUN_ROOT/$log_ref"
+  local log_path="$SINGULAR_ROOT/$log_ref"
   local observation_ref="docs/orchestration/gates/evidence/$node.gate-observation.json"
-  local observation_path="$GLUERUN_ROOT/$observation_ref"
+  local observation_path="$SINGULAR_ROOT/$observation_ref"
   local report_ref="docs/orchestration/gates/evidence/$node.gate-report.json"
   local gate_path="$gates_dir/$node.gate-result.json"
   local tmp_gate schema_id
   schema_id="$(gate_result_schema_id)"
   tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
-  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
-    rm -f "$observation_path" "$GLUERUN_ROOT/$report_ref"
+  if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
+    rm -f "$observation_path" "$SINGULAR_ROOT/$report_ref"
   fi
 
-  gluerun_append_event "gate_promotion.started" "gate promotion started" \
+  singular_append_event "gate_promotion.started" "gate promotion started" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
   local exit_code=0
   echo "promote-gate: node=$node running regression (log: $log_ref)" >&2
   run_gate_command_with_progress \
     "$command" \
     "$log_path" \
-    "$([[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]] && printf '%s' "$observation_path")" \
+    "$([[ "$schema_id" == "singular.orchestration.gate-result.v1" ]] && printf '%s' "$observation_path")" \
     || exit_code=$?
 
   local sha head_sha recorded_at report_sha="" report_outcome=""
   sha="$(shasum -a 256 "$log_path" | awk '{print $1}')"
-  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  recorded_at="$(gluerun_timestamp)"
-  if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+  head_sha="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  recorded_at="$(singular_timestamp)"
+  if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
     if ! write_strict_gate_report \
       "$node" "$command" "$exit_code" "$log_ref" "$head_sha" \
       "$observation_ref" "$report_ref"; then
       rm -f "$tmp_gate"
-      gluerun_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
+      singular_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"inconclusive-infrastructure\",\"logRef\":\"$log_ref\"}"
       echo "refusing to promote node=$node: strict gate report is missing or invalid" >&2
       return 2
@@ -1935,7 +1935,7 @@ promote_node() {
     if [[ "$report_outcome" != "passed" \
       && "$report_outcome" != "passed-with-acknowledged-baseline" ]]; then
       rm -f "$tmp_gate"
-      gluerun_append_event "gate_promotion.failed" "strict gate report did not pass" \
+      singular_append_event "gate_promotion.failed" "strict gate report did not pass" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"$report_outcome\",\"exitCode\":$exit_code,\"logRef\":\"$log_ref\",\"gateReportRef\":\"$report_ref\"}"
       echo "gate promotion did not pass node=$node classification=$report_outcome log=$log_ref report=$report_ref" >&2
       [[ "$exit_code" -ne 0 ]] && return "$exit_code"
@@ -1943,7 +1943,7 @@ promote_node() {
     fi
   elif [[ "$exit_code" -ne 0 ]]; then
     rm -f "$tmp_gate"
-    gluerun_append_event "gate_promotion.failed" "gate promotion command failed" \
+    singular_append_event "gate_promotion.failed" "gate promotion command failed" \
       "{\"runId\":\"$run_id\",\"node\":\"$node\",\"exitCode\":$exit_code,\"logRef\":\"$log_ref\"}"
     echo "gate promotion command failed node=$node exit=$exit_code log=$log_ref" >&2
     return "$exit_code"
@@ -1959,7 +1959,7 @@ promote_node() {
   validate_gate_candidate_file "$node" "$tmp_gate"
   mv "$tmp_gate" "$gate_path"
   "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
-  gluerun_append_event "gate_promotion.completed" "gate promoted" \
+  singular_append_event "gate_promotion.completed" "gate promoted" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\",\"logRef\":\"$log_ref\",\"headSha\":\"$head_sha\"}"
   promoted_total=$((promoted_total + 1))
   echo "promoted node=$node gate=$gate_path log=$log_ref"
@@ -1975,7 +1975,7 @@ promote_node() {
 #     a VALID passing review file at
 #     docs/orchestration/gates/evidence/<node>.review.json (gate-review.v0:
 #     verdict pass, node match, evidenceRefs exist, headSha ancestor of the
-#     target head, age <= GLUERUN_REVIEW_MAX_AGE_HOURS, default 168; 0=off).
+#     target head, age <= SINGULAR_REVIEW_MAX_AGE_HOURS, default 168; 0=off).
 #   - default authority (operator) without --operator refuses with the exact
 #     unlock instructions. The field run's promoter accepted agent-authored
 #     evidence for an operator-only node with no check at all — this closes
@@ -1987,8 +1987,8 @@ promote_evaluation_node() {
     return 0
   fi
   local head_sha recorded_at gate_path tmp_gate
-  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  recorded_at="$(gluerun_timestamp)"
+  head_sha="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  recorded_at="$(singular_timestamp)"
   gate_path="$gates_dir/$node.gate-result.json"
 
   if [[ "$operator_mode" == "yes" ]]; then
@@ -1998,8 +1998,8 @@ promote_evaluation_node() {
     fi
     local schema_id
     schema_id="$(gate_result_schema_id)"
-    if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]] \
-      && ! gluerun_unbound_waivers_enabled; then
+    if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]] \
+      && ! singular_unbound_waivers_enabled; then
       cat >&2 <<EOF
 evaluation node $node: unbound --operator --evidence promotion is disabled under schema v2.
   Record a first-class human-gate request and exact-artifact human approval instead.
@@ -2009,7 +2009,7 @@ EOF
     fi
     local -a operator_hashes=()
     local evidence_ref evidence_sha
-    if [[ "$schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+    if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
       for evidence_ref in "${operator_evidence[@]}"; do
         if ! evidence_sha="$(gate_source_sha256 "$evidence_ref")"; then
           echo "evaluation node $node: operator evidence cannot be safely hash-bound: $evidence_ref" >&2
@@ -2060,7 +2060,7 @@ PY
     validate_gate_candidate_file "$node" "$tmp_gate"
     mv "$tmp_gate" "$gate_path"
     "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
-    gluerun_append_event "gate_promotion.completed" "evaluation gate promoted (operator)" \
+    singular_append_event "gate_promotion.completed" "evaluation gate promoted (operator)" \
       "{\"runId\":\"$run_id\",\"node\":\"$node\",\"evidenceClass\":\"operator-review\"}"
     promoted_total=$((promoted_total + 1))
     echo "promoted node=$node gate=$gate_path evidenceClass=operator-review"
@@ -2073,8 +2073,8 @@ PY
   local review_file="$gates_dir/evidence/$node.review.json"
   if [[ "$authority" != "agent-review-allowed" ]]; then
     if [[ "$strict" == "yes" ]]; then
-      if [[ "$(gate_result_schema_id)" == "gluerun.orchestration.gate-result.v1" ]] \
-        && ! gluerun_unbound_waivers_enabled; then
+      if [[ "$(gate_result_schema_id)" == "singular.orchestration.gate-result.v1" ]] \
+        && ! singular_unbound_waivers_enabled; then
         cat >&2 <<EOF
 evaluation node $node requires exact-artifact human approval under schema v2.
   Record a first-class human-gate request and approval for this node.
@@ -2084,7 +2084,7 @@ EOF
         cat >&2 <<EOF
 evaluation node $node requires operator authority.
   Options:
-    - rerun with: gluerun promote-gate $node --operator --evidence <path>...
+    - rerun with: singular promote-gate $node --operator --evidence <path>...
     - or set "authority": "agent-review-allowed" on the node in dag.v0.json
       and record review evidence at $review_file (gate-review.v0)
 EOF
@@ -2102,21 +2102,21 @@ EOF
     return 0
   fi
   local review_json
-  if ! review_json="$(gluerun_normalize_schema_id "$review_file" "gate review")"; then
+  if ! review_json="$(singular_normalize_schema_id "$review_file" "gate review")"; then
     echo "evaluation node $node: unreadable review file $review_file" >&2
     return 2
   fi
-  if ! gluerun_json_schema_check "$review_json" "$GLUERUN_ENGINE_HOME/schemas/gate-review.v0.schema.json" "gate review" 2>&1; then
+  if ! singular_json_schema_check "$review_json" "$SINGULAR_ENGINE_HOME/schemas/gate-review.v0.schema.json" "gate review" 2>&1; then
     echo "evaluation node $node: review file failed gate-review.v0 validation" >&2
     return 2
   fi
   local r_node r_verdict r_head r_reviewer_kind r_reviewer_id r_recorded
-  r_node="$(gluerun_json_field "$review_file" node)"
-  r_verdict="$(gluerun_json_field "$review_file" verdict)"
-  r_head="$(gluerun_json_field "$review_file" headSha)"
-  r_reviewer_kind="$(gluerun_json_field "$review_file" reviewer.kind 2>/dev/null || echo agent)"
-  r_reviewer_id="$(gluerun_json_field "$review_file" reviewer.id 2>/dev/null || echo unknown)"
-  r_recorded="$(gluerun_json_field "$review_file" recordedAt)"
+  r_node="$(singular_json_field "$review_file" node)"
+  r_verdict="$(singular_json_field "$review_file" verdict)"
+  r_head="$(singular_json_field "$review_file" headSha)"
+  r_reviewer_kind="$(singular_json_field "$review_file" reviewer.kind 2>/dev/null || echo agent)"
+  r_reviewer_id="$(singular_json_field "$review_file" reviewer.id 2>/dev/null || echo unknown)"
+  r_recorded="$(singular_json_field "$review_file" recordedAt)"
   if [[ "$r_node" != "$node" ]]; then
     echo "evaluation node $node: review file names node $r_node" >&2
     return 2
@@ -2125,11 +2125,11 @@ EOF
     echo "evaluation node $node: review verdict is '$r_verdict' — refusing to promote (a failed review never auto-writes a failed gate; that is an operator action)" >&2
     return 2
   fi
-  if ! git -C "$GLUERUN_ROOT" merge-base --is-ancestor "$r_head" "$head_sha" 2>/dev/null; then
+  if ! git -C "$SINGULAR_ROOT" merge-base --is-ancestor "$r_head" "$head_sha" 2>/dev/null; then
     echo "evaluation node $node: review headSha $r_head is not an ancestor of the target head — re-review at the current head" >&2
     return 2
   fi
-  local max_age="${GLUERUN_REVIEW_MAX_AGE_HOURS:-168}"
+  local max_age="${SINGULAR_REVIEW_MAX_AGE_HOURS:-168}"
   if [[ "$max_age" =~ ^[0-9]+$ && "$max_age" -gt 0 ]]; then
     if ! python3 - "$r_recorded" "$max_age" <<'PY'
 import sys
@@ -2143,13 +2143,13 @@ age_h = (datetime.now(timezone.utc) - t).total_seconds() / 3600.0
 sys.exit(0 if age_h <= max_h else 1)
 PY
     then
-      echo "evaluation node $node: review evidence is older than ${max_age}h (GLUERUN_REVIEW_MAX_AGE_HOURS) — re-review" >&2
+      echo "evaluation node $node: review evidence is older than ${max_age}h (SINGULAR_REVIEW_MAX_AGE_HOURS) — re-review" >&2
       return 2
     fi
   fi
   # Missing evidenceRefs fail closed.
   local missing_ref
-  missing_ref="$(python3 - "$review_file" "$GLUERUN_ROOT" <<'PY'
+  missing_ref="$(python3 - "$review_file" "$SINGULAR_ROOT" <<'PY'
 import json, os, sys
 review, root = sys.argv[1], sys.argv[2]
 data = json.load(open(review))
@@ -2167,13 +2167,13 @@ PY
   local review_schema_id review_file_ref review_file_sha="" review_refs_json="[]" review_ref_count=0
   local -a review_ref_hashes=()
   review_schema_id="$(gate_result_schema_id)"
-  review_file_ref="$(python3 - "$review_file" "$GLUERUN_ROOT" <<'PY'
+  review_file_ref="$(python3 - "$review_file" "$SINGULAR_ROOT" <<'PY'
 import os
 import sys
 print(os.path.relpath(sys.argv[1], sys.argv[2]))
 PY
 )"
-  if [[ "$review_schema_id" == "gluerun.orchestration.gate-result.v1" ]]; then
+  if [[ "$review_schema_id" == "singular.orchestration.gate-result.v1" ]]; then
     if ! review_file_sha="$(gate_source_sha256 "$review_file_ref")"; then
       echo "evaluation node $node: review file cannot be safely hash-bound: $review_file_ref" >&2
       return 2
@@ -2221,7 +2221,7 @@ PY
   fi
 
   tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
-  python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "$review_file" "$r_reviewer_kind" "$r_reviewer_id" "$GLUERUN_ROOT" \
+  python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "$review_file" "$r_reviewer_kind" "$r_reviewer_id" "$SINGULAR_ROOT" \
     "$review_schema_id" "$review_file_sha" "$review_ref_count" "${review_ref_hashes[@]}" <<'PY'
 import json
 import os
@@ -2283,7 +2283,7 @@ PY
   validate_gate_candidate_file "$node" "$tmp_gate"
   mv "$tmp_gate" "$gate_path"
   "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
-  gluerun_append_event "gate_promotion.completed" "evaluation gate promoted (agent review)" \
+  singular_append_event "gate_promotion.completed" "evaluation gate promoted (agent review)" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\",\"evidenceClass\":\"agent-review\",\"reviewer\":\"$r_reviewer_kind/$r_reviewer_id\"}"
   promoted_total=$((promoted_total + 1))
   echo "promoted node=$node gate=$gate_path evidenceClass=agent-review reviewer=$r_reviewer_kind/$r_reviewer_id"
@@ -2339,9 +2339,9 @@ if [[ "$frontier_mode" == "yes" ]]; then
   # build-loop nodes are untouched while registered nodes get a definite
   # promote-or-block decision instead of silent spinning.
   # "no frontier gates to adjudicate" must not double as the report for a DAG
-  # that could not be read at all -- gluerun_dag_next_areas_json warns and emits
+  # that could not be read at all -- singular_dag_next_areas_json warns and emits
   # dag.evaluation_failed, and this stays non-fatal so the cycle continues.
-  frontier_json="$(gluerun_dag_next_areas_json || true)"
+  frontier_json="$(singular_dag_next_areas_json || true)"
   mapfile -t requested_nodes < <(python3 - "$frontier_json" <<'PY'
 import json
 import sys
@@ -2379,8 +2379,8 @@ if [[ "$frontier_mode" == "yes" && $((promoted_total + blocked_total)) -eq 0 ]];
   # not ready or the graph can never advance unattended.
   if [[ "${#unregistered_nodes[@]}" -gt 0 ]]; then
     echo "  ${#unregistered_nodes[@]} frontier node(s) are in no promoter registry: ${unregistered_nodes[*]}"
-    echo "  this graph cannot advance unattended; point \"promoter\" in gluerun.config.json at a promoter that registers them (see gluerun doctor)"
-    gluerun_append_event "gate_promotion.unregistered_frontier" \
+    echo "  this graph cannot advance unattended; point \"promoter\" in singular.config.json at a promoter that registers them (see singular doctor)"
+    singular_append_event "gate_promotion.unregistered_frontier" \
       "frontier nodes have no registered promoter; the graph cannot advance unattended" \
       "$(python3 - "${unregistered_nodes[@]}" <<'PY'
 import json

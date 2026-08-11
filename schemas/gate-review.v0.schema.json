@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.gate-review.v0",
-  "title": "gluerun Evaluation-Gate Review Evidence",
-  "description": "Independent review evidence for a `kind: evaluation` DAG node whose `authority` is agent-review-allowed. Written to docs/orchestration/gates/evidence/<node>.review.json; promote-gate validates it (verdict pass, node match, evidenceRefs exist, headSha an ancestor of the target head, age within GLUERUN_REVIEW_MAX_AGE_HOURS) before recording an agent-review gate result. Operator promotion (promote-gate --operator) never requires this file.",
+  "$id": "singular.orchestration.gate-review.v0",
+  "title": "singular Evaluation-Gate Review Evidence",
+  "description": "Independent review evidence for a `kind: evaluation` DAG node whose `authority` is agent-review-allowed. Written to docs/orchestration/gates/evidence/<node>.review.json; promote-gate validates it (verdict pass, node match, evidenceRefs exist, headSha an ancestor of the target head, age within SINGULAR_REVIEW_MAX_AGE_HOURS) before recording an agent-review gate result. Operator promotion (promote-gate --operator) never requires this file.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "node", "reviewer", "verdict", "evidenceRefs", "rationale", "headSha", "recordedAt"],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.gate-review.v0" },
+    "schema": { "const": "singular.orchestration.gate-review.v0" },
     "node": { "type": "string", "minLength": 1 },
     "reviewer": {
       "type": "object",

@@ -22,7 +22,7 @@ Design task — operator reviews the diff before integration.
   implementer must not silently violate. Rule: never restate what the repo can
   answer (no symbol inventories — only symbols whose ROLE in the plan is
   non-obvious).
-- Parser helpers in `engine/ctx-packet.sh` (`gluerun_ctx_packet_json <task>` →
+- Parser helpers in `engine/ctx-packet.sh` (`singular_ctx_packet_json <task>` →
   normalized JSON or `{}`).
 - Test `tests/test-ctx-packet.sh`: parse fixtures (present, absent, malformed
   → fail closed to `{}` + warning event).
@@ -34,7 +34,7 @@ parse.
 
 - `engine/ctx-assumptions.sh`: per-run assumption ledger seeded from the task's
   context packet; carried across attempts like the findings ledger.
-- Wire-in (behind `GLUERUN_CTX_PACKET=0`):
+- Wire-in (behind `SINGULAR_CTX_PACKET=0`):
   - Implementer prompts (base + structured fix prompt) gain an assumptions
     section: violated assumptions are called out like open findings.
   - Auditor prompt gains: "verify these assumptions were not silently

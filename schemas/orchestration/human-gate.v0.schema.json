@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.human-gate.v0",
-  "title": "gluerun Human Gate Request",
+  "$id": "singular.orchestration.human-gate.v0",
+  "title": "singular Human Gate Request",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,7 +17,7 @@
     "expiresAt"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.human-gate.v0" },
+    "schema": { "const": "singular.orchestration.human-gate.v0" },
     "gateId": { "type": "string", "minLength": 1 },
     "node": { "type": "string", "minLength": 1 },
     "approvalType": { "type": "string", "minLength": 1 },

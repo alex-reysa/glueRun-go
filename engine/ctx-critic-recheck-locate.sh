@@ -4,10 +4,10 @@
 # node `critic-carryover` (stage S3-plan-revision, area plancritic, layer
 # engine_runtime, kind runtime).
 #
-# The recheck runner gluerun_ctx_critic_recheck_run (TASK-0031) requires two inputs
+# The recheck runner singular_ctx_critic_recheck_run (TASK-0031) requires two inputs
 # that are NOT in scope at the l1-drive.sh acceptance site: (1) the executable DAG
 # node that owns the accepted task's critiqued batch, and (2) the path to the prior
-# gluerun.orchestration.plan-critique.v0 record produced for that node at planning
+# singular.orchestration.plan-critique.v0 record produced for that node at planning
 # time. The acceptance hook (alongside the integrated paired-audit hook, TASK-0006)
 # has only run_id, task_id, run_dir and worktree in scope — it carries neither the
 # originating node nor the critique-record path. The critic session is node-keyed
@@ -37,27 +37,27 @@
 # never a fabricated node or path), so the terminal hook safely SKIPS the recheck and
 # records nothing rather than misfiring. A skipped recheck mutates no accept/reject
 # outcome, preserving evidence invariance. The whole recheck stays default-OFF behind
-# GLUERUN_CRITIC_RECHECK_PCT (TASK-0027).
+# SINGULAR_CRITIC_RECHECK_PCT (TASK-0027).
 #
 # The terminal l1-drive.sh post-acceptance hook that delegates these locators into the
 # recheck runner (TASK-0031), self-guarded on the default-OFF knob and byte-identical
 # when OFF, is the sanctioned follow-up slice and is OUT OF SCOPE here.
 #
 # Public entry points:
-#   gluerun_ctx_critic_recheck_locate_node <task_id> [worktree]
+#   singular_ctx_critic_recheck_locate_node <task_id> [worktree]
 #     PURE and READ-ONLY. Resolve the executable DAG node that owns the accepted task's
 #     critiqued batch by reading the durable task->node association recorded in the
-#     control-state event log (GLUERUN_EVENTS_FILE). Print the node id when it is
+#     control-state event log (SINGULAR_EVENTS_FILE). Print the node id when it is
 #     present and UNAMBIGUOUS (exactly one distinct non-empty node across all events
 #     carrying this taskId); print EMPTY when the association is missing or ambiguous
 #     (the same task recorded against two different nodes). Appends no event, writes no
 #     state, invokes no runner, always exits 0.
-#   gluerun_ctx_critic_recheck_locate_record <node> <task_id> [worktree]
+#   singular_ctx_critic_recheck_locate_record <node> <task_id> [worktree]
 #     PURE and READ-ONLY. Resolve the path to the prior plan-critique.v0 record produced
 #     for <node> at planning time (the durable per-node archive convention, then the
 #     node stage-dir convention <stage_dir>/plan-critique.json under the runs dir).
 #     Print the path ONLY when the file exists AND parses as a
-#     gluerun.orchestration.plan-critique.v0 record whose node matches <node> and whose
+#     singular.orchestration.plan-critique.v0 record whose node matches <node> and whose
 #     batch included <task_id> (or when <task_id> is empty, node-only). Print EMPTY
 #     otherwise. Appends no event, writes no state, invokes no runner, always exits 0.
 
@@ -65,23 +65,23 @@
 # persists plan-critique.json under the per-run stage dir; by post-acceptance time that
 # per-run dir may be gone, so the record locator also consults a durable per-node
 # archive. Its root defaults under the runtime state dir (NEVER under docs/); override
-# with GLUERUN_CRITIC_RECHECK_RECORD_DIR. Empty node -> empty (caller decides).
-gluerun_ctx_critic_recheck_locate_record_path() {
+# with SINGULAR_CRITIC_RECHECK_RECORD_DIR. Empty node -> empty (caller decides).
+singular_ctx_critic_recheck_locate_record_path() {
   local node="$1"
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
-  local record_dir="${GLUERUN_CRITIC_RECHECK_RECORD_DIR:-${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}/critique}"
+  local record_dir="${SINGULAR_CRITIC_RECHECK_RECORD_DIR:-${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}/critique}"
   printf '%s/%s/plan-critique.json' "$record_dir" "$node"
 }
 
 # Resolve the executable DAG node owning an accepted task's critiqued batch from the
 # durable control-state event log. Pure/read-only; prints the node when unambiguous,
 # else empty. Never exits non-zero. See header for the contract.
-#   gluerun_ctx_critic_recheck_locate_node <task_id> [worktree]
-gluerun_ctx_critic_recheck_locate_node() {
+#   singular_ctx_critic_recheck_locate_node <task_id> [worktree]
+singular_ctx_critic_recheck_locate_node() {
   local task_id="${1:-}" worktree="${2:-.}"
   # Indeterminate/empty task -> empty output (fail-safe).
   [[ -n "$task_id" ]] || { printf '%s' ""; return 0; }
-  local events_file="${GLUERUN_EVENTS_FILE:-}"
+  local events_file="${SINGULAR_EVENTS_FILE:-}"
   [[ -n "$events_file" && -f "$events_file" ]] || { printf '%s' ""; return 0; }
 
   # Scan the NDJSON control-state log read-only. Collect the DISTINCT non-empty node
@@ -123,11 +123,11 @@ PY
 
 # Resolve the path to the prior plan-critique.v0 record for <node>. Pure/read-only;
 # prints the path only when a candidate exists AND parses as a
-# gluerun.orchestration.plan-critique.v0 record whose node matches <node> and whose
+# singular.orchestration.plan-critique.v0 record whose node matches <node> and whose
 # batch included <task_id> (or, when <task_id> is empty, node-only). Else empty. Never
 # exits non-zero. See header for the contract.
-#   gluerun_ctx_critic_recheck_locate_record <node> <task_id> [worktree]
-gluerun_ctx_critic_recheck_locate_record() {
+#   singular_ctx_critic_recheck_locate_record <node> <task_id> [worktree]
+singular_ctx_critic_recheck_locate_record() {
   local node="${1:-}" task_id="${2:-}" worktree="${3:-.}"
   # Indeterminate/empty node -> empty output (fail-safe).
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
@@ -138,10 +138,10 @@ gluerun_ctx_critic_recheck_locate_record() {
   #      plan-critique.json), sorted for stability.
   local candidates=()
   local durable
-  durable="$(gluerun_ctx_critic_recheck_locate_record_path "$node")"
+  durable="$(singular_ctx_critic_recheck_locate_record_path "$node")"
   [[ -n "$durable" ]] && candidates+=("$durable")
 
-  local runs_dir="${GLUERUN_RUNS_DIR:-${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}/runs}"
+  local runs_dir="${SINGULAR_RUNS_DIR:-${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}/runs}"
   if [[ -d "$runs_dir" ]]; then
     local staged
     while IFS= read -r staged; do
@@ -165,7 +165,7 @@ except Exception:
     sys.exit(1)
 if not isinstance(doc, dict):
     sys.exit(1)
-if doc.get("schema") != "gluerun.orchestration.plan-critique.v0":
+if doc.get("schema") != "singular.orchestration.plan-critique.v0":
     sys.exit(1)
 if str(doc.get("node", "")) != node:
     sys.exit(1)

@@ -1,4 +1,4 @@
-/* glueRun-go orchestration console — client logic.
+/* singular orchestration console — client logic.
    Read-only. Renders durable orchestration state into a top/main/inspector
    console. Selection, pins, filters, and expansion live in JS state (never
    derived from the DOM) so the 10s auto-refresh never loses them. Views are
@@ -48,7 +48,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     statusFilter: "",
     selectedId: null,      // node id (TASK-xxxx | L0 | L1:area)
     selectedKind: "none",  // none | l0 | l1 | l2
-    pinnedId: localStorage.getItem("gluerun.pinnedId") || null,
+    pinnedId: localStorage.getItem("singular.pinnedId") || null,
     inspTab: "overview",
     taskCache: new Map(),  // id -> detail
     taskInflight: new Set(),
@@ -144,7 +144,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
       fetchOverview(); // refresh the plan pill + overview panel (own cheap cached endpoint)
     } catch (err) {
       setConn("down");
-      console.error("[gluerun] load failed:", err && err.stack ? err.stack : err);
+      console.error("[singular] load failed:", err && err.stack ? err.stack : err);
     }
   }
 
@@ -184,7 +184,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     // If a pin survives reloads but its task vanished, drop it gracefully.
     if (S.pinnedId && S.pinnedId.startsWith("TASK-")) {
       const exists = (S.snap.l2Tasks || []).some((t) => t.id === S.pinnedId);
-      if (!exists) { S.pinnedId = null; if (!isHistorical()) localStorage.removeItem("gluerun.pinnedId"); }
+      if (!exists) { S.pinnedId = null; if (!isHistorical()) localStorage.removeItem("singular.pinnedId"); }
     }
   }
 
@@ -1285,15 +1285,15 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
   function roleMatrix(g) {
     const items = g.items || [];
     const byKey = (k) => items.find((it) => (it.envKey || it.key) === k) || { value: "—", envKey: k };
-    const model = byKey("GLUERUN_CODEX_MODEL");
-    const tier = byKey("GLUERUN_CODEX_SERVICE_TIER");
+    const model = byKey("SINGULAR_CODEX_MODEL");
+    const tier = byKey("SINGULAR_CODEX_SERVICE_TIER");
     const roles = [
-      ["planner", "L1", byKey("GLUERUN_CODEX_PLANNER_REASONING_EFFORT")],
-      ["worker", "L2", byKey("GLUERUN_CODEX_L2_REASONING_EFFORT")],
-      ["auditor", "gate", byKey("GLUERUN_CODEX_AUDITOR_REASONING_EFFORT")],
+      ["planner", "L1", byKey("SINGULAR_CODEX_PLANNER_REASONING_EFFORT")],
+      ["worker", "L2", byKey("SINGULAR_CODEX_L2_REASONING_EFFORT")],
+      ["auditor", "gate", byKey("SINGULAR_CODEX_AUDITOR_REASONING_EFFORT")],
     ];
     const head = `<div class="set-row set-shared">
-      <div class="set-key"><span class="set-label">all roles</span><code class="set-env mono">${esc(model.envKey || "GLUERUN_CODEX_MODEL")}</code></div>
+      <div class="set-key"><span class="set-label">all roles</span><code class="set-env mono">${esc(model.envKey || "SINGULAR_CODEX_MODEL")}</code></div>
       <div class="set-val"><span class="gate-tag set-model" data-tone="active"><span class="lbl">${esc(model.value)}</span></span><span class="gate-tag" data-tone="idle"><span class="lbl">tier ${esc(tier.value)}</span></span></div>
     </div>`;
     const rows = roles.map(([name, cap, eff]) => {
@@ -1342,7 +1342,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
   }
 
   // "work" tab — observed-this-run agents + the tools/commands they actually ran
-  // (honest proxies; glueRun-go has no live skill registry).
+  // (honest proxies; singular has no live skill registry).
   function renderWorkPanel(d) {
     const ai = d.agentsInvolved || {};
     const tu = d.toolsUsed || {};
@@ -1483,8 +1483,8 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     S.pinnedId = S.pinnedId === id ? null : id;
     // Read-only in historical mode — keep the in-session pin marker but never persist.
     if (!isHistorical()) {
-      if (S.pinnedId) localStorage.setItem("gluerun.pinnedId", S.pinnedId);
-      else localStorage.removeItem("gluerun.pinnedId");
+      if (S.pinnedId) localStorage.setItem("singular.pinnedId", S.pinnedId);
+      else localStorage.removeItem("singular.pinnedId");
     }
     applyMarkers();
     if (S.selectedId) $("insp-pin").setAttribute("aria-pressed", String(S.pinnedId === S.selectedId));

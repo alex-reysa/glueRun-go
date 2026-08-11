@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ctx-route-lease.sh — the generalized session-lease read helpers, generalizing
-# the Stage-1 planner-only lease discipline (gluerun_planner_resume_lease_path /
+# the Stage-1 planner-only lease discipline (singular_planner_resume_lease_path /
 # _live, hard-coded to sessions/planner/<node>.lease) to every persisted session
 # of any role. A live lease here means another fanout is (re)using that role's
 # session; a router of any role must not resume it concurrently.
@@ -10,24 +10,24 @@
 # present-but-uncalled the engine is byte-identical to prior behavior (OFF-parity
 # by construction, mirroring engine/ctx-route-window.sh). This is the READ side
 # only — the lease-write/acquire/release lifecycle is a driver concern wired in a
-# later slice, exactly as the planner lease lifecycle was. The GLUERUN_CTX_ROUTING
+# later slice, exactly as the planner lease lifecycle was. The SINGULAR_CTX_ROUTING
 # wire-in and the engine/ctx-route.sh spine that composes these helpers are later
 # slices of the routing-module node and are OUT OF SCOPE here.
 #
-# gluerun_ctx_route_session_lease_path <role> <key>
+# singular_ctx_route_session_lease_path <role> <key>
 #
 # Canonical role-generic lease path <state-dir>/sessions/<role>/<key>.lease with
-# state-dir ${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}. Empty role OR
+# state-dir ${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}. Empty role OR
 # empty key -> empty string (caller decides). This reduces to the integrated
 # planner path for role `planner`, key `<node>`.
-gluerun_ctx_route_session_lease_path() {
+singular_ctx_route_session_lease_path() {
   local role="$1" key="$2"
   [[ -n "$role" && -n "$key" ]] || { printf '%s' ""; return 0; }
-  local state_dir="${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}"
+  local state_dir="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}"
   printf '%s/sessions/%s/%s.lease' "$state_dir" "$role" "$key"
 }
 
-# gluerun_ctx_route_session_lease_live <lease-path>
+# singular_ctx_route_session_lease_live <lease-path>
 #
 # Liveness of a session-lease. Reproduces the integrated planner lease helper's
 # fail-closed verdict table so a router of any role can refuse resume while
@@ -37,7 +37,7 @@ gluerun_ctx_route_session_lease_path() {
 #   - file present, live PID     -> 0 (held)
 #   - file present, dead PID     -> 1 (free; a crashed holder is not concurrency)
 #   - file present, no PID found -> 0 (held; cannot prove it is free -> fail closed)
-gluerun_ctx_route_session_lease_live() {
+singular_ctx_route_session_lease_live() {
   local lease_path="$1"
   [[ -n "$lease_path" && -f "$lease_path" ]] || return 1
   local pid

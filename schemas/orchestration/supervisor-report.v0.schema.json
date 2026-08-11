@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.supervisor-report.v0",
-  "title": "gluerun Supervisor Briefing Report",
+  "$id": "singular.orchestration.supervisor-report.v0",
+  "title": "singular Supervisor Briefing Report",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "stage", "narrative"],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.supervisor-report.v0" },
+    "schema": { "const": "singular.orchestration.supervisor-report.v0" },
     "stage": { "type": "string", "minLength": 1 },
     "narrative": { "type": "string", "minLength": 1 },
     "risks": {

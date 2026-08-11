@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Contract test for schemas/context-graph.v0.schema.json — one line of the
-# append-only JSONL provenance-graph corpus under .gluerun-state/graph/
+# append-only JSONL provenance-graph corpus under .singular-state/graph/
 # (nodes.jsonl + edges.jsonl). This is the PURE-PROJECTION contract only: no
 # projector, no CLI, no engine wiring exist yet (they belong to the downstream
 # graph-projector node). Fail-closed: the record is an additive, closed object
-# (additionalProperties:false) in the gluerun.orchestration.*.v0 family, and
+# (additionalProperties:false) in the singular.orchestration.*.v0 family, and
 # every invalid class below is rejected.
 #
 # No jsonschema module ships in this environment, so this test carries a tiny
@@ -103,15 +103,15 @@ validates() { python3 "$VALIDATOR" "$SCHEMA" >/dev/null 2>&1; }
 assert_valid()   { printf '%s' "$1" | validates || fail "$2: should VALIDATE but did not"; }
 assert_invalid() { printf '%s' "$1" | validates && fail "$2: should be REJECTED but validated"; return 0; }
 
-# --- schema identity: $id/const in the gluerun.orchestration.*.v0 family ------
-python3 - "$SCHEMA" <<'PY' || fail "schema \$id/const not in gluerun.orchestration.*.v0 family"
+# --- schema identity: $id/const in the singular.orchestration.*.v0 family ------
+python3 - "$SCHEMA" <<'PY' || fail "schema \$id/const not in singular.orchestration.*.v0 family"
 import json, sys
 s = json.load(open(sys.argv[1]))
 sid = s.get("$id", "")
-assert sid == "gluerun.orchestration.context-graph.v0", f"bad $id: {sid}"
+assert sid == "singular.orchestration.context-graph.v0", f"bad $id: {sid}"
 for defn in ("node", "edge"):
     c = s["$defs"][defn]["properties"]["schema"].get("const")
-    assert c == "gluerun.orchestration.context-graph.v0", f"bad {defn} schema const: {c}"
+    assert c == "singular.orchestration.context-graph.v0", f"bad {defn} schema const: {c}"
 PY
 
 # --- taxonomy completeness: full node + edge enums asserted from the schema ---
@@ -153,12 +153,12 @@ PY
 HASH="sha256:a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
 node_line() { # type evidenceClass
   cat <<JSON
-{"schema":"gluerun.orchestration.context-graph.v0","kind":"node","id":"n-000000000abc","type":"${1}","evidenceClass":"${2}","provenance":{"sourcePath":"docs/orchestration/tasks/TASK-0001.md","contentHash":"$HASH","recordType":"task"},"label":"demo"}
+{"schema":"singular.orchestration.context-graph.v0","kind":"node","id":"n-000000000abc","type":"${1}","evidenceClass":"${2}","provenance":{"sourcePath":"docs/orchestration/tasks/TASK-0001.md","contentHash":"$HASH","recordType":"task"},"label":"demo"}
 JSON
 }
 edge_line() { # type
   cat <<JSON
-{"schema":"gluerun.orchestration.context-graph.v0","kind":"edge","id":"e-000000000abc","type":"${1}","from":"n-000000000abc","to":"n-000000000def","provenance":{"sourcePath":".gluerun-state/events/log.jsonl","contentHash":"$HASH"}}
+{"schema":"singular.orchestration.context-graph.v0","kind":"edge","id":"e-000000000abc","type":"${1}","from":"n-000000000abc","to":"n-000000000def","provenance":{"sourcePath":".singular-state/events/log.jsonl","contentHash":"$HASH"}}
 JSON
 }
 
@@ -212,34 +212,34 @@ assert_invalid "$(node_line "banana" "claim")" "unknown node type rejected"
 assert_invalid "$(edge_line "correlates_with")" "unknown edge type rejected"
 
 # (c) node missing provenance
-assert_invalid '{"schema":"gluerun.orchestration.context-graph.v0","kind":"node","id":"n-000000000abc","type":"finding","evidenceClass":"claim"}' \
+assert_invalid '{"schema":"singular.orchestration.context-graph.v0","kind":"node","id":"n-000000000abc","type":"finding","evidenceClass":"claim"}' \
   "node missing provenance rejected"
 
 # (d) evidenceClass outside authoritative|claim
 assert_invalid "$(node_line "finding" "hearsay")" "evidenceClass out of enum rejected"
 
 # (e) unknown top-level property (closed object)
-assert_invalid "{\"schema\":\"gluerun.orchestration.context-graph.v0\",\"kind\":\"node\",\"id\":\"n-000000000abc\",\"type\":\"finding\",\"evidenceClass\":\"claim\",\"provenance\":{\"sourcePath\":\"x\",\"contentHash\":\"$HASH\"},\"rogue\":true}" \
+assert_invalid "{\"schema\":\"singular.orchestration.context-graph.v0\",\"kind\":\"node\",\"id\":\"n-000000000abc\",\"type\":\"finding\",\"evidenceClass\":\"claim\",\"provenance\":{\"sourcePath\":\"x\",\"contentHash\":\"$HASH\"},\"rogue\":true}" \
   "unknown top-level property rejected"
 
 # (f) provenance missing contentHash (host-verifiable identity is mandatory)
-assert_invalid '{"schema":"gluerun.orchestration.context-graph.v0","kind":"node","id":"n-000000000abc","type":"commit","evidenceClass":"authoritative","provenance":{"sourcePath":"x"}}' \
+assert_invalid '{"schema":"singular.orchestration.context-graph.v0","kind":"node","id":"n-000000000abc","type":"commit","evidenceClass":"authoritative","provenance":{"sourcePath":"x"}}' \
   "provenance missing contentHash rejected"
 
 # (g) contentHash not a sha256 digest
-assert_invalid '{"schema":"gluerun.orchestration.context-graph.v0","kind":"node","id":"n-000000000abc","type":"commit","evidenceClass":"authoritative","provenance":{"sourcePath":"x","contentHash":"deadbeef"}}' \
+assert_invalid '{"schema":"singular.orchestration.context-graph.v0","kind":"node","id":"n-000000000abc","type":"commit","evidenceClass":"authoritative","provenance":{"sourcePath":"x","contentHash":"deadbeef"}}' \
   "contentHash bad pattern rejected"
 
 # (h) bad node id shape
-assert_invalid "$(printf '{"schema":"gluerun.orchestration.context-graph.v0","kind":"node","id":"NODE-1","type":"goal","evidenceClass":"claim","provenance":{"sourcePath":"x","contentHash":"%s"}}' "$HASH")" \
+assert_invalid "$(printf '{"schema":"singular.orchestration.context-graph.v0","kind":"node","id":"NODE-1","type":"goal","evidenceClass":"claim","provenance":{"sourcePath":"x","contentHash":"%s"}}' "$HASH")" \
   "bad node id rejected"
 
 # (i) edge missing an endpoint
-assert_invalid "$(printf '{"schema":"gluerun.orchestration.context-graph.v0","kind":"edge","id":"e-000000000abc","type":"implements","from":"n-000000000abc","provenance":{"sourcePath":"x","contentHash":"%s"}}' "$HASH")" \
+assert_invalid "$(printf '{"schema":"singular.orchestration.context-graph.v0","kind":"edge","id":"e-000000000abc","type":"implements","from":"n-000000000abc","provenance":{"sourcePath":"x","contentHash":"%s"}}' "$HASH")" \
   "edge missing 'to' endpoint rejected"
 
 # (j) missing kind discriminator (ambiguous line)
-assert_invalid "$(printf '{"schema":"gluerun.orchestration.context-graph.v0","id":"n-000000000abc","type":"goal","evidenceClass":"claim","provenance":{"sourcePath":"x","contentHash":"%s"}}' "$HASH")" \
+assert_invalid "$(printf '{"schema":"singular.orchestration.context-graph.v0","id":"n-000000000abc","type":"goal","evidenceClass":"claim","provenance":{"sourcePath":"x","contentHash":"%s"}}' "$HASH")" \
   "missing kind discriminator rejected"
 
 # --- mapping doc names every S0-S5 durable record/event type ------------------

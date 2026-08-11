@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# P6 (0.5.0): `gluerun health --json` (compact digest, stable across idle
-# calls), `gluerun gates` (malformed gates displayed not fatal), and
+# P6 (0.5.0): `singular health --json` (compact digest, stable across idle
+# calls), `singular gates` (malformed gates displayed not fatal), and
 # `dag.sh next-areas --explain` exclusion reasons.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
@@ -19,12 +19,12 @@ assert_contains() { [[ "$1" == *"$2"* ]] || fail "$3: missing '$2' in: $1"; }
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/repo"
-mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates" "$root/.gluerun-state"
+mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates" "$root/.singular-state"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     { "id": "a", "stage": "S0", "area": "core", "layer": "x", "kind": "contract", "dependsOn": [], "requiredCompletion": "done" },
     { "id": "b", "stage": "S1", "area": "core", "layer": "x", "kind": "contract", "dependsOn": ["a"], "requiredCompletion": "done" },
@@ -35,16 +35,16 @@ EOF
 printf 'bound gate evidence\n' >"$root/x"
 x_sha="$(shasum -a 256 "$root/x" | awk '{print $1}')"
 cat >"$root/docs/orchestration/gates/a.gate-result.json" <<EOF
-{"schema":"gluerun.orchestration.gate-result.v1","node":"a","status":"passed-with-acknowledged-baseline","authoritative":true,"evidenceClass":"grandfathered","verificationClassification":"not-rerun-evidence-verified","evidence":[{"kind":"source-path","ref":"x","sha256":"$x_sha","description":"t"}],"decidedBy":"test","recordedAt":"2026-06-01T00:00:00Z"}
+{"schema":"singular.orchestration.gate-result.v1","node":"a","status":"passed-with-acknowledged-baseline","authoritative":true,"evidenceClass":"grandfathered","verificationClassification":"not-rerun-evidence-verified","evidence":[{"kind":"source-path","ref":"x","sha256":"$x_sha","description":"t"}],"decidedBy":"test","recordedAt":"2026-06-01T00:00:00Z"}
 EOF
 printf '{broken json' >"$root/docs/orchestration/gates/c.gate-result.json"
 git -C "$root" add . && git -C "$root" -c user.email=t@t -c user.name=t commit -q -m init
 
 run_env() {
-  env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ORCH_DIR="$root/docs/orchestration" GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
-    GLUERUN_LEASES_DIR="$root/.gluerun-state/leases" GLUERUN_WORKTREES_DIR="$root/.worktrees" \
-    GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" GLUERUN_TARGET_BRANCH=target "$@"
+  env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ORCH_DIR="$root/docs/orchestration" SINGULAR_TASKS_DIR="$root/docs/orchestration/tasks" \
+    SINGULAR_LEASES_DIR="$root/.singular-state/leases" SINGULAR_WORKTREES_DIR="$root/.worktrees" \
+    SINGULAR_EVENTS_FILE="$root/.singular-state/events.ndjson" SINGULAR_TARGET_BRANCH=target "$@"
 }
 
 # 1. gates: passed + missing + malformed all displayed.
@@ -59,7 +59,7 @@ mkdir -p "$root/docs/orchestration/human-gates"
 printf 'approval bytes\n' >"$root/approval-artifact.txt"
 python3 - "$root/docs/orchestration/dag.v0.json" \
   "$root/docs/orchestration/human-gates/a.human-gate.json" \
-  "$root/approval-artifact.txt" "$root/.gluerun-state/events.ndjson" <<'PY'
+  "$root/approval-artifact.txt" "$root/.singular-state/events.ndjson" <<'PY'
 import hashlib
 import json
 import sys
@@ -74,7 +74,7 @@ with open(dag_path, "w", encoding="utf-8") as handle:
     json.dump(dag, handle)
 artifact = open(artifact_path, "rb").read()
 request = {
-    "schema": "gluerun.orchestration.human-gate.v0",
+    "schema": "singular.orchestration.human-gate.v0",
     "gateId": "a-approval",
     "node": "a",
     "approvalType": "exact-artifact",
@@ -163,12 +163,12 @@ assert human["items"][0]["owner"] == "owner@example.com"
 assert human["items"][0]["blockedNodes"] == ["b"]' "$j1" || fail "health fields"
 
 # State change -> digest changes.
-touch "$root/.gluerun-state/STOP"
+touch "$root/.singular-state/STOP"
 j3="$(run_env bash "$SCRIPT_DIR/ops.sh" health --json)"
 d3="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["digest"])' "$j3")"
 [[ "$d3" != "$d1" ]] || fail "digest must change when state changes"
 assert_contains "$j3" "STOP sentinel present" "attention lists STOP"
-rm -f "$root/.gluerun-state/STOP"
+rm -f "$root/.singular-state/STOP"
 
 # Restore the original DAG semantics before the dedicated frontier assertions.
 python3 - "$root/docs/orchestration/dag.v0.json" <<'PY'

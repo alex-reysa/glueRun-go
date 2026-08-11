@@ -7,9 +7,9 @@
 # anticipates — the piece that makes rehydration packets ASSEMBLED BY subgraph
 # selection.
 #
-#   gluerun_ctx_rehydrate_subgraph_packet             # stdin: <id>=<path> specs
-#   gluerun_ctx_rehydrate_subgraph_manifest           # stdin: <id>=<path> specs
-#   gluerun_ctx_rehydrate_subgraph_assemble <graphDir> <taskNodeId> <packet|manifest>
+#   singular_ctx_rehydrate_subgraph_packet             # stdin: <id>=<path> specs
+#   singular_ctx_rehydrate_subgraph_manifest           # stdin: <id>=<path> specs
+#   singular_ctx_rehydrate_subgraph_assemble <graphDir> <taskNodeId> <packet|manifest>
 #
 # The two renderers read the resolver output — `<source-class-id>=<path>` specs,
 # one per line on stdin — and emit either the rehydration packet or the manifest,
@@ -23,14 +23,14 @@
 #     re-sorted into source-class rank order.
 #   - Per-node sections, not per-class dedup: a repeated class label yields
 #     repeated sections (one durable source per selected node).
-#   - Caps: each section body capped to GLUERUN_CONTEXT_SECTION_MAX_CHARS with the
+#   - Caps: each section body capped to SINGULAR_CONTEXT_SECTION_MAX_CHARS with the
 #     flat truncation marker; default 4000 honored.
-#   - Manifest conforms to gluerun.orchestration.ctx-rehydrate-manifest.v0, sources
+#   - Manifest conforms to singular.orchestration.ctx-rehydrate-manifest.v0, sources
 #     in selection order, each with the sha256 of that artifact's bytes.
 #   - Quarantine-aware: a `.quarantined` path or a source with a `.quarantined`
 #     sibling never reaches the packet or the manifest (composes the single
-#     integrated authority gluerun_ctx_artifact_exclude).
-#   - `gluerun_ctx_rehydrate_subgraph_assemble` pipes select -> sources -> render
+#     integrated authority singular_ctx_artifact_exclude).
+#   - `singular_ctx_rehydrate_subgraph_assemble` pipes select -> sources -> render
 #     end-to-end over a hand-authored fixture corpus, producing a contradictions-
 #     first capped packet or its matching manifest.
 #   - Determinism / fail-safe: identical inputs -> byte-identical packet AND
@@ -58,7 +58,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 tmp="$(mktemp -d)"
 snap_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp" "$snap_dir"' EXIT
-export GLUERUN_ROOT="$tmp"
+export SINGULAR_ROOT="$tmp"
 
 # --- OFF-parity: sourcing the file invokes nothing and writes nothing ---------
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
@@ -68,13 +68,13 @@ after="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
 
 # Renderers read specs on stdin; run each in a fresh sourced shell.
 packet() {
-  bash -c 'source "'"$LIB"'"; gluerun_ctx_rehydrate_subgraph_packet'
+  bash -c 'source "'"$LIB"'"; singular_ctx_rehydrate_subgraph_packet'
 }
 manifest() {
-  bash -c 'source "'"$LIB"'"; gluerun_ctx_rehydrate_subgraph_manifest'
+  bash -c 'source "'"$LIB"'"; singular_ctx_rehydrate_subgraph_manifest'
 }
 assemble() {
-  bash -c 'source "'"$LIB"'"; gluerun_ctx_rehydrate_subgraph_assemble "$@"' _ "$@"
+  bash -c 'source "'"$LIB"'"; singular_ctx_rehydrate_subgraph_assemble "$@"' _ "$@"
 }
 # section headers, in output order, from a packet on stdin
 packet_ids() { grep -E '^=== .* ===$' | sed -E 's/^=== (.*) ===$/\1/'; }
@@ -83,9 +83,9 @@ manifest_ids() {
   python3 -c 'import json,sys; print("\n".join(s["id"] for s in json.load(sys.stdin)["sources"]))'
 }
 
-[[ "$(type -t gluerun_ctx_rehydrate_subgraph_packet 2>/dev/null)" != "" ]] 2>/dev/null || true
-for fn in gluerun_ctx_rehydrate_subgraph_packet gluerun_ctx_rehydrate_subgraph_manifest \
-          gluerun_ctx_rehydrate_subgraph_assemble; do
+[[ "$(type -t singular_ctx_rehydrate_subgraph_packet 2>/dev/null)" != "" ]] 2>/dev/null || true
+for fn in singular_ctx_rehydrate_subgraph_packet singular_ctx_rehydrate_subgraph_manifest \
+          singular_ctx_rehydrate_subgraph_assemble; do
   bash -c 'source "'"$LIB"'"; [[ "$(type -t '"$fn"')" == "function" ]]' \
     || fail "$fn not defined after sourcing engine/lib.sh"
 done
@@ -143,7 +143,7 @@ want:
 $want_ids"
 # schema const + sha256 derived from artifact bytes
 m_schema="$(printf '%s\n' "$m1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["schema"])')"
-[[ "$m_schema" == "gluerun.orchestration.ctx-rehydrate-manifest.v0" ]] \
+[[ "$m_schema" == "singular.orchestration.ctx-rehydrate-manifest.v0" ]] \
   || fail "case3: manifest schema const wrong: $m_schema"
 task_hash="$(printf '%s\n' "$m1" | python3 -c 'import json,sys; print(next(s["sha256"] for s in json.load(sys.stdin)["sources"] if s["id"]=="task-packet"))')"
 py_hash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$p_task")"
@@ -193,7 +193,7 @@ printf '%s\n' "$m1" | python3 "$VALIDATOR" "$SCHEMA_CORE" \
 # --- Case 4: caps (marker + default) ----------------------------------------
 big="$(printf 'X%.0s' $(seq 1 9000))"
 printf '%s\n' "$big" >"$art/big.json"
-cp="$(printf 'task-packet=%s\n' "$art/big.json" | GLUERUN_CONTEXT_SECTION_MAX_CHARS=200 packet)" \
+cp="$(printf 'task-packet=%s\n' "$art/big.json" | SINGULAR_CONTEXT_SECTION_MAX_CHARS=200 packet)" \
   || fail "case4: capped packet exited non-zero"
 cbody="$(printf '%s\n' "$cp" | tail -n +2)"
 (( ${#cbody} <= 200 )) || fail "case4: section body ${#cbody} exceeds cap 200"
@@ -263,50 +263,50 @@ GDIR="$tmp/graph"
 NODES_IN="$tmp/nodes.in"
 EDGES_IN="$tmp/edges.in"
 
-T="$(gluerun_graph_node_id 'task:T')"
-A="$(gluerun_graph_node_id 'attempt:A')"
-P="$(gluerun_graph_node_id 'pv:P')"
-C="$(gluerun_graph_node_id 'crit:C')"
-AS="$(gluerun_graph_node_id 'assume:AS')"
-F1="$(gluerun_graph_node_id 'find:F1')"
-F2="$(gluerun_graph_node_id 'find:F2')"
-G="$(gluerun_graph_node_id 'pv:G')"
+T="$(singular_graph_node_id 'task:T')"
+A="$(singular_graph_node_id 'attempt:A')"
+P="$(singular_graph_node_id 'pv:P')"
+C="$(singular_graph_node_id 'crit:C')"
+AS="$(singular_graph_node_id 'assume:AS')"
+F1="$(singular_graph_node_id 'find:F1')"
+F2="$(singular_graph_node_id 'find:F2')"
+G="$(singular_graph_node_id 'pv:G')"
 
 {
-  gluerun_graph_emit_node task         'task:T'    "$p_task"  'cT'
-  gluerun_graph_emit_node attempt      'attempt:A' 'src/A'    'cA'
-  gluerun_graph_emit_node plan-version 'pv:P'      'src/P'    'cP'
-  gluerun_graph_emit_node critique     'crit:C'    "$p_crit"  'cC'
-  gluerun_graph_emit_node assumption   'assume:AS' "$art/assumptions.json" 'cAS'
-  gluerun_graph_emit_node finding      'find:F1'   "$p_find1" 'cF1'
-  gluerun_graph_emit_node finding      'find:F2'   "$p_find2" 'cF2'
-  gluerun_graph_emit_node plan-version 'pv:G'      'src/G'    'cG'
+  singular_graph_emit_node task         'task:T'    "$p_task"  'cT'
+  singular_graph_emit_node attempt      'attempt:A' 'src/A'    'cA'
+  singular_graph_emit_node plan-version 'pv:P'      'src/P'    'cP'
+  singular_graph_emit_node critique     'crit:C'    "$p_crit"  'cC'
+  singular_graph_emit_node assumption   'assume:AS' "$art/assumptions.json" 'cAS'
+  singular_graph_emit_node finding      'find:F1'   "$p_find1" 'cF1'
+  singular_graph_emit_node finding      'find:F2'   "$p_find2" 'cF2'
+  singular_graph_emit_node plan-version 'pv:G'      'src/G'    'cG'
 } > "$NODES_IN"
 printf '{"assume":"as"}\n' > "$art/assumptions.json"
 
 {
-  gluerun_graph_emit_edge implements   "$A"  "$T" 'src/e1' 'c1'
-  gluerun_graph_emit_edge derived_from "$P"  "$A" 'src/e2' 'c2'
-  gluerun_graph_emit_edge critiques    "$C"  "$P" 'src/e3' 'c3'
-  gluerun_graph_emit_edge derived_from "$AS" "$P" 'src/e4' 'c4'
-  gluerun_graph_emit_edge derived_from "$F1" "$C" 'src/e5' 'c5'
-  gluerun_graph_emit_edge derived_from "$F2" "$C" 'src/e6' 'c6'
-  gluerun_graph_emit_edge contradicts  "$G"  "$AS" 'src/e7' 'c7'
+  singular_graph_emit_edge implements   "$A"  "$T" 'src/e1' 'c1'
+  singular_graph_emit_edge derived_from "$P"  "$A" 'src/e2' 'c2'
+  singular_graph_emit_edge critiques    "$C"  "$P" 'src/e3' 'c3'
+  singular_graph_emit_edge derived_from "$AS" "$P" 'src/e4' 'c4'
+  singular_graph_emit_edge derived_from "$F1" "$C" 'src/e5' 'c5'
+  singular_graph_emit_edge derived_from "$F2" "$C" 'src/e6' 'c6'
+  singular_graph_emit_edge contradicts  "$G"  "$AS" 'src/e7' 'c7'
 } > "$EDGES_IN"
 
-gluerun_graph_write_corpus "$GDIR" "$NODES_IN" "$EDGES_IN" || fail "case8: write_corpus failed"
+singular_graph_write_corpus "$GDIR" "$NODES_IN" "$EDGES_IN" || fail "case8: write_corpus failed"
 
 # assemble MUST equal the composed pipeline select | sources | render.
-pipe_packet="$(gluerun_ctx_rehydrate_subgraph_select "$GDIR" "$T" \
-  | gluerun_ctx_rehydrate_subgraph_sources \
-  | gluerun_ctx_rehydrate_subgraph_packet)" || fail "case8: composed pipeline (packet) failed"
+pipe_packet="$(singular_ctx_rehydrate_subgraph_select "$GDIR" "$T" \
+  | singular_ctx_rehydrate_subgraph_sources \
+  | singular_ctx_rehydrate_subgraph_packet)" || fail "case8: composed pipeline (packet) failed"
 asm_packet="$(assemble "$GDIR" "$T" packet)" || fail "case8: assemble packet exited non-zero"
 [[ "$asm_packet" == "$pipe_packet" ]] \
   || fail "case8: assemble packet != select|sources|packet pipeline"
 
-pipe_manifest="$(gluerun_ctx_rehydrate_subgraph_select "$GDIR" "$T" \
-  | gluerun_ctx_rehydrate_subgraph_sources \
-  | gluerun_ctx_rehydrate_subgraph_manifest)" || fail "case8: composed pipeline (manifest) failed"
+pipe_manifest="$(singular_ctx_rehydrate_subgraph_select "$GDIR" "$T" \
+  | singular_ctx_rehydrate_subgraph_sources \
+  | singular_ctx_rehydrate_subgraph_manifest)" || fail "case8: composed pipeline (manifest) failed"
 asm_manifest="$(assemble "$GDIR" "$T" manifest)" || fail "case8: assemble manifest exited non-zero"
 [[ "$asm_manifest" == "$pipe_manifest" ]] \
   || fail "case8: assemble manifest != select|sources|manifest pipeline"
@@ -346,7 +346,7 @@ snap_after="$(corpus_snap)"
 [[ "$snap_before" == "$snap_after" ]] || fail "case9: assemble mutated the corpus (must be read-only)"
 
 # grants no independence: rehydrate strategy stays tainted.
-tainted="$(bash -c 'source "'"$LIB"'"; gluerun_ctx_route_strategy_tainted rehydrate')" \
+tainted="$(bash -c 'source "'"$LIB"'"; singular_ctx_route_strategy_tainted rehydrate')" \
   || fail "case9: taint query exited non-zero"
 [[ "$tainted" == "1" ]] || fail "case9: rehydrate strategy no longer tainted (got [$tainted])"
 

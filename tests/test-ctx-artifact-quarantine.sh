@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Covers Slice A of artifact-secret-scan containment: quarantine-on-hit.
 # `engine/ctx-artifact-quarantine.sh` ships a PURE, present-but-uncalled helper
-#   gluerun_ctx_artifact_quarantine <run_dir>
+#   singular_ctx_artifact_quarantine <run_dir>
 # that enumerates the durable context artifacts via the integrated enumerator
-# (gluerun_ctx_artifact_scan_paths) and the shared secret patterns
-# (gluerun_secret_scan_patterns), and for every artifact matching a secret
+# (singular_ctx_artifact_scan_paths) and the shared secret patterns
+# (singular_secret_scan_patterns), and for every artifact matching a secret
 # pattern it (1) renames the artifact to `<path>.quarantined` preserving its
 # byte content, (2) appends exactly one `ctx.artifact_secret` event recording the
 # artifact path and matched pattern label, and (3) returns success (exit 0).
@@ -66,10 +66,10 @@ clean_packet_hash="$(shasum "$run_dir/packet.json" | awk '{print $1}')"
 # ctx-artifact-quarantine.sh. The shared secret patterns live in secret-scan.sh;
 # reuse that single source of truth by loading only its patterns function.
 quarantine() {
-  GLUERUN_ROOT="$tmp" GLUERUN_STATE_DIR="$state_dir" bash -c '
+  SINGULAR_ROOT="$tmp" SINGULAR_STATE_DIR="$state_dir" bash -c '
     source "'"$LIB"'"
-    eval "$(sed -n "/^gluerun_secret_scan_patterns()/,/^}/p" "'"$SCAN"'")"
-    gluerun_ctx_artifact_quarantine "$1"
+    eval "$(sed -n "/^singular_secret_scan_patterns()/,/^}/p" "'"$SCAN"'")"
+    singular_ctx_artifact_quarantine "$1"
   ' _ "$1"
 }
 

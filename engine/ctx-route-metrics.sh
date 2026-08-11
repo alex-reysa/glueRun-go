@@ -4,10 +4,10 @@
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines a new
 # function only; NO existing engine path invokes it, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior. The
-# `gluerun metrics` / ctx-metrics.sh merge is a later hook and OUT OF SCOPE here.
+# `singular metrics` / ctx-metrics.sh merge is a later hook and OUT OF SCOPE here.
 #
 # STRICTLY READ-ONLY: it reads each run's attempts index
-# (runs/<runId>/attempts/index.json, schema gluerun.orchestration.attempts-index.v0)
+# (runs/<runId>/attempts/index.json, schema singular.orchestration.attempts-index.v0)
 # and (for signature parity with ctx-metrics.sh) an events log, then emits JSON on
 # stdout. It appends no events, writes no files, and mutates no run artifact. It
 # never exits non-zero on malformed or absent inputs — it degrades to empty splits.
@@ -18,14 +18,14 @@
 # learning loop tell whether a `resume` decision pays off against a `fresh` one.
 #
 # Public entry point:
-#   gluerun_ctx_route_metrics_json [runs_dir] [events_file]
-#     runs_dir     defaults to ${GLUERUN_RUNS_DIR:-}
-#     events_file  defaults to ${GLUERUN_EVENTS_FILE:-}
+#   singular_ctx_route_metrics_json [runs_dir] [events_file]
+#     runs_dir     defaults to ${SINGULAR_RUNS_DIR:-}
+#     events_file  defaults to ${SINGULAR_EVENTS_FILE:-}
 #   Missing/empty inputs are NOT an error: they yield empty per-role splits.
 #
 # Output shape (stable; keys sorted; deterministic for a given input set):
 #   {
-#     "schema": "gluerun.orchestration.ctx-route-metrics.v0",
+#     "schema": "singular.orchestration.ctx-route-metrics.v0",
 #     "roleStrategyOutcomeSplits": {
 #       "worker":   { <strategy>: {"accepted": <int>, "rejected": <int>}, ... },
 #       "reviewer": { <strategy>: {"accepted": <int>, "rejected": <int>}, ... }
@@ -36,9 +36,9 @@
 # strategy fields are not counted. JSON is emitted with sorted keys and a trailing
 # newline so downstream consumers and tests can pin the exact bytes.
 
-gluerun_ctx_route_metrics_json() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
+singular_ctx_route_metrics_json() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
   python3 - "$runs_dir" "$events_file" <<'PY'
 import json
 import os
@@ -92,7 +92,7 @@ if runs_dir and os.path.isdir(runs_dir):
                     bump(splits, role, str(a[field]), outcome)
 
 metrics = {
-    "schema": "gluerun.orchestration.ctx-route-metrics.v0",
+    "schema": "singular.orchestration.ctx-route-metrics.v0",
     "roleStrategyOutcomeSplits": splits,
 }
 json.dump(metrics, sys.stdout, indent=2, sort_keys=True)

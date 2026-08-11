@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Covers the per-run assumption ledger seed (stage S4-context-packets, node
 # assumption-ledger, foundational data-structure slice). `engine/ctx-assumptions.sh`
-# ships a PURE, present-but-uncalled helper `gluerun_ctx_assumptions_seed <task-file>`
-# that composes the already-integrated `gluerun_ctx_packet_json` parser and prints a
+# ships a PURE, present-but-uncalled helper `singular_ctx_assumptions_seed <task-file>`
+# that composes the already-integrated `singular_ctx_packet_json` parser and prints a
 # normalized per-run assumption ledger JSON:
 #   - a packet declaring assumptions -> {"schema":".ctx-assumptions.v0","assumptions":[
 #         {"id":"A1","status":..,"claim":..,"basis":..}, ... ]} in declared order
@@ -26,15 +26,15 @@ trap 'rm -rf "$tmp"' EXIT
 
 # Seed a task file through the real engine helper in an isolated subshell so
 # lib.sh's `set -e` and the sourced ctx-*.sh files never contaminate this test
-# process. GLUERUN_ROOT is a scratch dir so any state (the parser's malformed
+# process. SINGULAR_ROOT is a scratch dir so any state (the parser's malformed
 # warning event) lands under $tmp, never in the repo. $2 optionally overrides the
 # events file so the malformed case can be inspected in isolation.
 seed() {
   local tf="$1" ev="${2:-$tmp/events.ndjson}"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    GLUERUN_EVENTS_FILE="'"$ev"'"
-    gluerun_ctx_assumptions_seed "'"$tf"'"
+    SINGULAR_EVENTS_FILE="'"$ev"'"
+    singular_ctx_assumptions_seed "'"$tf"'"
   '
 }
 
@@ -53,7 +53,7 @@ print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())
 PY
 }
 
-EMPTY_LEDGER='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[]}'
+EMPTY_LEDGER='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[]}'
 
 # --- Fixtures ---------------------------------------------------------------
 
@@ -76,7 +76,7 @@ cat > "$full" <<'EOF'
 
 ### Inspected symbols
 
-- gluerun_ctx_packet_json — the composed parser
+- singular_ctx_packet_json — the composed parser
 EOF
 
 # Packet present but zero assumptions (only Decisions).
@@ -110,7 +110,7 @@ cp "$TEMPLATE" "$absent"
 # --- Case 1: full packet -> ledger with stable positional ids ---------------
 out_full="$(seed "$full")" || fail "full: seed exited non-zero"
 expected_full='{
-  "schema": "gluerun.orchestration.ctx-assumptions.v0",
+  "schema": "singular.orchestration.ctx-assumptions.v0",
   "assumptions": [
     {"id": "A1", "status": "open", "claim": "runtime is node 20", "basis": "package.json engines field"},
     {"id": "A2", "status": "validated", "claim": "db schema already migrated", "basis": "verified in db.ts"},
@@ -118,7 +118,7 @@ expected_full='{
   ]
 }'
 json_eq "$out_full" "$expected_full" || fail "full: ledger mismatch; got [$out_full]"
-assert_contains "$out_full" '"gluerun.orchestration.ctx-assumptions.v0"' "full: schema const present"
+assert_contains "$out_full" '"singular.orchestration.ctx-assumptions.v0"' "full: schema const present"
 assert_contains "$out_full" '"A1"' "full: id A1 present"
 assert_contains "$out_full" '"A3"' "full: id A3 present"
 

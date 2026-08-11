@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0078",
   "runId": "RUN-20260712T163252Z-42242",
   "branch": "agent/graph/TASK-0078-graph-project-plans",
@@ -12,9 +12,9 @@
     "worker-evidence/regression.log: target test + engine-clean both green",
     "scope-check.log: '2 changed path(s), all allowed'; secret-scan.log: 'clean'; worker-packet-validation.log: 'ok'; module-packet-guard.log: empty",
     "git diff --name-status 9b23df7..a5ac84a: only A engine/ctx-graph-project-plans.sh, A tests/test-ctx-graph-project-plans.sh (481 insertions)",
-    "engine/ctx-graph-project-plans.sh (169 lines): three mappers gluerun_graph_project_plan_versions/_decisions/_critique, define-only, US(0x1f)-delimited python->shell rows, pure stdout",
+    "engine/ctx-graph-project-plans.sh (169 lines): three mappers singular_graph_project_plan_versions/_decisions/_critique, define-only, US(0x1f)-delimited python->shell rows, pure stdout",
     "tests/test-ctx-graph-project-plans.sh (312 lines): schema-valid JSONL asserts, edge direction/count, claim invariance, distinct-id, severity projection, idempotence, canonicalize stability, OFF-parity + no-writes snapshots",
-    "dependency composition verified: gluerun_graph_identity (variadic, ctx-graph-project.sh:47), gluerun_graph_node_id/emit_node/emit_edge (ctx-graph.sh:43/60/99), gluerun_graph_canonicalize/write_corpus (ctx-graph-corpus.sh:41/64), schemas/context-graph.v0.schema.json present",
+    "dependency composition verified: singular_graph_identity (variadic, ctx-graph-project.sh:47), singular_graph_node_id/emit_node/emit_edge (ctx-graph.sh:43/60/99), singular_graph_canonicalize/write_corpus (ctx-graph-corpus.sh:41/64), schemas/context-graph.v0.schema.json present",
     "engine/lib.sh:3857 ctx-loader block auto-sources engine/ctx-*.sh in sorted order (confirms OFF-parity auto-source claim)",
     "emit_node evidenceClass logic (ctx-graph.sh:64-67): only commit|gate-result mint authoritative; plan-version/decision/critique/finding all fall through to claim \u2014 evidence invariance holds by construction"
   ],
@@ -32,7 +32,7 @@
     "Strict-test-first evidence complete: red.log shows fail-closed RED (impl-absent precondition guard), green.log + regression.log green; independently reproduced green with target-test exit 0 and gate exit 0.",
     "Schema/type/lifecycle/provenance correct: every node evidenceClass=claim (verified empirically and by emit_node construction), edges run new-version->prior-version (from=version_node,to=prior_node) matching acceptance, attributes.severity projected onto finding nodes, all lines validate against the shipped schema.",
     "OFF-parity honored: define-only module, no invocation, before/after directory snapshots pin zero filesystem writes; engine-clean stays green; auto-sourced via existing lib.sh ctx-loader loop.",
-    "Idempotence/determinism covered: byte-identical re-projection and stable collapse through gluerun_graph_canonicalize asserted and passing.",
+    "Idempotence/determinism covered: byte-identical re-projection and stable collapse through singular_graph_canonicalize asserted and passing.",
     "Non-blocking note (no defect): decision-node id keys on (type,node,runId,ts); two matching events sharing an identical ts would collide, but ts is a reasonable collision key, documented, and covered with distinct-ts cases \u2014 out of scope for this task."
   ],
   "requiredFixes": [],

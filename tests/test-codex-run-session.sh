@@ -20,7 +20,7 @@ CODEX_RUN="$SCRIPT_DIR/codex-run.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
-workroot="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-codex-test.XXXXXX")"
+workroot="$(mktemp -d "${TMPDIR:-/tmp}/singular-codex-test.XXXXXX")"
 bindir="$workroot/bin"
 mkdir -p "$bindir"
 cleanup() { rm -rf "$workroot"; }
@@ -87,18 +87,18 @@ MOCK
 chmod +x "$bindir/codex"
 
 export PATH="$bindir:$PATH"
-export GLUERUN_TARGET_BRANCH="test-target"
+export SINGULAR_TARGET_BRANCH="test-target"
 
 new_repo() {
   local d="$1"; mkdir -p "$d"
   ( cd "$d" && git init -q && git config user.email t@t && git config user.name t \
-      && printf '.gluerun-state/\n' > .gitignore && git add .gitignore && git commit -qm init \
-      && git branch "$GLUERUN_TARGET_BRANCH" )
+      && printf '.singular-state/\n' > .gitignore && git add .gitignore && git commit -qm init \
+      && git branch "$SINGULAR_TARGET_BRANCH" )
 }
 
 run_codex_run() {
   local repo="$1"; shift
-  ( cd "$repo" && GLUERUN_ROOT="$repo" GLUERUN_STATE_DIR="$repo/.gluerun-state" "$CODEX_RUN" "$@" )
+  ( cd "$repo" && SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$repo/.singular-state" "$CODEX_RUN" "$@" )
 }
 
 field() { # read a top-level field from a JSON file
@@ -117,7 +117,7 @@ MOCK_RESULT='{"status":"needs-review"}' MOCK_ARGS_OUT="$args" \
 grep -q -- "exec -m " "$args" || fail "a: default argv not in HEAD `exec -m` form (got: $(cat "$args"))"
 grep -q -- "resume" "$args" && fail "a: default argv unexpectedly contains 'resume'"
 # No stray tee artifact under the workroot.
-[[ -z "$(find "$workroot" -name 'gluerun-codex-jsonl.*' 2>/dev/null)" ]] || fail "a: tee artifact leaked"
+[[ -z "$(find "$workroot" -name 'singular-codex-jsonl.*' 2>/dev/null)" ]] || fail "a: tee artifact leaked"
 pass "a default invocation byte-identical: no resume, no meta, no tee artifact"
 
 # --- Case b: --session-meta parses the session id + PIPESTATUS exit propagation -
@@ -159,8 +159,8 @@ child_out="$workroot/b5-child.pid"; ec=0
 MOCK_RESULT='{"status":"accepted"}' MOCK_SHAPE="thread" \
   MOCK_SESSION_ID="completed-session-123" MOCK_TERMINAL_COMPLETE=yes \
   MOCK_HANG_AFTER_COMPLETE=yes MOCK_CHILD_OUT="$child_out" \
-  GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=60 \
-  GLUERUN_CODEX_COMPLETION_GRACE_SEC=1 \
+  SINGULAR_CODEX_TIMEOUT_SEC=60 SINGULAR_CODEX_IDLE_SEC=60 \
+  SINGULAR_CODEX_COMPLETION_GRACE_SEC=1 \
   run_codex_run "$r" --level l2 -C "$r" --output-last-message "$o" \
   --session-meta "$meta" >/dev/null 2>&1 || ec=$?
 [[ "$ec" -eq 0 ]] || fail "b5: semantically completed hung run should succeed (got $ec)"
@@ -186,8 +186,8 @@ MOCK_RESULT='{"status":"accepted-before-provider-failure"}' MOCK_SHAPE="thread" 
   MOCK_SESSION_ID="failed-session-123" MOCK_TERMINAL_COMPLETE=yes \
   MOCK_FAILURE_AFTER_COMPLETE=yes MOCK_FAILURE_DELAY_SEC=2 \
   MOCK_HANG_AFTER_COMPLETE=yes MOCK_CHILD_OUT="$child_out" \
-  GLUERUN_CODEX_TIMEOUT_SEC=60 GLUERUN_CODEX_IDLE_SEC=60 \
-  GLUERUN_CODEX_COMPLETION_GRACE_SEC=6 \
+  SINGULAR_CODEX_TIMEOUT_SEC=60 SINGULAR_CODEX_IDLE_SEC=60 \
+  SINGULAR_CODEX_COMPLETION_GRACE_SEC=6 \
   run_codex_run "$r" --level l2 -C "$r" --output-last-message "$o" \
   --session-meta "$meta" --result-file "$result" >/dev/null 2>&1 || ec=$?
 [[ "$ec" -ne 0 ]] || fail "b6: terminal provider failure was converted to success"
@@ -237,7 +237,7 @@ pass "c --resume-session yields 'exec resume <id>' in the codex argv"
 r="$workroot/d"; new_repo "$r"; o="$(out)"; args="$workroot/d.args"; ec=0
 meta="$workroot/d-meta.json"
 cat >"$meta" <<JSON
-{"schema":"gluerun.orchestration.session-meta.v0","provider":"codex","sessionId":"s","model":"gpt-OTHER","effort":"medium","cwd":"$r","exitCode":0,"createdAt":"2026-01-01T00:00:00Z"}
+{"schema":"singular.orchestration.session-meta.v0","provider":"codex","sessionId":"s","model":"gpt-OTHER","effort":"medium","cwd":"$r","exitCode":0,"createdAt":"2026-01-01T00:00:00Z"}
 JSON
 MOCK_RESULT='{"status":"x"}' MOCK_ARGS_OUT="$args" \
   run_codex_run "$r" --level l2 -C "$r" --output-last-message "$o" \
@@ -255,7 +255,7 @@ r="$workroot/e"; new_repo "$r"; o="$(out)"
 MOCK_RESULT='{"status":"x"}' \
   run_codex_run "$r" --level l2 -C "$r" --run-id RUN-SESSION-E \
   --output-last-message "$o" >/dev/null 2>&1
-record="$r/.gluerun-state/runs/RUN-SESSION-E/runner-session.json"
+record="$r/.singular-state/runs/RUN-SESSION-E/runner-session.json"
 [[ -f "$record" ]] || fail "e: runner-session.json not written to the run dir"
 python3 - "$record" <<'PY' || fail "e: session record did not prove a session leader ($(cat "$record"))"
 import json

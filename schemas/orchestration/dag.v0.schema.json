@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.dag.v0",
-  "title": "gluerun Planning DAG",
+  "$id": "singular.orchestration.dag.v0",
+  "title": "singular Planning DAG",
   "description": "Layer/kind vocabularies are project-defined: any non-empty string is valid unless the optional top-level `layers`/`kinds` allowlists are present (this matches engine/dag.sh's validator; the 0.4.0 schema file hardcoded one project's enums and would have rejected the engine's own starter DAG). `authority` (0.5.0) governs evaluation-gate promotion: absent/operator = operator-only; agent-review-allowed = a valid gate-review.v0 evidence file may promote.",
   "type": "object",
   "additionalProperties": false,
@@ -11,7 +11,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "gluerun.orchestration.dag.v0"
+      "const": "singular.orchestration.dag.v0"
     },
     "layers": {
       "type": "array",

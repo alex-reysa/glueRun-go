@@ -21,7 +21,7 @@ mistake: a list of paths cannot describe a state you want to return to.
      `git add` kept its mutation, and a staged new file survived entirely.
   4. Untracked files that appeared during the window were `rm -rf`'d on the
      assumption the agent created them. Read-only runs execute against
-     $GLUERUN_ROOT for up to 1200s while the rest of the engine keeps working in
+     $SINGULAR_ROOT for up to 1200s while the rest of the engine keeps working in
      that same directory, so this deleted freshly imported task files — the
      engine destroying its own control state.
 
@@ -65,7 +65,7 @@ import stat
 import subprocess
 import sys
 
-SCHEMA = "gluerun.orchestration.readonly-guard.v0"
+SCHEMA = "singular.orchestration.readonly-guard.v0"
 
 # A read-only run should have nothing dirty to preserve, or very little. A huge
 # dirty set means the caller pointed the guard at something it was not designed
@@ -469,7 +469,7 @@ def write_path(worktree: str, path: str, data: bytes, mode: int) -> None:
     if mode == SYMLINK:
         os.symlink(os.fsdecode(data), full)
         return
-    tmp = full + ".gluerun-restore.tmp"
+    tmp = full + ".singular-restore.tmp"
     with open(tmp, "wb") as stream:
         stream.write(data)
     os.chmod(tmp, 0o755 if mode == 0o100755 else 0o644)

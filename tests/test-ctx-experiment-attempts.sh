@@ -53,9 +53,9 @@ file_hash() { shasum "$1" 2>/dev/null | awk '{print $1}'; }
 [[ -f "$SCHEMA" ]] || fail "schema not present yet: $SCHEMA"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-for fn in gluerun_ctx_experiment_attempts_to_accept \
-          gluerun_ctx_experiment_findings_per_attempt \
-          gluerun_ctx_experiment_attempts_json; do
+for fn in singular_ctx_experiment_attempts_to_accept \
+          singular_ctx_experiment_findings_per_attempt \
+          singular_ctx_experiment_attempts_json; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $TOOL"
 done
 
@@ -172,7 +172,7 @@ r_before="$(file_hash "$SIB_REPORT")"
 s_before="$(file_hash "$SIB_STRATEGY")"
 
 # --- Slice 1: per-arm attempts-to-accept -------------------------------------
-a2a="$(gluerun_ctx_experiment_attempts_to_accept "$runs" "$events")" \
+a2a="$(singular_ctx_experiment_attempts_to_accept "$runs" "$events")" \
   || fail "attempts-to-accept aggregator exited non-zero on a valid fixture"
 printf '%s' "$a2a" > "$tmp/a2a.json"
 python3 - "$tmp/a2a.json" <<'PY' || fail "attempts-to-accept did not match expected"
@@ -189,7 +189,7 @@ print("a2a-ok")
 PY
 
 # --- Slice 2: per-arm findings-per-attempt -----------------------------------
-fpa="$(gluerun_ctx_experiment_findings_per_attempt "$runs" "$events")" \
+fpa="$(singular_ctx_experiment_findings_per_attempt "$runs" "$events")" \
   || fail "findings-per-attempt aggregator exited non-zero on a valid fixture"
 printf '%s' "$fpa" > "$tmp/fpa.json"
 python3 - "$tmp/fpa.json" <<'PY' || fail "findings-per-attempt did not match expected"
@@ -208,7 +208,7 @@ print("fpa-ok")
 PY
 
 # --- Slice 3: composed, schema-valid, deterministic artifact -----------------
-art="$(gluerun_ctx_experiment_attempts_json "$runs" "$events")" \
+art="$(singular_ctx_experiment_attempts_json "$runs" "$events")" \
   || fail "attempts aggregator exited non-zero on a valid fixture"
 printf '%s' "$art" > "$tmp/art.json"
 printf '%s' "$art" | validates "$SCHEMA" || fail "artifact did not validate against $SCHEMA"
@@ -227,7 +227,7 @@ python3 - "$tmp/art.json" <<'PY' || fail "composed artifact fields did not match
 import json, sys
 m = json.load(open(sys.argv[1]))
 def close(a, b): return abs(a - b) < 1e-9
-assert m["schema"] == "gluerun.orchestration.ctx-experiment-attempts.v0", m["schema"]
+assert m["schema"] == "singular.orchestration.ctx-experiment-attempts.v0", m["schema"]
 a2a = m["attemptsToAccept"]
 assert a2a["A"]["acceptedTasks"] == 2 and a2a["A"]["attemptsToAcceptSum"] == 3, a2a["A"]
 assert close(a2a["A"]["attemptsToAcceptMean"], 1.5), a2a["A"]
@@ -244,7 +244,7 @@ print("composed-ok")
 PY
 
 # --- Determinism: identical inputs -> byte-identical output ------------------
-art2="$(gluerun_ctx_experiment_attempts_json "$runs" "$events")"
+art2="$(singular_ctx_experiment_attempts_json "$runs" "$events")"
 [[ "$art" == "$art2" ]] || fail "composed artifact not deterministic across identical runs"
 
 # --- Read-only: input fixture tree + sibling engine files byte-unchanged ------
@@ -255,7 +255,7 @@ after="$(tree_hash "$fix")"
 [[ "$s_before" == "$(file_hash "$SIB_STRATEGY")" ]] || fail "engine/ctx-experiment-strategy.sh was mutated"
 
 # --- Fail-safe: missing runs dir + missing events -> zeroed artifact ----------
-out_empty="$(gluerun_ctx_experiment_attempts_json "$tmp/no-such-runs" "$tmp/no-such-events.ndjson")" \
+out_empty="$(singular_ctx_experiment_attempts_json "$tmp/no-such-runs" "$tmp/no-such-events.ndjson")" \
   || fail "attempts aggregator crashed on missing input (should fail safe)"
 printf '%s' "$out_empty" > "$tmp/empty.json"
 printf '%s' "$out_empty" | validates "$SCHEMA" || fail "zeroed artifact did not validate against schema"
@@ -276,7 +276,7 @@ PY
 # empty events file + present runs dir with no arm assignment -> also fail-safe
 # and zeroed (no task joins to any arm), never a divide error.
 : > "$tmp/empty-events.ndjson"
-noarm="$(gluerun_ctx_experiment_findings_per_attempt "$runs" "$tmp/empty-events.ndjson")" \
+noarm="$(singular_ctx_experiment_findings_per_attempt "$runs" "$tmp/empty-events.ndjson")" \
   || fail "findings-per-attempt crashed on an empty events file"
 python3 - <<PY || fail "no-arm slice not zeroed"
 import json
@@ -288,8 +288,8 @@ print("noarm-ok")
 PY
 
 # --- No-arg default invocation is also fail-safe -----------------------------
-GLUERUN_RUNS_DIR="$tmp/no-such-runs" GLUERUN_EVENTS_FILE="$tmp/no-such-events.ndjson" \
-  gluerun_ctx_experiment_attempts_json >/dev/null \
+SINGULAR_RUNS_DIR="$tmp/no-such-runs" SINGULAR_EVENTS_FILE="$tmp/no-such-events.ndjson" \
+  singular_ctx_experiment_attempts_json >/dev/null \
   || fail "no-arg default invocation crashed instead of failing safe"
 
 echo "ctx-experiment-attempts tests passed"

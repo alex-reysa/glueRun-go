@@ -5,14 +5,14 @@
 # present-but-uncalled config-gated entry point over the integrated render /
 # manifest composers (TASK-0060):
 #
-#   gluerun_ctx_rehydrate_authored_config_render   [trigger ...]
-#   gluerun_ctx_rehydrate_authored_config_manifest [trigger ...]
+#   singular_ctx_rehydrate_authored_config_render   [trigger ...]
+#   singular_ctx_rehydrate_authored_config_manifest [trigger ...]
 #
 # Each emits the authored packet section / manifest entries ONLY when
-# GLUERUN_CTX_MANIFEST=1 AND gluerun.config.json declares a readable
+# SINGULAR_CTX_MANIFEST=1 AND singular.config.json declares a readable
 # `contextManifest` path — resolving that path and delegating to
-# `gluerun_ctx_rehydrate_authored_render <resolved> [trigger ...]` /
-# `gluerun_ctx_rehydrate_authored_manifest <resolved> [trigger ...]`. Any unmet
+# `singular_ctx_rehydrate_authored_render <resolved> [trigger ...]` /
+# `singular_ctx_rehydrate_authored_manifest <resolved> [trigger ...]`. Any unmet
 # precondition (flag off, field absent, path missing/unreadable) yields empty
 # output. Pure / read-only / deterministic / fail-soft: mutates nothing on disk
 # and never exits non-zero on well-formed input.
@@ -34,7 +34,7 @@ trap 'rm -rf "$tmp"' EXIT
 manifest="$tmp/authored-manifest.json"
 cat >"$manifest" <<'JSON'
 {
-  "schema": "gluerun.orchestration.authored-knowledge-manifest.v0",
+  "schema": "singular.orchestration.authored-knowledge-manifest.v0",
   "entries": [
     { "id": "zeta-body",  "body": "AUTHORED BODY zeta",  "load-when": ["implement"], "freshness": "current" },
     { "id": "plan-only",  "body": "planner body",        "load-when": ["planner"],   "freshness": "current" },
@@ -44,14 +44,14 @@ cat >"$manifest" <<'JSON'
 JSON
 
 # --- Fixture config declaring an ABSOLUTE contextManifest path ---------------
-config_abs="$tmp/gluerun.config.json"
+config_abs="$tmp/singular.config.json"
 cat >"$config_abs" <<JSON
 { "contextManifest": "$manifest" }
 JSON
 
 # --- Fixture config declaring a RELATIVE contextManifest path ---------------
 # Resolved against the config file's own directory (== \$tmp here).
-config_rel="$tmp/cfg-rel/gluerun.config.json"
+config_rel="$tmp/cfg-rel/singular.config.json"
 mkdir -p "$tmp/cfg-rel"
 cp "$manifest" "$tmp/cfg-rel/authored-manifest.json"
 cat >"$config_rel" <<'JSON'
@@ -77,25 +77,25 @@ tree_hash() {
 before_hash="$(tree_hash)"
 
 # Invoke the config-gated entry point with an explicit flag + config file.
-#   $1 = GLUERUN_CTX_MANIFEST value (empty string => unset)
+#   $1 = SINGULAR_CTX_MANIFEST value (empty string => unset)
 #   $2 = fn suffix: render|manifest
-#   $3 = GLUERUN_JSON_CONFIG_FILE
+#   $3 = SINGULAR_JSON_CONFIG_FILE
 #   $4.. = triggers
 cfg_call() {
   local flag="$1" suffix="$2" cfgfile="$3"; shift 3
   if [[ -n "$flag" ]]; then
-    GLUERUN_CTX_MANIFEST="$flag" GLUERUN_JSON_CONFIG_FILE="$cfgfile" \
-      bash -c 'source "'"$LIB"'"; gluerun_ctx_rehydrate_authored_config_'"$suffix"' "$@"' _ "$@"
+    SINGULAR_CTX_MANIFEST="$flag" SINGULAR_JSON_CONFIG_FILE="$cfgfile" \
+      bash -c 'source "'"$LIB"'"; singular_ctx_rehydrate_authored_config_'"$suffix"' "$@"' _ "$@"
   else
-    GLUERUN_JSON_CONFIG_FILE="$cfgfile" \
-      bash -c 'unset GLUERUN_CTX_MANIFEST; source "'"$LIB"'"; gluerun_ctx_rehydrate_authored_config_'"$suffix"' "$@"' _ "$@"
+    SINGULAR_JSON_CONFIG_FILE="$cfgfile" \
+      bash -c 'unset SINGULAR_CTX_MANIFEST; source "'"$LIB"'"; singular_ctx_rehydrate_authored_config_'"$suffix"' "$@"' _ "$@"
   fi
 }
 
 # Direct delegation target (the thing config_* must equal when armed+configured).
 direct_call() {
   local suffix="$1" mpath="$2"; shift 2
-  bash -c 'source "'"$LIB"'"; gluerun_ctx_rehydrate_authored_'"$suffix"' "$@"' _ "$mpath" "$@"
+  bash -c 'source "'"$LIB"'"; singular_ctx_rehydrate_authored_'"$suffix"' "$@"' _ "$mpath" "$@"
 }
 
 nonblank() { [[ -n "${1//[$'\n' ]/}" ]]; }
@@ -104,15 +104,15 @@ nonblank() { [[ -n "${1//[$'\n' ]/}" ]]; }
 for suffix in render manifest; do
   out="$(cfg_call "" "$suffix" "$config_abs" implement)" \
     || fail "case1: $suffix exited non-zero with flag unset"
-  nonblank "$out" && fail "case1: $suffix emitted output with GLUERUN_CTX_MANIFEST unset. got:[$out]"
+  nonblank "$out" && fail "case1: $suffix emitted output with SINGULAR_CTX_MANIFEST unset. got:[$out]"
 
   out="$(cfg_call 0 "$suffix" "$config_abs" implement)" \
     || fail "case1: $suffix exited non-zero with flag=0"
-  nonblank "$out" && fail "case1: $suffix emitted output with GLUERUN_CTX_MANIFEST=0. got:[$out]"
+  nonblank "$out" && fail "case1: $suffix emitted output with SINGULAR_CTX_MANIFEST=0. got:[$out]"
 
   out="$(cfg_call 2 "$suffix" "$config_abs" implement)" \
     || fail "case1: $suffix exited non-zero with flag=2"
-  nonblank "$out" && fail "case1: $suffix emitted output with GLUERUN_CTX_MANIFEST=2. got:[$out]"
+  nonblank "$out" && fail "case1: $suffix emitted output with SINGULAR_CTX_MANIFEST=2. got:[$out]"
 done
 
 # --- Case 2: armed but contextManifest absent / path missing -> nothing -----

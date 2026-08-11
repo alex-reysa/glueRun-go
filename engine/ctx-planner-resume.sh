@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # ctx-planner-resume.sh — the planner-role resume decision behind the default-OFF
-# GLUERUN_PLANNER_SESSION knob.
+# SINGULAR_PLANNER_SESSION knob.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines new
 # functions only; NO existing engine path invokes them, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior (mirroring
 # engine/ctx-planner-session.sh). The generate-tasks.sh call site that consults
-# this decider only when GLUERUN_PLANNER_SESSION=1, the resume-refused rc-86 fresh
+# this decider only when SINGULAR_PLANNER_SESSION=1, the resume-refused rc-86 fresh
 # fallback, the role=planner strategy events, and the finalize->decide TEMPLATE-sha
 # round-trip are the sanctioned follow-up slices of this node and are OUT OF SCOPE
 # here.
 #
-# gluerun_planner_resume_decide is the planner-role variant of the integrated
-# task-role gluerun_session_resume_decide in lib.sh: the same single-line
+# singular_planner_resume_decide is the planner-role variant of the integrated
+# task-role singular_session_resume_decide in lib.sh: the same single-line
 # `resume <sessionId>` / `fresh <reason>` contract, ordered fail-closed gates
 # where the FIRST failing gate names the reason, reusing the
-# gluerun.orchestration.session-meta.v0 shape (planner writes an additive optional
+# singular.orchestration.session-meta.v0 shape (planner writes an additive optional
 # `node` field; all task-role fields remain valid).
 #
 # Gate order (first failure wins):
-#   1. disabled              GLUERUN_PLANNER_SESSION unset/!=1 (default 0 = OFF)
+#   1. disabled              SINGULAR_PLANNER_SESSION unset/!=1 (default 0 = OFF)
 #   2. no-session            meta missing / unparseable
 #   3. no-session-id         empty provider or sessionId
 #   4. role-mismatch         role is not exactly "planner"
@@ -27,7 +27,7 @@
 #   6. head-rewritten        meta.headShaAtCreate NOT an ancestor of target head
 #   7. runner-changed        runner basename differs
 #   8. prompt-template-changed  meta.promptSha256 != sha256(l1-planner.md TEMPLATE)
-#   9. expired               age > GLUERUN_SESSION_MAX_AGE_SEC
+#   9. expired               age > SINGULAR_SESSION_MAX_AGE_SEC
 #  10. worktree-moved        meta.cwd != worktree
 #  11. leased                a LIVE lease held at the canonical planner lease path
 #   -> resume <sessionId>    when every gate passes
@@ -40,22 +40,22 @@
 
 # Pure helper: canonical planner TEMPLATE path. The template-sha gate keys on the
 # TEMPLATE file (NOT the rendered prompt, which varies per frontier by design).
-# Override with GLUERUN_PLANNER_TEMPLATE; default lives under GLUERUN_ROOT.
-gluerun_planner_resume_template_path() {
-  if [[ -n "${GLUERUN_PLANNER_TEMPLATE:-}" ]]; then
-    printf '%s' "$GLUERUN_PLANNER_TEMPLATE"; return 0
+# Override with SINGULAR_PLANNER_TEMPLATE; default lives under SINGULAR_ROOT.
+singular_planner_resume_template_path() {
+  if [[ -n "${SINGULAR_PLANNER_TEMPLATE:-}" ]]; then
+    printf '%s' "$SINGULAR_PLANNER_TEMPLATE"; return 0
   fi
-  printf '%s/docs/orchestration/prompts/l1-planner.md' "${GLUERUN_ROOT:-.}"
+  printf '%s/docs/orchestration/prompts/l1-planner.md' "${SINGULAR_ROOT:-.}"
 }
 
 # Pure helper: canonical per-node planner session-lease path. A live lease here
 # means another L1 fanout is (re)using this planner session; the decider must not
 # resume it concurrently. Lives beside the planner session-meta under the runtime
 # state dir, NEVER under docs/. Empty node -> empty (caller decides).
-gluerun_planner_resume_lease_path() {
+singular_planner_resume_lease_path() {
   local node="$1"
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
-  local state_dir="${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}"
+  local state_dir="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}"
   printf '%s/sessions/planner/%s.lease' "$state_dir" "$node"
 }
 
@@ -64,7 +64,7 @@ gluerun_planner_resume_lease_path() {
 #   - file present, live PID    -> 0 (held)
 #   - file present, dead PID    -> 1 (free; a crashed holder is not concurrency)
 #   - file present, no PID found -> 0 (held; cannot prove it is free -> fail closed)
-gluerun_planner_resume_lease_live() {
+singular_planner_resume_lease_live() {
   local lease_path="$1"
   [[ -n "$lease_path" && -f "$lease_path" ]] || return 1
   local pid
@@ -96,13 +96,13 @@ PY
 
 # Decide whether the next planner run may resume the recorded session. Prints
 # EXACTLY one line: `resume <sessionId>` or `fresh <reason>`. Never exits non-zero.
-#   gluerun_planner_resume_decide <meta_path> <node> <runner_basename> \
+#   singular_planner_resume_decide <meta_path> <node> <runner_basename> \
 #                                 <worktree> <lineage_head>
-gluerun_planner_resume_decide() {
+singular_planner_resume_decide() {
   local meta_path="$1" node="$2" runner="$3" worktree="$4" lineage_head="$5"
 
   # Gate 1: feature-flag disabled (default 0 = OFF).
-  if [[ "${GLUERUN_PLANNER_SESSION:-0}" != "1" ]]; then
+  if [[ "${SINGULAR_PLANNER_SESSION:-0}" != "1" ]]; then
     printf 'fresh disabled\n'; return 0
   fi
   # Gate 2: meta missing.
@@ -168,14 +168,14 @@ PY
   # Gate 8: prompt-template changed. Key on the TEMPLATE sha (NOT the rendered
   # prompt). An unreadable template -> empty sha -> mismatch (fail closed).
   local tpl_path tpl_sha
-  tpl_path="$(gluerun_planner_resume_template_path)"
-  tpl_sha="$(gluerun_sha256_file "$tpl_path" 2>/dev/null || printf '%s' "")"
+  tpl_path="$(singular_planner_resume_template_path)"
+  tpl_sha="$(singular_sha256_file "$tpl_path" 2>/dev/null || printf '%s' "")"
   if [[ -z "$tpl_sha" || "$m_psha" != "$tpl_sha" ]]; then
     printf 'fresh prompt-template-changed\n'; return 0
   fi
-  # Gate 9: expired per GLUERUN_SESSION_MAX_AGE_SEC. Missing/unparseable createdAt
+  # Gate 9: expired per SINGULAR_SESSION_MAX_AGE_SEC. Missing/unparseable createdAt
   # -> EXPIRED (fail closed).
-  local max_age="${GLUERUN_SESSION_MAX_AGE_SEC:-14400}"
+  local max_age="${SINGULAR_SESSION_MAX_AGE_SEC:-14400}"
   local age_ok
   age_ok="$(python3 - "$m_created" "$max_age" <<'PY' 2>/dev/null || true
 import sys
@@ -209,8 +209,8 @@ PY
   # a parallel L1 fanout is already using this planner session — never resume it
   # concurrently.
   local lease_path
-  lease_path="$(gluerun_planner_resume_lease_path "$node")"
-  if gluerun_planner_resume_lease_live "$lease_path"; then
+  lease_path="$(singular_planner_resume_lease_path "$node")"
+  if singular_planner_resume_lease_live "$lease_path"; then
     printf 'fresh leased\n'; return 0
   fi
 

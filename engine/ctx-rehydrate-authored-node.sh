@@ -8,7 +8,7 @@
 #
 # This is the first, PURE half of closing a gap the authored-knowledge track
 # designed for but left inert. TASK-0064's pure builder
-# gluerun_ctx_rehydrate_authored_triggers <role> <step> [node] [task] accepts an
+# singular_ctx_rehydrate_authored_triggers <role> <step> [node] [task] accepts an
 # optional [node] slot, but its two live consumers wired in by TASK-0065 — the
 # injection at engine/l1-drive.sh and the manifest-record at
 # engine/ctx-rehydrate-event.sh — both pass only `implementer implement "$task_id"`,
@@ -17,10 +17,10 @@
 # whose `load-when` targets a node/stage (e.g. `["rehydrate-path"]`) can never
 # become eligible, and the builder's [node] parameter is dead.
 #
-#   gluerun_ctx_rehydrate_authored_node <task_id> [worktree]
+#   singular_ctx_rehydrate_authored_node <task_id> [worktree]
 #
 # Deterministically resolves the executable DAG node that owns <task_id> from the
-# durable task->node association in the control-state event log (GLUERUN_EVENTS_FILE)
+# durable task->node association in the control-state event log (SINGULAR_EVENTS_FILE)
 # — the same durable convention TASK-0032's locator reads: planner.staged /
 # planner.generated events carrying data.taskId + data.node. It prints the node id
 # when it is present and UNAMBIGUOUS (exactly one distinct non-empty node across all
@@ -36,7 +36,7 @@
 #
 # Node-scoped authored `load-when` matching becomes FUNCTIONAL only once the
 # follow-up wire-in lands: a separate task threads this resolver's output into the
-# [node] slot of gluerun_ctx_rehydrate_authored_triggers at BOTH call sites
+# [node] slot of singular_ctx_rehydrate_authored_triggers at BOTH call sites
 # (engine/l1-drive.sh, engine/ctx-rehydrate-event.sh). That wire-in is OUT OF SCOPE
 # here; this leaf by itself changes no injected packet and no recorded manifest, is
 # NOT part of the `rehydrate-path` node's requiredCompletion, and does NOT gate the
@@ -45,12 +45,12 @@
 # Resolve the executable DAG node owning <task_id> from the durable control-state
 # event log. Pure/read-only; prints the node when unambiguous, else empty. Never
 # exits non-zero. See header for the contract.
-#   gluerun_ctx_rehydrate_authored_node <task_id> [worktree]
-gluerun_ctx_rehydrate_authored_node() {
+#   singular_ctx_rehydrate_authored_node <task_id> [worktree]
+singular_ctx_rehydrate_authored_node() {
   local task_id="${1:-}" worktree="${2:-.}"
   # Indeterminate/empty task -> empty output (fail-safe).
   [[ -n "$task_id" ]] || { printf '%s' ""; return 0; }
-  local events_file="${GLUERUN_EVENTS_FILE:-}"
+  local events_file="${SINGULAR_EVENTS_FILE:-}"
   [[ -n "$events_file" && -f "$events_file" ]] || { printf '%s' ""; return 0; }
 
   # Scan the NDJSON control-state log read-only. Collect the DISTINCT non-empty node

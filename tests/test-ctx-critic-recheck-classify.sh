@@ -8,7 +8,7 @@
 # node's requiredCompletion.
 #
 # TASK-0027 integrated the deterministic post-acceptance sampling gate
-# (engine/ctx-critic-recheck.sh, behind default-OFF GLUERUN_CRITIC_RECHECK_PCT)
+# (engine/ctx-critic-recheck.sh, behind default-OFF SINGULAR_CRITIC_RECHECK_PCT)
 # that decides WHETHER an accepted task is sampled; this brick supplies the
 # per-finding disposition set + the ctx.critic_recheck events. It mirrors the
 # classifier/record pairing of engine/ctx-plan-revise-dispositions.sh (TASK-0021).
@@ -21,7 +21,7 @@
 # Asserts:
 #   (a) present-but-uncalled: lib.sh auto-sources it (engine/ctx-*.sh) and it
 #       defines the two NEW functions; no existing engine path invokes them.
-#   (b) gluerun_ctx_critic_recheck_classify <prior_critique_record> <recheck_output>
+#   (b) singular_ctx_critic_recheck_classify <prior_critique_record> <recheck_output>
 #       is PURE and READ-ONLY: prints one TAB-separated `<finding-id>\t<disposition>`
 #       line per PRIOR finding in id-sorted order, appends no events, mutates
 #       nothing, exits 0.
@@ -33,12 +33,12 @@
 #       all default to survives (a missing record yields no ids at all).
 #   (e) determinism: byte-stable id-sorted classifier output and disposition
 #       payload for a fixed (prior record, recheck output).
-#   (f) gluerun_ctx_critic_recheck_record <node> <run_id> <task_id>
+#   (f) singular_ctx_critic_recheck_record <node> <run_id> <task_id>
 #       <prior_critique_record> <recheck_output> records ONLY: emits EXACTLY ONE
-#       `ctx.critic_recheck` event via gluerun_append_event carrying node, runId,
+#       `ctx.critic_recheck` event via singular_append_event carrying node, runId,
 #       taskId, role = plan-critic, and the full id-sorted per-finding disposition
 #       set; mutates nothing else (no lease, no runner, no other state write).
-# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and all inputs to
+# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and all inputs to
 # tmp so the suite never mutates real run state.
 set -uo pipefail
 
@@ -53,10 +53,10 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/state"
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+: > "$SINGULAR_EVENTS_FILE"
 
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
@@ -64,10 +64,10 @@ source "$LIB" || fail "sourcing lib.sh failed"
 # (a) The engine file must exist and be auto-sourced by lib.sh's ctx-loader; it
 #     defines the two NEW functions (RED before impl).
 [[ -f "$CTX" ]] || fail "engine not present yet: $CTX"
-[[ "$(type -t gluerun_ctx_critic_recheck_classify)" == "function" ]] \
-  || fail "gluerun_ctx_critic_recheck_classify not defined (auto-source failed?)"
-[[ "$(type -t gluerun_ctx_critic_recheck_record)" == "function" ]] \
-  || fail "gluerun_ctx_critic_recheck_record not defined (auto-source failed?)"
+[[ "$(type -t singular_ctx_critic_recheck_classify)" == "function" ]] \
+  || fail "singular_ctx_critic_recheck_classify not defined (auto-source failed?)"
+[[ "$(type -t singular_ctx_critic_recheck_record)" == "function" ]] \
+  || fail "singular_ctx_critic_recheck_record not defined (auto-source failed?)"
 
 # A sentinel runner: if any function ever spawns a runner, this file appears.
 SENTINEL="$tmp/runner-invoked"
@@ -78,7 +78,7 @@ touch "$SENTINEL"
 exit 0
 STUBEOF
 chmod +x "$STUB"
-export GLUERUN_RUNNER="$STUB"
+export SINGULAR_RUNNER="$STUB"
 
 # --- Seed inputs -------------------------------------------------------------
 # A valid plan-critique.v0 record with FOUR prior findings (out of id order):
@@ -89,7 +89,7 @@ export GLUERUN_RUNNER="$STUB"
 rec="$tmp/critique.json"
 cat > "$rec" <<'JSON'
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "critic-carryover",
   "runId": "RUN-CRIT",
   "batchTaskIds": ["TASK-0007"],
@@ -125,11 +125,11 @@ JSON
 # (b)+(c) classify: per-finding disposition, id-sorted TAB-separated output.
 # ---------------------------------------------------------------------------
 before_hash="$(cat "$rec" "$out_report" | cksum)"
-out="$(gluerun_ctx_critic_recheck_classify "$rec" "$out_report")" \
+out="$(singular_ctx_critic_recheck_classify "$rec" "$out_report")" \
   || fail "classify must exit 0"
 after_hash="$(cat "$rec" "$out_report" | cksum)"
 [[ "$before_hash" == "$after_hash" ]] || fail "classify mutated its inputs"
-[[ ! -s "$GLUERUN_EVENTS_FILE" ]] || fail "classify appended events (must be read-only)"
+[[ ! -s "$SINGULAR_EVENTS_FILE" ]] || fail "classify appended events (must be read-only)"
 [[ ! -e "$SENTINEL" ]] || fail "classify spawned a runner"
 
 # Exactly four lines (one per PRIOR finding), id-sorted. The non-prior id
@@ -154,7 +154,7 @@ disp_of() { printf '%s\n' "$out" | awk -F'\t' -v id="$1" '$1==id{print $2}'; }
 # ---------------------------------------------------------------------------
 # (e) determinism: byte-stable classifier output for a fixed input set.
 # ---------------------------------------------------------------------------
-out2="$(gluerun_ctx_critic_recheck_classify "$rec" "$out_report")" || fail "classify crashed on rerun"
+out2="$(singular_ctx_critic_recheck_classify "$rec" "$out_report")" || fail "classify crashed on rerun"
 [[ "$out" == "$out2" ]] || fail "classify output not byte-stable across runs"
 
 # ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ cat > "$amb" <<'JSON'
   ]
 }
 JSON
-out_amb="$(gluerun_ctx_critic_recheck_classify "$rec" "$amb")" \
+out_amb="$(singular_ctx_critic_recheck_classify "$rec" "$amb")" \
   || fail "ambiguous status must not crash (exit 0)"
 while IFS=$'\t' read -r id disp; do
   [[ -z "$id" ]] && continue
@@ -181,7 +181,7 @@ while IFS=$'\t' read -r id disp; do
 done <<< "$out_amb"
 
 # Missing recheck output -> every prior finding defaults to survives.
-out_noout="$(gluerun_ctx_critic_recheck_classify "$rec" "$tmp/does-not-exist.json")" \
+out_noout="$(singular_ctx_critic_recheck_classify "$rec" "$tmp/does-not-exist.json")" \
   || fail "missing recheck output must not crash (exit 0)"
 [[ "$(printf '%s\n' "$out_noout" | grep -c .)" -eq 4 ]] \
   || fail "missing recheck output must still emit one line per prior finding"
@@ -194,7 +194,7 @@ done <<< "$out_noout"
 # Unparseable recheck output -> same fail-closed default, no fabrication.
 badout="$tmp/bad-out.json"
 printf 'this is { not json at all\n' > "$badout"
-out_badout="$(gluerun_ctx_critic_recheck_classify "$rec" "$badout")" \
+out_badout="$(singular_ctx_critic_recheck_classify "$rec" "$badout")" \
   || fail "unparseable recheck output must not crash"
 printf '%s\n' "$out_badout" | grep -q 'addressed' \
   && fail "unparseable recheck output must not fabricate addressed"
@@ -202,13 +202,13 @@ printf '%s\n' "$out_badout" | grep -q 'obsolete' \
   && fail "unparseable recheck output must not fabricate obsolete"
 
 # Missing / unparseable prior record -> no ids at all (no fabrication), no crash.
-out_norec="$(gluerun_ctx_critic_recheck_classify "$tmp/does-not-exist.json" "$out_report")" \
+out_norec="$(singular_ctx_critic_recheck_classify "$tmp/does-not-exist.json" "$out_report")" \
   || fail "missing prior record must not crash (exit 0)"
 [[ "$(printf '%s\n' "$out_norec" | grep -c .)" -eq 0 ]] \
   || fail "missing prior record must yield no findings (got: $out_norec)"
 badrec="$tmp/bad-rec.json"
 printf 'not { valid json\n' > "$badrec"
-out_badrec="$(gluerun_ctx_critic_recheck_classify "$badrec" "$out_report")" \
+out_badrec="$(singular_ctx_critic_recheck_classify "$badrec" "$out_report")" \
   || fail "unparseable prior record must not crash (exit 0)"
 [[ "$(printf '%s\n' "$out_badrec" | grep -c .)" -eq 0 ]] \
   || fail "unparseable prior record must yield no findings"
@@ -217,24 +217,24 @@ out_badrec="$(gluerun_ctx_critic_recheck_classify "$badrec" "$out_report")" \
 # (f) record: emits ONE ctx.critic_recheck event carrying node + runId + taskId +
 # role=plan-critic + per-id dispositions; mutates nothing else.
 # ---------------------------------------------------------------------------
-: > "$GLUERUN_EVENTS_FILE"
-# Pre-warm the sanctioned state-dir scaffold that ANY gluerun_append_event ensures,
+: > "$SINGULAR_EVENTS_FILE"
+# Pre-warm the sanctioned state-dir scaffold that ANY singular_append_event ensures,
 # so the invariant below proves the recorder writes NO state beyond the one pinned
-# provenance event (which lands in GLUERUN_EVENTS_FILE, outside the state dir).
-gluerun_ensure_state_dirs
+# provenance event (which lands in SINGULAR_EVENTS_FILE, outside the state dir).
+singular_ensure_state_dirs
 before_state="$(ls -1a "$tmp/state" | sort | shasum | awk '{print $1}')"
 NODE="critic-carryover"
 RUN_ID="RUN-20260711T114814Z-17145"
 TASK_ID="TASK-0028"
-gluerun_ctx_critic_recheck_record "$NODE" "$RUN_ID" "$TASK_ID" "$rec" "$out_report" \
+singular_ctx_critic_recheck_record "$NODE" "$RUN_ID" "$TASK_ID" "$rec" "$out_report" \
   || fail "record must succeed"
 [[ ! -e "$SENTINEL" ]] || fail "record spawned a runner"
 after_state="$(ls -1a "$tmp/state" | sort | shasum | awk '{print $1}')"
 [[ "$before_state" == "$after_state" ]] || fail "record mutated state dir"
 
-[[ "$(grep -c '"ctx.critic_recheck"' "$GLUERUN_EVENTS_FILE")" -eq 1 ]] \
+[[ "$(grep -c '"ctx.critic_recheck"' "$SINGULAR_EVENTS_FILE")" -eq 1 ]] \
   || fail "record must emit exactly one ctx.critic_recheck event"
-evt="$(grep '"ctx.critic_recheck"' "$GLUERUN_EVENTS_FILE" | tail -1)"
+evt="$(grep '"ctx.critic_recheck"' "$SINGULAR_EVENTS_FILE" | tail -1)"
 python3 - "$evt" "$NODE" "$RUN_ID" "$TASK_ID" <<'PY' || fail "ctx.critic_recheck event payload wrong"
 import json, sys
 evt = json.loads(sys.argv[1]); node, rid, tid = sys.argv[2:5]
@@ -259,8 +259,8 @@ PY
 # (e) determinism: the recorded disposition payload is byte-stable across runs
 # (ignoring the event envelope's own ts).
 # ---------------------------------------------------------------------------
-: > "$GLUERUN_EVENTS_FILE"
-gluerun_ctx_critic_recheck_record "$NODE" "$RUN_ID" "$TASK_ID" "$rec" "$out_report" \
+: > "$SINGULAR_EVENTS_FILE"
+singular_ctx_critic_recheck_record "$NODE" "$RUN_ID" "$TASK_ID" "$rec" "$out_report" \
   || fail "record crashed on rerun"
 payload_data() {
   python3 - "$1" <<'PY'
@@ -272,17 +272,17 @@ with open(sys.argv[1]) as f:
             print(json.dumps(e["data"], sort_keys=True, separators=(",", ":")))
 PY
 }
-d1="$(payload_data "$GLUERUN_EVENTS_FILE")"
-: > "$GLUERUN_EVENTS_FILE"
-gluerun_ctx_critic_recheck_record "$NODE" "$RUN_ID" "$TASK_ID" "$rec" "$out_report" \
+d1="$(payload_data "$SINGULAR_EVENTS_FILE")"
+: > "$SINGULAR_EVENTS_FILE"
+singular_ctx_critic_recheck_record "$NODE" "$RUN_ID" "$TASK_ID" "$rec" "$out_report" \
   || fail "record crashed on third run"
-d2="$(payload_data "$GLUERUN_EVENTS_FILE")"
+d2="$(payload_data "$SINGULAR_EVENTS_FILE")"
 [[ "$d1" == "$d2" ]] || fail "recorded disposition payload not byte-stable across runs"
 
 # ---------------------------------------------------------------------------
 # (a) present-but-uncalled: no existing engine path invokes the new functions.
 # ---------------------------------------------------------------------------
-for fn in gluerun_ctx_critic_recheck_classify gluerun_ctx_critic_recheck_record; do
+for fn in singular_ctx_critic_recheck_classify singular_ctx_critic_recheck_record; do
   callers="$(grep -rl "$fn" "$ENGINE_HOME/engine" 2>/dev/null \
     | grep -v '/ctx-critic-recheck-classify.sh$' || true)"
   : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)

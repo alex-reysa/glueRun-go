@@ -22,9 +22,9 @@ set -euo pipefail
 #   ops.sh report
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "ops.sh requires bash >= 4" >&2; exit 1
@@ -60,14 +60,14 @@ ops_unpark() {
     case "$1" in
       --reason) reason="$2"; shift 2 ;;
       TASK-*) task_id="$1"; shift ;;
-      *) echo "usage: gluerun unpark TASK-XXXX [--reason TEXT]" >&2; return 2 ;;
+      *) echo "usage: singular unpark TASK-XXXX [--reason TEXT]" >&2; return 2 ;;
     esac
   done
-  [[ -n "$task_id" ]] || { echo "usage: gluerun unpark TASK-XXXX [--reason TEXT]" >&2; return 2; }
+  [[ -n "$task_id" ]] || { echo "usage: singular unpark TASK-XXXX [--reason TEXT]" >&2; return 2; }
 
-  local task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+  local task_file="$SINGULAR_TASKS_DIR/$task_id.md"
   if [[ ! -f "$task_file" ]]; then
-    if [[ -f "$GLUERUN_TASKS_DIR/superseded/$task_id.md" ]]; then
+    if [[ -f "$SINGULAR_TASKS_DIR/superseded/$task_id.md" ]]; then
       echo "unpark: $task_id is superseded, not parked; move it back by hand if that was wrong" >&2
       return 2
     fi
@@ -75,7 +75,7 @@ ops_unpark() {
     return 2
   fi
   local current
-  current="$(gluerun_task_status "$task_file" 2>/dev/null || true)"
+  current="$(singular_task_status "$task_file" 2>/dev/null || true)"
   if [[ "$current" == "ready" ]]; then
     echo "unpark: $task_id is already ready (idempotent no-op)"
     return 0
@@ -88,32 +88,32 @@ ops_unpark() {
   esac
 
   local run_id
-  run_id="$(gluerun_run_id)"
-  gluerun_acquire_lock "$run_id" || { echo "unpark: origin lock busy" >&2; return 2; }
+  run_id="$(singular_run_id)"
+  singular_acquire_lock "$run_id" || { echo "unpark: origin lock busy" >&2; return 2; }
   # shellcheck disable=SC2064
-  trap "gluerun_release_lock '$run_id' 2>/dev/null || true" EXIT
+  trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
 
-  local rationale="${reason:-unparked via gluerun unpark}"
+  local rationale="${reason:-unparked via singular unpark}"
   # Surface 1 — decisions (durable intent first, as in supersede).
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision unpark \
     --rationale "$rationale" --run "$run_id" --authority operator 2>/dev/null \
     && echo "unpark: decision recorded" || echo "unpark: decision record FAILED (continuing)" >&2
   # Surface 2 — task file.
-  gluerun_task_set_status "$task_file" "ready" \
+  singular_task_set_status "$task_file" "ready" \
     && echo "unpark: task -> ready" \
     || { echo "unpark: task status update FAILED" >&2; return 2; }
   # Surface 3 — lease: status plus the retry budget it carries.
-  if gluerun_lease_unpark "$task_id" 2>/dev/null; then
+  if singular_lease_unpark "$task_id" 2>/dev/null; then
     echo "unpark: lease -> ready, retryCount reset"
   else
     echo "unpark: no lease (ok)"
   fi
   # Surface 4 — refusals counter.
-  if [[ -f "$GLUERUN_DISPATCH_DIR/$task_id.refusals" ]]; then
-    rm -f "$GLUERUN_DISPATCH_DIR/$task_id.refusals"
+  if [[ -f "$SINGULAR_DISPATCH_DIR/$task_id.refusals" ]]; then
+    rm -f "$SINGULAR_DISPATCH_DIR/$task_id.refusals"
     echo "unpark: refusals counter cleared"
   fi
-  gluerun_append_event "task.unparked" "task returned to the frontier via operator verb" \
+  singular_append_event "task.unparked" "task returned to the frontier via operator verb" \
     "{\"taskId\":\"$task_id\",\"previousStatus\":\"$current\"}"
   echo "unparked $task_id"
 }
@@ -131,50 +131,50 @@ ops_supersede() {
       --reason) reason="$2"; shift 2 ;;
       --force) force="yes"; shift ;;
       TASK-*) task_id="$1"; shift ;;
-      *) echo "usage: gluerun supersede TASK-XXXX [--by TASK-YYYY] [--reason TEXT] [--force]" >&2; return 2 ;;
+      *) echo "usage: singular supersede TASK-XXXX [--by TASK-YYYY] [--reason TEXT] [--force]" >&2; return 2 ;;
     esac
   done
-  [[ -n "$task_id" ]] || { echo "usage: gluerun supersede TASK-XXXX [--by TASK-YYYY] [--reason TEXT] [--force]" >&2; return 2; }
+  [[ -n "$task_id" ]] || { echo "usage: singular supersede TASK-XXXX [--by TASK-YYYY] [--reason TEXT] [--force]" >&2; return 2; }
 
-  local superseded_dir="$GLUERUN_TASKS_DIR/superseded"
+  local superseded_dir="$SINGULAR_TASKS_DIR/superseded"
   if [[ -f "$superseded_dir/$task_id.md" ]]; then
     echo "supersede: $task_id already superseded (idempotent no-op)"
     return 0
   fi
-  local task_file="$GLUERUN_TASKS_DIR/$task_id.md"
+  local task_file="$SINGULAR_TASKS_DIR/$task_id.md"
   [[ -f "$task_file" ]] || { echo "supersede: no task file $task_file" >&2; return 2; }
   if [[ -n "$by" ]]; then
-    [[ -f "$GLUERUN_TASKS_DIR/$by.md" || -f "$superseded_dir/$by.md" ]] \
+    [[ -f "$SINGULAR_TASKS_DIR/$by.md" || -f "$superseded_dir/$by.md" ]] \
       || { echo "supersede: successor $by not found" >&2; return 2; }
     [[ "$by" != "$task_id" ]] || { echo "supersede: task cannot supersede itself" >&2; return 2; }
   fi
 
   # Live-dispatch guard.
   local drec dpid dstart dpgid drun
-  drec="$(gluerun_dispatch_record_path "$task_id")"
-  if [[ -f "$drec" && "$(gluerun_json_field "$drec" state 2>/dev/null || true)" == "launched" ]]; then
-    dpid="$(gluerun_json_field "$drec" pid 2>/dev/null || true)"
-    dstart="$(gluerun_json_field "$drec" pidStart 2>/dev/null || true)"
-    dpgid="$(gluerun_json_field "$drec" pgid 2>/dev/null || true)"
-    drun="$(gluerun_json_field "$drec" runId 2>/dev/null || true)"
-    if gluerun_dispatch_tree_alive "$task_id" "$dpid" "$dstart" "$drun" "${dpgid:-0}"; then
+  drec="$(singular_dispatch_record_path "$task_id")"
+  if [[ -f "$drec" && "$(singular_json_field "$drec" state 2>/dev/null || true)" == "launched" ]]; then
+    dpid="$(singular_json_field "$drec" pid 2>/dev/null || true)"
+    dstart="$(singular_json_field "$drec" pidStart 2>/dev/null || true)"
+    dpgid="$(singular_json_field "$drec" pgid 2>/dev/null || true)"
+    drun="$(singular_json_field "$drec" runId 2>/dev/null || true)"
+    if singular_dispatch_tree_alive "$task_id" "$dpid" "$dstart" "$drun" "${dpgid:-0}"; then
       if [[ "$force" != "yes" ]]; then
         echo "supersede: $task_id has a LIVE dispatch (pid $dpid); rerun with --force to terminate it" >&2
         return 2
       fi
       echo "supersede: --force terminating live dispatch tree (pid $dpid)"
-      gluerun_kill_dispatch_pgroup "$task_id" || gluerun_kill_tree "$dpid" || true
+      singular_kill_dispatch_pgroup "$task_id" || singular_kill_tree "$dpid" || true
       sleep 1
     fi
   fi
 
   local run_id
-  run_id="$(gluerun_run_id)"
-  gluerun_acquire_lock "$run_id" || { echo "supersede: origin lock busy" >&2; return 2; }
+  run_id="$(singular_run_id)"
+  singular_acquire_lock "$run_id" || { echo "supersede: origin lock busy" >&2; return 2; }
   # shellcheck disable=SC2064
-  trap "gluerun_release_lock '$run_id' 2>/dev/null || true" EXIT
+  trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
 
-  local rationale="${reason:-superseded${by:+ by $by} via gluerun supersede}"
+  local rationale="${reason:-superseded${by:+ by $by} via singular supersede}"
   # Surface 1 — decisions (durable intent first).
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision supersede \
     --rationale "$rationale" --run "$run_id" --authority operator 2>/dev/null \
@@ -194,33 +194,33 @@ for line in lines:
 open(path, "w").writelines(out)
 PY
   fi
-  gluerun_task_set_status "$task_file" "superseded" || true
+  singular_task_set_status "$task_file" "superseded" || true
   mkdir -p "$superseded_dir"
   mv "$task_file" "$superseded_dir/$task_id.md" \
     && echo "supersede: task file -> tasks/superseded/$task_id.md" \
     || echo "supersede: task file move FAILED" >&2
   # Surface 3 — lease.
-  if gluerun_lease_set_status "$task_id" "superseded" 2>/dev/null; then
+  if singular_lease_set_status "$task_id" "superseded" 2>/dev/null; then
     echo "supersede: lease -> superseded"
   else
     echo "supersede: no lease (ok)"
   fi
   # Surface 4 — dispatch record + queued inbox packet.
-  if [[ -f "$drec" && "$(gluerun_json_field "$drec" state 2>/dev/null || true)" == "launched" ]]; then
-    gluerun_dispatch_record_finalize "$task_id" 0 "superseded" || true
+  if [[ -f "$drec" && "$(singular_json_field "$drec" state 2>/dev/null || true)" == "launched" ]]; then
+    singular_dispatch_record_finalize "$task_id" 0 "superseded" || true
     echo "supersede: dispatch record finalized"
   fi
   local pkt pkt_task
-  mkdir -p "$GLUERUN_INBOX_DIR/superseded" 2>/dev/null || true
-  for pkt in "$GLUERUN_INBOX_DIR"/*.json; do
+  mkdir -p "$SINGULAR_INBOX_DIR/superseded" 2>/dev/null || true
+  for pkt in "$SINGULAR_INBOX_DIR"/*.json; do
     [[ -f "$pkt" ]] || continue
-    pkt_task="$(gluerun_json_field "$pkt" taskId 2>/dev/null || true)"
+    pkt_task="$(singular_json_field "$pkt" taskId 2>/dev/null || true)"
     if [[ "$pkt_task" == "$task_id" ]]; then
-      mv "$pkt" "$GLUERUN_INBOX_DIR/superseded/$(basename "$pkt")"
+      mv "$pkt" "$SINGULAR_INBOX_DIR/superseded/$(basename "$pkt")"
       echo "supersede: quarantined inbox packet $(basename "$pkt")"
     fi
   done
-  gluerun_append_event "task.superseded" "task superseded via operator verb" \
+  singular_append_event "task.superseded" "task superseded via operator verb" \
     "{\"taskId\":\"$task_id\",\"by\":\"$by\",\"forced\":\"$force\"}"
   echo "superseded $task_id${by:+ -> $by}"
 }
@@ -231,18 +231,18 @@ ops_breaker() {
   case "$sub" in
     show)
       local n
-      n="$(gluerun_breaker_count)"
-      echo "breaker: $n/${GLUERUN_MAX_CONSEC_FAILS} ($([[ "$n" -ge "$GLUERUN_MAX_CONSEC_FAILS" ]] && echo OPEN || echo closed))"
-      [[ -f "$GLUERUN_BREAKER_FILE" ]] && cat "$GLUERUN_BREAKER_FILE"
+      n="$(singular_breaker_count)"
+      echo "breaker: $n/${SINGULAR_MAX_CONSEC_FAILS} ($([[ "$n" -ge "$SINGULAR_MAX_CONSEC_FAILS" ]] && echo OPEN || echo closed))"
+      [[ -f "$SINGULAR_BREAKER_FILE" ]] && cat "$SINGULAR_BREAKER_FILE"
       ;;
     reset)
       local prev
-      prev="$(gluerun_breaker_count)"
-      gluerun_breaker_reset
-      gluerun_append_event "breaker.reset" "circuit breaker reset by operator" "{\"previous\":$prev}"
-      echo "breaker reset (was $prev/$GLUERUN_MAX_CONSEC_FAILS)"
+      prev="$(singular_breaker_count)"
+      singular_breaker_reset
+      singular_append_event "breaker.reset" "circuit breaker reset by operator" "{\"previous\":$prev}"
+      echo "breaker reset (was $prev/$SINGULAR_MAX_CONSEC_FAILS)"
       ;;
-    *) echo "usage: gluerun breaker [show|reset]" >&2; return 2 ;;
+    *) echo "usage: singular breaker [show|reset]" >&2; return 2 ;;
   esac
 }
 
@@ -252,15 +252,15 @@ ops_stop() {
     --wait) wait_secs=300 ;;
     --wait=*) wait_secs="${1#--wait=}" ;;
     "") : ;;
-    *) echo "usage: gluerun stop [--wait[=SECS]]" >&2; return 2 ;;
+    *) echo "usage: singular stop [--wait[=SECS]]" >&2; return 2 ;;
   esac
-  gluerun_ensure_state_dirs
-  : >"$GLUERUN_STOP_FILE"
-  gluerun_append_event "operator.stop_requested" "STOP sentinel written by operator" "{}"
-  echo "STOP written ($GLUERUN_STOP_FILE)"
+  singular_ensure_state_dirs
+  : >"$SINGULAR_STOP_FILE"
+  singular_append_event "operator.stop_requested" "STOP sentinel written by operator" "{}"
+  echo "STOP written ($SINGULAR_STOP_FILE)"
   [[ -n "$wait_secs" ]] || return 0
   [[ "$wait_secs" =~ ^[0-9]+$ ]] || wait_secs=300
-  local pidfile="$GLUERUN_STATE_DIR/autonomate.pid" pid waited=0
+  local pidfile="$SINGULAR_STATE_DIR/autonomate.pid" pid waited=0
   pid="$(cat "$pidfile" 2>/dev/null || true)"
   if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
     echo "autonomate not running"
@@ -279,17 +279,17 @@ ops_stop() {
 }
 
 ops_resume() {
-  if [[ -f "$GLUERUN_STOP_FILE" ]]; then
-    rm -f "$GLUERUN_STOP_FILE"
-    gluerun_append_event "operator.resume_requested" "STOP sentinel removed by operator" "{}"
+  if [[ -f "$SINGULAR_STOP_FILE" ]]; then
+    rm -f "$SINGULAR_STOP_FILE"
+    singular_append_event "operator.resume_requested" "STOP sentinel removed by operator" "{}"
     echo "STOP removed"
   else
     echo "no STOP sentinel present"
   fi
   local pid
-  pid="$(cat "$GLUERUN_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
+  pid="$(cat "$SINGULAR_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
   if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-    echo "hint: autonomate is not running — start it with: gluerun auto --detach"
+    echo "hint: autonomate is not running — start it with: singular auto --detach"
   fi
 }
 
@@ -300,12 +300,12 @@ ops_wake() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --keep-stop) keep_stop="yes"; shift ;;
-      *) echo "usage: gluerun wake [--keep-stop]" >&2; return 2 ;;
+      *) echo "usage: singular wake [--keep-stop]" >&2; return 2 ;;
     esac
   done
-  gluerun_planner_backoff_clear
+  singular_planner_backoff_clear
   ops_breaker reset
-  if [[ -f "$GLUERUN_STOP_FILE" ]]; then
+  if [[ -f "$SINGULAR_STOP_FILE" ]]; then
     if [[ "$keep_stop" == "yes" ]]; then
       echo "STOP kept (--keep-stop); the loop stays halted"
     else
@@ -315,12 +315,12 @@ ops_wake() {
       # noticed yet, and `auto` then started a second one. `auto`'s pidfile is
       # atomic now, so the second one refuses — but say plainly what happened,
       # because a silent un-stop is how the sequence got habitual.
-      rm -f "$GLUERUN_STOP_FILE"
+      rm -f "$SINGULAR_STOP_FILE"
       echo "STOP removed — the loop is no longer halted (use --keep-stop to only end the nap)"
-      if [[ -f "$GLUERUN_STATE_DIR/autonomate.pid" ]]; then
+      if [[ -f "$SINGULAR_STATE_DIR/autonomate.pid" ]]; then
         local live_pid
-        live_pid="$(head -1 "$GLUERUN_STATE_DIR/autonomate.pid" 2>/dev/null | tr -d '[:space:]')"
-        if [[ -n "$live_pid" ]] && gluerun_pid_alive "$live_pid"; then
+        live_pid="$(head -1 "$SINGULAR_STATE_DIR/autonomate.pid" 2>/dev/null | tr -d '[:space:]')"
+        if [[ -n "$live_pid" ]] && singular_pid_alive "$live_pid"; then
           echo "note: autonomate (pid $live_pid) is still running and will resume; do NOT start another"
         fi
       fi
@@ -328,8 +328,8 @@ ops_wake() {
   else
     echo "no STOP sentinel present"
   fi
-  gluerun_request_wake
-  gluerun_append_event "operator.wake" "wake verb completed" \
+  singular_request_wake
+  singular_append_event "operator.wake" "wake verb completed" \
     "{\"keptStop\":\"$keep_stop\"}"
 }
 
@@ -337,7 +337,7 @@ ops_wake() {
 ops_gates() {
   local json="no"
   [[ "${1:-}" == "--json" ]] && json="yes"
-  python3 - "${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}" "$GLUERUN_ORCH_DIR/gates" "$json" <<'PY'
+  python3 - "${SINGULAR_DAG_FILE:-$SINGULAR_ORCH_DIR/dag.v0.json}" "$SINGULAR_ORCH_DIR/gates" "$json" <<'PY'
 import json
 import os
 import sys
@@ -401,10 +401,10 @@ ops_pid_probe_state() {
   # the same downstream contract without changing the production probe. Both
   # variables are required so a stray inherited state value cannot alter an
   # ordinary operator health check.
-  if [[ "${GLUERUN_TEST_PID_PROBE:-0}" == "1" ]]; then
-    case "${GLUERUN_TEST_PID_PROBE_STATE:-}" in
+  if [[ "${SINGULAR_TEST_PID_PROBE:-0}" == "1" ]]; then
+    case "${SINGULAR_TEST_PID_PROBE_STATE:-}" in
       alive|dead|unknown)
-        printf '%s\n' "$GLUERUN_TEST_PID_PROBE_STATE"
+        printf '%s\n' "$SINGULAR_TEST_PID_PROBE_STATE"
         return 0
         ;;
     esac
@@ -446,10 +446,10 @@ ops_health() {
   gates_json="$(ops_gates --json 2>/dev/null | python3 -c 'import json,sys;d=json.load(sys.stdin);print(json.dumps({"passed":d["passed"],"total":d["total"]}))' 2>/dev/null || echo '{"passed":null,"total":null}')"
   # "null" here used to mean two different things -- no ready work, and a DAG
   # that could not be evaluated at all -- and health printed the same line for
-  # both. gluerun_dag_next_areas_json separates them: a non-zero exit is an
+  # both. singular_dag_next_areas_json separates them: a non-zero exit is an
   # evaluation failure, which health must name.
   local frontier_raw frontier_rc=0
-  frontier_raw="$(gluerun_dag_next_areas_json)" || frontier_rc=$?
+  frontier_raw="$(singular_dag_next_areas_json)" || frontier_rc=$?
   if [[ "$frontier_rc" -ne 0 ]]; then
     frontier_json="unavailable"
   else
@@ -460,26 +460,26 @@ try:
 except Exception:
     print("null")' || echo null)"
   fi
-  ready_count="$(gluerun_list_ready_tasks 2>/dev/null | grep -c . || true)"
-  active_count="$(gluerun_active_lease_count 2>/dev/null || echo 0)"
-  l1_active="$(gluerun_l1_list_active 2>/dev/null | grep -c . || true)"
-  l1_stale="$(gluerun_l1_list_stale 2>/dev/null | grep -c . || true)"
+  ready_count="$(singular_list_ready_tasks 2>/dev/null | grep -c . || true)"
+  active_count="$(singular_active_lease_count 2>/dev/null || echo 0)"
+  l1_active="$(singular_l1_list_active 2>/dev/null | grep -c . || true)"
+  l1_stale="$(singular_l1_list_stale 2>/dev/null | grep -c . || true)"
   local backoff_json breaker_n stop_present lock_present auto_pid auto_state
-  backoff_json="$(gluerun_planner_backoff_active_json 2>/dev/null || echo null)"
-  breaker_n="$(gluerun_breaker_count)"
-  stop_present="$([[ -f "$GLUERUN_STOP_FILE" ]] && echo true || echo false)"
-  lock_present="$([[ -f "$GLUERUN_LOCK_FILE" ]] && echo true || echo false)"
-  auto_pid="$(cat "$GLUERUN_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
+  backoff_json="$(singular_planner_backoff_active_json 2>/dev/null || echo null)"
+  breaker_n="$(singular_breaker_count)"
+  stop_present="$([[ -f "$SINGULAR_STOP_FILE" ]] && echo true || echo false)"
+  lock_present="$([[ -f "$SINGULAR_LOCK_FILE" ]] && echo true || echo false)"
+  auto_pid="$(cat "$SINGULAR_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
   auto_state="$(ops_pid_probe_state "$auto_pid" 2>/dev/null || echo unknown)"
   case "$auto_state" in
     alive|dead|unknown) ;;
     *) auto_state="unknown" ;;
   esac
   local disk_free wt_count console_url lifecycle_json resource_json health_details_json
-  disk_free="$(gluerun_free_disk_gb 2>/dev/null || echo null)"
-  wt_count="$(find "$GLUERUN_WORKTREES_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | grep -c . || true)"
-  console_url="$(head -1 "$GLUERUN_STATE_DIR/console.url" 2>/dev/null || true)"
-  lifecycle_json="$(python3 - "$GLUERUN_RUNS_DIR" <<'PY'
+  disk_free="$(singular_free_disk_gb 2>/dev/null || echo null)"
+  wt_count="$(find "$SINGULAR_WORKTREES_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | grep -c . || true)"
+  console_url="$(head -1 "$SINGULAR_STATE_DIR/console.url" 2>/dev/null || true)"
+  lifecycle_json="$(python3 - "$SINGULAR_RUNS_DIR" <<'PY'
 import collections
 import json
 import pathlib
@@ -493,7 +493,7 @@ if runs.is_dir():
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if data.get("schema") != "gluerun.orchestration.run-status.v0":
+        if data.get("schema") != "singular.orchestration.run-status.v0":
             continue
         records.append(data)
 records.sort(key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
@@ -509,17 +509,17 @@ PY
 )"
   resource_json="$("$SCRIPT_DIR/resource-plan.sh" --json 2>/dev/null || echo null)"
   health_details_json="$(python3 "$SCRIPT_DIR/health_details.py" \
-    --repo "$GLUERUN_ROOT" \
-    --dag "${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}" \
-    --events "$GLUERUN_EVENTS_FILE" 2>/dev/null \
+    --repo "$SINGULAR_ROOT" \
+    --dag "${SINGULAR_DAG_FILE:-$SINGULAR_ORCH_DIR/dag.v0.json}" \
+    --events "$SINGULAR_EVENTS_FILE" 2>/dev/null \
     || echo '{"diagnostics":{"total":0,"groups":0,"counts":{},"items":[]},"humanGates":{"total":0,"approved":0,"blocking":0,"states":{},"blockedNodes":[],"items":[],"errors":["health detail collection failed"]}}')"
   local head_sha
-  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse --short HEAD 2>/dev/null || echo null)"
+  head_sha="$(git -C "$SINGULAR_ROOT" rev-parse --short HEAD 2>/dev/null || echo null)"
 
   python3 - "$gates_json" "$frontier_json" "$ready_count" "$active_count" "$l1_active" "$l1_stale" \
-    "$backoff_json" "$breaker_n" "${GLUERUN_MAX_CONSEC_FAILS:-5}" "$stop_present" "$lock_present" \
-    "$auto_pid" "$auto_state" "$disk_free" "${GLUERUN_MIN_DISK_GB:-2}" "$wt_count" "$console_url" \
-    "${GLUERUN_TARGET_BRANCH:-}" "$head_sha" "$lifecycle_json" "$resource_json" \
+    "$backoff_json" "$breaker_n" "${SINGULAR_MAX_CONSEC_FAILS:-5}" "$stop_present" "$lock_present" \
+    "$auto_pid" "$auto_state" "$disk_free" "${SINGULAR_MIN_DISK_GB:-2}" "$wt_count" "$console_url" \
+    "${SINGULAR_TARGET_BRANCH:-}" "$head_sha" "$lifecycle_json" "$resource_json" \
     "$health_details_json" "$json" <<'PY'
 import hashlib
 import json
@@ -565,7 +565,7 @@ except Exception:
 attention = []
 if frontier == "unavailable":
     attention.append(
-        "DAG frontier could not be evaluated (run `gluerun next-areas` for the "
+        "DAG frontier could not be evaluated (run `singular next-areas` for the "
         "diagnostic); an empty frontier here does NOT mean there is no work"
     )
 if stop == "true":
@@ -575,7 +575,7 @@ if backoff:
 if num(breaker) and num(breaker) >= num(breaker_max):
     attention.append(f"circuit breaker OPEN ({breaker}/{breaker_max})")
 if num(l1s):
-    attention.append(f"{l1s} stale L1 lease(s) (gluerun recover --scan)")
+    attention.append(f"{l1s} stale L1 lease(s) (singular recover --scan)")
 if num(disk) is not None and num(min_disk) is not None and num(disk) < num(min_disk):
     attention.append(f"disk below floor ({disk}GiB < {min_disk}GiB)")
 if auto_state == "dead":
@@ -702,11 +702,11 @@ ops_gc() {
     case "$1" in
       --dry-run) dry="yes"; shift ;;
       --from-reconcile)
-        [[ -n "${2:-}" ]] || { echo "usage: gluerun gc [--dry-run] [--from-reconcile RUN_ID]" >&2; return 2; }
+        [[ -n "${2:-}" ]] || { echo "usage: singular gc [--dry-run] [--from-reconcile RUN_ID]" >&2; return 2; }
         inherited_run_id="$2"
         shift 2
         ;;
-      *) echo "usage: gluerun gc [--dry-run] [--from-reconcile RUN_ID]" >&2; return 2 ;;
+      *) echo "usage: singular gc [--dry-run] [--from-reconcile RUN_ID]" >&2; return 2 ;;
     esac
   done
   [[ -z "$inherited_run_id" || "$dry" == "no" ]] || {
@@ -715,30 +715,30 @@ ops_gc() {
   }
 
   local run_id lock_run_id lock_pid
-  run_id="${inherited_run_id:-$(gluerun_run_id)}"
+  run_id="${inherited_run_id:-$(singular_run_id)}"
   if [[ -n "$inherited_run_id" ]]; then
     # Reconcile already owns the sole origin lock. Reuse it only for its direct
     # child and exact run id; this avoids weakening the ordinary gc lock rule.
-    lock_run_id="$(gluerun_json_field "$GLUERUN_LOCK_FILE" runId 2>/dev/null || true)"
-    lock_pid="$(gluerun_json_field "$GLUERUN_LOCK_FILE" pid 2>/dev/null || true)"
+    lock_run_id="$(singular_json_field "$SINGULAR_LOCK_FILE" runId 2>/dev/null || true)"
+    lock_pid="$(singular_json_field "$SINGULAR_LOCK_FILE" pid 2>/dev/null || true)"
     if [[ "$lock_run_id" != "$inherited_run_id" || "$lock_pid" != "$PPID" ]] \
-      || ! gluerun_pid_alive "$lock_pid"; then
+      || ! singular_pid_alive "$lock_pid"; then
       echo "gc: reconcile lock ownership did not verify" >&2
       return 2
     fi
   elif [[ "$dry" == "no" ]]; then
-    gluerun_acquire_lock "$run_id" || { echo "gc: origin lock busy" >&2; return 2; }
+    singular_acquire_lock "$run_id" || { echo "gc: origin lock busy" >&2; return 2; }
     # shellcheck disable=SC2064
-    trap "gluerun_release_lock '$run_id' 2>/dev/null || true" EXIT
+    trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
   fi
   local prefix_word=""
   [[ "$dry" == "yes" ]] && prefix_word="would-"
 
-  # 1. Runs-history cap: keep newest GLUERUN_RUNS_KEEP per prefix bucket;
+  # 1. Runs-history cap: keep newest SINGULAR_RUNS_KEEP per prefix bucket;
   #    never delete runs referenced by live leases/dispatches/inbox packets or
-  #    newer than GLUERUN_RUNS_MIN_AGE_HOURS.
-  python3 - "$GLUERUN_RUNS_DIR" "$GLUERUN_LEASES_DIR" "$GLUERUN_DISPATCH_DIR" "$GLUERUN_INBOX_DIR" \
-    "${GLUERUN_RUNS_KEEP:-200}" "${GLUERUN_RUNS_MIN_AGE_HOURS:-24}" "$dry" <<'PY'
+  #    newer than SINGULAR_RUNS_MIN_AGE_HOURS.
+  python3 - "$SINGULAR_RUNS_DIR" "$SINGULAR_LEASES_DIR" "$SINGULAR_DISPATCH_DIR" "$SINGULAR_INBOX_DIR" \
+    "${SINGULAR_RUNS_KEEP:-200}" "${SINGULAR_RUNS_MIN_AGE_HOURS:-24}" "$dry" <<'PY'
 import json
 import os
 import shutil
@@ -794,46 +794,46 @@ print(f"gc: runs: {prefix}removed {removed} / kept {kept} (keep={keep}/bucket)")
 PY
 
   # 2. Worktrees: prune integrated+merged+clean (same predicate as recover
-  #    auto-prune), gated GLUERUN_GC_WORKTREES=1.
+  #    auto-prune), gated SINGULAR_GC_WORKTREES=1.
   local pruned=0 kept_wt=0 wt tid lease_status wt_head
-  if [[ "${GLUERUN_GC_WORKTREES:-1}" == "1" && -d "$GLUERUN_WORKTREES_DIR" ]]; then
-    for wt in "$GLUERUN_WORKTREES_DIR"/*; do
+  if [[ "${SINGULAR_GC_WORKTREES:-1}" == "1" && -d "$SINGULAR_WORKTREES_DIR" ]]; then
+    for wt in "$SINGULAR_WORKTREES_DIR"/*; do
       [[ -d "$wt" ]] || continue
       tid="$(basename "$wt")"
-      lease_status="$(gluerun_lease_status "$tid" 2>/dev/null || true)"
+      lease_status="$(singular_lease_status "$tid" 2>/dev/null || true)"
       if [[ "$lease_status" != "integrated" ]]; then
         kept_wt=$((kept_wt + 1)); continue
       fi
       wt_head="$(git -C "$wt" rev-parse HEAD 2>/dev/null || true)"
       if [[ -z "$wt_head" ]] \
-        || ! git -C "$GLUERUN_ROOT" merge-base --is-ancestor "$wt_head" "$GLUERUN_TARGET_BRANCH" 2>/dev/null \
+        || ! git -C "$SINGULAR_ROOT" merge-base --is-ancestor "$wt_head" "$SINGULAR_TARGET_BRANCH" 2>/dev/null \
         || [[ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]]; then
         kept_wt=$((kept_wt + 1)); continue
       fi
       if [[ "$dry" == "no" ]]; then
-        git -C "$GLUERUN_ROOT" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
-        gluerun_record_recovery "gc pruned integrated worktree" "$tid" "" "prune" "operator" "" "operator" 2>/dev/null || true
+        git -C "$SINGULAR_ROOT" worktree remove --force "$wt" 2>/dev/null || rm -rf "$wt"
+        singular_record_recovery "gc pruned integrated worktree" "$tid" "" "prune" "operator" "" "operator" 2>/dev/null || true
       fi
       pruned=$((pruned + 1))
     done
-    [[ "$dry" == "no" ]] && git -C "$GLUERUN_ROOT" worktree prune 2>/dev/null || true
+    [[ "$dry" == "no" ]] && git -C "$SINGULAR_ROOT" worktree prune 2>/dev/null || true
   fi
   echo "gc: worktrees: ${prefix_word}pruned $pruned / kept $kept_wt"
 
   # 3. Events rotation.
-  local max_mb="${GLUERUN_EVENTS_MAX_MB:-64}" rotate_keep="${GLUERUN_EVENTS_ROTATE_KEEP:-3}"
-  if [[ -f "$GLUERUN_EVENTS_FILE" && "$max_mb" =~ ^[0-9]+$ && "$max_mb" -gt 0 ]]; then
+  local max_mb="${SINGULAR_EVENTS_MAX_MB:-64}" rotate_keep="${SINGULAR_EVENTS_ROTATE_KEEP:-3}"
+  if [[ -f "$SINGULAR_EVENTS_FILE" && "$max_mb" =~ ^[0-9]+$ && "$max_mb" -gt 0 ]]; then
     local size_mb
-    size_mb="$(( $(wc -c <"$GLUERUN_EVENTS_FILE") / 1024 / 1024 ))"
+    size_mb="$(( $(wc -c <"$SINGULAR_EVENTS_FILE") / 1024 / 1024 ))"
     if (( size_mb >= max_mb )); then
       if [[ "$dry" == "no" ]]; then
         local i
         for ((i = rotate_keep - 1; i >= 1; i--)); do
-          [[ -f "$GLUERUN_EVENTS_FILE.$i" ]] && mv "$GLUERUN_EVENTS_FILE.$i" "$GLUERUN_EVENTS_FILE.$((i + 1))"
+          [[ -f "$SINGULAR_EVENTS_FILE.$i" ]] && mv "$SINGULAR_EVENTS_FILE.$i" "$SINGULAR_EVENTS_FILE.$((i + 1))"
         done
-        mv "$GLUERUN_EVENTS_FILE" "$GLUERUN_EVENTS_FILE.1"
-        : >"$GLUERUN_EVENTS_FILE"
-        gluerun_append_event "gc.events_rotated" "events journal rotated" "{\"sizeMb\":$size_mb}"
+        mv "$SINGULAR_EVENTS_FILE" "$SINGULAR_EVENTS_FILE.1"
+        : >"$SINGULAR_EVENTS_FILE"
+        singular_append_event "gc.events_rotated" "events journal rotated" "{\"sizeMb\":$size_mb}"
       fi
       echo "gc: events: ${prefix_word}rotated (${size_mb}MB >= ${max_mb}MB)"
     else
@@ -842,7 +842,7 @@ PY
   fi
 
   # 4. Quarantine sweeps (>30 days).
-  python3 - "$GLUERUN_LEASES_DIR/superseded" "$GLUERUN_INBOX_DIR/superseded" "$dry" <<'PY'
+  python3 - "$SINGULAR_LEASES_DIR/superseded" "$SINGULAR_INBOX_DIR/superseded" "$dry" <<'PY'
 import os
 import sys
 import time
@@ -873,8 +873,8 @@ PY
   # the quarantines above. A journal whose owner process is still alive belongs
   # to a run in flight and is never touched, no matter how old the timestamp
   # looks; `reconcile` is what restores the ones whose owner is gone.
-  python3 - "$GLUERUN_STATE_DIR/readonly-guard" \
-    "${GLUERUN_READONLY_GUARD_KEEP_DAYS:-30}" "$dry" <<'PY'
+  python3 - "$SINGULAR_STATE_DIR/readonly-guard" \
+    "${SINGULAR_READONLY_GUARD_KEEP_DAYS:-30}" "$dry" <<'PY'
 import json
 import os
 import shutil
@@ -923,13 +923,13 @@ days = keep_s // 86400
 print(f"gc: readonly-guard: {prefix}removed {removed} journal(s) older than {days}d"
       + (f"; {live} in flight" if live else ""))
 PY
-  [[ "$dry" == "no" ]] && gluerun_append_event "gc.completed" "gc run completed" "{}"
+  [[ "$dry" == "no" ]] && singular_append_event "gc.completed" "gc run completed" "{}"
   return 0
 }
 
 # --- plan (archive / list) -------------------------------------------------------
 # "Plan threads" (0.8.0): a completed DAG is archived as a browsable mini-repo
-# under .gluerun-state/plans/<id>/ (both docs/orchestration/ and .gluerun-state/
+# under .singular-state/plans/<id>/ (both docs/orchestration/ and .singular-state/
 # subtrees — the console points a per-plan collector root here), then the live
 # tree is reset to a starter DAG so a fresh plan can begin. Archived plans are
 # read-only history; the archive root is gitignored (runs/events were never
@@ -940,7 +940,7 @@ ops_plan() {
   case "$sub" in
     archive) ops_plan_archive "$@" ;;
     list)    ops_plan_list "$@" ;;
-    *) echo "usage: gluerun plan archive|list ..." >&2; return 2 ;;
+    *) echo "usage: singular plan archive|list ..." >&2; return 2 ;;
   esac
 }
 
@@ -951,39 +951,39 @@ ops_plan_archive() {
       --name)      name="${2:-}"; shift 2 ;;
       --force)     force="yes"; shift ;;
       --no-commit) no_commit="yes"; shift ;;
-      *) echo "usage: gluerun plan archive [--name <display name>] [--force] [--no-commit]" >&2; return 2 ;;
+      *) echo "usage: singular plan archive [--name <display name>] [--force] [--no-commit]" >&2; return 2 ;;
     esac
   done
 
-  local gates_dir="${GLUERUN_GATES_DIR:-$GLUERUN_ORCH_DIR/gates}"
-  local dag_file="${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}"
+  local gates_dir="${SINGULAR_GATES_DIR:-$SINGULAR_ORCH_DIR/gates}"
+  local dag_file="${SINGULAR_DAG_FILE:-$SINGULAR_ORCH_DIR/dag.v0.json}"
 
   # --- Preconditions (each refusable only via --force) ---
   # 1. Live autonomate.
   local auto_pid
-  auto_pid="$(cat "$GLUERUN_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
+  auto_pid="$(cat "$SINGULAR_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
   if [[ -n "$auto_pid" ]] && kill -0 "$auto_pid" 2>/dev/null && [[ "$force" != "yes" ]]; then
-    echo "plan archive: autonomate is LIVE (pid $auto_pid); stop it (gluerun stop --wait) or rerun with --force" >&2
+    echo "plan archive: autonomate is LIVE (pid $auto_pid); stop it (singular stop --wait) or rerun with --force" >&2
     return 1
   fi
   # 2. Origin lock present.
-  if [[ -f "$GLUERUN_LOCK_FILE" && "$force" != "yes" ]]; then
-    echo "plan archive: origin lock present ($GLUERUN_LOCK_FILE); the loop may be active — rerun with --force" >&2
+  if [[ -f "$SINGULAR_LOCK_FILE" && "$force" != "yes" ]]; then
+    echo "plan archive: origin lock present ($SINGULAR_LOCK_FILE); the loop may be active — rerun with --force" >&2
     return 1
   fi
   # 3. Live dispatch tree (a launched record whose process tree is still alive).
-  if [[ "$force" != "yes" && -d "$GLUERUN_DISPATCH_DIR" ]]; then
+  if [[ "$force" != "yes" && -d "$SINGULAR_DISPATCH_DIR" ]]; then
     local drec dstate dtid dpid dstart dpgid drun
-    for drec in "$GLUERUN_DISPATCH_DIR"/*.json; do
+    for drec in "$SINGULAR_DISPATCH_DIR"/*.json; do
       [[ -f "$drec" ]] || continue
-      dstate="$(gluerun_json_field "$drec" state 2>/dev/null || true)"
+      dstate="$(singular_json_field "$drec" state 2>/dev/null || true)"
       [[ "$dstate" == "launched" ]] || continue
-      dtid="$(gluerun_json_field "$drec" taskId 2>/dev/null || true)"
-      dpid="$(gluerun_json_field "$drec" pid 2>/dev/null || true)"
-      dstart="$(gluerun_json_field "$drec" pidStart 2>/dev/null || true)"
-      dpgid="$(gluerun_json_field "$drec" pgid 2>/dev/null || true)"
-      drun="$(gluerun_json_field "$drec" runId 2>/dev/null || true)"
-      if gluerun_dispatch_tree_alive "$dtid" "$dpid" "$dstart" "$drun" "${dpgid:-0}"; then
+      dtid="$(singular_json_field "$drec" taskId 2>/dev/null || true)"
+      dpid="$(singular_json_field "$drec" pid 2>/dev/null || true)"
+      dstart="$(singular_json_field "$drec" pidStart 2>/dev/null || true)"
+      dpgid="$(singular_json_field "$drec" pgid 2>/dev/null || true)"
+      drun="$(singular_json_field "$drec" runId 2>/dev/null || true)"
+      if singular_dispatch_tree_alive "$dtid" "$dpid" "$dstart" "$drun" "${dpgid:-0}"; then
         echo "plan archive: LIVE dispatch for $dtid (pid $dpid); rerun with --force to archive anyway" >&2
         return 1
       fi
@@ -994,7 +994,7 @@ ops_plan_archive() {
   # Fails safe either way (an unreadable frontier is not allComplete, so archive
   # refuses), but the operator should still be told WHY rather than being sent to
   # finish a DAG that cannot be parsed.
-  frontier_out="$(gluerun_dag_next_areas_json || true)"
+  frontier_out="$(singular_dag_next_areas_json || true)"
   all_complete="$(printf '%s' "$frontier_out" | python3 -c 'import json,sys
 try:
     print("true" if json.load(sys.stdin).get("allComplete") else "false")
@@ -1005,11 +1005,11 @@ except Exception:
     return 1
   fi
   # 5. Worktrees present — never moved/archived, even with --force; refuse without.
-  if [[ -d "$GLUERUN_WORKTREES_DIR" ]]; then
+  if [[ -d "$SINGULAR_WORKTREES_DIR" ]]; then
     local wt_entries
-    wt_entries="$(find "$GLUERUN_WORKTREES_DIR" -mindepth 1 -maxdepth 1 2>/dev/null || true)"
+    wt_entries="$(find "$SINGULAR_WORKTREES_DIR" -mindepth 1 -maxdepth 1 2>/dev/null || true)"
     if [[ -n "$wt_entries" && "$force" != "yes" ]]; then
-      echo "plan archive: .worktrees/ is not empty (worktrees are never archived); run 'gluerun gc' first:" >&2
+      echo "plan archive: .worktrees/ is not empty (worktrees are never archived); run 'singular gc' first:" >&2
       printf '%s\n' "$wt_entries" | sed 's/^/  /' >&2
       return 1
     fi
@@ -1017,12 +1017,12 @@ except Exception:
 
   # --- Acquire the origin lock (trap release) ---
   local run_id
-  run_id="$(gluerun_run_id)"
-  gluerun_acquire_lock "$run_id" || { echo "plan archive: origin lock busy" >&2; return 1; }
+  run_id="$(singular_run_id)"
+  singular_acquire_lock "$run_id" || { echo "plan archive: origin lock busy" >&2; return 1; }
   # shellcheck disable=SC2064
-  trap "gluerun_release_lock '$run_id' 2>/dev/null || true" EXIT
+  trap "singular_release_lock '$run_id' 2>/dev/null || true" EXIT
   # Re-check autonomate liveness after acquiring the lock (it may have started).
-  auto_pid="$(cat "$GLUERUN_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
+  auto_pid="$(cat "$SINGULAR_STATE_DIR/autonomate.pid" 2>/dev/null || true)"
   if [[ -n "$auto_pid" ]] && kill -0 "$auto_pid" 2>/dev/null && [[ "$force" != "yes" ]]; then
     echo "plan archive: autonomate became LIVE (pid $auto_pid) after acquiring lock; aborting" >&2
     return 1
@@ -1044,21 +1044,21 @@ print(s)')"
   fi
 
   # --- Build manifest (one python heredoc over gates + tasks + events) ---
-  local plans_dir="$GLUERUN_STATE_DIR/plans"
+  local plans_dir="$SINGULAR_STATE_DIR/plans"
   local archive_dir="$plans_dir/$id"
   local archived_at engine_version schema_version branch head_sha
-  archived_at="$(gluerun_timestamp)"
-  engine_version="$(tr -d '[:space:]' <"$GLUERUN_ENGINE_HOME/VERSION" 2>/dev/null || true)"
-  schema_version="$(tr -d '[:space:]' <"$GLUERUN_ENGINE_HOME/SCHEMA_VERSION" 2>/dev/null || true)"
-  if [[ -z "$schema_version" && -f "$GLUERUN_ROOT/gluerun.config.json" ]]; then
-    schema_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schemaVersion","") or "")' "$GLUERUN_ROOT/gluerun.config.json" 2>/dev/null || true)"
+  archived_at="$(singular_timestamp)"
+  engine_version="$(tr -d '[:space:]' <"$SINGULAR_ENGINE_HOME/VERSION" 2>/dev/null || true)"
+  schema_version="$(tr -d '[:space:]' <"$SINGULAR_ENGINE_HOME/SCHEMA_VERSION" 2>/dev/null || true)"
+  if [[ -z "$schema_version" && -f "$SINGULAR_ROOT/singular.config.json" ]]; then
+    schema_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("schemaVersion","") or "")' "$SINGULAR_ROOT/singular.config.json" 2>/dev/null || true)"
   fi
-  branch="$(git -C "$GLUERUN_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  head_sha="$(git -C "$GLUERUN_ROOT" rev-parse HEAD 2>/dev/null || true)"
+  branch="$(git -C "$SINGULAR_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  head_sha="$(git -C "$SINGULAR_ROOT" rev-parse HEAD 2>/dev/null || true)"
 
   local manifest_tmp
   manifest_tmp="$(mktemp)"
-  python3 - "$dag_file" "$gates_dir" "$GLUERUN_TASKS_DIR" "$GLUERUN_EVENTS_FILE" \
+  python3 - "$dag_file" "$gates_dir" "$SINGULAR_TASKS_DIR" "$SINGULAR_EVENTS_FILE" \
     "$id" "$display_name" "$archived_at" "$engine_version" "$schema_version" \
     "$branch" "$head_sha" "$force" >"$manifest_tmp" <<'PY'
 import json, os, sys
@@ -1111,7 +1111,7 @@ if os.path.isfile(events_file):
                 last_at = ts
 
 manifest = {
-    "schema": "gluerun.plan.manifest.v0",
+    "schema": "singular.plan.manifest.v0",
     "id": plan_id,
     "name": name,
     "archivedAt": archived_at,
@@ -1133,27 +1133,27 @@ PY
   gates_total="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gates"]["total"])' "$manifest_tmp")"
 
   # --- Archive moves/copies into the mini-repo layout ---
-  mkdir -p "$archive_dir/docs/orchestration" "$archive_dir/.gluerun-state"
-  local adocs="$archive_dir/docs/orchestration" astate="$archive_dir/.gluerun-state" d s
+  mkdir -p "$archive_dir/docs/orchestration" "$archive_dir/.singular-state"
+  local adocs="$archive_dir/docs/orchestration" astate="$archive_dir/.singular-state" d s
   # MOVE docs-side (per-plan history).
   [[ -e "$dag_file" ]] && mv "$dag_file" "$adocs/dag.v0.json"
   for d in tasks gates areas packets; do
-    [[ -e "$GLUERUN_ORCH_DIR/$d" ]] && mv "$GLUERUN_ORCH_DIR/$d" "$adocs/$d"
+    [[ -e "$SINGULAR_ORCH_DIR/$d" ]] && mv "$SINGULAR_ORCH_DIR/$d" "$adocs/$d"
   done
   # COPY docs-side (durable repo-level; originals stay live).
-  [[ -e "$GLUERUN_ORCH_DIR/prompts" ]] && cp -R "$GLUERUN_ORCH_DIR/prompts" "$adocs/prompts"
-  [[ -f "$GLUERUN_ORCH_DIR/planner-contract.md" ]] && cp "$GLUERUN_ORCH_DIR/planner-contract.md" "$adocs/planner-contract.md"
-  [[ -f "$GLUERUN_ORCH_DIR/decisions.md" ]] && cp "$GLUERUN_ORCH_DIR/decisions.md" "$adocs/decisions.md"
+  [[ -e "$SINGULAR_ORCH_DIR/prompts" ]] && cp -R "$SINGULAR_ORCH_DIR/prompts" "$adocs/prompts"
+  [[ -f "$SINGULAR_ORCH_DIR/planner-contract.md" ]] && cp "$SINGULAR_ORCH_DIR/planner-contract.md" "$adocs/planner-contract.md"
+  [[ -f "$SINGULAR_ORCH_DIR/decisions.md" ]] && cp "$SINGULAR_ORCH_DIR/decisions.md" "$adocs/decisions.md"
   # MOVE state-side (per-plan runtime record).
-  [[ -e "$GLUERUN_EVENTS_FILE" ]] && mv "$GLUERUN_EVENTS_FILE" "$astate/events.ndjson"
+  [[ -e "$SINGULAR_EVENTS_FILE" ]] && mv "$SINGULAR_EVENTS_FILE" "$astate/events.ndjson"
   for s in runs sessions leases l1-leases dispatch inbox; do
-    [[ -e "$GLUERUN_STATE_DIR/$s" ]] && mv "$GLUERUN_STATE_DIR/$s" "$astate/$s"
+    [[ -e "$SINGULAR_STATE_DIR/$s" ]] && mv "$SINGULAR_STATE_DIR/$s" "$astate/$s"
   done
-  [[ -f "$GLUERUN_ORIGIN_STATE_FILE" ]] && mv "$GLUERUN_ORIGIN_STATE_FILE" "$astate/origin-state.json"
-  [[ -f "$GLUERUN_STATUS_FILE" ]] && mv "$GLUERUN_STATUS_FILE" "$astate/STATUS.md"
-  [[ -f "$GLUERUN_BREAKER_FILE" ]] && mv "$GLUERUN_BREAKER_FILE" "$astate/circuit.json"
-  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] && mv "$GLUERUN_PLANNER_BACKOFF_FILE" "$astate/planner-backoff.json"
-  local counter; counter="$(gluerun_task_id_counter_file)"
+  [[ -f "$SINGULAR_ORIGIN_STATE_FILE" ]] && mv "$SINGULAR_ORIGIN_STATE_FILE" "$astate/origin-state.json"
+  [[ -f "$SINGULAR_STATUS_FILE" ]] && mv "$SINGULAR_STATUS_FILE" "$astate/STATUS.md"
+  [[ -f "$SINGULAR_BREAKER_FILE" ]] && mv "$SINGULAR_BREAKER_FILE" "$astate/circuit.json"
+  [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] && mv "$SINGULAR_PLANNER_BACKOFF_FILE" "$astate/planner-backoff.json"
+  local counter; counter="$(singular_task_id_counter_file)"
   [[ -d "$counter.lock" ]] && { rmdir "$counter.lock" 2>/dev/null || true; }
   [[ -f "$counter" ]] && mv "$counter" "$astate/task-id-counter"
 
@@ -1176,7 +1176,7 @@ atomic_write(manifest_dest, manifest)
 
 summary = {k: manifest.get(k) for k in
            ("id", "name", "archivedAt", "gates", "taskCount", "eventCount", "headSha", "branch")}
-index = {"schema": "gluerun.plans.index.v0", "updatedAt": manifest["archivedAt"], "plans": []}
+index = {"schema": "singular.plans.index.v0", "updatedAt": manifest["archivedAt"], "plans": []}
 if os.path.exists(index_path):
     try:
         prev = json.load(open(index_path))
@@ -1195,10 +1195,10 @@ PY
   rm -f "$manifest_tmp"
 
   # --- Reset the live tree to a fresh starter plan ---
-  gluerun_ensure_repo_scaffold
+  singular_ensure_repo_scaffold
   cat >"$dag_file" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "layers": ["scaffold", "domain", "api"],
   "kinds": ["build", "test"],
   "nodes": [
@@ -1206,19 +1206,19 @@ PY
   ]
 }
 EOF
-  : >"$GLUERUN_EVENTS_FILE"
+  : >"$SINGULAR_EVENTS_FILE"
   local event_data
   event_data="$(python3 -c 'import json,sys
 print(json.dumps({"planId":sys.argv[1],"name":sys.argv[2],"gates":{"passed":int(sys.argv[3]),"total":int(sys.argv[4])}},separators=(",",":")))' \
     "$id" "$display_name" "$gates_passed" "$gates_total")"
-  gluerun_append_event "plan.archived" "archived plan $id ($display_name)" "$event_data"
+  singular_append_event "plan.archived" "archived plan $id ($display_name)" "$event_data"
 
   # --- Commit the reset docs (default; --no-commit opts out) ---
   local committed="false"
   if [[ "$no_commit" != "yes" ]]; then
-    git -C "$GLUERUN_ROOT" add -A docs/orchestration 2>/dev/null || true
-    if ! git -C "$GLUERUN_ROOT" diff --cached --quiet 2>/dev/null; then
-      if git -C "$GLUERUN_ROOT" -c user.name="$GLUERUN_GIT_L0_NAME" -c user.email="$GLUERUN_GIT_L0_EMAIL" \
+    git -C "$SINGULAR_ROOT" add -A docs/orchestration 2>/dev/null || true
+    if ! git -C "$SINGULAR_ROOT" diff --cached --quiet 2>/dev/null; then
+      if git -C "$SINGULAR_ROOT" -c user.name="$SINGULAR_GIT_L0_NAME" -c user.email="$SINGULAR_GIT_L0_EMAIL" \
         commit -q -m "plan: archive $id ($display_name)" 2>/dev/null; then
         committed="true"
       fi
@@ -1226,7 +1226,7 @@ print(json.dumps({"planId":sys.argv[1],"name":sys.argv[2],"gates":{"passed":int(
   fi
 
   # --- Release lock + summary ---
-  gluerun_release_lock "$run_id" 2>/dev/null || true
+  singular_release_lock "$run_id" 2>/dev/null || true
   trap - EXIT
   python3 -c 'import json,sys
 print(json.dumps({"ok":True,"id":sys.argv[1],"dir":sys.argv[2],
@@ -1240,9 +1240,9 @@ ops_plan_list() {
   case "${1:-}" in
     --json) json="yes" ;;
     "")     : ;;
-    *) echo "usage: gluerun plan list [--json]" >&2; return 2 ;;
+    *) echo "usage: singular plan list [--json]" >&2; return 2 ;;
   esac
-  python3 - "$GLUERUN_STATE_DIR/plans" "$json" <<'PY'
+  python3 - "$SINGULAR_STATE_DIR/plans" "$json" <<'PY'
 import json, os, sys
 plans_dir, as_json = sys.argv[1], sys.argv[2]
 index_path = os.path.join(plans_dir, "index.json")
@@ -1274,11 +1274,11 @@ if os.path.isdir(plans_dir):
 plans.sort(key=lambda p: p.get("archivedAt") or "", reverse=True)
 
 if as_json == "yes":
-    print(json.dumps({"schema": "gluerun.plans.index.v0", "plans": plans}, indent=2))
+    print(json.dumps({"schema": "singular.plans.index.v0", "plans": plans}, indent=2))
     sys.exit(0)
 
 if not plans:
-    sys.stderr.write("no archived plans (run 'gluerun plan archive' when a DAG completes)\n")
+    sys.stderr.write("no archived plans (run 'singular plan archive' when a DAG completes)\n")
     sys.exit(0)
 
 def gates_str(p):
@@ -1303,15 +1303,15 @@ ops_ask() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --wait) want_wait="yes"; shift ;;
-      -*) echo "usage: gluerun ask \"<question>\" [--wait]" >&2; return 2 ;;
+      -*) echo "usage: singular ask \"<question>\" [--wait]" >&2; return 2 ;;
       *) if [[ -z "$question" ]]; then question="$1"; else question="$question $1"; fi; shift ;;
     esac
   done
-  [[ -n "$question" ]] || { echo "usage: gluerun ask \"<question>\" [--wait]" >&2; return 2; }
-  gluerun_ensure_state_dirs
+  [[ -n "$question" ]] || { echo "usage: singular ask \"<question>\" [--wait]" >&2; return 2; }
+  singular_ensure_state_dirs
   local run_id run_dir
   run_id="ASK-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  run_dir="$(gluerun_run_dir "$run_id")"
+  run_dir="$(singular_run_dir "$run_id")"
   mkdir -p "$run_dir"
   python3 - "$run_dir/question.md" "$question" <<'PY'
 import os, sys
@@ -1323,12 +1323,12 @@ os.replace(tmp, path)
 PY
   echo "runId=$run_id"
   if [[ "$want_wait" == "yes" ]]; then
-    "$(gluerun_bash_bin)" "$SCRIPT_DIR/ask.sh" --run-id "$run_id"
+    "$(singular_bash_bin)" "$SCRIPT_DIR/ask.sh" --run-id "$run_id"
     # A timeout / no-answer ends with no answer.md; that is a normal terminal
     # outcome (state is in ask.json), so never fail the verb on its absence.
     if [[ -f "$run_dir/answer.md" ]]; then echo "---"; cat "$run_dir/answer.md"; fi
   else
-    ( "$(gluerun_bash_bin)" "$SCRIPT_DIR/ask.sh" --run-id "$run_id" >>"$run_dir/ask-spawn.log" 2>&1 & ) || true
+    ( "$(singular_bash_bin)" "$SCRIPT_DIR/ask.sh" --run-id "$run_id" >>"$run_dir/ask-spawn.log" 2>&1 & ) || true
     echo "dispatched (poll the console, or re-run with --wait)"
   fi
 }
@@ -1337,13 +1337,13 @@ PY
 # updated in place only if the model returns a schema-valid report.
 ops_report() {
   echo "requesting supervisor briefing (readonly, one-shot)..." >&2
-  "$(gluerun_bash_bin)" "$SCRIPT_DIR/supervise.sh" --once
+  "$(singular_bash_bin)" "$SCRIPT_DIR/supervise.sh" --once
 }
 
 case "$verb" in
   supersede)     ops_supersede "$@" ;;
   unpark)        ops_unpark "$@" ;;
-  clear-backoff) gluerun_planner_backoff_clear ;;
+  clear-backoff) singular_planner_backoff_clear ;;
   breaker)       ops_breaker "$@" ;;
   stop)          ops_stop "$@" ;;
   resume)        ops_resume "$@" ;;

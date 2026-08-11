@@ -38,40 +38,40 @@
 # zeroed rather than absent or an error, and the overall exit is zero.
 #
 # Public entry point:
-#   gluerun_ctx_experiment_summary_json [runs_dir] [events_file] [metrics_file]
+#   singular_ctx_experiment_summary_json [runs_dir] [events_file] [metrics_file]
 #     Emits ONE deterministic, sorted-key JSON object conforming to
-#     gluerun.orchestration.ctx-experiment-summary.v0, nesting the report,
+#     singular.orchestration.ctx-experiment-summary.v0, nesting the report,
 #     strategy, and attempts composer outputs verbatim. Defaults:
-#     runs_dir=$GLUERUN_RUNS_DIR, events_file=$GLUERUN_EVENTS_FILE,
-#     metrics_file=$GLUERUN_CTX_EXPERIMENT_METRICS_FILE.
+#     runs_dir=$SINGULAR_RUNS_DIR, events_file=$SINGULAR_EVENTS_FILE,
+#     metrics_file=$SINGULAR_CTX_EXPERIMENT_METRICS_FILE.
 
 # Composed capstone bundle. Delegates to the three integrated per-family composers
 # and nests their JSON outputs verbatim. Fail-safe / always exit 0.
-gluerun_ctx_experiment_summary_json() {
-  local runs_dir="${1:-${GLUERUN_RUNS_DIR:-}}"
-  local events_file="${2:-${GLUERUN_EVENTS_FILE:-}}"
-  local metrics_file="${3:-${GLUERUN_CTX_EXPERIMENT_METRICS_FILE:-}}"
+singular_ctx_experiment_summary_json() {
+  local runs_dir="${1:-${SINGULAR_RUNS_DIR:-}}"
+  local events_file="${2:-${SINGULAR_EVENTS_FILE:-}}"
+  local metrics_file="${3:-${SINGULAR_CTX_EXPERIMENT_METRICS_FILE:-}}"
 
   # Route each input to the correct sub-composer per its EXISTING signature and
   # capture each composer's JSON output. Each composer is itself fail-safe.
   local report strategy attempts
-  report="$(gluerun_ctx_experiment_report_json "$events_file" "$metrics_file")"
-  strategy="$(gluerun_ctx_experiment_strategy_json "$events_file")"
-  attempts="$(gluerun_ctx_experiment_attempts_json "$runs_dir" "$events_file")"
+  report="$(singular_ctx_experiment_report_json "$events_file" "$metrics_file")"
+  strategy="$(singular_ctx_experiment_strategy_json "$events_file")"
+  attempts="$(singular_ctx_experiment_attempts_json "$runs_dir" "$events_file")"
 
   # Merge + emit. Sub-artifacts pass through the environment (arbitrary JSON,
   # never re-parsed by the shell) and are nested verbatim under stable keys.
-  GLUERUN_SUMMARY_REPORT="$report" \
-  GLUERUN_SUMMARY_STRATEGY="$strategy" \
-  GLUERUN_SUMMARY_ATTEMPTS="$attempts" \
+  SINGULAR_SUMMARY_REPORT="$report" \
+  SINGULAR_SUMMARY_STRATEGY="$strategy" \
+  SINGULAR_SUMMARY_ATTEMPTS="$attempts" \
   python3 - <<'PY' || true
 import json, os, sys
 
 artifact = {
-    "schema": "gluerun.orchestration.ctx-experiment-summary.v0",
-    "report": json.loads(os.environ["GLUERUN_SUMMARY_REPORT"]),
-    "strategy": json.loads(os.environ["GLUERUN_SUMMARY_STRATEGY"]),
-    "attempts": json.loads(os.environ["GLUERUN_SUMMARY_ATTEMPTS"]),
+    "schema": "singular.orchestration.ctx-experiment-summary.v0",
+    "report": json.loads(os.environ["SINGULAR_SUMMARY_REPORT"]),
+    "strategy": json.loads(os.environ["SINGULAR_SUMMARY_STRATEGY"]),
+    "attempts": json.loads(os.environ["SINGULAR_SUMMARY_ATTEMPTS"]),
 }
 json.dump(artifact, sys.stdout, indent=2, sort_keys=True)
 sys.stdout.write("\n")

@@ -2,8 +2,8 @@
 # Covers the pure prompt-render brick of the per-run assumption ledger
 # (stage S4-context-packets, node assumption-ledger). `engine/ctx-assumptions-prompt.sh`
 # ships two PURE, present-but-uncalled helpers
-#   gluerun_ctx_assumptions_fix_section   <ledger-json>
-#   gluerun_ctx_assumptions_audit_section <ledger-json>
+#   singular_ctx_assumptions_fix_section   <ledger-json>
+#   singular_ctx_assumptions_audit_section <ledger-json>
 # that are string->string transforms over the ledger argument: they read no files,
 # consult no flag, emit no events, and print a rendered prompt section on stdout.
 #
@@ -31,28 +31,28 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 # Invoke the real engine helpers in an isolated subshell so lib.sh's `set -e` and the
-# sourced ctx-*.sh files never contaminate this test process. GLUERUN_ROOT is a scratch
+# sourced ctx-*.sh files never contaminate this test process. SINGULAR_ROOT is a scratch
 # dir the helpers must NOT touch (they are pure string->string transforms). The ledger
 # JSON is passed as a positional arg to avoid quoting surprises.
 fix_section() {
   local ledger="$1"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_assumptions_fix_section "$1"
+    singular_ctx_assumptions_fix_section "$1"
   ' _ "$ledger"
 }
 audit_section() {
   local ledger="$1"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_assumptions_audit_section "$1"
+    singular_ctx_assumptions_audit_section "$1"
   ' _ "$ledger"
 }
 
 # --- Fixtures ---------------------------------------------------------------
 
 # A seeded/transitioned ledger with a mix of statuses; A2 is host-flipped `violated`.
-LEDGER='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+LEDGER='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"package.json engines field"},
   {"id":"A2","status":"violated","claim":"db schema already migrated","basis":"verified in db.ts"},
   {"id":"A3","status":"open","claim":"the cache is warm","basis":"cold-start trace"}
@@ -107,7 +107,7 @@ sys.exit(0 if s.index("A1") < s.index("A2") < s.index("A3") else 1)
 PY
 
 # --- Case 3: empty / absent ledger -> both helpers render the empty string -----
-for empty in '{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[]}' '{}' '' 'not-json'; do
+for empty in '{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[]}' '{}' '' 'not-json'; do
   ef="$(fix_section "$empty")" || fail "case3: fix_section exited non-zero for [$empty]"
   ea="$(audit_section "$empty")" || fail "case3: audit_section exited non-zero for [$empty]"
   [[ -z "$ef" ]] || fail "case3: fix section not empty for [$empty]; got [$ef]"
@@ -121,7 +121,7 @@ aud1b="$(audit_section "$LEDGER")" || fail "case4: audit_section exited non-zero
 [[ "$aud1" == "$aud1b" ]] || fail "case4: audit section not deterministic"
 
 # --- Case 5: ledger with no violated -> fix still lists assumptions as context --
-CLEAN='{"schema":"gluerun.orchestration.ctx-assumptions.v0","assumptions":[
+CLEAN='{"schema":"singular.orchestration.ctx-assumptions.v0","assumptions":[
   {"id":"A1","status":"open","claim":"runtime is node 20","basis":"b1"},
   {"id":"A2","status":"validated","claim":"db schema already migrated","basis":"b2"}
 ]}'
@@ -132,10 +132,10 @@ assert_contains "$fix5" "A2" "case5: id A2 present with no violations"
 # --- Case 6: pure -> writes nothing to the filesystem, emits no events ---------
 pure="$tmp/pure"
 mkdir -p "$pure"
-GLUERUN_ROOT="$pure" bash -c '
+SINGULAR_ROOT="$pure" bash -c '
   source "'"$LIB"'"
-  gluerun_ctx_assumptions_fix_section "$1" >/dev/null
-  gluerun_ctx_assumptions_audit_section "$1" >/dev/null
+  singular_ctx_assumptions_fix_section "$1" >/dev/null
+  singular_ctx_assumptions_audit_section "$1" >/dev/null
 ' _ "$LEDGER" || fail "case6: helpers exited non-zero"
 n="$(find "$pure" -type f | wc -l | tr -d ' ')"
 [[ "$n" -eq 0 ]] || fail "case6: helpers wrote $n file(s); must be pure transforms"

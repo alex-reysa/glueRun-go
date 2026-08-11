@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.context-graph.v0",
-  "title": "gluerun Context Provenance Graph (append-only JSONL line)",
-  "description": "One line of the append-only JSONL corpus under .gluerun-state/graph/ — either a node record (nodes.jsonl) or an edge record (edges.jsonl). PURE PROJECTION: derived from the event log, decision records, gate results, critiques, and ledgers; rebuildable from scratch and never authored directly by a model. Fail-closed: closed objects (additionalProperties:false); every node carries evidenceClass (authoritative|claim) and provenance (source record path + content hash). Mirrors schemas/plan-critique.v0.schema.json.",
+  "$id": "singular.orchestration.context-graph.v0",
+  "title": "singular Context Provenance Graph (append-only JSONL line)",
+  "description": "One line of the append-only JSONL corpus under .singular-state/graph/ — either a node record (nodes.jsonl) or an edge record (edges.jsonl). PURE PROJECTION: derived from the event log, decision records, gate results, critiques, and ledgers; rebuildable from scratch and never authored directly by a model. Fail-closed: closed objects (additionalProperties:false); every node carries evidenceClass (authoritative|claim) and provenance (source record path + content hash). Mirrors schemas/plan-critique.v0.schema.json.",
   "oneOf": [
     { "$ref": "#/$defs/node" },
     { "$ref": "#/$defs/edge" }
@@ -37,7 +37,7 @@
       "description": "A node record — one line of nodes.jsonl.",
       "required": ["schema", "kind", "id", "type", "evidenceClass", "provenance"],
       "properties": {
-        "schema": { "const": "gluerun.orchestration.context-graph.v0" },
+        "schema": { "const": "singular.orchestration.context-graph.v0" },
         "kind": { "const": "node" },
         "id": {
           "type": "string",
@@ -85,7 +85,7 @@
       "description": "An edge record — one line of edges.jsonl. Directed from `from` to `to`.",
       "required": ["schema", "kind", "id", "type", "from", "to", "provenance"],
       "properties": {
-        "schema": { "const": "gluerun.orchestration.context-graph.v0" },
+        "schema": { "const": "singular.orchestration.context-graph.v0" },
         "kind": { "const": "edge" },
         "id": {
           "type": "string",

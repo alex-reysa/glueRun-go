@@ -4,16 +4,16 @@
 # made the ROUTE DECIDE `rehydrate` over the subgraph manifest on the treatment
 # arm, but the packet the model receives (engine/l1-drive.sh
 # rehydrate_inject_packet) and the manifest the strategy event records
-# (engine/ctx-rehydrate-event.sh gluerun_ctx_rehydrate_event_data) were still
+# (engine/ctx-rehydrate-event.sh singular_ctx_rehydrate_event_data) were still
 # FLAT. This slice adds a shared selector and wires it into BOTH sites so the
 # injected packet and the recorded manifest carry the SAME subgraph sources by
 # construction.
 #
-#   gluerun_ctx_route_subgraph_render <task_id> <packet|manifest>
-#     - When gluerun_ctx_rehydrate_subgraph_arm_mode <task_id> <graphDir> ==
-#       subgraph (graphDir = ${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}),
-#       resolve node = gluerun_graph_node_id(gluerun_graph_identity task <task_id>)
-#       and print gluerun_ctx_rehydrate_subgraph_assemble <graphDir> <node> <mode>,
+#   singular_ctx_route_subgraph_render <task_id> <packet|manifest>
+#     - When singular_ctx_rehydrate_subgraph_arm_mode <task_id> <graphDir> ==
+#       subgraph (graphDir = ${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}),
+#       resolve node = singular_graph_node_id(singular_graph_identity task <task_id>)
+#       and print singular_ctx_rehydrate_subgraph_assemble <graphDir> <node> <mode>,
 #       returning 0.
 #     - Otherwise print nothing and return non-zero (caller keeps its FLAT path).
 #
@@ -28,11 +28,11 @@
 #       packet under the reference-only / NOT-authoritative provenance header, NOT
 #       the flat packet; on every off path it stays byte-identical to the flat
 #       injection.
-#   (C) record hook (engine/ctx-rehydrate-event.sh gluerun_ctx_rehydrate_event_data):
+#   (C) record hook (engine/ctx-rehydrate-event.sh singular_ctx_rehydrate_event_data):
 #       on the subgraph branch the recorded strategy-event manifest is the SUBGRAPH
 #       manifest; on every off path it stays the flat manifest.
-#   (D) GLUERUN_REHYDRATE gate: rehydrate_inject_packet is a no-op unless
-#       worker_strategy==rehydrate (only reachable behind GLUERUN_REHYDRATE=1).
+#   (D) SINGULAR_REHYDRATE gate: rehydrate_inject_packet is a no-op unless
+#       worker_strategy==rehydrate (only reachable behind SINGULAR_REHYDRATE=1).
 #   (E) evidence invariance: rehydrate stays tainted; the injected subgraph section
 #       stays reference-only / NOT authoritative.
 set -uo pipefail
@@ -51,38 +51,38 @@ EVENT="$ENGINE_HOME/engine/ctx-rehydrate-event.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
-# Hermetic guard: scrub inherited GLUERUN_* so a leaked knob can't poison the sandbox.
-while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+# Hermetic guard: scrub inherited SINGULAR_* so a leaked knob can't poison the sandbox.
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-mkdir -p "$GLUERUN_STATE_DIR"
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+mkdir -p "$SINGULAR_STATE_DIR"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+: > "$SINGULAR_EVENTS_FILE"
 
 # shellcheck source=/dev/null
 source "$LIB" || fail "sourcing lib.sh failed"
 
 # --- The new shared selector must exist -------------------------------------
 [[ -f "$SEL" ]] || fail "selector file not present: $SEL"
-[[ "$(type -t gluerun_ctx_route_subgraph_render)" == "function" ]] \
-  || fail "gluerun_ctx_route_subgraph_render is not defined (strict-test-first RED)"
+[[ "$(type -t singular_ctx_route_subgraph_render)" == "function" ]] \
+  || fail "singular_ctx_route_subgraph_render is not defined (strict-test-first RED)"
 
 # Integrated pieces the selector composes must be available (compose, not reimpl).
-for fn in gluerun_ctx_rehydrate_subgraph_arm_mode gluerun_ctx_rehydrate_subgraph_assemble \
-          gluerun_graph_node_id gluerun_graph_identity gluerun_graph_write_corpus \
-          gluerun_ctx_rehydrate_sources gluerun_ctx_rehydrate_packet gluerun_ctx_rehydrate_manifest \
-          gluerun_ctx_rehydrate_event_data gluerun_ctx_ab_arm_for gluerun_ctx_route_strategy_tainted; do
+for fn in singular_ctx_rehydrate_subgraph_arm_mode singular_ctx_rehydrate_subgraph_assemble \
+          singular_graph_node_id singular_graph_identity singular_graph_write_corpus \
+          singular_ctx_rehydrate_sources singular_ctx_rehydrate_packet singular_ctx_rehydrate_manifest \
+          singular_ctx_rehydrate_event_data singular_ctx_ab_arm_for singular_ctx_route_strategy_tainted; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn not available"
 done
 
 count_events() {
-  [[ -f "$GLUERUN_EVENTS_FILE" ]] || { echo 0; return 0; }
-  local c; c="$(grep -c '"type":' "$GLUERUN_EVENTS_FILE" 2>/dev/null)" || true
+  [[ -f "$SINGULAR_EVENTS_FILE" ]] || { echo 0; return 0; }
+  local c; c="$(grep -c '"type":' "$SINGULAR_EVENTS_FILE" 2>/dev/null)" || true
   echo "${c:-0}"
 }
 before_ev="$(count_events)"
@@ -91,7 +91,7 @@ before_ev="$(count_events)"
 treat_id=""; ctrl_id=""
 for id in TASK-0001 TASK-0002 TASK-0003 TASK-0004 TASK-0005 TASK-0006 \
           TASK-0007 TASK-0008 TASK-0009 TASK-0010 TASK-0011 TASK-0012; do
-  arm="$(gluerun_ctx_ab_arm_for "$id")"
+  arm="$(singular_ctx_ab_arm_for "$id")"
   [[ -z "$treat_id" && "$arm" == "B" ]] && treat_id="$id"
   [[ -z "$ctrl_id"  && "$arm" == "A" ]] && ctrl_id="$id"
 done
@@ -99,20 +99,20 @@ done
 [[ -n "$ctrl_id"  ]] || fail "setup: no control (A) id found in fixture set"
 
 # --- A present, non-empty graph corpus whose task node maps to a durable source
-# The task node identity MUST be gluerun_graph_identity task <treat_id> so the
+# The task node identity MUST be singular_graph_identity task <treat_id> so the
 # selector's node resolution finds it. Its sourcePath points at real bytes that
 # DIFFER from the flat run_dir source, so a subgraph packet/manifest is visibly
 # distinct from the flat one.
-export GLUERUN_CTX_GRAPH_DIR="$tmp/graph"
+export SINGULAR_CTX_GRAPH_DIR="$tmp/graph"
 corpus_art="$tmp/corpus-task-packet.json"
 printf '{"origin":"subgraph-corpus"}\n' > "$corpus_art"
-task_node="$(gluerun_graph_node_id "$(gluerun_graph_identity task "$treat_id")")"
+task_node="$(singular_graph_node_id "$(singular_graph_identity task "$treat_id")")"
 nodes_in="$tmp/nodes.in"; edges_in="$tmp/edges.in"
-gluerun_graph_emit_node task "$(gluerun_graph_identity task "$treat_id")" "$corpus_art" 'cT' > "$nodes_in"
+singular_graph_emit_node task "$(singular_graph_identity task "$treat_id")" "$corpus_art" 'cT' > "$nodes_in"
 : > "$edges_in"
-gluerun_graph_write_corpus "$GLUERUN_CTX_GRAPH_DIR" "$nodes_in" "$edges_in" \
+singular_graph_write_corpus "$SINGULAR_CTX_GRAPH_DIR" "$nodes_in" "$edges_in" \
   || fail "setup: write_corpus failed"
-[[ -s "$GLUERUN_CTX_GRAPH_DIR/nodes.jsonl" ]] || fail "setup: corpus nodes.jsonl empty"
+[[ -s "$SINGULAR_CTX_GRAPH_DIR/nodes.jsonl" ]] || fail "setup: corpus nodes.jsonl empty"
 
 # --- A flat run_dir with one durable source (non-empty flat packet/manifest) --
 run_dir="$tmp/run"; mkdir -p "$run_dir"
@@ -121,68 +121,68 @@ printf '{"origin":"flat-run-dir"}\n' > "$run_dir/packet.json"
 flat_specs() {
   local -a specs=(); local line
   while IFS= read -r line; do [[ -n "$line" ]] && specs+=("$line"); done \
-    < <(gluerun_ctx_rehydrate_sources "$run_dir")
+    < <(singular_ctx_rehydrate_sources "$run_dir")
   printf '%s\n' ${specs[@]+"${specs[@]}"}
 }
-expected_flat_packet="$(gluerun_ctx_rehydrate_packet $(flat_specs) 2>/dev/null)"
-expected_flat_manifest="$(gluerun_ctx_rehydrate_manifest $(flat_specs) 2>/dev/null)"
+expected_flat_packet="$(singular_ctx_rehydrate_packet $(flat_specs) 2>/dev/null)"
+expected_flat_manifest="$(singular_ctx_rehydrate_manifest $(flat_specs) 2>/dev/null)"
 [[ -n "$expected_flat_packet" && "$expected_flat_packet" == *"flat-run-dir"* ]] \
   || fail "setup: flat packet unexpectedly empty / missing run_dir bytes"
 
 # The subgraph packet/manifest the selector must delegate to.
-expected_sub_packet="$(gluerun_ctx_rehydrate_subgraph_assemble "$GLUERUN_CTX_GRAPH_DIR" "$task_node" packet)"
-expected_sub_manifest="$(gluerun_ctx_rehydrate_subgraph_assemble "$GLUERUN_CTX_GRAPH_DIR" "$task_node" manifest)"
+expected_sub_packet="$(singular_ctx_rehydrate_subgraph_assemble "$SINGULAR_CTX_GRAPH_DIR" "$task_node" packet)"
+expected_sub_manifest="$(singular_ctx_rehydrate_subgraph_assemble "$SINGULAR_CTX_GRAPH_DIR" "$task_node" manifest)"
 [[ -n "$expected_sub_packet" && "$expected_sub_packet" == *"subgraph-corpus"* ]] \
   || fail "setup: subgraph packet unexpectedly empty / missing corpus bytes"
 [[ "$expected_sub_packet" != "$expected_flat_packet" ]] \
   || fail "setup: subgraph and flat packet must differ for a meaningful test"
 
 # ===========================================================================
-# (A) The shared selector gluerun_ctx_route_subgraph_render.
+# (A) The shared selector singular_ctx_route_subgraph_render.
 # ===========================================================================
 # OFF-parity: knob unset -> non-zero + empty, for BOTH modes.
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
-if got="$(gluerun_ctx_route_subgraph_render "$treat_id" packet)"; then
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
+if got="$(singular_ctx_route_subgraph_render "$treat_id" packet)"; then
   fail "A OFF(unset): render(packet) returned 0 (should signal flat via non-zero)"
 fi
 [[ -z "$got" ]] || fail "A OFF(unset): render(packet) printed output: [$got]"
-if got="$(gluerun_ctx_route_subgraph_render "$treat_id" manifest)"; then
+if got="$(singular_ctx_route_subgraph_render "$treat_id" manifest)"; then
   fail "A OFF(unset): render(manifest) returned 0"
 fi
 [[ -z "$got" ]] || fail "A OFF(unset): render(manifest) printed output"
 
-export GLUERUN_CTX_SUBGRAPH_REHYDRATE=0
-if gluerun_ctx_route_subgraph_render "$treat_id" packet >/dev/null; then
+export SINGULAR_CTX_SUBGRAPH_REHYDRATE=0
+if singular_ctx_route_subgraph_render "$treat_id" packet >/dev/null; then
   fail "A OFF(=0): render(packet) returned 0"
 fi
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
 
 # ON + treatment + non-empty corpus -> subgraph assembler at the deterministic node.
-export GLUERUN_CTX_SUBGRAPH_REHYDRATE=1
-got="$(gluerun_ctx_route_subgraph_render "$treat_id" packet)" \
+export SINGULAR_CTX_SUBGRAPH_REHYDRATE=1
+got="$(singular_ctx_route_subgraph_render "$treat_id" packet)" \
   || fail "A ON+treat+corpus: render(packet) returned non-zero"
 [[ "$got" == "$expected_sub_packet" ]] \
   || fail "A ON+treat+corpus: render(packet) != subgraph assembler at node $task_node"
 [[ "$got" != "$expected_flat_packet" ]] \
   || fail "A ON+treat+corpus: render(packet) still returned the flat packet"
-got="$(gluerun_ctx_route_subgraph_render "$treat_id" manifest)" \
+got="$(singular_ctx_route_subgraph_render "$treat_id" manifest)" \
   || fail "A ON+treat+corpus: render(manifest) returned non-zero"
 [[ "$got" == "$expected_sub_manifest" ]] \
   || fail "A ON+treat+corpus: render(manifest) != subgraph assembler manifest"
 
 # Control arm -> non-zero + empty even with knob on + corpus present.
-if got="$(gluerun_ctx_route_subgraph_render "$ctrl_id" packet)"; then
+if got="$(singular_ctx_route_subgraph_render "$ctrl_id" packet)"; then
   fail "A ON+control: render(packet) returned 0 (control arm must stay flat)"
 fi
 [[ -z "$got" ]] || fail "A ON+control: render(packet) printed output"
 
 # Absent corpus -> non-zero + empty (fail-closed via the arm decider).
-if got="$(GLUERUN_CTX_GRAPH_DIR="$tmp/graph-missing" \
-          gluerun_ctx_route_subgraph_render "$treat_id" packet)"; then
+if got="$(SINGULAR_CTX_GRAPH_DIR="$tmp/graph-missing" \
+          singular_ctx_route_subgraph_render "$treat_id" packet)"; then
   fail "A ON+missing corpus: render(packet) returned 0"
 fi
 [[ -z "$got" ]] || fail "A ON+missing corpus: render(packet) printed output"
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
 pass "(A) shared selector: OFF-parity non-zero/empty; ON+treat+corpus == subgraph assembler; control/absent -> flat"
 
 # ===========================================================================
@@ -215,7 +215,7 @@ ap="$tmp/ap-nogate.md"; inject_into "$ap"
 worker_strategy="rehydrate"
 
 # OFF path (subgraph knob off): the FLAT packet is injected, byte-identical.
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
 ap="$tmp/ap-flat.md"; inject_into "$ap"
 grep -qF "$PROV_HEADER" "$ap" || fail "B OFF: provenance header missing on flat inject"
 grep -qF "flat-run-dir" "$ap" || fail "B OFF: flat packet bytes missing"
@@ -223,7 +223,7 @@ grep -qF "subgraph-corpus" "$ap" && fail "B OFF: subgraph bytes leaked into flat
 
 # ON path (knob=1 + treatment + corpus): the SUBGRAPH packet is injected instead,
 # still under the reference-only / NOT-authoritative provenance header.
-export GLUERUN_CTX_SUBGRAPH_REHYDRATE=1
+export SINGULAR_CTX_SUBGRAPH_REHYDRATE=1
 ap="$tmp/ap-sub.md"; inject_into "$ap"
 grep -qF "$PROV_HEADER" "$ap" || fail "B ON: provenance header missing on subgraph inject"
 grep -qi "not authoritative" "$ap" || fail "B ON: reference-only / NOT-authoritative framing missing"
@@ -241,11 +241,11 @@ ap="$tmp/ap-ctrl.md"; inject_into "$ap"
 grep -qF "flat-run-dir" "$ap" || fail "B ON+control: expected flat packet"
 grep -qF "subgraph-corpus" "$ap" && fail "B ON+control: subgraph bytes leaked on control arm"
 task_id="$treat_id"
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
 pass "(B) inject hook: subgraph packet injected under provenance header on treatment arm; flat elsewhere"
 
 # ===========================================================================
-# (C) engine/ctx-rehydrate-event.sh gluerun_ctx_rehydrate_event_data — record
+# (C) engine/ctx-rehydrate-event.sh singular_ctx_rehydrate_event_data — record
 # the SUBGRAPH manifest on the subgraph branch, flat elsewhere.
 # ===========================================================================
 manifest_of() {  # extract the recorded .manifest object, canonicalized
@@ -254,8 +254,8 @@ manifest_of() {  # extract the recorded .manifest object, canonicalized
 canon() { python3 -c 'import json,sys; print(json.dumps(json.loads(sys.stdin.read()), sort_keys=True))'; }
 
 # OFF path: recorded manifest == flat manifest.
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
-ev="$(gluerun_ctx_rehydrate_event_data implementer "$treat_id" RUN-1 1 window-pressure "$run_dir")" \
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
+ev="$(singular_ctx_rehydrate_event_data implementer "$treat_id" RUN-1 1 window-pressure "$run_dir")" \
   || fail "C OFF: event_data exited non-zero"
 got_m="$(printf '%s' "$ev" | manifest_of)"
 want_flat_m="$(printf '%s' "$expected_flat_manifest" | canon)"
@@ -264,8 +264,8 @@ got:  $got_m
 want: $want_flat_m"
 
 # ON path (treatment + corpus): recorded manifest == subgraph manifest.
-export GLUERUN_CTX_SUBGRAPH_REHYDRATE=1
-ev="$(gluerun_ctx_rehydrate_event_data implementer "$treat_id" RUN-1 1 window-pressure "$run_dir")" \
+export SINGULAR_CTX_SUBGRAPH_REHYDRATE=1
+ev="$(singular_ctx_rehydrate_event_data implementer "$treat_id" RUN-1 1 window-pressure "$run_dir")" \
   || fail "C ON: event_data exited non-zero"
 got_m="$(printf '%s' "$ev" | manifest_of)"
 want_sub_m="$(printf '%s' "$expected_sub_manifest" | canon)"
@@ -275,11 +275,11 @@ want: $want_sub_m"
 [[ "$got_m" != "$want_flat_m" ]] || fail "C ON: recorded manifest still the flat manifest"
 
 # ON but CONTROL arm -> flat manifest recorded.
-ev="$(gluerun_ctx_rehydrate_event_data implementer "$ctrl_id" RUN-1 1 window-pressure "$run_dir")" \
+ev="$(singular_ctx_rehydrate_event_data implementer "$ctrl_id" RUN-1 1 window-pressure "$run_dir")" \
   || fail "C ON+control: event_data exited non-zero"
 got_m="$(printf '%s' "$ev" | manifest_of)"
 [[ "$got_m" == "$want_flat_m" ]] || fail "C ON+control: expected flat manifest on control arm"
-unset GLUERUN_CTX_SUBGRAPH_REHYDRATE
+unset SINGULAR_CTX_SUBGRAPH_REHYDRATE
 pass "(C) record hook: subgraph manifest recorded on treatment arm; flat elsewhere; same sources as the inject site"
 
 # ===========================================================================
@@ -288,7 +288,7 @@ pass "(C) record hook: subgraph manifest recorded on treatment arm; flat elsewhe
 # ===========================================================================
 after_ev="$(count_events)"
 [[ "$after_ev" -eq "$before_ev" ]] || fail "E: selector/render appended events ($before_ev -> $after_ev)"
-[[ "$(gluerun_ctx_route_strategy_tainted rehydrate)" == "1" ]] \
+[[ "$(singular_ctx_route_strategy_tainted rehydrate)" == "1" ]] \
   || fail "E: rehydrate strategy no longer tainted"
 pass "(E) evidence invariance: no events appended by the selector; rehydrate stays tainted"
 

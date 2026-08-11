@@ -44,7 +44,7 @@ make_repo() {
   mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/packets/imported" \
     "$root/docs/orchestration/areas/artifact" \
     "$root/docs/orchestration/gates" \
-    "$root/docs/orchestration/prompts" "$root/schemas/orchestration" "$root/.gluerun-state"
+    "$root/docs/orchestration/prompts" "$root/schemas/orchestration" "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$root/docs/orchestration/prompts/l1-planner.md"
@@ -64,7 +64,7 @@ Current status: active
 EOF
   cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     {
       "id": "D0.contract",
@@ -107,7 +107,7 @@ EOF
 EOF
   cat >"$root/docs/orchestration/gates/D0.contract.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D0.contract",
   "status": "passed",
   "authoritative": true,
@@ -131,7 +131,7 @@ write_task() {
   local id="$1" status="$2" owned="$3" depends="${4:-[]}" forbidden="${5:-}"
   local title="${6:-Task $id}"
   [[ -n "$forbidden" ]] || forbidden="Any file outside the owned scope unless an L1 scope amendment is recorded."
-  cat >"$GLUERUN_TASKS_DIR/$id.md" <<EOF
+  cat >"$SINGULAR_TASKS_DIR/$id.md" <<EOF
 # $id: $title
 
 Status: $status
@@ -171,25 +171,25 @@ with_fixture() {
   local tmp
   tmp="$(mktemp -d)"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-  export GLUERUN_LEASES_DIR="$GLUERUN_STATE_DIR/leases"
-  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-  export GLUERUN_WORKTREES_DIR="$GLUERUN_ROOT/.worktrees"
-  export GLUERUN_ORIGIN_STATE_FILE="$GLUERUN_STATE_DIR/origin-state.json"
-  export GLUERUN_GIT_LOCK_DIR="$GLUERUN_STATE_DIR/locks/git-op.lock"
-  export GLUERUN_PACKET_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/state-packet.v0.schema.json"
-  export GLUERUN_AUDIT_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/audit-verdict.v0.schema.json"
-  export GLUERUN_DECIDER_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/decider-verdict.v0.schema.json"
-  export GLUERUN_STOP_FILE="$GLUERUN_STATE_DIR/STOP"
-  export GLUERUN_STATUS_FILE="$GLUERUN_STATE_DIR/STATUS.md"
-  export GLUERUN_BREAKER_FILE="$GLUERUN_STATE_DIR/circuit.json"
-  export GLUERUN_TARGET_BRANCH="target"
-  export GLUERUN_MODULES="storage-proof"
-  export GLUERUN_PROOF_LAYERS="storage_proof"
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+  export SINGULAR_LEASES_DIR="$SINGULAR_STATE_DIR/leases"
+  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+  export SINGULAR_WORKTREES_DIR="$SINGULAR_ROOT/.worktrees"
+  export SINGULAR_ORIGIN_STATE_FILE="$SINGULAR_STATE_DIR/origin-state.json"
+  export SINGULAR_GIT_LOCK_DIR="$SINGULAR_STATE_DIR/locks/git-op.lock"
+  export SINGULAR_PACKET_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/state-packet.v0.schema.json"
+  export SINGULAR_AUDIT_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/audit-verdict.v0.schema.json"
+  export SINGULAR_DECIDER_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/decider-verdict.v0.schema.json"
+  export SINGULAR_STOP_FILE="$SINGULAR_STATE_DIR/STOP"
+  export SINGULAR_STATUS_FILE="$SINGULAR_STATE_DIR/STATUS.md"
+  export SINGULAR_BREAKER_FILE="$SINGULAR_STATE_DIR/circuit.json"
+  export SINGULAR_TARGET_BRANCH="target"
+  export SINGULAR_MODULES="storage-proof"
+  export SINGULAR_PROOF_LAYERS="storage_proof"
   source "$SCRIPT_DIR/lib.sh"
 }
 
@@ -197,7 +197,7 @@ test_task_parser_metadata() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "TASK-0007, TASK-0008"
   local json
-  json="$(gluerun_task_json "$GLUERUN_TASKS_DIR/TASK-0001.md")"
+  json="$(singular_task_json "$SINGULAR_TASKS_DIR/TASK-0001.md")"
   assert_eq "canonical" "$(json_field "$json" dispatchMode)" "dispatch mode parsed"
   assert_eq '["TASK-0007","TASK-0008"]' "$(json_field "$json" dependsOn)" "dependsOn parsed"
 }
@@ -209,11 +209,11 @@ test_frontier_selection() {
   write_task TASK-0003 ready internal/artifact/version.go "TASK-0001"
   write_task TASK-0004 ready internal/artifact/schema.go "[]"
   write_task TASK-0005 ready internal/artifact/dependent.go "TASK-9999"
-  gluerun_lease_write TASK-0006 agent/artifact/TASK-0006 artifact l2 "internal/artifact/active.go" running RUN-LEASE "$GLUERUN_WORKTREES_DIR/TASK-0006" target-sha "" '["internal/artifact/active.go"]' "[]"
+  singular_lease_write TASK-0006 agent/artifact/TASK-0006 artifact l2 "internal/artifact/active.go" running RUN-LEASE "$SINGULAR_WORKTREES_DIR/TASK-0006" target-sha "" '["internal/artifact/active.go"]' "[]"
   write_task TASK-0006 ready internal/artifact/active.go "[]"
 
   local selected ids
-  selected="$(gluerun_select_dispatch_frontier 3)"
+  selected="$(singular_select_dispatch_frontier 3)"
   ids="$(printf '%s\n' "$selected" | xargs -n1 basename | sed 's/\.md$//' | paste -sd ' ' -)"
   assert_eq "TASK-0002 TASK-0003" "$ids" "frontier selects only dependency-ready, file-disjoint, lease-free tasks"
 }
@@ -224,18 +224,18 @@ test_frontier_selection_allows_shared_forbidden_files() {
   write_task TASK-0002 ready internal/artifact/version.go "[]" internal/artifact/doc.go
 
   local selected ids
-  selected="$(gluerun_select_dispatch_frontier 2)"
+  selected="$(singular_select_dispatch_frontier 2)"
   ids="$(printf '%s\n' "$selected" | xargs -n1 basename | sed 's/\.md$//' | paste -sd ' ' -)"
   assert_eq "TASK-0001 TASK-0002" "$ids" "frontier allows disjoint owned files with shared forbidden files"
 }
 
 test_frontier_selection_allows_shared_forbidden_file_with_active_lease() {
   with_fixture
-  gluerun_lease_write TASK-0001 agent/artifact/TASK-0001 artifact l2 "internal/artifact/active.go" running RUN-LEASE "$GLUERUN_WORKTREES_DIR/TASK-0001" target-sha "" '["internal/artifact/active.go"]' '["internal/artifact/doc.go"]'
+  singular_lease_write TASK-0001 agent/artifact/TASK-0001 artifact l2 "internal/artifact/active.go" running RUN-LEASE "$SINGULAR_WORKTREES_DIR/TASK-0001" target-sha "" '["internal/artifact/active.go"]' '["internal/artifact/doc.go"]'
   write_task TASK-0002 ready internal/artifact/version.go "[]" internal/artifact/doc.go
 
   local selected ids
-  selected="$(gluerun_select_dispatch_frontier 2)"
+  selected="$(singular_select_dispatch_frontier 2)"
   ids="$(printf '%s\n' "$selected" | xargs -n1 basename | sed 's/\.md$//' | paste -sd ' ' -)"
   assert_eq "TASK-0002" "$ids" "frontier ignores active lease forbidden files when owned files are disjoint"
 }
@@ -243,10 +243,10 @@ test_frontier_selection_allows_shared_forbidden_file_with_active_lease() {
 test_frontier_selection_allows_requeued_task_with_failed_lease() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/requeued.go "[]"
-  gluerun_lease_write TASK-0001 agent/artifact/TASK-0001 artifact l2 "internal/artifact/requeued.go" failed RUN-LEASE "$GLUERUN_WORKTREES_DIR/TASK-0001" target-sha "" '["internal/artifact/requeued.go"]' "[]"
+  singular_lease_write TASK-0001 agent/artifact/TASK-0001 artifact l2 "internal/artifact/requeued.go" failed RUN-LEASE "$SINGULAR_WORKTREES_DIR/TASK-0001" target-sha "" '["internal/artifact/requeued.go"]' "[]"
 
   local selected ids
-  selected="$(gluerun_select_dispatch_frontier 1)"
+  selected="$(singular_select_dispatch_frontier 1)"
   ids="$(printf '%s\n' "$selected" | xargs -n1 basename | sed 's/\.md$//' | paste -sd ' ' -)"
   assert_eq "TASK-0001" "$ids" "frontier allows an explicitly requeued ready task with a terminal failed lease"
 }
@@ -257,9 +257,9 @@ make_parallel_stub() {
 #!/usr/bin/env bash
 set -euo pipefail
 tid="$1"
-mkdir -p "$GLUERUN_STATE_DIR"
-echo "$tid base=${GLUERUN_DISPATCH_BASE_SHA:-} batch=${GLUERUN_DISPATCH_BATCH_ID:-}" >>"$GLUERUN_STATE_DIR/dispatch.log"
-touch "$GLUERUN_STATE_DIR/$tid.start"
+mkdir -p "$SINGULAR_STATE_DIR"
+echo "$tid base=${SINGULAR_DISPATCH_BASE_SHA:-} batch=${SINGULAR_DISPATCH_BATCH_ID:-}" >>"$SINGULAR_STATE_DIR/dispatch.log"
+touch "$SINGULAR_STATE_DIR/$tid.start"
 case "$tid" in
   TASK-0001) other=TASK-0002 ;;
   TASK-0002) other=TASK-0001 ;;
@@ -267,7 +267,7 @@ case "$tid" in
 esac
 if [[ -n "$other" ]]; then
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [[ -f "$GLUERUN_STATE_DIR/$other.start" ]] && exit 0
+    [[ -f "$SINGULAR_STATE_DIR/$other.start" ]] && exit 0
     sleep 0.2
   done
   echo "$tid did not overlap with $other" >&2
@@ -282,27 +282,27 @@ test_reconcile_parallel_batch_with_stub() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "[]"
   write_task TASK-0002 ready internal/artifact/b.go "[]"
-  local stub="$GLUERUN_ROOT/stub-l1.sh"
+  local stub="$SINGULAR_ROOT/stub-l1.sh"
   make_parallel_stub "$stub"
 
   local out
-  out="$(GLUERUN_L1_DRIVER="$stub" GLUERUN_GENERATE=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_MAX_CONCURRENT=2 GLUERUN_MAX_DISPATCH=2 GLUERUN_DETACHED_DISPATCH=0 \
+  out="$(SINGULAR_L1_DRIVER="$stub" SINGULAR_GENERATE=0 SINGULAR_AUTO_INTEGRATE=0 SINGULAR_MAX_CONCURRENT=2 SINGULAR_MAX_DISPATCH=2 SINGULAR_DETACHED_DISPATCH=0 \
     "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
   assert_contains "$out" "dispatched_this_run=2" "parallel reconcile dispatched both tasks"
   assert_contains "$out" "failed_dispatches=0" "parallel reconcile had no dispatch failures"
-  assert_contains "$(cat "$GLUERUN_STATE_DIR/dispatch.log")" "TASK-0001 base=" "TASK-0001 received dispatch metadata"
-  assert_contains "$(cat "$GLUERUN_STATE_DIR/dispatch.log")" "TASK-0002 base=" "TASK-0002 received dispatch metadata"
+  assert_contains "$(cat "$SINGULAR_STATE_DIR/dispatch.log")" "TASK-0001 base=" "TASK-0001 received dispatch metadata"
+  assert_contains "$(cat "$SINGULAR_STATE_DIR/dispatch.log")" "TASK-0002 base=" "TASK-0002 received dispatch metadata"
 }
 
 test_reconcile_parallel_batch_with_shared_forbidden_file() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "[]" internal/artifact/doc.go
   write_task TASK-0002 ready internal/artifact/b.go "[]" internal/artifact/doc.go
-  local stub="$GLUERUN_ROOT/stub-l1.sh"
+  local stub="$SINGULAR_ROOT/stub-l1.sh"
   make_parallel_stub "$stub"
 
   local out
-  out="$(GLUERUN_L1_DRIVER="$stub" GLUERUN_GENERATE=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_MAX_CONCURRENT=2 GLUERUN_MAX_DISPATCH=2 GLUERUN_DETACHED_DISPATCH=0 \
+  out="$(SINGULAR_L1_DRIVER="$stub" SINGULAR_GENERATE=0 SINGULAR_AUTO_INTEGRATE=0 SINGULAR_MAX_CONCURRENT=2 SINGULAR_MAX_DISPATCH=2 SINGULAR_DETACHED_DISPATCH=0 \
     "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
   assert_contains "$out" "dispatched_this_run=2" "parallel reconcile dispatched both tasks sharing a forbidden file"
   assert_contains "$out" "failed_dispatches=0" "parallel reconcile shared-forbidden batch had no dispatch failures"
@@ -312,29 +312,29 @@ test_reconcile_counts_failed_child() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "[]"
   write_task TASK-0002 ready internal/artifact/b.go "[]"
-  local stub="$GLUERUN_ROOT/stub-l1-fail.sh"
+  local stub="$SINGULAR_ROOT/stub-l1-fail.sh"
   cat >"$stub" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-echo "$1" >>"$GLUERUN_STATE_DIR/dispatch.log"
+echo "$1" >>"$SINGULAR_STATE_DIR/dispatch.log"
 [[ "$1" == "TASK-0002" ]] && exit 9
 exit 0
 EOF
   chmod +x "$stub"
 
   local out
-  out="$(GLUERUN_L1_DRIVER="$stub" GLUERUN_GENERATE=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_MAX_CONCURRENT=2 GLUERUN_MAX_DISPATCH=2 GLUERUN_DETACHED_DISPATCH=0 \
+  out="$(SINGULAR_L1_DRIVER="$stub" SINGULAR_GENERATE=0 SINGULAR_AUTO_INTEGRATE=0 SINGULAR_MAX_CONCURRENT=2 SINGULAR_MAX_DISPATCH=2 SINGULAR_DETACHED_DISPATCH=0 \
     "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"
   assert_contains "$out" "dispatched_this_run=2" "failed-child reconcile still counted both dispatch attempts"
   assert_contains "$out" "failed_dispatches=1" "failed-child reconcile counted one failure"
 }
 
 make_codex_arg_stub() {
-  local dir="$GLUERUN_STATE_DIR/fake-bin"
+  local dir="$SINGULAR_STATE_DIR/fake-bin"
   mkdir -p "$dir"
   cat >"$dir/codex" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >"$GLUERUN_STATE_DIR/codex-args.log"
+printf '%s\n' "$*" >"$SINGULAR_STATE_DIR/codex-args.log"
 exit 0
 EOF
   chmod +x "$dir/codex"
@@ -345,19 +345,19 @@ test_codex_run_l2_defaults_to_workspace_write_sandbox() {
   with_fixture
   make_codex_arg_stub
 
-  "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$GLUERUN_ROOT" >/dev/null 2>&1
+  "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$SINGULAR_ROOT" >/dev/null 2>&1
 
-  assert_contains "$(cat "$GLUERUN_STATE_DIR/codex-args.log")" "--sandbox workspace-write" "l2 codex-run defaults to workspace-write"
+  assert_contains "$(cat "$SINGULAR_STATE_DIR/codex-args.log")" "--sandbox workspace-write" "l2 codex-run defaults to workspace-write"
 }
 
 test_codex_run_l2_uses_medium_reasoning_without_service_tier() {
   with_fixture
   make_codex_arg_stub
 
-  "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$GLUERUN_ROOT" >/dev/null 2>&1
+  "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$SINGULAR_ROOT" >/dev/null 2>&1
 
   local args
-  args="$(cat "$GLUERUN_STATE_DIR/codex-args.log")"
+  args="$(cat "$SINGULAR_STATE_DIR/codex-args.log")"
   assert_contains "$args" "-m gpt-5.5" "l2 codex-run pins the worker model"
   assert_contains "$args" "model_reasoning_effort=\"medium\"" "l2 codex-run uses medium reasoning"
   assert_not_contains "$args" "service_tier=" "l2 codex-run leaves service tier at the API default"
@@ -367,13 +367,13 @@ test_codex_run_l2_uses_medium_reasoning_without_service_tier() {
 test_codex_run_readonly_planner_uses_high_reasoning() {
   with_fixture
   make_codex_arg_stub
-  local prompt="$GLUERUN_STATE_DIR/planner-prompt.md"
+  local prompt="$SINGULAR_STATE_DIR/planner-prompt.md"
   printf 'plan\n' >"$prompt"
 
-  "$SCRIPT_DIR/codex-run.sh" --level readonly --prompt-file "$prompt" -C "$GLUERUN_ROOT" >/dev/null 2>&1
+  "$SCRIPT_DIR/codex-run.sh" --level readonly --prompt-file "$prompt" -C "$SINGULAR_ROOT" >/dev/null 2>&1
 
   local args
-  args="$(cat "$GLUERUN_STATE_DIR/codex-args.log")"
+  args="$(cat "$SINGULAR_STATE_DIR/codex-args.log")"
   assert_contains "$args" "--sandbox read-only" "planner codex-run uses readonly sandbox"
   assert_contains "$args" "-m gpt-5.5" "planner codex-run pins the model"
   assert_contains "$args" "model_reasoning_effort=\"high\"" "planner codex-run uses high reasoning"
@@ -386,10 +386,10 @@ test_codex_run_readonly_aux_roles_use_high_reasoning() {
 
   local name prompt args
   for name in auditor.md reviewer.md decider-prompt-worker-no-packet.md plan-critic.md generic-readonly.md; do
-    prompt="$GLUERUN_STATE_DIR/$name"
+    prompt="$SINGULAR_STATE_DIR/$name"
     printf 'role prompt\n' >"$prompt"
-    "$SCRIPT_DIR/codex-run.sh" --level readonly --prompt-file "$prompt" -C "$GLUERUN_ROOT" >/dev/null 2>&1
-    args="$(cat "$GLUERUN_STATE_DIR/codex-args.log")"
+    "$SCRIPT_DIR/codex-run.sh" --level readonly --prompt-file "$prompt" -C "$SINGULAR_ROOT" >/dev/null 2>&1
+    args="$(cat "$SINGULAR_STATE_DIR/codex-args.log")"
     assert_contains "$args" "model_reasoning_effort=\"high\"" "$name codex-run uses high reasoning"
   done
 }
@@ -397,13 +397,13 @@ test_codex_run_readonly_aux_roles_use_high_reasoning() {
 test_codex_run_readonly_auditor_uses_high_reasoning() {
   with_fixture
   make_codex_arg_stub
-  local prompt="$GLUERUN_STATE_DIR/auditor-prompt.md"
+  local prompt="$SINGULAR_STATE_DIR/auditor-prompt.md"
   printf 'audit\n' >"$prompt"
 
-  "$SCRIPT_DIR/codex-run.sh" --level readonly --prompt-file "$prompt" -C "$GLUERUN_ROOT" >/dev/null 2>&1
+  "$SCRIPT_DIR/codex-run.sh" --level readonly --prompt-file "$prompt" -C "$SINGULAR_ROOT" >/dev/null 2>&1
 
   local args
-  args="$(cat "$GLUERUN_STATE_DIR/codex-args.log")"
+  args="$(cat "$SINGULAR_STATE_DIR/codex-args.log")"
   assert_contains "$args" "--sandbox read-only" "auditor codex-run uses readonly sandbox"
   assert_contains "$args" "-m gpt-5.5" "auditor codex-run pins the model"
   assert_contains "$args" "model_reasoning_effort=\"high\"" "auditor codex-run uses high reasoning"
@@ -414,9 +414,9 @@ test_codex_run_l2_allows_explicit_sandbox_override() {
   with_fixture
   make_codex_arg_stub
 
-  GLUERUN_L2_SANDBOX=danger-full-access "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$GLUERUN_ROOT" >/dev/null 2>&1
+  SINGULAR_L2_SANDBOX=danger-full-access "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$SINGULAR_ROOT" >/dev/null 2>&1
 
-  assert_contains "$(cat "$GLUERUN_STATE_DIR/codex-args.log")" "--sandbox danger-full-access" "l2 codex-run honors explicit sandbox override"
+  assert_contains "$(cat "$SINGULAR_STATE_DIR/codex-args.log")" "--sandbox danger-full-access" "l2 codex-run honors explicit sandbox override"
 }
 
 test_codex_run_l2_rejects_invalid_sandbox_override() {
@@ -424,36 +424,36 @@ test_codex_run_l2_rejects_invalid_sandbox_override() {
   make_codex_arg_stub
 
   local out
-  out="$(GLUERUN_L2_SANDBOX=bogus "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$GLUERUN_ROOT" 2>&1 || true)"
+  out="$(SINGULAR_L2_SANDBOX=bogus "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$SINGULAR_ROOT" 2>&1 || true)"
 
-  assert_contains "$out" "invalid GLUERUN_L2_SANDBOX" "invalid l2 sandbox override is rejected"
+  assert_contains "$out" "invalid SINGULAR_L2_SANDBOX" "invalid l2 sandbox override is rejected"
 }
 
 test_codex_run_explicit_bin_wins_without_path_reordering() {
   with_fixture
-  local broken_dir="$GLUERUN_ROOT/broken-bin"
-  local working_dir="$GLUERUN_ROOT/working codex"
+  local broken_dir="$SINGULAR_ROOT/broken-bin"
+  local working_dir="$SINGULAR_ROOT/working codex"
   local working_codex="$working_dir/codex"
   mkdir -p "$broken_dir" "$working_dir"
   cat >"$broken_dir/codex" <<'EOF'
 #!/usr/bin/env bash
-touch "$GLUERUN_STATE_DIR/broken-codex-called"
+touch "$SINGULAR_STATE_DIR/broken-codex-called"
 exit 91
 EOF
   cat >"$working_codex" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >"$GLUERUN_STATE_DIR/pinned-codex-args.log"
+printf '%s\n' "$*" >"$SINGULAR_STATE_DIR/pinned-codex-args.log"
 exit 0
 EOF
   chmod +x "$broken_dir/codex" "$working_codex"
 
-  PATH="$broken_dir:$PATH" GLUERUN_CODEX_BIN="$working_codex" \
-    "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$GLUERUN_ROOT" \
+  PATH="$broken_dir:$PATH" SINGULAR_CODEX_BIN="$working_codex" \
+    "$SCRIPT_DIR/codex-run.sh" --level l2 --no-output-capture -C "$SINGULAR_ROOT" \
     >/dev/null 2>&1
 
-  [[ -f "$GLUERUN_STATE_DIR/pinned-codex-args.log" ]] || fail "explicit Codex path was not invoked"
-  [[ ! -f "$GLUERUN_STATE_DIR/broken-codex-called" ]] || fail "runner fell back to broken PATH Codex"
-  assert_contains "$(cat "$GLUERUN_STATE_DIR/pinned-codex-args.log")" "--sandbox workspace-write" \
+  [[ -f "$SINGULAR_STATE_DIR/pinned-codex-args.log" ]] || fail "explicit Codex path was not invoked"
+  [[ ! -f "$SINGULAR_STATE_DIR/broken-codex-called" ]] || fail "runner fell back to broken PATH Codex"
+  assert_contains "$(cat "$SINGULAR_STATE_DIR/pinned-codex-args.log")" "--sandbox workspace-write" \
     "pinned Codex receives normal runner arguments"
 }
 
@@ -461,35 +461,35 @@ test_codex_run_rejects_nonabsolute_explicit_bin() {
   with_fixture
   make_codex_arg_stub
   local out rc=0
-  out="$(GLUERUN_CODEX_BIN=codex "$SCRIPT_DIR/codex-run.sh" \
-    --level l2 --no-output-capture -C "$GLUERUN_ROOT" 2>&1)" || rc=$?
-  [[ "$rc" -ne 0 ]] || fail "relative GLUERUN_CODEX_BIN must be rejected"
-  assert_contains "$out" "GLUERUN_CODEX_BIN must be an absolute path" \
+  out="$(SINGULAR_CODEX_BIN=codex "$SCRIPT_DIR/codex-run.sh" \
+    --level l2 --no-output-capture -C "$SINGULAR_ROOT" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "relative SINGULAR_CODEX_BIN must be rejected"
+  assert_contains "$out" "SINGULAR_CODEX_BIN must be an absolute path" \
     "relative explicit Codex path has a clear error"
-  [[ ! -f "$GLUERUN_STATE_DIR/codex-args.log" ]] || fail "invalid explicit Codex must not fall back to PATH"
+  [[ ! -f "$SINGULAR_STATE_DIR/codex-args.log" ]] || fail "invalid explicit Codex must not fall back to PATH"
 }
 
 test_gate_red_external_proof_env_blocker_detected() {
   with_fixture
-  local log="$GLUERUN_STATE_DIR/gate-red.log"
+  local log="$SINGULAR_STATE_DIR/gate-red.log"
   cat >"$log" <<'EOF'
 --- FAIL: TestArtifactStorageRepositoryDurableRoundTripProvesPostgresAndBlobImmutability (0.00s)
-    storage_repository_test.go:30: GLUERUN_STORAGE_PROOF_DATABASE_URL or GLUERUN_DATABASE_URL must point at a real PostgreSQL database; the storage proof must not silently skip or use an in-memory/SQLite substitute
+    storage_repository_test.go:30: SINGULAR_STORAGE_PROOF_DATABASE_URL or SINGULAR_DATABASE_URL must point at a real PostgreSQL database; the storage proof must not silently skip or use an in-memory/SQLite substitute
 FAIL
 EOF
-  unset GLUERUN_STORAGE_PROOF_DATABASE_URL GLUERUN_DATABASE_URL
-  gluerun_gate_red_external_proof_env_blocker "$log" \
+  unset SINGULAR_STORAGE_PROOF_DATABASE_URL SINGULAR_DATABASE_URL
+  singular_gate_red_external_proof_env_blocker "$log" \
     || fail "missing real PostgreSQL env gate-red must be treated as an external proof-env blocker"
 }
 
 test_gate_red_external_proof_env_blocker_ignored_when_env_present() {
   with_fixture
-  local log="$GLUERUN_STATE_DIR/gate-red.log"
+  local log="$SINGULAR_STATE_DIR/gate-red.log"
   cat >"$log" <<'EOF'
-storage_repository_test.go:30: GLUERUN_STORAGE_PROOF_DATABASE_URL or GLUERUN_DATABASE_URL must point at a real PostgreSQL database; the storage proof must not silently skip or use an in-memory/SQLite substitute
+storage_repository_test.go:30: SINGULAR_STORAGE_PROOF_DATABASE_URL or SINGULAR_DATABASE_URL must point at a real PostgreSQL database; the storage proof must not silently skip or use an in-memory/SQLite substitute
 EOF
-  if GLUERUN_STORAGE_PROOF_DATABASE_URL="postgres://gluerun:gluerun@127.0.0.1:5432/gluerun" \
-    gluerun_gate_red_external_proof_env_blocker "$log"; then
+  if SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://singular:singular@127.0.0.1:5432/singular" \
+    singular_gate_red_external_proof_env_blocker "$log"; then
     fail "present real PostgreSQL env should leave gate-red eligible for rerun-tests"
   fi
 }
@@ -497,12 +497,12 @@ EOF
 test_strict_proof_skip_detected() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/storage_repository_test.go "[]"
-  cat >>"$GLUERUN_TASKS_DIR/TASK-0001.md" <<'EOF'
+  cat >>"$SINGULAR_TASKS_DIR/TASK-0001.md" <<'EOF'
 
 The strict first test uses a real PostgreSQL-backed metadata store and no silent skip of the real-store proof.
 EOF
-  mkdir -p "$GLUERUN_ROOT/internal/artifact"
-  cat >"$GLUERUN_ROOT/internal/artifact/storage_repository_test.go" <<'EOF'
+  mkdir -p "$SINGULAR_ROOT/internal/artifact"
+  cat >"$SINGULAR_ROOT/internal/artifact/storage_repository_test.go" <<'EOF'
 package artifact
 
 import "testing"
@@ -511,15 +511,15 @@ func TestProof(t *testing.T) {
 	t.Skipf("missing PostgreSQL")
 }
 EOF
-  gluerun_strict_proof_skip_detected "$GLUERUN_TASKS_DIR/TASK-0001.md" "$GLUERUN_ROOT" "internal/artifact/storage_repository_test.go" \
+  singular_strict_proof_skip_detected "$SINGULAR_TASKS_DIR/TASK-0001.md" "$SINGULAR_ROOT" "internal/artifact/storage_repository_test.go" \
     || fail "strict proof task must reject t.Skipf in owned proof tests"
 }
 
 test_strict_proof_skip_ignored_for_nonproof_task() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/storage_repository_test.go "[]"
-  mkdir -p "$GLUERUN_ROOT/internal/artifact"
-  cat >"$GLUERUN_ROOT/internal/artifact/storage_repository_test.go" <<'EOF'
+  mkdir -p "$SINGULAR_ROOT/internal/artifact"
+  cat >"$SINGULAR_ROOT/internal/artifact/storage_repository_test.go" <<'EOF'
 package artifact
 
 import "testing"
@@ -528,7 +528,7 @@ func TestFixture(t *testing.T) {
 	t.Skip("fixture")
 }
 EOF
-  if gluerun_strict_proof_skip_detected "$GLUERUN_TASKS_DIR/TASK-0001.md" "$GLUERUN_ROOT" "internal/artifact/storage_repository_test.go"; then
+  if singular_strict_proof_skip_detected "$SINGULAR_TASKS_DIR/TASK-0001.md" "$SINGULAR_ROOT" "internal/artifact/storage_repository_test.go"; then
     fail "ordinary tasks are not strict proof tasks just because a test contains t.Skip"
   fi
 }
@@ -590,7 +590,7 @@ Forbidden files:
 
 first_dep = "TASK-0002" if mode == "internal_dep" else "[]"
 data = {
-    "schema": "gluerun.orchestration.task-batch.v0",
+    "schema": "singular.orchestration.task-batch.v0",
     "tasks": [
         {"taskId": "TASK-0001", "markdown": markdown("TASK-0001", "First", "internal/artifact/first.go", first_dep)},
         {"taskId": "TASK-0002", "markdown": markdown("TASK-0002", "Second", "internal/artifact/second.go", "[]")},
@@ -612,23 +612,23 @@ PY
 
 test_generate_tasks_accepts_valid_batch() {
   with_fixture
-  local stub="$GLUERUN_ROOT/planner-valid.sh"
+  local stub="$SINGULAR_ROOT/planner-valid.sh"
   make_planner_stub "$stub" valid
   local out
-  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --count 2 2>&1)"
+  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --count 2 2>&1)"
   assert_contains "$out" "generated:TASK-0001" "planner generated first task"
   assert_contains "$out" "generated:TASK-0002" "planner generated second task"
-  [[ -f "$GLUERUN_TASKS_DIR/TASK-0001.md" && -f "$GLUERUN_TASKS_DIR/TASK-0002.md" ]] || fail "planner did not write batch task files"
+  [[ -f "$SINGULAR_TASKS_DIR/TASK-0001.md" && -f "$SINGULAR_TASKS_DIR/TASK-0002.md" ]] || fail "planner did not write batch task files"
 }
 
 test_generate_tasks_rejects_internal_dependency() {
   with_fixture
-  local stub="$GLUERUN_ROOT/planner-internal-dep.sh"
+  local stub="$SINGULAR_ROOT/planner-internal-dep.sh"
   make_planner_stub "$stub" internal_dep
   local out
-  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --count 2 2>&1 || true)"
+  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --count 2 2>&1 || true)"
   assert_contains "$out" "planner-failed" "planner rejected internal dependency batch"
-  [[ ! -f "$GLUERUN_TASKS_DIR/TASK-0001.md" ]] || fail "planner wrote invalid internal dependency batch"
+  [[ ! -f "$SINGULAR_TASKS_DIR/TASK-0001.md" ]] || fail "planner wrote invalid internal dependency batch"
 }
 
 test_scope_amendment_rejects_generated_cache_paths() {
@@ -636,15 +636,15 @@ test_scope_amendment_rejects_generated_cache_paths() {
   local accepted=()
   local p
   while IFS= read -r p; do
-    if gluerun_scope_amendment_path_allowed "$p"; then
+    if singular_scope_amendment_path_allowed "$p"; then
       accepted+=("$p")
     fi
   done <<'EOF'
 internal/artifact/real.go
-.gluerun-cache/go-build/aa/cache-a
-.gluerun-cache/go-build/testexpire.txt
-.gluerun-state/runs/RUN/file.log
-.gluerun-evidence/red.log
+.singular-cache/go-build/aa/cache-a
+.singular-cache/go-build/testexpire.txt
+.singular-state/runs/RUN/file.log
+.singular-evidence/red.log
 EOF
   assert_eq "internal/artifact/real.go" "${accepted[*]}" "scope amendment filters generated local cache/state/evidence paths"
 }
@@ -663,7 +663,7 @@ write_minimal_worker_packet() {
   "baseRef": "target",
   "branch": "agent/artifact/TASK-0001-test",
   "headSha": "uncommitted",
-  "workspace": "$GLUERUN_ROOT/.worktrees/TASK-0001",
+  "workspace": "$SINGULAR_ROOT/.worktrees/TASK-0001",
   "ownedFiles": ["internal/artifact/a.go"],
   "changedFiles": ["internal/artifact/a.go"],
   "commands": [{"cmd": "true", "exitCode": 0, "logRef": "log"}],
@@ -677,8 +677,8 @@ EOF
 }
 
 write_storage_proof_guard_task() {
-  mkdir -p "$GLUERUN_TASKS_DIR"
-  cat >"$GLUERUN_TASKS_DIR/TASK-0001.md" <<'EOF'
+  mkdir -p "$SINGULAR_TASKS_DIR"
+  cat >"$SINGULAR_TASKS_DIR/TASK-0001.md" <<'EOF'
 # TASK-0001: Durable storage proof fixture
 
 Status: ready
@@ -723,9 +723,9 @@ import sys
 path = sys.argv[1]
 with open(path, encoding="utf-8") as f:
     data = json.load(f)
-ref = ".gluerun-evidence/TASK-0001-skip-guard-red"
+ref = ".singular-evidence/TASK-0001-skip-guard-red"
 data["commands"][0] = {
-    "cmd": "env -u GLUERUN_STORAGE_PROOF_DATABASE_URL -u GLUERUN_DATABASE_URL go test ./internal/artifact -run TestStorageProof -count=1",
+    "cmd": "env -u SINGULAR_STORAGE_PROOF_DATABASE_URL -u SINGULAR_DATABASE_URL go test ./internal/artifact -run TestStorageProof -count=1",
     "exitCode": 1,
     "logRef": ref,
 }
@@ -744,30 +744,30 @@ PY
 
 test_l1_worker_packet_preflight_normalizes_legacy_schema_path() {
   with_fixture
-  local msg="$GLUERUN_STATE_DIR/legacy-last-message.json"
-  local packet="$GLUERUN_STATE_DIR/prepared-packet.json"
-  local validation_log="$GLUERUN_STATE_DIR/preflight-validation.log"
+  local msg="$SINGULAR_STATE_DIR/legacy-last-message.json"
+  local packet="$SINGULAR_STATE_DIR/prepared-packet.json"
+  local validation_log="$SINGULAR_STATE_DIR/preflight-validation.log"
   write_minimal_worker_packet "$msg" "schemas/orchestration/state-packet.v0.schema.json"
 
-  gluerun_l1_prepare_worker_packet "$msg" "$packet" "$validation_log" \
+  singular_l1_prepare_worker_packet "$msg" "$packet" "$validation_log" \
     || fail "legacy schema-path packet should pass L1 worker preflight"
 
-  assert_eq "gluerun.orchestration.state-packet.v0" \
+  assert_eq "singular.orchestration.state-packet.v0" \
     "$(json_field "$(cat "$packet")" schema)" \
     "L1 worker preflight normalizes legacy schema path"
-  assert_contains "$(gluerun_validate_packet_basic "$packet")" "ok" \
+  assert_contains "$(singular_validate_packet_basic "$packet")" "ok" \
     "normalized packet validates with strict import validator"
 }
 
 test_l1_worker_packet_preflight_reports_validation_errors() {
   with_fixture
-  local msg="$GLUERUN_STATE_DIR/bad-schema-last-message.json"
-  local packet="$GLUERUN_STATE_DIR/bad-schema-packet.json"
-  local validation_log="$GLUERUN_STATE_DIR/bad-schema-validation.log"
+  local msg="$SINGULAR_STATE_DIR/bad-schema-last-message.json"
+  local packet="$SINGULAR_STATE_DIR/bad-schema-packet.json"
+  local validation_log="$SINGULAR_STATE_DIR/bad-schema-validation.log"
   local rc=0
   write_minimal_worker_packet "$msg" "wrong-schema"
 
-  gluerun_l1_prepare_worker_packet "$msg" "$packet" "$validation_log" || rc=$?
+  singular_l1_prepare_worker_packet "$msg" "$packet" "$validation_log" || rc=$?
 
   assert_eq "12" "$rc" "invalid worker packet is classified as packet-invalid preflight"
   assert_contains "$(cat "$validation_log")" "unsupported schema: wrong-schema" \
@@ -776,11 +776,11 @@ test_l1_worker_packet_preflight_reports_validation_errors() {
 
 test_l1_worker_packet_preflight_reports_unknown_fields() {
   with_fixture
-  local msg="$GLUERUN_STATE_DIR/unknown-field-last-message.json"
-  local packet="$GLUERUN_STATE_DIR/unknown-field-packet.json"
-  local validation_log="$GLUERUN_STATE_DIR/unknown-field-validation.log"
+  local msg="$SINGULAR_STATE_DIR/unknown-field-last-message.json"
+  local packet="$SINGULAR_STATE_DIR/unknown-field-packet.json"
+  local validation_log="$SINGULAR_STATE_DIR/unknown-field-validation.log"
   local rc=0
-  write_minimal_worker_packet "$msg" "gluerun.orchestration.state-packet.v0"
+  write_minimal_worker_packet "$msg" "singular.orchestration.state-packet.v0"
   python3 - "$msg" <<'PY'
 import json
 import sys
@@ -794,7 +794,7 @@ with open(path, "w", encoding="utf-8") as f:
     f.write("\n")
 PY
 
-  gluerun_l1_prepare_worker_packet "$msg" "$packet" "$validation_log" || rc=$?
+  singular_l1_prepare_worker_packet "$msg" "$packet" "$validation_log" || rc=$?
 
   assert_eq "12" "$rc" "unknown top-level worker packet field is packet-invalid"
   assert_contains "$(cat "$validation_log")" "unknown fields: risks" \
@@ -804,14 +804,14 @@ PY
 test_storage_proof_packet_guard_rejects_unmarked_red_log() {
   with_fixture
   write_storage_proof_guard_task
-  local packet="$GLUERUN_STATE_DIR/storage-proof-unmarked-packet.json"
-  local worktree="$GLUERUN_ROOT/.worktrees/TASK-0001"
+  local packet="$SINGULAR_STATE_DIR/storage-proof-unmarked-packet.json"
+  local worktree="$SINGULAR_ROOT/.worktrees/TASK-0001"
   local out rc=0
-  write_minimal_worker_packet "$packet" "gluerun.orchestration.state-packet.v0"
-  mkdir -p "$worktree/.gluerun-evidence"
-  printf 'red failed\n' >"$worktree/.gluerun-evidence/red.log"
+  write_minimal_worker_packet "$packet" "singular.orchestration.state-packet.v0"
+  mkdir -p "$worktree/.singular-evidence"
+  printf 'red failed\n' >"$worktree/.singular-evidence/red.log"
 
-  out="$(gluerun_packet_module_guard "$packet" "$GLUERUN_TASKS_DIR/TASK-0001.md" "$worktree" "$GLUERUN_STATE_DIR/runs/RUN-PACKET" 2>&1)" || rc=$?
+  out="$(singular_packet_module_guard "$packet" "$SINGULAR_TASKS_DIR/TASK-0001.md" "$worktree" "$SINGULAR_STATE_DIR/runs/RUN-PACKET" 2>&1)" || rc=$?
 
   [[ "$rc" -ne 0 ]] || fail "storage proof packet without marked red guard must be rejected"
   assert_contains "$out" "logRef ending in -skip-guard-red" \
@@ -821,15 +821,15 @@ test_storage_proof_packet_guard_rejects_unmarked_red_log() {
 test_storage_proof_packet_guard_accepts_marked_env_unset_red_log() {
   with_fixture
   write_storage_proof_guard_task
-  local packet="$GLUERUN_STATE_DIR/storage-proof-marked-packet.json"
-  local worktree="$GLUERUN_ROOT/.worktrees/TASK-0001"
-  local ref=".gluerun-evidence/TASK-0001-skip-guard-red"
-  write_minimal_worker_packet "$packet" "gluerun.orchestration.state-packet.v0"
+  local packet="$SINGULAR_STATE_DIR/storage-proof-marked-packet.json"
+  local worktree="$SINGULAR_ROOT/.worktrees/TASK-0001"
+  local ref=".singular-evidence/TASK-0001-skip-guard-red"
+  write_minimal_worker_packet "$packet" "singular.orchestration.state-packet.v0"
   mark_minimal_packet_with_storage_proof_guard "$packet"
-  mkdir -p "$worktree/.gluerun-evidence"
+  mkdir -p "$worktree/.singular-evidence"
   printf 'real storage stripped failed\n' >"$worktree/$ref"
 
-  gluerun_packet_module_guard "$packet" "$GLUERUN_TASKS_DIR/TASK-0001.md" "$worktree" "$GLUERUN_STATE_DIR/runs/RUN-PACKET" >/dev/null \
+  singular_packet_module_guard "$packet" "$SINGULAR_TASKS_DIR/TASK-0001.md" "$worktree" "$SINGULAR_STATE_DIR/runs/RUN-PACKET" >/dev/null \
     || fail "storage proof packet with marked env-unset red guard should pass"
 }
 
@@ -847,43 +847,43 @@ test_l2_worker_prompt_matches_state_packet_schema_fields() {
 
 test_integrate_push_logs_sanitize_branch_names() {
   with_fixture
-  git -C "$GLUERUN_ROOT" branch -m codex/gluerun-bootstrap-target
-  export GLUERUN_TARGET_BRANCH="codex/gluerun-bootstrap-target"
+  git -C "$SINGULAR_ROOT" branch -m codex/singular-bootstrap-target
+  export SINGULAR_TARGET_BRANCH="codex/singular-bootstrap-target"
 
-  local origin="$GLUERUN_ROOT/../origin.git"
+  local origin="$SINGULAR_ROOT/../origin.git"
   git init --bare -q "$origin"
-  git -C "$GLUERUN_ROOT" remote add origin "$origin"
-  git -C "$GLUERUN_ROOT" push -q -u origin "$GLUERUN_TARGET_BRANCH"
+  git -C "$SINGULAR_ROOT" remote add origin "$origin"
+  git -C "$SINGULAR_ROOT" push -q -u origin "$SINGULAR_TARGET_BRANCH"
 
   local branch="agent/artifact/TASK-0100-push-log"
-  git -C "$GLUERUN_ROOT" checkout -q -b "$branch"
-  mkdir -p "$GLUERUN_ROOT/internal/artifact"
-  cat >"$GLUERUN_ROOT/internal/artifact/push_log_fixture.go" <<'EOF'
+  git -C "$SINGULAR_ROOT" checkout -q -b "$branch"
+  mkdir -p "$SINGULAR_ROOT/internal/artifact"
+  cat >"$SINGULAR_ROOT/internal/artifact/push_log_fixture.go" <<'EOF'
 package artifact
 
 const PushLogFixture = "ok"
 EOF
-  git -C "$GLUERUN_ROOT" add internal/artifact/push_log_fixture.go
-  git -C "$GLUERUN_ROOT" -c user.name=test -c user.email=test@example.local commit -q -m "TASK-0100: push log fixture"
+  git -C "$SINGULAR_ROOT" add internal/artifact/push_log_fixture.go
+  git -C "$SINGULAR_ROOT" -c user.name=test -c user.email=test@example.local commit -q -m "TASK-0100: push log fixture"
   local head
-  head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  git -C "$GLUERUN_ROOT" checkout -q "$GLUERUN_TARGET_BRANCH"
+  head="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  git -C "$SINGULAR_ROOT" checkout -q "$SINGULAR_TARGET_BRANCH"
 
-  local packet_dir="$GLUERUN_ORCH_DIR/packets/imported/TASK-0100"
+  local packet_dir="$SINGULAR_ORCH_DIR/packets/imported/TASK-0100"
   mkdir -p "$packet_dir"
   cat >"$packet_dir/RUN-PUSHLOG.json" <<EOF
 {
-  "schema": "gluerun.orchestration.state-packet.v0",
+  "schema": "singular.orchestration.state-packet.v0",
   "packetId": "RUN-PUSHLOG",
   "runId": "RUN-PUSHLOG",
   "taskId": "TASK-0100",
   "area": "artifact",
   "role": "l2",
   "status": "accepted",
-  "baseRef": "$GLUERUN_TARGET_BRANCH",
+  "baseRef": "$SINGULAR_TARGET_BRANCH",
   "branch": "$branch",
   "headSha": "$head",
-  "workspace": "$GLUERUN_ROOT",
+  "workspace": "$SINGULAR_ROOT",
   "ownedFiles": ["internal/artifact/push_log_fixture.go"],
   "changedFiles": ["internal/artifact/push_log_fixture.go"],
   "commands": [{"cmd": "true", "exitCode": 0}],
@@ -896,7 +896,7 @@ EOF
 EOF
   cat >"$packet_dir/RUN-PUSHLOG.audit.json" <<EOF
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0100",
   "runId": "RUN-PUSHLOG",
   "branch": "$branch",
@@ -910,12 +910,12 @@ EOF
 EOF
 
   local out run_dir
-  out="$(GLUERUN_DEFAULT_GATE_CMD=true GLUERUN_PUSH=1 "$SCRIPT_DIR/integrate.sh" --task TASK-0100 --run-id RUN-PUSHLOG 2>&1)"
-  assert_contains "$out" "pushed codex/gluerun-bootstrap-target -> origin" "target branch pushed with slash name"
+  out="$(SINGULAR_DEFAULT_GATE_CMD=true SINGULAR_PUSH=1 "$SCRIPT_DIR/integrate.sh" --task TASK-0100 --run-id RUN-PUSHLOG 2>&1)"
+  assert_contains "$out" "pushed codex/singular-bootstrap-target -> origin" "target branch pushed with slash name"
   assert_contains "$out" "pushed agent/artifact/TASK-0100-push-log -> origin" "worker branch pushed with slash name"
 
-  run_dir="$GLUERUN_RUNS_DIR/RUN-PUSHLOG"
-  [[ -f "$run_dir/secret-scan-push-codex__gluerun-bootstrap-target.log" ]] || fail "missing sanitized target push scan log"
+  run_dir="$SINGULAR_RUNS_DIR/RUN-PUSHLOG"
+  [[ -f "$run_dir/secret-scan-push-codex__singular-bootstrap-target.log" ]] || fail "missing sanitized target push scan log"
   [[ -f "$run_dir/secret-scan-push-agent__artifact__TASK-0100-push-log.log" ]] || fail "missing sanitized worker push scan log"
   [[ ! -d "$run_dir/secret-scan-push-codex" ]] || fail "target push scan log used branch slash as directory"
   [[ ! -d "$run_dir/secret-scan-push-agent" ]] || fail "worker push scan log used branch slash as directory"

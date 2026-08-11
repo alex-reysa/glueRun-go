@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Covers the single sanctioned call-site of the plan-revision-loop node
 # (stage S3-plan-revision, area plancritic, layer engine_runtime): the default-OFF
-# GLUERUN_PLAN_CRITIQUE=1 hook in engine/l1-plan-node.sh that, in the EXISTING
+# SINGULAR_PLAN_CRITIQUE=1 hook in engine/l1-plan-node.sh that, in the EXISTING
 # staging-success branch, delegates to the integrated bounded revise -> (resume|
-# fresh) -> re-critique -> approve/park orchestrator gluerun_plan_revise_loop
+# fresh) -> re-critique -> approve/park orchestrator singular_plan_revise_loop
 # and routes its single terminal outcome:
 #   import       -> today's behavior (candidates left staged, node lease left
 #                   active, print planned:<node>, exit 0, so L0 stays the sole
@@ -24,10 +24,10 @@
 #          imported (L0 never sees them; the driver leaves the global tasks dir
 #          untouched here as always).
 #
-# Fully hermetic: a STUB planner via GLUERUN_L1_PLANNER stages a candidate, and a
-# STUB critic via GLUERUN_RUNNER (consumed by the integrated critic driver the
+# Fully hermetic: a STUB planner via SINGULAR_L1_PLANNER stages a candidate, and a
+# STUB critic via SINGULAR_RUNNER (consumed by the integrated critic driver the
 # orchestrator calls) fixes the verdict, so no real runner is ever invoked.
-# Everything runs in an isolated GLUERUN_ROOT/GLUERUN_STATE_DIR.
+# Everything runs in an isolated SINGULAR_ROOT/SINGULAR_STATE_DIR.
 set -uo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
@@ -38,9 +38,9 @@ fi
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
-# Hermetic guard: scrub any inherited GLUERUN_* env so a leaked runner/root from
+# Hermetic guard: scrub any inherited SINGULAR_* env so a leaked runner/root from
 # a real drive cannot poison the sandbox.
-while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^GLUERUN_' || true)
+while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -53,7 +53,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 REPO="$tmp/repo"
 mkdir -p "$REPO/docs/orchestration/prompts" "$REPO/docs/orchestration/tasks" \
-  "$REPO/schemas/orchestration" "$REPO/.gluerun-state"
+  "$REPO/schemas/orchestration" "$REPO/.singular-state"
 git -C "$REPO" init -q
 git -C "$REPO" checkout -q -b target
 cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$REPO/docs/orchestration/prompts/l1-planner.md"
@@ -65,7 +65,7 @@ cp "$ENGINE_HOME/schemas/l1-lease.v0.schema.json" "$REPO/schemas/orchestration/l
 cp "$ENGINE_HOME/schemas/gate-result.v0.schema.json" "$REPO/schemas/orchestration/gate-result.v0.schema.json"
 cat >"$REPO/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "layers": ["engine_runtime"],
   "kinds": ["runtime"],
   "nodes": [
@@ -84,14 +84,14 @@ EOF
 git -C "$REPO" add .
 git -C "$REPO" -c user.name=test -c user.email=test@example.local commit -q -m init
 
-export GLUERUN_ROOT="$REPO"
-export GLUERUN_STATE_DIR="$REPO/.gluerun-state"
-export GLUERUN_ORCH_DIR="$REPO/docs/orchestration"
-export GLUERUN_TARGET_BRANCH="target"
-export GLUERUN_L1_LEASES_DIR="$GLUERUN_STATE_DIR/l1-leases"
-export GLUERUN_PLAN_REVISE_MAX=1
+export SINGULAR_ROOT="$REPO"
+export SINGULAR_STATE_DIR="$REPO/.singular-state"
+export SINGULAR_ORCH_DIR="$REPO/docs/orchestration"
+export SINGULAR_TARGET_BRANCH="target"
+export SINGULAR_L1_LEASES_DIR="$SINGULAR_STATE_DIR/l1-leases"
+export SINGULAR_PLAN_REVISE_MAX=1
 
-# --- STUB planner (GLUERUN_L1_PLANNER) ---------------------------------------
+# --- STUB planner (SINGULAR_L1_PLANNER) ---------------------------------------
 # Stands in for generate-tasks.sh staged mode: writes one *.candidate.md into the
 # node's --stage-dir and exits 0 (the existing staging-success precondition).
 PLANNER="$tmp/stub-planner.sh"
@@ -138,11 +138,11 @@ MD
 exit 0
 PEOF
 chmod +x "$PLANNER"
-export GLUERUN_L1_PLANNER="$PLANNER"
+export SINGULAR_L1_PLANNER="$PLANNER"
 
-# --- STUB critic (GLUERUN_RUNNER) --------------------------------------------
+# --- STUB critic (SINGULAR_RUNNER) --------------------------------------------
 # The integrated critic driver the orchestrator invokes reaches its runner via
-# GLUERUN_RUNNER. This stub records that it ran (CRITIC_MARKER) and writes a
+# SINGULAR_RUNNER. This stub records that it ran (CRITIC_MARKER) and writes a
 # plan-critique.v0 record fixing the verdict to CRITIC_VERDICT.
 CRITIC="$tmp/stub-critic.sh"
 cat > "$CRITIC" <<'CEOF'
@@ -158,7 +158,7 @@ done
 cat > "$out" <<JSON
 Here is my critique:
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "STUB",
   "runId": "STUB",
   "batchTaskIds": ["TASK-9999"],
@@ -176,7 +176,7 @@ chmod +x "$CRITIC"
 
 # --- helpers -----------------------------------------------------------------
 lease_status() {
-  local lease="$GLUERUN_L1_LEASES_DIR/$NODE.json"
+  local lease="$SINGULAR_L1_LEASES_DIR/$NODE.json"
   [[ -f "$lease" ]] || { echo ""; return 0; }
   python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("status",""))' "$lease"
 }
@@ -186,10 +186,10 @@ lease_status() {
 run_plan_node() {
   local sdir="$1"; shift
   RC=0
-  OUT="$(env GLUERUN_ROOT="$REPO" GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" \
-    GLUERUN_ORCH_DIR="$GLUERUN_ORCH_DIR" GLUERUN_TARGET_BRANCH=target \
-    GLUERUN_L1_LEASES_DIR="$GLUERUN_L1_LEASES_DIR" \
-    GLUERUN_L1_PLANNER="$PLANNER" GLUERUN_PLAN_REVISE_MAX=1 \
+  OUT="$(env SINGULAR_ROOT="$REPO" SINGULAR_STATE_DIR="$SINGULAR_STATE_DIR" \
+    SINGULAR_ORCH_DIR="$SINGULAR_ORCH_DIR" SINGULAR_TARGET_BRANCH=target \
+    SINGULAR_L1_LEASES_DIR="$SINGULAR_L1_LEASES_DIR" \
+    SINGULAR_L1_PLANNER="$PLANNER" SINGULAR_PLAN_REVISE_MAX=1 \
     "$@" "$SCRIPT_DIR/l1-plan-node.sh" \
       --node "$NODE" --run-id RUN-hook --stage-dir "$sdir" 2>/dev/null)" || RC=$?
 }
@@ -199,7 +199,7 @@ run_plan_node() {
 # ---------------------------------------------------------------------------
 sd_off="$tmp/stage-off"
 marker_off="$tmp/critic-off"
-run_plan_node "$sd_off" GLUERUN_RUNNER="$CRITIC" CRITIC_MARKER="$marker_off" CRITIC_VERDICT=park
+run_plan_node "$sd_off" SINGULAR_RUNNER="$CRITIC" CRITIC_MARKER="$marker_off" CRITIC_VERDICT=park
 assert_eq "$RC" "0" "OFF: staging-success path exits 0"
 assert_eq "$OUT" "planned:$NODE" "OFF: prints planned:<node>"
 assert_eq "$(lease_status)" "active" "OFF: node lease left active"
@@ -214,7 +214,7 @@ echo "PASS: (OFF) hook inert, byte-identical staging-success path"
 # Explicit =0 behaves identically.
 sd_off0="$tmp/stage-off0"
 marker_off0="$tmp/critic-off0"
-run_plan_node "$sd_off0" GLUERUN_PLAN_CRITIQUE=0 GLUERUN_RUNNER="$CRITIC" \
+run_plan_node "$sd_off0" SINGULAR_PLAN_CRITIQUE=0 SINGULAR_RUNNER="$CRITIC" \
   CRITIC_MARKER="$marker_off0" CRITIC_VERDICT=park
 assert_eq "$RC" "0" "OFF(=0): exits 0"
 assert_eq "$OUT" "planned:$NODE" "OFF(=0): prints planned:<node>"
@@ -226,10 +226,10 @@ echo "PASS: (OFF=0) hook inert"
 # (import) flag ON + approve verdict -> planned:<node>, exit 0, lease active,
 # orchestrator invoked.
 # ---------------------------------------------------------------------------
-rm -f "$GLUERUN_L1_LEASES_DIR/$NODE.json"
+rm -f "$SINGULAR_L1_LEASES_DIR/$NODE.json"
 sd_imp="$tmp/stage-import"
 marker_imp="$tmp/critic-import"
-run_plan_node "$sd_imp" GLUERUN_PLAN_CRITIQUE=1 GLUERUN_RUNNER="$CRITIC" \
+run_plan_node "$sd_imp" SINGULAR_PLAN_CRITIQUE=1 SINGULAR_RUNNER="$CRITIC" \
   CRITIC_MARKER="$marker_imp" CRITIC_VERDICT=approve
 assert_eq "$RC" "0" "import: approve routes to import, exit 0"
 assert_eq "$OUT" "planned:$NODE" "import: prints planned:<node>"
@@ -240,10 +240,10 @@ echo "PASS: (import) approve -> planned:<node>, exit 0, lease active"
 # ---------------------------------------------------------------------------
 # (park) flag ON + park verdict -> lease failed, plan-failed, non-zero exit.
 # ---------------------------------------------------------------------------
-rm -f "$GLUERUN_L1_LEASES_DIR/$NODE.json"
+rm -f "$SINGULAR_L1_LEASES_DIR/$NODE.json"
 sd_park="$tmp/stage-park"
 marker_park="$tmp/critic-park"
-run_plan_node "$sd_park" GLUERUN_PLAN_CRITIQUE=1 GLUERUN_RUNNER="$CRITIC" \
+run_plan_node "$sd_park" SINGULAR_PLAN_CRITIQUE=1 SINGULAR_RUNNER="$CRITIC" \
   CRITIC_MARKER="$marker_park" CRITIC_VERDICT=park
 [[ "$RC" -ne 0 ]] || fail "park: a non-approve terminal must exit non-zero"
 assert_contains "$OUT" "plan-failed:$NODE" "park: prints plan-failed:<node>"

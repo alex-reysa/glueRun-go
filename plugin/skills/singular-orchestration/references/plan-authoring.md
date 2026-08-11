@@ -7,12 +7,12 @@ hand-authoring task files.
 
 ## The DAG (`docs/orchestration/dag.v0.json`)
 
-Schema: `gluerun.orchestration.dag.v0` (mirrored into the repo by
-`gluerun init`; validate with `gluerun validate-dag`). Top level:
+Schema: `singular.orchestration.dag.v0` (mirrored into the repo by
+`singular init`; validate with `singular validate-dag`). Top level:
 
 ```json
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "layers": ["contract", "runtime", "harness", "evaluation"],
   "kinds": ["contract", "runtime", "harness", "evaluation"],
   "nodes": [ ... ]
@@ -25,7 +25,7 @@ Node fields (all required except `description`; no extra fields allowed):
 | --- | --- |
 | `id` | Stable kebab-case identifier. Becomes the gate filename (`gates/<id>.gate-result.json`) and the argument to `area-gate` / `promote-gate`. |
 | `stage` | Human grouping label (e.g. `S0-baseline`, `M1`). Does NOT constrain scheduling — only `dependsOn` does. |
-| `area` | Must name a key in `gluerun.config.json` `areas{}`. Determines the file scopes workers for this node may own. |
+| `area` | Must name a key in `singular.config.json` `areas{}`. Determines the file scopes workers for this node may own. |
 | `layer` / `kind` | Must appear in the top-level `layers` / `kinds` arrays. Taxonomy for humans and tooling; `kind: evaluation` marks operator-driven nodes that planners must NOT emit tasks for. |
 | `dependsOn` | Array of node ids. A node joins the frontier when every dependency has a passing gate result. |
 | `requiredCompletion` | Behavior-level completion criterion, checkable by command/test. This is what the gate promoter certifies. |
@@ -61,7 +61,7 @@ that already has tasks or a gate result; add a new node instead.
 ## Task files (`docs/orchestration/tasks/TASK-XXXX.md`)
 
 Normally emitted by L1 planners (staged as
-`gluerun.orchestration.task-batch.v0` JSON — `{taskId, markdown}` pairs —
+`singular.orchestration.task-batch.v0` JSON — `{taskId, markdown}` pairs —
 then imported by L0). Hand-author only for seeding or hotfixes, using
 `docs/orchestration/tasks/TEMPLATE.md`:
 
@@ -69,7 +69,7 @@ then imported by L0). Hand-author only for seeding or hotfixes, using
 # TASK-XXXX: <title>
 
 Status: ready
-Area: <area key from gluerun.config.json>
+Area: <area key from singular.config.json>
 Target branch: `agent/integration`
 Worker branch: `agent/<area>/TASK-XXXX-<kebab-slug>`
 Test policy: `strict_test_first`
@@ -135,7 +135,7 @@ every run. Rules that have proven their worth in production:
 
 ## Prompts (`docs/orchestration/prompts/`)
 
-`gluerun init` copies role skeletons (l0-origin, l1-planner,
+`singular init` copies role skeletons (l0-origin, l1-planner,
 l1-area-orchestrator, l2-test-first-developer, auditor, reviewer,
 plan-critic, decider). Rewrite them for the repo's stack — language, test
 runner, code conventions. Keep the auditor and plan-critic prompts skeptical
@@ -143,11 +143,11 @@ and independent; they are the quality floor.
 
 ## Checklist before first actuate
 
-- [ ] `gluerun validate-dag` passes.
-- [ ] `gluerun next-areas` shows the frontier you expect (wave 1 width ≥ 2
+- [ ] `singular validate-dag` passes.
+- [ ] `singular next-areas` shows the frontier you expect (wave 1 width ≥ 2
       unless the work is genuinely serial).
-- [ ] Every node's `area` exists in `gluerun.config.json` `areas{}` and the
+- [ ] Every node's `area` exists in `singular.config.json` `areas{}` and the
       scopes cover the files its tasks will own.
 - [ ] `gateCommand` actually proves repo health (not `false`, not a no-op).
 - [ ] `planner-contract.md` names the scarce hook files and slice rules.
-- [ ] Prompts rewritten for the stack; `gluerun doctor` clean.
+- [ ] Prompts rewritten for the stack; `singular doctor` clean.

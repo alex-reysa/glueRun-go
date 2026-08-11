@@ -7,18 +7,18 @@
 # function only; NO existing engine path invokes it, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior (OFF-parity
 # by construction, mirroring engine/ctx-planner-resume.sh). The
-# GLUERUN_CTX_ROUTING wire-in and the engine/ctx-route.sh spine that composes this
-# gate with gluerun_session_resume_decide / gluerun_planner_resume_decide are
+# SINGULAR_CTX_ROUTING wire-in and the engine/ctx-route.sh spine that composes this
+# gate with singular_session_resume_decide / singular_planner_resume_decide are
 # later slices of the routing-module node and are OUT OF SCOPE here.
 #
-# gluerun_ctx_route_window_gate <role> <session-transcript-path>
+# singular_ctx_route_window_gate <role> <session-transcript-path>
 #
 # Estimates session tokens from the provider session transcript via a documented
-# deterministic estimate — byte_count / GLUERUN_SESSION_WINDOW_CHARS_PER_TOKEN,
-# floored — and compares the estimate against GLUERUN_SESSION_WINDOW_MAX_PCT of
-# the window size GLUERUN_SESSION_WINDOW_TOKENS:
+# deterministic estimate — byte_count / SINGULAR_SESSION_WINDOW_CHARS_PER_TOKEN,
+# floored — and compares the estimate against SINGULAR_SESSION_WINDOW_MAX_PCT of
+# the window size SINGULAR_SESSION_WINDOW_TOKENS:
 #
-#   estimate * 100 > GLUERUN_SESSION_WINDOW_TOKENS * GLUERUN_SESSION_WINDOW_MAX_PCT
+#   estimate * 100 > SINGULAR_SESSION_WINDOW_TOKENS * SINGULAR_SESSION_WINDOW_MAX_PCT
 #       -> refuse window-pressure   (over threshold)
 #   otherwise                                            -> pass
 #
@@ -36,10 +36,10 @@
 # exits non-zero.
 #
 # Additive documented knobs (defaults live here):
-#   GLUERUN_SESSION_WINDOW_TOKENS          200000  context-window size in tokens
-#   GLUERUN_SESSION_WINDOW_MAX_PCT         70      refuse-resume usage percentage
-#   GLUERUN_SESSION_WINDOW_CHARS_PER_TOKEN 4       deterministic estimate divisor
-gluerun_ctx_route_window_gate() {
+#   SINGULAR_SESSION_WINDOW_TOKENS          200000  context-window size in tokens
+#   SINGULAR_SESSION_WINDOW_MAX_PCT         70      refuse-resume usage percentage
+#   SINGULAR_SESSION_WINDOW_CHARS_PER_TOKEN 4       deterministic estimate divisor
+singular_ctx_route_window_gate() {
   local role="$1" transcript="$2"
   : "$role"  # accepted for per-role dispatch; not consulted by the budget here
 
@@ -48,9 +48,9 @@ gluerun_ctx_route_window_gate() {
     printf 'refuse window-pressure\n'; return 0
   fi
 
-  local window="${GLUERUN_SESSION_WINDOW_TOKENS:-200000}"
-  local max_pct="${GLUERUN_SESSION_WINDOW_MAX_PCT:-70}"
-  local cpt="${GLUERUN_SESSION_WINDOW_CHARS_PER_TOKEN:-4}"
+  local window="${SINGULAR_SESSION_WINDOW_TOKENS:-200000}"
+  local max_pct="${SINGULAR_SESSION_WINDOW_MAX_PCT:-70}"
+  local cpt="${SINGULAR_SESSION_WINDOW_CHARS_PER_TOKEN:-4}"
 
   # Compute the deterministic estimate and the verdict in one python pass. Any
   # arithmetic ambiguity (non-integer knob, unreadable size, cpt<=0) fails closed

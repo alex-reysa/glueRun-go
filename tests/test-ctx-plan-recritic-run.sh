@@ -6,19 +6,19 @@
 # per-node plan-critic session (its prior concerns the checklist), completing the
 # run half of the stage-file deliverable begun by the decider/recorder.
 #
-#   gluerun_plan_recritic_run <node> <run_id> <stage_dir> <revises_run_id> [worktree]
+#   singular_plan_recritic_run <node> <run_id> <stage_dir> <revises_run_id> [worktree]
 #
 # Asserts:
-#   (A) knob off (GLUERUN_PLAN_RECRITIC_RESUME unset/0) -> the decider returns
+#   (A) knob off (SINGULAR_PLAN_RECRITIC_RESUME unset/0) -> the decider returns
 #       `fresh disabled`; the runner delegates to the integrated FRESH critic
-#       (gluerun_ctx_plan_critic_run) producing the SAME plan-critique.json record
+#       (singular_ctx_plan_critic_run) producing the SAME plan-critique.json record
 #       + exactly one plan.critiqued event with NO --resume-session on the runner,
 #       plus a role=plan-critic strategy_selected event (strategy fresh, the exact
 #       reason, revisesRunId) — byte-identical to today's fresh re-critique.
 #   (B) knob on + a valid plan-critic session -> the pass runs the DEFAULT runner
 #       WITH --resume-session <sid> (read-only), persists the critique through the
 #       SHARED lib.sh helpers into the same plan-critique.json record with finding
-#       ids matching gluerun_finding_id, appends the SAME single plan.critiqued
+#       ids matching singular_finding_id, appends the SAME single plan.critiqued
 #       event, and records a role=plan-critic RESUME strategy event carrying
 #       revisesRunId + sessionId.
 #   (C) rc-86 (resume refused) on the resume run -> a context.resume_failed fresh
@@ -27,7 +27,7 @@
 #   (D) unparseable runner output -> fail-OPEN: an approve verdict + a
 #       ctx.plan_critique_infra event, NO plan.critiqued, returns 0 (never blocks).
 #   (E) present-but-uncalled -> no existing engine path invokes the new function.
-# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and temp dirs so the
+# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and temp dirs so the
 # suite never mutates real run state.
 set -uo pipefail
 
@@ -44,18 +44,18 @@ pass() { echo "ok: $*"; }
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-export GLUERUN_ORCH_DIR="$tmp/docs/orchestration"
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-mkdir -p "$GLUERUN_STATE_DIR" "$GLUERUN_ORCH_DIR/prompts"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+export SINGULAR_ORCH_DIR="$tmp/docs/orchestration"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+mkdir -p "$SINGULAR_STATE_DIR" "$SINGULAR_ORCH_DIR/prompts"
+: > "$SINGULAR_EVENTS_FILE"
 
 # The critic base/template prompt where BOTH the fresh driver and the resume
-# decider resolve it (${GLUERUN_ORCH_DIR}/prompts/plan-critic.md), so the
+# decider resolve it (${SINGULAR_ORCH_DIR}/prompts/plan-critic.md), so the
 # template-sha gate matches the sha the finalize recorded.
 [[ -f "$REAL_TEMPLATE" ]] || fail "missing critic template fixture source: $REAL_TEMPLATE"
-cp "$REAL_TEMPLATE" "$GLUERUN_ORCH_DIR/prompts/plan-critic.md"
+cp "$REAL_TEMPLATE" "$SINGULAR_ORCH_DIR/prompts/plan-critic.md"
 
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
@@ -65,10 +65,10 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX" ]] || fail "engine not present yet: $CTX"
 # shellcheck disable=SC1090
 source "$CTX" || fail "sourcing $CTX failed"
-[[ "$(type -t gluerun_plan_recritic_run)" == "function" ]] \
-  || fail "gluerun_plan_recritic_run not defined by $CTX"
+[[ "$(type -t singular_plan_recritic_run)" == "function" ]] \
+  || fail "singular_plan_recritic_run not defined by $CTX"
 
-TPL_SHA="$(gluerun_sha256_file "$GLUERUN_ORCH_DIR/prompts/plan-critic.md")"
+TPL_SHA="$(singular_sha256_file "$SINGULAR_ORCH_DIR/prompts/plan-critic.md")"
 [[ -n "$TPL_SHA" ]] || fail "template sha came back empty"
 
 # --- A real worktree so the node-lineage gate (git merge-base) runs for real --
@@ -82,8 +82,8 @@ HEAD2="$(git -C "$wt" rev-parse HEAD)"
 
 NODE="plan-revision-loop"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-META="$GLUERUN_STATE_DIR/sessions/plan-critic/$NODE.json"
-lease_path="$GLUERUN_STATE_DIR/sessions/plan-critic/$NODE.lease"
+META="$SINGULAR_STATE_DIR/sessions/plan-critic/$NODE.json"
+lease_path="$SINGULAR_STATE_DIR/sessions/plan-critic/$NODE.lease"
 
 REVISES="RUN-REVISE-777"
 
@@ -117,7 +117,7 @@ fi
 cat > "$out" <<JSON
 Here is my critique:
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "STUB-WRONG-NODE",
   "runId": "STUB-WRONG-RUN",
   "batchTaskIds": ["TASK-9999"],
@@ -130,22 +130,22 @@ JSON
 exit 0
 STUBEOF
 chmod +x "$STUB"
-export GLUERUN_RUNNER="$STUB"
+export SINGULAR_RUNNER="$STUB"
 export STUB_ARGV_FILE="$tmp/stub-argv.txt"
 export STUB_CALLS_FILE="$tmp/stub-calls.txt"
 
 CLAIM='Batch slices TASK-0007 and TASK-0008 with a hidden ordering coupling'
-EXPECT_FID="$(gluerun_finding_id "$CLAIM")"
-[[ "$EXPECT_FID" =~ ^f-[0-9a-f]{12}$ ]] || fail "gluerun_finding_id shape unexpected: $EXPECT_FID"
+EXPECT_FID="$(singular_finding_id "$CLAIM")"
+[[ "$EXPECT_FID" =~ ^f-[0-9a-f]{12}$ ]] || fail "singular_finding_id shape unexpected: $EXPECT_FID"
 FINDING='[{"id":"f-ffffffffffff","severity":"blocking","claim":"'"$CLAIM"'","evidence":"owned files overlap","suggestedChange":"declare a dependsOn edge"}]'
 
 count_events() { # <type>
-  [[ -f "$GLUERUN_EVENTS_FILE" ]] || { echo 0; return 0; }
-  local c; c="$(grep -c "\"type\":\"$1\"" "$GLUERUN_EVENTS_FILE" 2>/dev/null)" || true
+  [[ -f "$SINGULAR_EVENTS_FILE" ]] || { echo 0; return 0; }
+  local c; c="$(grep -c "\"type\":\"$1\"" "$SINGULAR_EVENTS_FILE" 2>/dev/null)" || true
   echo "${c:-0}"
 }
 last_event() { # <type>
-  python3 - "$GLUERUN_EVENTS_FILE" "$1" <<'PY'
+  python3 - "$SINGULAR_EVENTS_FILE" "$1" <<'PY'
 import json, sys
 path, typ = sys.argv[1:3]
 last = None
@@ -176,7 +176,7 @@ forge_meta() { # forge a base-good plan-critic session-meta at $META
 import json, sys
 path, cwd, now, node, tpl, head = sys.argv[1:7]
 doc = {
-    "schema": "gluerun.orchestration.session-meta.v0",
+    "schema": "singular.orchestration.session-meta.v0",
     "provider": "codex", "sessionId": "SID-CRITIC", "model": "m", "effort": "e",
     "cwd": cwd, "exitCode": 0, "createdAt": now,
     "role": "plan-critic", "node": node, "runner": "stub-runner.sh",
@@ -188,7 +188,7 @@ PY
 }
 
 reset_case() { # fresh events + argv + calls per case
-  : > "$GLUERUN_EVENTS_FILE"
+  : > "$SINGULAR_EVENTS_FILE"
   : > "$STUB_ARGV_FILE"
   : > "$STUB_CALLS_FILE"
 }
@@ -198,7 +198,7 @@ assert_record() { # <record> <node> <run_id> <verdict>
 import json, sys
 rec = json.load(open(sys.argv[1]))
 node, run_id, verdict, fid = sys.argv[2:6]
-assert rec.get("schema") == "gluerun.orchestration.plan-critique.v0", rec
+assert rec.get("schema") == "singular.orchestration.plan-critique.v0", rec
 assert rec.get("node") == node, rec
 assert rec.get("runId") == run_id, rec
 assert rec.get("verdict") == verdict, rec
@@ -219,8 +219,8 @@ export STUB_MODE="json"; export STUB_VERDICT="revise"; export STUB_FINDINGS="$FI
 export STUB_RESUME_REFUSE=0
 stage_dir="$(make_stage_dir "OFF")"
 run_id="RUN-OFF"
-GLUERUN_PLAN_RECRITIC_RESUME=0 \
-  gluerun_plan_recritic_run "$NODE" "$run_id" "$stage_dir" "$REVISES" "$wt" \
+SINGULAR_PLAN_RECRITIC_RESUME=0 \
+  singular_plan_recritic_run "$NODE" "$run_id" "$stage_dir" "$REVISES" "$wt" \
   || fail "A: runner crashed with knob off"
 
 record="$stage_dir/plan-critique.json"
@@ -259,8 +259,8 @@ export STUB_RESUME_REFUSE=0
 rm -f "$lease_path"
 stage_dir="$(make_stage_dir "RESUME")"
 run_id="RUN-RESUME"
-GLUERUN_PLAN_RECRITIC_RESUME=1 \
-  gluerun_plan_recritic_run "$NODE" "$run_id" "$stage_dir" "$REVISES" "$wt" \
+SINGULAR_PLAN_RECRITIC_RESUME=1 \
+  singular_plan_recritic_run "$NODE" "$run_id" "$stage_dir" "$REVISES" "$wt" \
   || fail "B: runner crashed on resume path"
 
 record="$stage_dir/plan-critique.json"
@@ -298,8 +298,8 @@ export STUB_RESUME_REFUSE=1
 rm -f "$lease_path"
 stage_dir="$(make_stage_dir "REFUSE")"
 run_id="RUN-REFUSE"
-GLUERUN_PLAN_RECRITIC_RESUME=1 \
-  gluerun_plan_recritic_run "$NODE" "$run_id" "$stage_dir" "$REVISES" "$wt" \
+SINGULAR_PLAN_RECRITIC_RESUME=1 \
+  singular_plan_recritic_run "$NODE" "$run_id" "$stage_dir" "$REVISES" "$wt" \
   || fail "C: runner must not crash on rc-86 fallback"
 
 record="$stage_dir/plan-critique.json"
@@ -336,12 +336,12 @@ reset_case
 forge_meta
 export STUB_MODE="prose"; export STUB_RESUME_REFUSE=0
 unset STUB_FINDINGS 2>/dev/null || true
-export GLUERUN_AUDIT_INFRA_MAX=2
+export SINGULAR_AUDIT_INFRA_MAX=2
 rm -f "$lease_path"
 stage_dir="$(make_stage_dir "INFRA")"
 run_id="RUN-INFRA"
-GLUERUN_PLAN_RECRITIC_RESUME=1 \
-  gluerun_plan_recritic_run "$NODE" "$run_id" "$stage_dir" "$REVISES" "$wt" \
+SINGULAR_PLAN_RECRITIC_RESUME=1 \
+  singular_plan_recritic_run "$NODE" "$run_id" "$stage_dir" "$REVISES" "$wt" \
   || fail "D: runner must fail OPEN, not crash/return non-zero"
 
 record="$stage_dir/plan-critique.json"
@@ -364,7 +364,7 @@ pass "(D) unparseable -> fail-open approve + ctx.plan_critique_infra, no plan.cr
 # ===========================================================================
 # (E) present-but-uncalled: no existing engine path invokes the new function.
 # ===========================================================================
-callers="$(grep -rl 'gluerun_plan_recritic_run' "$ENGINE_HOME/engine" 2>/dev/null \
+callers="$(grep -rl 'singular_plan_recritic_run' "$ENGINE_HOME/engine" 2>/dev/null \
   | grep -v '/ctx-plan-recritic-run.sh$' || true)"
 : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
 pass "(E) invariance: the new runner is present-but-uncalled by any existing engine path"

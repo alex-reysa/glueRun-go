@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.l1-lease.v0",
-  "title": "gluerun L1 Node Lease",
+  "$id": "singular.orchestration.l1-lease.v0",
+  "title": "singular L1 Node Lease",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
     "updatedAt"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.l1-lease.v0" },
+    "schema": { "const": "singular.orchestration.l1-lease.v0" },
     "node": { "type": "string", "minLength": 1 },
     "area": { "type": "string", "minLength": 1 },
     "stage": { "type": "string", "minLength": 1 },

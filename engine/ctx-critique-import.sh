@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx-critique-import.sh — the critique-import gate: the pure, read-only DECISION
 # the L0 importer will consult to honor plan-critique verdicts behind the
-# default-OFF GLUERUN_PLAN_CRITIQUE knob.
+# default-OFF SINGULAR_PLAN_CRITIQUE knob.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
 # functions only; NO existing engine path invokes them, so with this file
@@ -15,7 +15,7 @@
 #
 # The gate reads ONLY the persisted critique record (plan-critique.json, written
 # by engine/ctx-plan-critic.sh next to a node's staged candidates) together with
-# the GLUERUN_PLAN_CRITIQUE knob, and returns the import disposition. It appends
+# the SINGULAR_PLAN_CRITIQUE knob, and returns the import disposition. It appends
 # NO events, spawns no runner, and mutates nothing — evidence invariance: the
 # disposition event and lease handling belong to the follow-up wiring slice. The
 # gate is an added enforcement layer over the read-only skeptic critique; it
@@ -23,7 +23,7 @@
 # auditor, and on the fail-closed ON path it only ever refuses import — it never
 # fabricates an approval.
 #
-# Decision semantics, gated on GLUERUN_PLAN_CRITIQUE (default 0):
+# Decision semantics, gated on SINGULAR_PLAN_CRITIQUE (default 0):
 #   OFF (unset or "0"): observe-only — the decision is ALWAYS `import`,
 #     regardless of the recorded verdict or a missing record, so wiring it OFF
 #     leaves the import path byte-identical to today.
@@ -32,13 +32,13 @@
 #     a verdict outside approve|revise|park, fails CLOSED to reject.
 #
 # Public entry points:
-#   gluerun_ctx_critique_import_record_path <stage_dir>
+#   singular_ctx_critique_import_record_path <stage_dir>
 #     Pure: print the canonical critique record path "<stage_dir>/plan-critique.json"
 #     (the same path engine/ctx-plan-critic.sh persists to). Empty stage_dir ->
 #     empty (caller skips). No side effects.
-#   gluerun_ctx_critique_import_enabled
-#     Pure: exit 0 when the gate is ON (GLUERUN_PLAN_CRITIQUE=1), else 1.
-#   gluerun_ctx_critique_import_decide <stage_dir>
+#   singular_ctx_critique_import_enabled
+#     Pure: exit 0 when the gate is ON (SINGULAR_PLAN_CRITIQUE=1), else 1.
+#   singular_ctx_critique_import_decide <stage_dir>
 #     Pure/read-only: print a single TAB-separated line "<disposition>\t<reason>\t<observed>"
 #     and return the disposition as exit status:
 #       import -> exit 0, line "import\tok\t<observed>"
@@ -51,40 +51,40 @@
 
 # Shipped plan-critique schema. The engine ships its OWN schemas, so resolve
 # them relative to THIS file (mirroring lib.sh) — never a possibly-stale
-# GLUERUN_SCHEMA_DIR pointing at another install. Overridable for vendoring.
-if [[ -z "${GLUERUN_PLAN_CRITIQUE_SCHEMA:-}" ]]; then
-  GLUERUN_PLAN_CRITIQUE_SCHEMA="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/schemas/plan-critique.v0.schema.json"
+# SINGULAR_SCHEMA_DIR pointing at another install. Overridable for vendoring.
+if [[ -z "${SINGULAR_PLAN_CRITIQUE_SCHEMA:-}" ]]; then
+  SINGULAR_PLAN_CRITIQUE_SCHEMA="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/schemas/plan-critique.v0.schema.json"
 fi
 
 # The stable reject reason token. Kept as one place so the follow-up reconcile.sh
 # wiring and this gate never drift.
-gluerun_ctx_critique_import_reason() { printf '%s' "plan-critique"; }
+singular_ctx_critique_import_reason() { printf '%s' "plan-critique"; }
 
 # Pure path helper: the canonical critique record path next to a node's staged
 # candidates. Empty stage_dir -> empty (caller skips). No side effects.
-gluerun_ctx_critique_import_record_path() {
+singular_ctx_critique_import_record_path() {
   local stage_dir="$1"
   [[ -n "$stage_dir" ]] || { printf '%s' ""; return 0; }
   printf '%s/plan-critique.json' "$stage_dir"
 }
 
-# Pure knob read: exit 0 when enforcement is ON (GLUERUN_PLAN_CRITIQUE=1). Any
+# Pure knob read: exit 0 when enforcement is ON (SINGULAR_PLAN_CRITIQUE=1). Any
 # other value (unset, "0", anything else) is observe-only (OFF). No side effects.
-gluerun_ctx_critique_import_enabled() {
-  [[ "${GLUERUN_PLAN_CRITIQUE:-0}" == "1" ]]
+singular_ctx_critique_import_enabled() {
+  [[ "${SINGULAR_PLAN_CRITIQUE:-0}" == "1" ]]
 }
 
 # The critique-import gate DECISION. Pure and read-only: reads only the persisted
 # critique record and the knob; appends no events, spawns no runner, writes no
 # files. See the header for the output contract.
-gluerun_ctx_critique_import_decide() {
+singular_ctx_critique_import_decide() {
   local stage_dir="$1"
-  local record; record="$(gluerun_ctx_critique_import_record_path "$stage_dir")"
-  local reason; reason="$(gluerun_ctx_critique_import_reason)"
+  local record; record="$(singular_ctx_critique_import_record_path "$stage_dir")"
+  local reason; reason="$(singular_ctx_critique_import_reason)"
 
   # OFF (observe-only): ALWAYS import — the recorded verdict is not enforced and
   # a missing record is fine, so the OFF import path is byte-identical to today.
-  if ! gluerun_ctx_critique_import_enabled; then
+  if ! singular_ctx_critique_import_enabled; then
     printf 'import\tok\toff\n'
     return 0
   fi
@@ -112,9 +112,9 @@ PY
 )" || { printf 'reject\t%s\tinvalid\n' "$reason"; return 1; }
 
   # Schema validation via the shared checker. A record failing
-  # gluerun.orchestration.plan-critique.v0 (including a verdict outside the
+  # singular.orchestration.plan-critique.v0 (including a verdict outside the
   # approve|revise|park enum) -> reject.
-  gluerun_json_schema_check "$compact" "$GLUERUN_PLAN_CRITIQUE_SCHEMA" "plan critique" \
+  singular_json_schema_check "$compact" "$SINGULAR_PLAN_CRITIQUE_SCHEMA" "plan critique" \
     >/dev/null 2>&1 || { printf 'reject\t%s\tinvalid\n' "$reason"; return 1; }
 
   # Extract the (schema-valid) verdict and map it to a disposition.

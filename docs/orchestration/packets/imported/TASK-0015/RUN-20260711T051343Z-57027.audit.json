@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0015",
   "runId": "RUN-20260711T051343Z-57027",
   "branch": "agent/plancritic/TASK-0015-critique-import-gate",
@@ -13,7 +13,7 @@
     "git diff 5f7a006..7cfa585 --name-status: only A engine/ctx-critique-import.sh, A tests/test-ctx-critique-import.sh (+375, no forbidden file)",
     "engine/ctx-critique-import.sh: pure/read-only gate; OFF (default) always `import`, ON fails CLOSED to reject; never fabricates approval",
     "tests/test-ctx-critique-import.sh: OFF observe-only, ON approve/revise/park, fail-closed missing/badjson/badschema/badverdict, purity (no events/no writes), present-but-uncalled assertions",
-    "engine/lib.sh:3857 ctx-*.sh auto-source loop (adds file without editing lib.sh); gluerun_json_schema_check defined lib.sh:1916; schemas/plan-critique.v0.schema.json present",
+    "engine/lib.sh:3857 ctx-*.sh auto-source loop (adds file without editing lib.sh); singular_json_schema_check defined lib.sh:1916; schemas/plan-critique.v0.schema.json present",
     "git status --porcelain: clean working tree; engine file absent at base 5f7a006 (confirms genuine test-first)"
   ],
   "commandsRun": [
@@ -21,14 +21,14 @@
     "git diff --name-status 5f7a006 7cfa585; git diff --stat 5f7a006 7cfa585",
     "cat worker-evidence/{red,green,regression}.log; cat gate-check.log",
     "git status --porcelain",
-    "grep -n 'ctx-' engine/lib.sh; ls schemas/plan-critique.v0.schema.json; grep -rn 'gluerun_json_schema_check()' engine/",
+    "grep -n 'ctx-' engine/lib.sh; ls schemas/plan-critique.v0.schema.json; grep -rn 'singular_json_schema_check()' engine/",
     "git show --stat 7cfa585; git cat-file -e 5f7a006:engine/ctx-critique-import.sh"
   ],
   "findings": [
     "Scope compliant: head commit 7cfa585 adds only the two owned files; no forbidden file modified; working tree clean.",
     "Test-first satisfied: red.log exit 1 (engine file absent at base) -> green.log exit 0; test authored asserting the gate before the implementation existed.",
     "Gate green: gate-check.json exitCode 0; full suite 37 passed / 0 failed including regression test-engine-clean.sh, so the present-but-uncalled gate leaves the engine byte-identical.",
-    "Consistency verified: gate resolves its own schema relative to the file (schemas/plan-critique.v0.schema.json exists), uses lib.sh gluerun_json_schema_check, and fails CLOSED on the ON path (missing/invalid/bad-verdict -> reject) while OFF path always imports.",
+    "Consistency verified: gate resolves its own schema relative to the file (schemas/plan-critique.v0.schema.json exists), uses lib.sh singular_json_schema_check, and fails CLOSED on the ON path (missing/invalid/bad-verdict -> reject) while OFF path always imports.",
     "No hidden scope expansion: only new functions defined; lib.sh ctx-*.sh auto-source loop already present so no lib.sh/reconcile.sh/driver edit; consumer wiring explicitly deferred to a follow-up node per nextAction.",
     "No branch drift: branch matches assignment and baseRef 5f7a006 is a recent ancestor of head.",
     "Non-blocking observation: the ON path depends on python3; if python3 were unavailable the compaction/verdict-read fails to reject (fail-closed, safe direction) and the OFF path never invokes python3 \u2014 no fabricated approval, so no fix required."

@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0097",
   "runId": "RUN-20260712T215042Z-34601",
   "branch": "agent/eval/TASK-0097-experiment-arm-audit",
@@ -12,9 +12,9 @@
     "worker-evidence/worker-packet-validation.log ('ok') + module-packet-guard.log (0 bytes)",
     "worker-evidence/implementer-capsule.json (committed headSha 872c924, forbiddenFiles empty)",
     "worker-evidence/last-message.json (pre-commit worker packet)",
-    ".gluerun-evidence/red.log (RED: tool not present yet, exit 1)",
-    ".gluerun-evidence/green.log (PASS, exit 0)",
-    ".gluerun-evidence/regression.log (armaudit+engine-clean PASS, exit 0)",
+    ".singular-evidence/red.log (RED: tool not present yet, exit 1)",
+    ".singular-evidence/green.log (PASS, exit 0)",
+    ".singular-evidence/regression.log (armaudit+engine-clean PASS, exit 0)",
     "engine/ctx-experiment-armaudit.sh (264 lines, read-only consumer, new functions only)",
     "schemas/orchestration/ctx-experiment-armaudit.v0.schema.json (const matches emitted schema)",
     "tests/test-ctx-experiment-armaudit.sh (343 lines, behavioral fixture coverage)",
@@ -26,13 +26,13 @@
     "git rev-parse HEAD^ (=810c3ba, equals packet baseRef); git diff --name-status HEAD^..HEAD; git status --porcelain (clean)",
     "bash tests/test-ctx-experiment-armaudit.sh (independent, EXIT=0)",
     "bash tests/test-ctx-experiment-armaudit.sh && bash tests/test-engine-clean.sh (independent regression, EXIT=0)",
-    "cat .gluerun-evidence/{red,green,regression}.log and worker-evidence guard logs",
-    "grep ctx-loader block in engine/lib.sh; verified gluerun_ctx_experiment_armstate_json exists in emitter; python3 --version (3.14.5)"
+    "cat .singular-evidence/{red,green,regression}.log and worker-evidence guard logs",
+    "grep ctx-loader block in engine/lib.sh; verified singular_ctx_experiment_armstate_json exists in emitter; python3 --version (3.14.5)"
   ],
   "findings": [
     "Scope compliant: worker commit HEAD^..HEAD adds only the 3 owned files (engine/ctx-experiment-armaudit.sh, schemas/orchestration/ctx-experiment-armaudit.v0.schema.json, tests/test-ctx-experiment-armaudit.sh); no forbidden/pre-existing file modified; working tree clean.",
     "Genuine test-first: RED failed for the correct reason (tool absent) before GREEN; independent re-run reproduces green exit 0.",
-    "Schema/provenance consistent: emitted schema const == gluerun.orchestration.ctx-experiment-armaudit.v0; baseRef==HEAD^==810c3ba; committed headSha==872c924.",
+    "Schema/provenance consistent: emitted schema const == singular.orchestration.ctx-experiment-armaudit.v0; baseRef==HEAD^==810c3ba; committed headSha==872c924.",
     "OFF-parity / read-only preserved: engine file defines new functions only, auto-sourced by lib.sh ctx-loader, uncalled by existing paths; test asserts l1-drive.sh and ctx-experiment-armstate.sh are byte-unchanged and the input fixture tree is invariant.",
     "Foundation-clean: generic activeCount arm boundary with no hardcoded treatment knob-set; test-engine-clean passes; fail-safe zeroed artifact on missing/empty inputs; schema fails closed (additionalProperties:false).",
     "Test coverage is comprehensive: all three entry points, every classification branch (consistent/contaminated/misconfigured-as-M0/unrecorded), no-arm exclusion, determinism, sorted-key canonical form, schema validation, and partition invariance.",

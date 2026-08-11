@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0073",
   "runId": "RUN-20260712T142128Z-31284",
   "branch": "agent/graph/TASK-0073-graph-contract-drop-unwired-guard",
@@ -22,7 +22,7 @@
     "grep -in 'pure projection|never authored|directly by a model' docs/context-build-plan/graph-event-mapping.md",
     "ls engine/_scratch_ctx_graph_ref.sh tests/_oldguard_repro.sh (absent)",
     "git status --porcelain (clean, exit 0)",
-    "grep TASK-0073 over .gluerun-state (dispatch/lease/events)"
+    "grep TASK-0073 over .singular-state (dispatch/lease/events)"
   ],
   "findings": [
     "File scope compliant: only owned file tests/test-context-graph-schema.sh modified; no forbidden file (schema, mapping doc, nodes.jsonl, edges.jsonl) appears in the diff.",

@@ -55,7 +55,7 @@ fi
 
 safe_run_id="${run_dir##*/}"
 safe_run_id="${safe_run_id//[^A-Za-z0-9_.-]/_}"
-sandbox_base="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-audit-${safe_run_id}.XXXXXX")"
+sandbox_base="$(mktemp -d "${TMPDIR:-/tmp}/singular-audit-${safe_run_id}.XXXXXX")"
 verify_worktree="$sandbox_base/worktree"
 cache_root="$sandbox_base/cache"
 log="$run_dir/audit-verification-${attempt}-${try_number}.log"
@@ -63,10 +63,10 @@ worktree_added="no"
 
 cleanup() {
   if [[ "$worktree_added" == "yes" ]]; then
-    if gluerun_git_lock_acquire 2>/dev/null; then
-      git -C "$GLUERUN_ROOT" worktree remove --force "$verify_worktree" >/dev/null 2>&1 || true
-      git -C "$GLUERUN_ROOT" worktree prune >/dev/null 2>&1 || true
-      gluerun_git_lock_release
+    if singular_git_lock_acquire 2>/dev/null; then
+      git -C "$SINGULAR_ROOT" worktree remove --force "$verify_worktree" >/dev/null 2>&1 || true
+      git -C "$SINGULAR_ROOT" worktree prune >/dev/null 2>&1 || true
+      singular_git_lock_release
     fi
   fi
   rm -rf "$sandbox_base"
@@ -186,19 +186,19 @@ emit_setup_failure() {
 
 original_before="$(workspace_fingerprint "$source_worktree")"
 
-if [[ "${GLUERUN_AUDIT_VERIFY_FORCE_SETUP_FAILURE:-0}" == "1" ]]; then
+if [[ "${SINGULAR_AUDIT_VERIFY_FORCE_SETUP_FAILURE:-0}" == "1" ]]; then
   emit_setup_failure "forced-setup-failure"
   exit $?
 fi
 
-if ! gluerun_git_lock_acquire; then
+if ! singular_git_lock_acquire; then
   emit_setup_failure "git-lock-timeout"
   exit $?
 fi
 add_rc=0
-git -C "$GLUERUN_ROOT" worktree add --detach -q "$verify_worktree" "$head_sha" >"$log" 2>&1 || add_rc=$?
+git -C "$SINGULAR_ROOT" worktree add --detach -q "$verify_worktree" "$head_sha" >"$log" 2>&1 || add_rc=$?
 if [[ "$add_rc" -eq 0 ]]; then worktree_added="yes"; fi
-gluerun_git_lock_release
+singular_git_lock_release
 if [[ "$add_rc" -ne 0 ]]; then
   emit_setup_failure "worktree-create-failed"
   exit $?
@@ -216,10 +216,10 @@ fi
 # this one never ran `prewarm`, and it is the worktree where the auditor re-runs
 # the gate whose result decides whether the work is accepted. A green worker gate
 # that fails here is indistinguishable, from the outside, from broken work.
-if ! gluerun_worktree_prepare "$verify_worktree" "" "$source_worktree" "$log"; then
-  case "$GLUERUN_WORKTREE_PREPARE_STAGE" in
+if ! singular_worktree_prepare "$verify_worktree" "" "$source_worktree" "$log"; then
+  case "$SINGULAR_WORKTREE_PREPARE_STAGE" in
     provision) emit_setup_failure "worktree-provision-failed" ;;
-    copy-paths) emit_setup_failure "${GLUERUN_WORKTREE_PREPARE_DETAIL:-dependency-copy-failed}" ;;
+    copy-paths) emit_setup_failure "${SINGULAR_WORKTREE_PREPARE_DETAIL:-dependency-copy-failed}" ;;
     bootstrap) emit_setup_failure "worktree-bootstrap-failed" ;;
     *) emit_setup_failure "worktree-prepare-failed" ;;
   esac
@@ -239,14 +239,14 @@ fi
 
 observation="$run_dir/audit-gate-observation-${attempt}-${try_number}.json"
 rm -f "$observation"
-gate_timeout="${GLUERUN_AUDIT_GATE_TIMEOUT_SEC:-1200}"
+gate_timeout="${SINGULAR_AUDIT_GATE_TIMEOUT_SEC:-1200}"
 [[ "$gate_timeout" =~ ^[0-9]+$ ]] || gate_timeout=1200
 
 # Cache + report variables supplied only to the disposable command; they stay
 # outside the source checkout. Declared ONCE and shared by both spawn paths
 # below so the guarded and unguarded gates cannot drift apart.
 gate_env=(
-  GLUERUN_GATE_REPORT_FILE="$observation"
+  SINGULAR_GATE_REPORT_FILE="$observation"
   TMPDIR="$cache_root/tmp/"
   TMP="$cache_root/tmp"
   TEMP="$cache_root/tmp"
@@ -266,36 +266,36 @@ gate_env=(
 run_gate_command() {
   # Reuse the worker gate's allowlisted environment boundary so a denied host
   # variable cannot leak into verification.
-  gluerun_run_in_worktree_env "$verify_worktree" env "${gate_env[@]}" \
-    "$(gluerun_bash_bin)" -c "$gate_command"
+  singular_run_in_worktree_env "$verify_worktree" env "${gate_env[@]}" \
+    "$(singular_bash_bin)" -c "$gate_command"
 }
 
 # The same gate, spawned as a SESSION LEADER. An audited gate is an arbitrary,
 # uncooperative tree, so containment cannot depend on `ps`: where enumeration is
 # denied the old walk found no children and killed only the top shell, leaving
 # the gate running in a disposable worktree nobody would ever look at again
-# (PMGO-004). gluerun_setsid_exec is the LAST command here, so $! at the call
+# (PMGO-004). singular_setsid_exec is the LAST command here, so $! at the call
 # site is the leader itself (pid == pgid) and one negative pid reaches the tree.
 #
 # ONLY valid as a background job — it replaces the calling process.
 #
-# gluerun_run_in_worktree_env is a shell function that runs its command in a
+# singular_run_in_worktree_env is a shell function that runs its command in a
 # SUBSHELL, so it cannot be exec'd; the new session therefore re-enters it after
 # sourcing lib.sh, exactly the way every other engine child process obtains it.
 # Inlining the boundary here instead would fork it into two copies that drift.
 run_gate_command_session() {
-  export GLUERUN_ROOT GLUERUN_STATE_DIR GLUERUN_ENGINE_HOME
-  export GLUERUN_AUDIT_GATE_LIB="$SCRIPT_DIR/lib.sh"
-  export GLUERUN_AUDIT_GATE_WORKTREE="$verify_worktree"
-  export GLUERUN_AUDIT_GATE_COMMAND="$gate_command"
-  gluerun_setsid_exec "$(gluerun_bash_bin)" -c '
+  export SINGULAR_ROOT SINGULAR_STATE_DIR SINGULAR_ENGINE_HOME
+  export SINGULAR_AUDIT_GATE_LIB="$SCRIPT_DIR/lib.sh"
+  export SINGULAR_AUDIT_GATE_WORKTREE="$verify_worktree"
+  export SINGULAR_AUDIT_GATE_COMMAND="$gate_command"
+  singular_setsid_exec "$(singular_bash_bin)" -c '
 set -euo pipefail
 gate_env=("$@")
 set --
-source "$GLUERUN_AUDIT_GATE_LIB"
-gluerun_run_in_worktree_env "$GLUERUN_AUDIT_GATE_WORKTREE" env "${gate_env[@]}" \
-  "$(gluerun_bash_bin)" -c "$GLUERUN_AUDIT_GATE_COMMAND"
-' gluerun-audit-gate "${gate_env[@]}"
+source "$SINGULAR_AUDIT_GATE_LIB"
+singular_run_in_worktree_env "$SINGULAR_AUDIT_GATE_WORKTREE" env "${gate_env[@]}" \
+  "$(singular_bash_bin)" -c "$SINGULAR_AUDIT_GATE_COMMAND"
+' singular-audit-gate "${gate_env[@]}"
 }
 
 started_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
@@ -309,8 +309,8 @@ if [[ "$gate_timeout" -gt 0 ]]; then
     if [[ "$SECONDS" -ge "$gate_deadline" ]]; then
       gate_timed_out="yes"
       # `session`: the spawner's assertion that $gate_pid came from
-      # gluerun_setsid_exec above and has not been waited on yet.
-      gluerun_kill_tree "$gate_pid" 0 session
+      # singular_setsid_exec above and has not been waited on yet.
+      singular_kill_tree "$gate_pid" 0 session
       kill -KILL "$gate_pid" 2>/dev/null || true
       wait "$gate_pid" 2>/dev/null || true
       gate_exit=124
@@ -367,7 +367,7 @@ for changed in "${changed_paths[@]}"; do
   report_args+=(--changed-path "$changed")
 done
 report_rc=0
-if [[ "${GLUERUN_CONFIG_SCHEMA_VERSION:-}" == "v2" ]]; then
+if [[ "${SINGULAR_CONFIG_SCHEMA_VERSION:-}" == "v2" ]]; then
   strict_args=(
     "${report_args[@]}"
     --raw-exit-code "$gate_exit"
@@ -398,7 +398,7 @@ if [[ "${GLUERUN_CONFIG_SCHEMA_VERSION:-}" == "v2" ]]; then
     fi
     "$SCRIPT_DIR/gate-report.py" "${fallback_args[@]}" || report_rc=$?
   else
-    normalized_outcome="$(gluerun_json_field "$output" outcome 2>/dev/null || true)"
+    normalized_outcome="$(singular_json_field "$output" outcome 2>/dev/null || true)"
     case "$normalized_outcome" in
       passed|passed-with-acknowledged-baseline) report_rc=0 ;;
       failed-product) report_rc=10 ;;

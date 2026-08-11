@@ -2,9 +2,9 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "accept-existing-packet.sh requires bash >= 4 (mapfile); install via 'brew install bash'" >&2
@@ -66,37 +66,37 @@ cleanup() {
     fi
   fi
   if [[ "$verification_worktree_added" == "yes" ]]; then
-    if gluerun_git_lock_acquire 2>/dev/null; then
-      git -C "$GLUERUN_ROOT" worktree remove --force "$verification_worktree" >/dev/null 2>&1 || true
-      git -C "$GLUERUN_ROOT" worktree prune >/dev/null 2>&1 || true
-      gluerun_git_lock_release
+    if singular_git_lock_acquire 2>/dev/null; then
+      git -C "$SINGULAR_ROOT" worktree remove --force "$verification_worktree" >/dev/null 2>&1 || true
+      git -C "$SINGULAR_ROOT" worktree prune >/dev/null 2>&1 || true
+      singular_git_lock_release
     fi
   fi
   if [[ -n "$verification_sandbox" \
-    && "$(basename "$verification_sandbox")" == gluerun-accept-* ]]; then
+    && "$(basename "$verification_sandbox")" == singular-accept-* ]]; then
     rm -rf -- "$verification_sandbox"
   fi
   exit "$rc"
 }
 trap cleanup EXIT
 
-gluerun_ensure_state_dirs
-gluerun_require_target_branch
-if ! gluerun_validate_packet_basic "$packet" >/dev/null; then
+singular_ensure_state_dirs
+singular_require_target_branch
+if ! singular_validate_packet_basic "$packet" >/dev/null; then
   echo "packet command contract validation failed before deterministic execution" >&2
   exit 2
 fi
 
-task_id="$(gluerun_json_field "$packet" taskId)"
-run_id="$(gluerun_json_field "$packet" runId)"
-branch="$(gluerun_json_field "$packet" branch)"
-head_sha="$(gluerun_json_field "$packet" headSha)"
-base_ref="$(gluerun_json_field "$packet" baseRef)"
-workspace="$(gluerun_json_field "$packet" workspace)"
-run_dir="$GLUERUN_RUNS_DIR/$run_id"
-audit_record="$(gluerun_audit_record_path "$run_id")"
-task_file="$GLUERUN_TASKS_DIR/$task_id.md"
-repo_schema_version="$(python3 - "$GLUERUN_ROOT/gluerun.config.json" <<'PY' 2>/dev/null || true
+task_id="$(singular_json_field "$packet" taskId)"
+run_id="$(singular_json_field "$packet" runId)"
+branch="$(singular_json_field "$packet" branch)"
+head_sha="$(singular_json_field "$packet" headSha)"
+base_ref="$(singular_json_field "$packet" baseRef)"
+workspace="$(singular_json_field "$packet" workspace)"
+run_dir="$SINGULAR_RUNS_DIR/$run_id"
+audit_record="$(singular_audit_record_path "$run_id")"
+task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+repo_schema_version="$(python3 - "$SINGULAR_ROOT/singular.config.json" <<'PY' 2>/dev/null || true
 import json
 import sys
 try:
@@ -106,36 +106,36 @@ except Exception:
 PY
 )"
 audit_contract="v0"
-audit_schema_path="$GLUERUN_SCHEMA_DIR/audit-verdict.v0.schema.json"
+audit_schema_path="$SINGULAR_SCHEMA_DIR/audit-verdict.v0.schema.json"
 if [[ "$repo_schema_version" == "v2" ]]; then
   audit_contract="v1"
-  audit_schema_path="$GLUERUN_SCHEMA_DIR/audit-verdict.v1.schema.json"
+  audit_schema_path="$SINGULAR_SCHEMA_DIR/audit-verdict.v1.schema.json"
 fi
 
 [[ -f "$task_file" ]] || { echo "task file not found: $task_file" >&2; exit 2; }
 [[ -d "$workspace" ]] || { echo "packet workspace not found: $workspace" >&2; exit 2; }
 [[ -d "$run_dir" ]] || { echo "run dir not found: $run_dir" >&2; exit 2; }
 
-if find "$GLUERUN_ORCH_DIR/packets/imported/$task_id" -maxdepth 1 -name '*.json' -not -name '*.audit.json' -type f 2>/dev/null | grep -q .; then
+if find "$SINGULAR_ORCH_DIR/packets/imported/$task_id" -maxdepth 1 -name '*.json' -not -name '*.audit.json' -type f 2>/dev/null | grep -q .; then
   echo "task already imported: $task_id" >&2
   exit 2
 fi
-if [[ -f "$GLUERUN_INBOX_DIR/$run_id.json" ]]; then
-  echo "packet already queued in inbox: $GLUERUN_INBOX_DIR/$run_id.json" >&2
+if [[ -f "$SINGULAR_INBOX_DIR/$run_id.json" ]]; then
+  echo "packet already queued in inbox: $SINGULAR_INBOX_DIR/$run_id.json" >&2
   exit 2
 fi
-if find "$GLUERUN_INBOX_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null \
-  | while IFS= read -r p; do [[ "$(gluerun_json_field "$p" taskId 2>/dev/null || true)" == "$task_id" ]] && echo "$p"; done \
+if find "$SINGULAR_INBOX_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null \
+  | while IFS= read -r p; do [[ "$(singular_json_field "$p" taskId 2>/dev/null || true)" == "$task_id" ]] && echo "$p"; done \
   | grep -q .; then
   echo "task already queued in inbox: $task_id" >&2
   exit 2
 fi
 
-if ! git -C "$GLUERUN_ROOT" rev-parse --verify --quiet "$branch" >/dev/null; then
+if ! git -C "$SINGULAR_ROOT" rev-parse --verify --quiet "$branch" >/dev/null; then
   echo "packet branch not found: $branch" >&2
   exit 2
 fi
-actual_head="$(git -C "$GLUERUN_ROOT" rev-parse "$branch")"
+actual_head="$(git -C "$SINGULAR_ROOT" rev-parse "$branch")"
 if [[ "$actual_head" != "$head_sha" ]]; then
   echo "packet headSha $head_sha does not match branch head $actual_head" >&2
   exit 2
@@ -156,7 +156,7 @@ non_generated_dirty="$(
         [[ -n "$p" ]] || continue
         p="${p##* -> }"
         case "$p" in
-          .gluerun-cache|.gluerun-cache/*|.gluerun-state|.gluerun-state/*|.gluerun-evidence|.gluerun-evidence/*) ;;
+          .singular-cache|.singular-cache/*|.singular-state|.singular-state/*|.singular-evidence|.singular-evidence/*) ;;
           *) printf '%s\n' "$p" ;;
         esac
       done
@@ -180,7 +180,7 @@ PY
 )
 [[ "${#owned_files[@]}" -gt 0 ]] || { echo "packet declares no owned files" >&2; exit 2; }
 
-task_json="$(gluerun_task_json "$task_file")"
+task_json="$(singular_task_json "$task_file")"
 mapfile -t forbidden_files < <(printf '%s' "$task_json" | python3 -c 'import json,sys
 data=json.load(sys.stdin)
 for path in data.get("forbiddenFiles", []):
@@ -189,21 +189,21 @@ for path in data.get("forbiddenFiles", []):
 ')
 
 safe_run_id="${run_id//[^A-Za-z0-9_.-]/_}"
-verification_sandbox="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-accept-${safe_run_id}.XXXXXX")"
+verification_sandbox="$(mktemp -d "${TMPDIR:-/tmp}/singular-accept-${safe_run_id}.XXXXXX")"
 verification_worktree="$verification_sandbox/worktree"
 verification_cache="$verification_sandbox/cache"
 verification_setup_log="$run_dir/accept-existing-packet-setup.log"
-if ! gluerun_git_lock_acquire; then
+if ! singular_git_lock_acquire; then
   echo "could not acquire git lock for deterministic acceptance worktree" >&2
   exit 2
 fi
 worktree_add_rc=0
-git -C "$GLUERUN_ROOT" worktree add --detach -q "$verification_worktree" "$actual_head" \
+git -C "$SINGULAR_ROOT" worktree add --detach -q "$verification_worktree" "$actual_head" \
   >"$verification_setup_log" 2>&1 || worktree_add_rc=$?
 if [[ "$worktree_add_rc" -eq 0 ]]; then
   verification_worktree_added="yes"
 fi
-gluerun_git_lock_release
+singular_git_lock_release
 if [[ "$worktree_add_rc" -ne 0 ]]; then
   cat "$verification_setup_log" >&2
   echo "could not create disposable deterministic acceptance worktree" >&2
@@ -226,9 +226,9 @@ bootstrap_log="$run_dir/accept-existing-packet-bootstrap.log"
 # Same shared preparer as l1-drive and audit-verify. This site previously got
 # neither the dependency copies nor prewarm, so it was the least like the
 # worktree whose work it is deciding to accept.
-GLUERUN_WORKTREE_PREPARE_ENV=(
-  GLUERUN_ROOT="$verification_worktree"
-  GLUERUN_STATE_DIR="$verification_sandbox/state"
+SINGULAR_WORKTREE_PREPARE_ENV=(
+  SINGULAR_ROOT="$verification_worktree"
+  SINGULAR_STATE_DIR="$verification_sandbox/state"
   TMPDIR="$verification_cache/tmp/"
   TMP="$verification_cache/tmp"
   TEMP="$verification_cache/tmp"
@@ -245,15 +245,15 @@ GLUERUN_WORKTREE_PREPARE_ENV=(
   CARGO_TARGET_DIR="$verification_cache/cargo"
   GOCACHE="$verification_cache/go"
 )
-if ! gluerun_worktree_prepare "$verification_worktree" "" "$GLUERUN_ROOT" "$bootstrap_log"; then
+if ! singular_worktree_prepare "$verification_worktree" "" "$SINGULAR_ROOT" "$bootstrap_log"; then
   cat "$bootstrap_log" >&2
   # Per-stage wording preserved verbatim: these strings are the infrastructure
   # rejection reasons callers and tests match on.
-  case "$GLUERUN_WORKTREE_PREPARE_STAGE" in
+  case "$SINGULAR_WORKTREE_PREPARE_STAGE" in
     provision)
       echo "disposable deterministic acceptance worktree provisioning failed" >&2 ;;
     copy-paths)
-      echo "deterministic acceptance dependency copy failed: ${GLUERUN_WORKTREE_PREPARE_DETAIL:-unknown}" >&2 ;;
+      echo "deterministic acceptance dependency copy failed: ${SINGULAR_WORKTREE_PREPARE_DETAIL:-unknown}" >&2 ;;
     bootstrap)
       echo "required deterministic acceptance bootstrap failed" >&2 ;;
     *)
@@ -261,7 +261,7 @@ if ! gluerun_worktree_prepare "$verification_worktree" "" "$GLUERUN_ROOT" "$boot
   esac
   exit 2
 fi
-unset GLUERUN_WORKTREE_PREPARE_ENV
+unset SINGULAR_WORKTREE_PREPARE_ENV
 bootstrap_head="$(git -C "$verification_worktree" rev-parse HEAD 2>/dev/null || true)"
 mapfile -t bootstrap_changed_paths < <(
   git -C "$verification_worktree" status --porcelain=v1 --untracked-files=all 2>/dev/null \
@@ -316,7 +316,7 @@ def candidates(ref):
         os.path.join(workspace, ref),
         os.path.join(run_dir, ref),
     ]
-    if ref.startswith(".gluerun-evidence/"):
+    if ref.startswith(".singular-evidence/"):
         out.append(os.path.join(run_dir, "worker-evidence", os.path.basename(ref)))
     if ref.startswith("runs/"):
         out.append(os.path.join(os.path.dirname(os.path.dirname(run_dir)), ref))
@@ -423,7 +423,7 @@ with open(cmd_list, "w", encoding="utf-8") as f:
 PY
 
 storage_guard_log="$run_dir/accept-existing-packet-module-guard.log"
-if ! gluerun_packet_module_guard "$packet" "$task_file" "$workspace" "$run_dir" >"$storage_guard_log" 2>&1; then
+if ! singular_packet_module_guard "$packet" "$task_file" "$workspace" "$run_dir" >"$storage_guard_log" 2>&1; then
   cat "$storage_guard_log" >&2
   exit 2
 fi
@@ -443,9 +443,9 @@ while IFS= read -r line; do
   started_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
   command_exit=0
   (
-    gluerun_run_in_worktree_env "$verification_worktree" env \
-      GLUERUN_ROOT="$verification_worktree" \
-      GLUERUN_STATE_DIR="$verification_sandbox/state" \
+    singular_run_in_worktree_env "$verification_worktree" env \
+      SINGULAR_ROOT="$verification_worktree" \
+      SINGULAR_STATE_DIR="$verification_sandbox/state" \
       HOME="$verification_cache/home" \
       TMPDIR="$verification_cache/tmp/" \
       TMP="$verification_cache/tmp" \
@@ -462,7 +462,7 @@ while IFS= read -r line; do
       NODE_COMPILE_CACHE="$verification_cache/node" \
       CARGO_TARGET_DIR="$verification_cache/cargo" \
       GOCACHE="$verification_cache/go" \
-      "$(gluerun_bash_bin)" -c "$cmd"
+      "$(singular_bash_bin)" -c "$cmd"
   ) >"$log" 2>&1 || command_exit=$?
   finished_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
   duration_ms="$((finished_ms - started_ms))"
@@ -694,9 +694,9 @@ finally:
         pass
 PY
 
-manifest_schema="$GLUERUN_SCHEMA_DIR/evidence-manifest.v0.schema.json"
+manifest_schema="$SINGULAR_SCHEMA_DIR/evidence-manifest.v0.schema.json"
 manifest_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])),separators=(",",":")))' "$evidence_manifest")"
-gluerun_json_schema_check "$manifest_json" "$manifest_schema" "evidence manifest" \
+singular_json_schema_check "$manifest_json" "$manifest_schema" "evidence manifest" \
   || { echo "evidence manifest schema validation failed for $evidence_manifest" >&2; exit 2; }
 
 python3 - "$packet" "$audit_record" "$scope_log" "$secret_log" "$cmd_list" \
@@ -735,7 +735,7 @@ for item in packet.get("evidence", []):
         evidence.append(ref)
 
 audit = {
-    "schema": f"gluerun.orchestration.audit-verdict.{contract}",
+    "schema": f"singular.orchestration.audit-verdict.{contract}",
     "taskId": packet["taskId"],
     "runId": packet["runId"],
     "branch": packet["branch"],
@@ -772,8 +772,8 @@ PY
 
 # Central validator (0.5.0): the same schema check every auditor verdict gets,
 # replacing this script's hand-rolled required/extra/const/enum python.
-GLUERUN_AUDIT_SCHEMA="$audit_schema_path" \
-  gluerun_validate_audit_verdict "$audit_record" "$task_id" "$run_id" \
+SINGULAR_AUDIT_SCHEMA="$audit_schema_path" \
+  singular_validate_audit_verdict "$audit_record" "$task_id" "$run_id" \
   || { echo "audit schema validation failed for $audit_record" >&2; exit 2; }
 
 python3 - "$packet" "$run_id" <<'PY'
@@ -792,17 +792,17 @@ with open(packet_path, "w", encoding="utf-8") as f:
     json.dump(packet, f, indent=2)
     f.write("\n")
 PY
-gluerun_validate_packet_basic "$packet" >/dev/null
+singular_validate_packet_basic "$packet" >/dev/null
 
-if ! gluerun_lease_set_status "$task_id" "accepted"; then
+if ! singular_lease_set_status "$task_id" "accepted"; then
   echo "lease not found for task: $task_id" >&2
   exit 2
 fi
-gluerun_task_set_status "$task_file" "accepted"
+singular_task_set_status "$task_file" "accepted"
 "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "accept" \
   --rationale "deterministic acceptance of existing stranded packet; branch head matches packet; scope, secret scan, evidence, and rerun commands passed" \
   --run "$run_id" --branch "$branch" --authority origin >/dev/null
-gluerun_append_event "packet.accepted_existing" "existing state packet accepted deterministically" \
+singular_append_event "packet.accepted_existing" "existing state packet accepted deterministically" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$branch\",\"headSha\":\"$head_sha\",\"audit\":\"$audit_record\"}"
 
 echo "accepted existing packet: $packet (audit: $audit_record)"

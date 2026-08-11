@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0063",
   "runId": "RUN-20260712T073800Z-74265",
   "branch": "agent/routing/TASK-0063-rehydrate-authored-manifest-record",
@@ -16,13 +16,13 @@
     "worker-packet-validation.log (ok), module-packet-guard.log (empty/clean)",
     "l2-active-prompt.md (objective + acceptance criteria)",
     "git diff 6447e29..041cf2c (M engine/ctx-rehydrate-event.sh +30/-2, A tests/test-ctx-rehydrate-authored-event.sh +198)",
-    "engine/ctx-rehydrate-authored-config.sh:76 (delegation target gluerun_ctx_rehydrate_authored_config_manifest defined in integrated, non-owned file)"
+    "engine/ctx-rehydrate-authored-config.sh:76 (delegation target singular_ctx_rehydrate_authored_config_manifest defined in integrated, non-owned file)"
   ],
   "commandsRun": [
     "git rev-parse --abbrev-ref HEAD; git log -1 --format=%H %s (branch agent/routing/TASK-0063-...; HEAD 041cf2c)",
     "git log -1 --format=%P HEAD (parent == baseRef 6447e29 == integration tip after TASK-0062 merge; no drift)",
     "git diff --name-status 6447e29 HEAD (only 2 owned files; no forbidden file touched)",
-    "grep -rn gluerun_ctx_rehydrate_authored_config_manifest engine/ (defined in ctx-rehydrate-authored-config.sh; only CALLED, not inlined, in owned file)",
+    "grep -rn singular_ctx_rehydrate_authored_config_manifest engine/ (defined in ctx-rehydrate-authored-config.sh; only CALLED, not inlined, in owned file)",
     "bash tests/test-ctx-rehydrate-authored-event.sh (independent green, exit 0)",
     "restored baseRef engine/ctx-rehydrate-event.sh + reran target test (independent RED: fails at case1 exactly as red.log, exit 1; file restored, working tree net-zero)",
     "bash tests/run.sh (independent full suite: 86 passed, 0 failed, exit 0)"
@@ -30,7 +30,7 @@
   "findings": [
     "Scope compliant: diff baseRef(6447e29)..HEAD(041cf2c) touches only the two owned files; no forbidden file modified; scope-check + secret-scan clean.",
     "Test-first evidence genuine: red.log shows a real assertion failure (manifest.authored missing) that I independently reproduced by reverting the engine file; green independently confirmed.",
-    "Implementation delegates to gluerun_ctx_rehydrate_authored_config_manifest (defined in integrated engine/ctx-rehydrate-authored-config.sh) \u2014 no config/selection/render logic inlined into the owned file, satisfying minimal-delegation.",
+    "Implementation delegates to singular_ctx_rehydrate_authored_config_manifest (defined in integrated engine/ctx-rehydrate-authored-config.sh) \u2014 no config/selection/render logic inlined into the owned file, satisfying minimal-delegation.",
     "Consistency invariant satisfied: builder passes the SAME `implement` trigger TASK-0062 injects with; test case2 asserts recorded authored == config-gate delegate output.",
     "Provenance/schema correct: authored entries merged under a distinguishable manifest.authored key, additive to durable manifest.sources (case3 unchanged), each carrying class=authored-knowledge and authoritative=false (case4 no authoritative:true).",
     "OFF-parity holds: gate unset AND gate=0 both yield byte-identical durable-only payload with no `authored` key (case5); armed-but-unconfigured is fail-soft (case7); malformed authored blob skipped rather than recorded as {raw:...}.",

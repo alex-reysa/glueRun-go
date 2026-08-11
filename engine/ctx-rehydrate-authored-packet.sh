@@ -8,21 +8,21 @@
 # prior behavior.
 #
 # This is the THIRD slice of the explicitly-OPTIONAL authored-knowledge
-# deliverable. TASK-0058 (gluerun_ctx_rehydrate_authored_select) and TASK-0059
-# (gluerun_ctx_rehydrate_authored_eligible) reduce a FIXTURE authored-knowledge
+# deliverable. TASK-0058 (singular_ctx_rehydrate_authored_select) and TASK-0059
+# (singular_ctx_rehydrate_authored_eligible) reduce a FIXTURE authored-knowledge
 # manifest to the eligible entries as JSON Lines. This slice composes those two
 # integrated leaves into the two artifacts the eventual wire-in will merge: an
 # injectable capped packet SECTION and the authored MANIFEST entries recording
 # which authored ids were injected. It is NOT part of the `rehydrate-path` node's
-# requiredCompletion and does NOT gate the node. GLUERUN_CTX_MANIFEST (default 0)
+# requiredCompletion and does NOT gate the node. SINGULAR_CTX_MANIFEST (default 0)
 # gates the later config/driver wire-in, NOT this pure leaf. It takes NO
 # dependency on any singular-brain runtime.
 #
-#   gluerun_ctx_rehydrate_authored_render   <manifest-path> [trigger ...]
-#   gluerun_ctx_rehydrate_authored_manifest <manifest-path> [trigger ...]
+#   singular_ctx_rehydrate_authored_render   <manifest-path> [trigger ...]
+#   singular_ctx_rehydrate_authored_manifest <manifest-path> [trigger ...]
 #
-# Both compose `gluerun_ctx_rehydrate_authored_select <manifest-path>` piped
-# through `gluerun_ctx_rehydrate_authored_eligible [trigger ...]` — inheriting the
+# Both compose `singular_ctx_rehydrate_authored_select <manifest-path>` piped
+# through `singular_ctx_rehydrate_authored_eligible [trigger ...]` — inheriting the
 # quarantine, description_unverified, stale-freshness, and trigger-mismatch
 # exclusions of those integrated leaves; the composer introduces no content that
 # bypasses them — and resolve each eligible entry's body (an inline `body`, or the
@@ -31,7 +31,7 @@
 #   - `..._render` prints the injectable packet section on stdout: one labeled
 #     `=== authored:<id> ===` section per eligible entry, headed by an explicit
 #     AUTHORED-KNOWLEDGE / NOT AUTHORITATIVE marker, then the resolved body,
-#     truncated to at most GLUERUN_CONTEXT_SECTION_MAX_CHARS (default 4000,
+#     truncated to at most SINGULAR_CONTEXT_SECTION_MAX_CHARS (default 4000,
 #     honoring the engine/lib.sh knob) with a stable truncation marker. No
 #     rendered section is ever marked authoritative.
 #   - `..._manifest` prints a deterministic JSON sources list on stdout: one
@@ -48,22 +48,22 @@
 # non-zero on well-formed input. An absent, empty, or malformed manifest yields an
 # empty section and empty manifest sources (fail-soft).
 
-# gluerun_ctx_rehydrate_authored_render <manifest-path> [trigger ...]
-gluerun_ctx_rehydrate_authored_render() {
+# singular_ctx_rehydrate_authored_render <manifest-path> [trigger ...]
+singular_ctx_rehydrate_authored_render() {
   local manifest="${1-}"
   [[ $# -gt 0 ]] && shift
-  gluerun_ctx_rehydrate_authored_select "$manifest" \
-    | gluerun_ctx_rehydrate_authored_eligible "$@" \
-    | _gluerun_ctx_authored_packet_py packet "${GLUERUN_CONTEXT_SECTION_MAX_CHARS:-4000}"
+  singular_ctx_rehydrate_authored_select "$manifest" \
+    | singular_ctx_rehydrate_authored_eligible "$@" \
+    | _singular_ctx_authored_packet_py packet "${SINGULAR_CONTEXT_SECTION_MAX_CHARS:-4000}"
 }
 
-# gluerun_ctx_rehydrate_authored_manifest <manifest-path> [trigger ...]
-gluerun_ctx_rehydrate_authored_manifest() {
+# singular_ctx_rehydrate_authored_manifest <manifest-path> [trigger ...]
+singular_ctx_rehydrate_authored_manifest() {
   local manifest="${1-}"
   [[ $# -gt 0 ]] && shift
-  gluerun_ctx_rehydrate_authored_select "$manifest" \
-    | gluerun_ctx_rehydrate_authored_eligible "$@" \
-    | _gluerun_ctx_authored_packet_py manifest "${GLUERUN_CONTEXT_SECTION_MAX_CHARS:-4000}"
+  singular_ctx_rehydrate_authored_select "$manifest" \
+    | singular_ctx_rehydrate_authored_eligible "$@" \
+    | _singular_ctx_authored_packet_py manifest "${SINGULAR_CONTEXT_SECTION_MAX_CHARS:-4000}"
 }
 
 # Internal: the pure Python renderer. argv: mode (packet|manifest) and the
@@ -73,7 +73,7 @@ gluerun_ctx_rehydrate_authored_manifest() {
 # READ-ONLY, and emits either the labeled packet section or the JSON sources
 # manifest in a fixed id-sorted order. No I/O beyond reading path-backed bodies
 # and writing stdout; no side effects.
-_gluerun_ctx_authored_packet_py() {
+_singular_ctx_authored_packet_py() {
   # The program is passed via -c (NOT a heredoc) so python's stdin stays bound to
   # the real eligible JSONL rather than the script text.
   python3 -c '
@@ -146,7 +146,7 @@ records.sort(key=lambda r: r[0])
 
 if mode == "manifest":
     obj = {
-        "schema": "gluerun.orchestration.ctx-rehydrate-authored-manifest.v0",
+        "schema": "singular.orchestration.ctx-rehydrate-authored-manifest.v0",
         "sources": [
             {
                 "id": sid,

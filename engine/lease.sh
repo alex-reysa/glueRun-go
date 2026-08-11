@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-lease_dir="$GLUERUN_STATE_DIR/leases"
+lease_dir="$SINGULAR_STATE_DIR/leases"
 mkdir -p "$lease_dir"
 
 cmd="${1:-}"
@@ -34,8 +34,8 @@ case "$cmd" in
       echo "usage: $0 create --task TASK --branch BRANCH --area AREA --owner OWNER [--scope SCOPE]" >&2
       exit 2
     fi
-    gluerun_lease_write "$task_id" "$branch" "$area" "$owner" "$scope" "planned"
-    echo "$(gluerun_lease_path "$task_id")"
+    singular_lease_write "$task_id" "$branch" "$area" "$owner" "$scope" "planned"
+    echo "$(singular_lease_path "$task_id")"
     ;;
   set-status)
     task_id="${1:-}"
@@ -44,11 +44,11 @@ case "$cmd" in
       echo "usage: $0 set-status TASK STATUS" >&2
       exit 2
     fi
-    if ! gluerun_lease_set_status "$task_id" "$status"; then
+    if ! singular_lease_set_status "$task_id" "$status"; then
       echo "no lease for task: $task_id" >&2
       exit 2
     fi
-    echo "$(gluerun_lease_path "$task_id")"
+    echo "$(singular_lease_path "$task_id")"
     ;;
   show)
     task_id="${1:-}"

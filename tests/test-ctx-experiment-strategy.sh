@@ -49,9 +49,9 @@ file_hash() { shasum "$1" 2>/dev/null | awk '{print $1}'; }
 [[ -f "$SCHEMA" ]] || fail "schema not present yet: $SCHEMA"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-for fn in gluerun_ctx_experiment_hit_rates \
-          gluerun_ctx_experiment_refusal_mix \
-          gluerun_ctx_experiment_strategy_json; do
+for fn in singular_ctx_experiment_hit_rates \
+          singular_ctx_experiment_refusal_mix \
+          singular_ctx_experiment_strategy_json; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $TOOL"
 done
 
@@ -176,7 +176,7 @@ before="$(tree_hash "$fix")"
 sibling_before="$(file_hash "$SIBLING")"
 
 # --- Slice 1: resume / rehydrate hit rates, sliced per arm and per role -------
-hr="$(gluerun_ctx_experiment_hit_rates "$events")" \
+hr="$(singular_ctx_experiment_hit_rates "$events")" \
   || fail "hit-rate aggregator exited non-zero on a valid fixture"
 printf '%s' "$hr" > "$tmp/hr.json"
 python3 - "$tmp/hr.json" <<'PY' || fail "hit rates did not match expected"
@@ -199,7 +199,7 @@ print("hit-rate-ok")
 PY
 
 # --- Slice 2: gate-refusal reason mix + resume_failed count -------------------
-rm_="$(gluerun_ctx_experiment_refusal_mix "$events")" \
+rm_="$(singular_ctx_experiment_refusal_mix "$events")" \
   || fail "refusal-mix aggregator exited non-zero on a valid fixture"
 printf '%s' "$rm_" > "$tmp/rm.json"
 python3 - "$tmp/rm.json" <<'PY' || fail "refusal mix did not match expected"
@@ -214,7 +214,7 @@ print("refusal-mix-ok")
 PY
 
 # --- Slice 3: composed, schema-valid, deterministic artifact -----------------
-art="$(gluerun_ctx_experiment_strategy_json "$events")" \
+art="$(singular_ctx_experiment_strategy_json "$events")" \
   || fail "strategy aggregator exited non-zero on a valid fixture"
 printf '%s' "$art" > "$tmp/art.json"
 printf '%s' "$art" | validates "$SCHEMA" || fail "artifact did not validate against $SCHEMA"
@@ -233,7 +233,7 @@ python3 - "$tmp/art.json" <<'PY' || fail "composed artifact fields did not match
 import json, sys
 m = json.load(open(sys.argv[1]))
 def close(a, b): return abs(a - b) < 1e-9
-assert m["schema"] == "gluerun.orchestration.ctx-experiment-strategy.v0", m["schema"]
+assert m["schema"] == "singular.orchestration.ctx-experiment-strategy.v0", m["schema"]
 hr = m["hitRates"]
 assert hr["overall"]["total"] == 9 and hr["overall"]["resume"] == 4, hr["overall"]
 assert close(hr["overall"]["resumeHitRate"], 4/9), hr["overall"]
@@ -252,7 +252,7 @@ print("composed-ok")
 PY
 
 # --- Determinism: identical inputs -> byte-identical output ------------------
-art2="$(gluerun_ctx_experiment_strategy_json "$events")"
+art2="$(singular_ctx_experiment_strategy_json "$events")"
 [[ "$art" == "$art2" ]] || fail "composed artifact not deterministic across identical runs"
 
 # --- Read-only: input fixture tree + sibling report tool byte-unchanged -------
@@ -264,7 +264,7 @@ sibling_after="$(file_hash "$SIBLING")"
 
 # --- Fail-safe: missing input -> well-formed zeroed artifact ------------------
 missing_events="$tmp/no-such-events.ndjson"
-out_empty="$(gluerun_ctx_experiment_strategy_json "$missing_events")" \
+out_empty="$(singular_ctx_experiment_strategy_json "$missing_events")" \
   || fail "strategy aggregator crashed on missing input (should fail safe)"
 printf '%s' "$out_empty" > "$tmp/empty.json"
 printf '%s' "$out_empty" | validates "$SCHEMA" || fail "zeroed artifact did not validate against schema"
@@ -283,14 +283,14 @@ PY
 
 # empty events file (present but zero records) is also fail-safe.
 : > "$tmp/empty-events.ndjson"
-gluerun_ctx_experiment_hit_rates "$tmp/empty-events.ndjson" >/dev/null \
+singular_ctx_experiment_hit_rates "$tmp/empty-events.ndjson" >/dev/null \
   || fail "hit-rate aggregator crashed on an empty events file"
-gluerun_ctx_experiment_refusal_mix "$tmp/empty-events.ndjson" >/dev/null \
+singular_ctx_experiment_refusal_mix "$tmp/empty-events.ndjson" >/dev/null \
   || fail "refusal-mix aggregator crashed on an empty events file"
 
 # --- No-arg default invocation is also fail-safe -----------------------------
-GLUERUN_EVENTS_FILE="$missing_events" \
-  gluerun_ctx_experiment_strategy_json >/dev/null \
+SINGULAR_EVENTS_FILE="$missing_events" \
+  singular_ctx_experiment_strategy_json >/dev/null \
   || fail "no-arg default invocation crashed instead of failing safe"
 
 echo "ctx-experiment-strategy tests passed"

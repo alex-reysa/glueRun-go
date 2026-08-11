@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.task-batch.v0",
-  "title": "gluerun Task Batch",
+  "$id": "singular.orchestration.task-batch.v0",
+  "title": "singular Task Batch",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "tasks"],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.task-batch.v0" },
+    "schema": { "const": "singular.orchestration.task-batch.v0" },
     "tasks": {
       "type": "array",
       "minItems": 1,

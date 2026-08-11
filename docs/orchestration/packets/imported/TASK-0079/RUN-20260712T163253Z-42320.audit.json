@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0079",
   "runId": "RUN-20260712T163253Z-42320",
   "branch": "agent/eval/TASK-0079-experiment-strategy-metrics",
@@ -25,7 +25,7 @@
     "git rev-parse HEAD / HEAD^",
     "bash tests/test-ctx-experiment-strategy.sh (exit 0)",
     "bash tests/test-engine-clean.sh (exit 0)",
-    "source engine/ctx-experiment-strategy.sh && gluerun_ctx_experiment_strategy_json <fixture> and <missing-input> (exit 0, well-formed zeroed on missing)"
+    "source engine/ctx-experiment-strategy.sh && singular_ctx_experiment_strategy_json <fixture> and <missing-input> (exit 0, well-formed zeroed on missing)"
   ],
   "findings": [
     "File scope compliant: diff adds exactly the 3 owned files (all status A); no forbidden/out-of-scope file touched; scope-check + secret-scan clean.",

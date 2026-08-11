@@ -3,17 +3,17 @@
 # engine/ctx-critic-recheck-run.sh: the resume-capable, read-only critic-recheck
 # EXECUTOR that resumes the plan critic over an ACCEPTED task's diff and records
 # the per-finding dispositions. It is the post-acceptance sibling of the in-loop
-# re-critique runner gluerun_plan_recritic_run (TASK-0026): TASK-0026 re-critiques
+# re-critique runner singular_plan_recritic_run (TASK-0026): TASK-0026 re-critiques
 # REVISED candidates in-loop; this runner rechecks an ACCEPTED task after
 # acceptance. It composes ONLY already-integrated helpers — the TASK-0027 sampling
 # gate, the TASK-0029 resume decider + strategy recorder, and the TASK-0028
 # classifier/recorder — plus the shared runner/session primitives.
 #
-#   gluerun_ctx_critic_recheck_run <node> <run_id> <task_id> <run_dir> \
+#   singular_ctx_critic_recheck_run <node> <run_id> <task_id> <run_dir> \
 #       <prior_critique_record> [worktree]
 #
 # Asserts:
-#   (A) OFF by default (GLUERUN_CRITIC_RECHECK_PCT unset/0/garbage) -> the TASK-0027
+#   (A) OFF by default (SINGULAR_CRITIC_RECHECK_PCT unset/0/garbage) -> the TASK-0027
 #       sampling gate returns not-sampled, so the runner is a no-op: NO runner call,
 #       NO event, NO state write (byte-identical), returns 0.
 #   (B) Sampled + valid plan-critic session -> the recheck runs the DEFAULT runner
@@ -33,7 +33,7 @@
 #   (F) evidence invariance -> no accept/reject/promote/quarantine event is ever
 #       emitted; only the strategy + ctx.critic_recheck (+ fallback) events land.
 #   (G) present-but-uncalled -> no existing engine path invokes the new function.
-# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and temp dirs so the
+# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and temp dirs so the
 # suite never mutates real run state.
 set -uo pipefail
 
@@ -50,18 +50,18 @@ pass() { echo "ok: $*"; }
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-export GLUERUN_ORCH_DIR="$tmp/docs/orchestration"
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-mkdir -p "$GLUERUN_STATE_DIR" "$GLUERUN_ORCH_DIR/prompts"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+export SINGULAR_ORCH_DIR="$tmp/docs/orchestration"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+mkdir -p "$SINGULAR_STATE_DIR" "$SINGULAR_ORCH_DIR/prompts"
+: > "$SINGULAR_EVENTS_FILE"
 
 # The critic base/template prompt where BOTH the fresh critic and the resume
-# decider resolve it (${GLUERUN_ORCH_DIR}/prompts/plan-critic.md), so the
+# decider resolve it (${SINGULAR_ORCH_DIR}/prompts/plan-critic.md), so the
 # template-sha gate matches the sha the finalize recorded.
 [[ -f "$REAL_TEMPLATE" ]] || fail "missing critic template fixture source: $REAL_TEMPLATE"
-cp "$REAL_TEMPLATE" "$GLUERUN_ORCH_DIR/prompts/plan-critic.md"
+cp "$REAL_TEMPLATE" "$SINGULAR_ORCH_DIR/prompts/plan-critic.md"
 
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
@@ -71,10 +71,10 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX" ]] || fail "engine not present yet: $CTX"
 # shellcheck disable=SC1090
 source "$CTX" || fail "sourcing $CTX failed"
-[[ "$(type -t gluerun_ctx_critic_recheck_run)" == "function" ]] \
-  || fail "gluerun_ctx_critic_recheck_run not defined by $CTX"
+[[ "$(type -t singular_ctx_critic_recheck_run)" == "function" ]] \
+  || fail "singular_ctx_critic_recheck_run not defined by $CTX"
 
-TPL_SHA="$(gluerun_sha256_file "$GLUERUN_ORCH_DIR/prompts/plan-critic.md")"
+TPL_SHA="$(singular_sha256_file "$SINGULAR_ORCH_DIR/prompts/plan-critic.md")"
 [[ -n "$TPL_SHA" ]] || fail "template sha came back empty"
 
 # --- A real worktree so the node-lineage gate (git merge-base) runs for real --
@@ -88,21 +88,21 @@ HEAD2="$(git -C "$wt" rev-parse HEAD)"
 
 NODE="critic-carryover"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-META="$GLUERUN_STATE_DIR/sessions/plan-critic/$NODE.json"
-lease_path="$GLUERUN_STATE_DIR/sessions/plan-critic/$NODE.lease"
+META="$SINGULAR_STATE_DIR/sessions/plan-critic/$NODE.json"
+lease_path="$SINGULAR_STATE_DIR/sessions/plan-critic/$NODE.lease"
 
 TASK="TASK-0031"
 
 # --- The prior plan-critique.v0 record whose findings are rechecked ----------
 CLAIM='Accepted task leaves an unguarded read on a possibly-empty accepted diff'
-FID="$(gluerun_finding_id "$CLAIM")"
-[[ "$FID" =~ ^f-[0-9a-f]{12}$ ]] || fail "gluerun_finding_id shape unexpected: $FID"
+FID="$(singular_finding_id "$CLAIM")"
+[[ "$FID" =~ ^f-[0-9a-f]{12}$ ]] || fail "singular_finding_id shape unexpected: $FID"
 PRIOR="$tmp/prior-critique.json"
 python3 - "$PRIOR" "$NODE" "$FID" "$CLAIM" <<'PY'
 import json, sys
 path, node, fid, claim = sys.argv[1:5]
 doc = {
-    "schema": "gluerun.orchestration.plan-critique.v0",
+    "schema": "singular.orchestration.plan-critique.v0",
     "node": node, "runId": "RUN-ACCEPTED", "batchTaskIds": ["TASK-0031"],
     "verdict": "revise",
     "findings": [{"id": fid, "severity": "blocking", "claim": claim,
@@ -143,7 +143,7 @@ fi
 cat > "$out" <<JSON
 Here is my recheck report:
 {
-  "schema": "gluerun.orchestration.critic-recheck.v0",
+  "schema": "singular.orchestration.critic-recheck.v0",
   "findings": [
     {"id": "${STUB_FID}", "status": "${STUB_STATUS:-addressed}"}
   ]
@@ -152,18 +152,18 @@ JSON
 exit 0
 STUBEOF
 chmod +x "$STUB"
-export GLUERUN_RUNNER="$STUB"
+export SINGULAR_RUNNER="$STUB"
 export STUB_ARGV_FILE="$tmp/stub-argv.txt"
 export STUB_CALLS_FILE="$tmp/stub-calls.txt"
 export STUB_FID="$FID"
 
 count_events() { # <type>
-  [[ -f "$GLUERUN_EVENTS_FILE" ]] || { echo 0; return 0; }
-  local c; c="$(grep -c "\"type\":\"$1\"" "$GLUERUN_EVENTS_FILE" 2>/dev/null)" || true
+  [[ -f "$SINGULAR_EVENTS_FILE" ]] || { echo 0; return 0; }
+  local c; c="$(grep -c "\"type\":\"$1\"" "$SINGULAR_EVENTS_FILE" 2>/dev/null)" || true
   echo "${c:-0}"
 }
 last_event() { # <type>
-  python3 - "$GLUERUN_EVENTS_FILE" "$1" <<'PY'
+  python3 - "$SINGULAR_EVENTS_FILE" "$1" <<'PY'
 import json, sys
 path, typ = sys.argv[1:3]
 last = None
@@ -186,7 +186,7 @@ count_calls() { # -> number of stub runner invocations this case
 }
 
 reset_case() { # fresh events + argv + calls per case
-  : > "$GLUERUN_EVENTS_FILE"
+  : > "$SINGULAR_EVENTS_FILE"
   : > "$STUB_ARGV_FILE"
   : > "$STUB_CALLS_FILE"
 }
@@ -197,7 +197,7 @@ forge_meta() { # forge a base-good plan-critic session-meta at $META
 import json, sys
 path, cwd, now, node, tpl, head = sys.argv[1:7]
 doc = {
-    "schema": "gluerun.orchestration.session-meta.v0",
+    "schema": "singular.orchestration.session-meta.v0",
     "provider": "codex", "sessionId": "SID-CRITIC", "model": "m", "effort": "e",
     "cwd": cwd, "exitCode": 0, "createdAt": now,
     "role": "plan-critic", "node": node, "runner": "stub-runner.sh",
@@ -243,24 +243,24 @@ assert_no_outcome_events() {
 reset_case
 export STUB_MODE="report"; export STUB_STATUS="addressed"; export STUB_RESUME_REFUSE=0
 run_dir="$tmp/rundir/OFF"
-unset GLUERUN_CRITIC_RECHECK_PCT 2>/dev/null || true
-gluerun_ctx_critic_recheck_run "$NODE" "RUN-OFF" "$TASK" "$run_dir" "$PRIOR" "$wt" \
+unset SINGULAR_CRITIC_RECHECK_PCT 2>/dev/null || true
+singular_ctx_critic_recheck_run "$NODE" "RUN-OFF" "$TASK" "$run_dir" "$PRIOR" "$wt" \
   || fail "A: runner crashed with knob off"
 [[ "$(count_calls)" -eq 0 ]] \
   || fail "A: OFF must invoke NO runner"
-[[ "$(wc -c < "$GLUERUN_EVENTS_FILE" | tr -d ' ')" -eq 0 ]] \
+[[ "$(wc -c < "$SINGULAR_EVENTS_FILE" | tr -d ' ')" -eq 0 ]] \
   || fail "A: OFF must append NO event"
 [[ ! -d "$run_dir" ]] || fail "A: OFF must write NO state (run_dir created)"
 pass "(A) OFF by default -> no-op: no runner, no event, no state"
 
 # Non-numeric garbage is also OFF (fail-safe).
 reset_case
-GLUERUN_CRITIC_RECHECK_PCT="garbage" \
-  gluerun_ctx_critic_recheck_run "$NODE" "RUN-OFF2" "$TASK" "$tmp/rundir/OFF2" "$PRIOR" "$wt" \
+SINGULAR_CRITIC_RECHECK_PCT="garbage" \
+  singular_ctx_critic_recheck_run "$NODE" "RUN-OFF2" "$TASK" "$tmp/rundir/OFF2" "$PRIOR" "$wt" \
   || fail "A2: runner crashed with garbage knob"
 [[ "$(count_calls)" -eq 0 ]] \
   || fail "A2: garbage knob must invoke NO runner"
-[[ "$(wc -c < "$GLUERUN_EVENTS_FILE" | tr -d ' ')" -eq 0 ]] \
+[[ "$(wc -c < "$SINGULAR_EVENTS_FILE" | tr -d ' ')" -eq 0 ]] \
   || fail "A2: garbage knob must append NO event"
 pass "(A2) non-numeric knob -> fail-safe OFF no-op"
 
@@ -273,8 +273,8 @@ forge_meta
 export STUB_MODE="report"; export STUB_STATUS="addressed"; export STUB_RESUME_REFUSE=0
 rm -f "$lease_path"
 run_dir="$tmp/rundir/RESUME"
-GLUERUN_CRITIC_RECHECK_PCT=100 \
-  gluerun_ctx_critic_recheck_run "$NODE" "RUN-RESUME" "$TASK" "$run_dir" "$PRIOR" "$wt" \
+SINGULAR_CRITIC_RECHECK_PCT=100 \
+  singular_ctx_critic_recheck_run "$NODE" "RUN-RESUME" "$TASK" "$run_dir" "$PRIOR" "$wt" \
   || fail "B: runner crashed on resume path"
 grep -q -- '--resume-session' "$STUB_ARGV_FILE" \
   || fail "B: resume path must pass --resume-session"
@@ -308,8 +308,8 @@ reset_case
 rm -f "$META" "$lease_path"
 export STUB_MODE="report"; export STUB_STATUS="obsolete"; export STUB_RESUME_REFUSE=0
 run_dir="$tmp/rundir/FRESH"
-GLUERUN_CRITIC_RECHECK_PCT=100 \
-  gluerun_ctx_critic_recheck_run "$NODE" "RUN-FRESH" "$TASK" "$run_dir" "$PRIOR" "$wt" \
+SINGULAR_CRITIC_RECHECK_PCT=100 \
+  singular_ctx_critic_recheck_run "$NODE" "RUN-FRESH" "$TASK" "$run_dir" "$PRIOR" "$wt" \
   || fail "C: runner crashed on fresh path"
 grep -q -- '--resume-session' "$STUB_ARGV_FILE" \
   && fail "C: fresh path must NOT pass --resume-session"
@@ -341,8 +341,8 @@ forge_meta
 export STUB_MODE="report"; export STUB_STATUS="addressed"; export STUB_RESUME_REFUSE=1
 rm -f "$lease_path"
 run_dir="$tmp/rundir/REFUSE"
-GLUERUN_CRITIC_RECHECK_PCT=100 \
-  gluerun_ctx_critic_recheck_run "$NODE" "RUN-REFUSE" "$TASK" "$run_dir" "$PRIOR" "$wt" \
+SINGULAR_CRITIC_RECHECK_PCT=100 \
+  singular_ctx_critic_recheck_run "$NODE" "RUN-REFUSE" "$TASK" "$run_dir" "$PRIOR" "$wt" \
   || fail "D: runner must not crash on rc-86 fallback"
 [[ "$(count_events context.resume_failed)" -eq 1 ]] \
   || fail "D: expected one context.resume_failed event, got $(count_events context.resume_failed)"
@@ -376,8 +376,8 @@ forge_meta
 export STUB_MODE="prose"; export STUB_RESUME_REFUSE=0
 rm -f "$lease_path"
 run_dir="$tmp/rundir/INFRA"
-GLUERUN_CRITIC_RECHECK_PCT=100 \
-  gluerun_ctx_critic_recheck_run "$NODE" "RUN-INFRA" "$TASK" "$run_dir" "$PRIOR" "$wt" \
+SINGULAR_CRITIC_RECHECK_PCT=100 \
+  singular_ctx_critic_recheck_run "$NODE" "RUN-INFRA" "$TASK" "$run_dir" "$PRIOR" "$wt" \
   || fail "E: runner must fail OPEN, not crash/return non-zero"
 [[ "$(count_events ctx.critic_recheck)" -eq 1 ]] \
   || fail "E: expected exactly one ctx.critic_recheck, got $(count_events ctx.critic_recheck)"
@@ -389,7 +389,7 @@ pass "(E) no parseable output -> conservative survives default, one ctx.critic_r
 # ===========================================================================
 # (G) present-but-uncalled: no existing engine path invokes the new function.
 # ===========================================================================
-callers="$(grep -rl 'gluerun_ctx_critic_recheck_run' "$ENGINE_HOME/engine" 2>/dev/null \
+callers="$(grep -rl 'singular_ctx_critic_recheck_run' "$ENGINE_HOME/engine" 2>/dev/null \
   | grep -v '/ctx-critic-recheck-run.sh$' || true)"
 : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
 pass "(G) invariance: the new runner is present-but-uncalled by any existing engine path"

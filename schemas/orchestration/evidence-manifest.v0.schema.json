@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.evidence-manifest.v0",
-  "title": "gluerun Audit Evidence Manifest",
+  "$id": "singular.orchestration.evidence-manifest.v0",
+  "title": "singular Audit Evidence Manifest",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -20,7 +20,7 @@
     "createdAt"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.evidence-manifest.v0" },
+    "schema": { "const": "singular.orchestration.evidence-manifest.v0" },
     "taskId": { "type": "string", "pattern": "^TASK-[0-9]{4,}$" },
     "runId": { "type": "string", "minLength": 1 },
     "headSha": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },

@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0077",
   "runId": "RUN-20260712T154843Z-36668",
   "branch": "agent/eval/TASK-0077-experiment-report-metrics",
@@ -25,16 +25,16 @@
     "git status --porcelain (clean)",
     "bash tests/test-ctx-experiment-report.sh (exit 0, green reproduced)",
     "bash tests/test-ctx-experiment-report.sh && bash tests/test-engine-clean.sh (gate-exit 0 reproduced)",
-    "grep -rn gluerun_ctx_experiment engine/ tests/ (no external callers \u2014 OFF-parity confirmed)",
+    "grep -rn singular_ctx_experiment engine/ tests/ (no external callers \u2014 OFF-parity confirmed)",
     "grep ctx-loader in engine/lib.sh (confirms auto-source, fail-closed, source-only)"
   ],
   "findings": [
     "File scope compliant: exactly the 3 owned files added (engine/ctx-experiment-report.sh, schemas/orchestration/ctx-experiment-report.v0.schema.json, tests/test-ctx-experiment-report.sh); no forbidden file touched, working tree clean.",
     "Test-first evidence genuine: red.log fails at the tool-presence guard (impl absent), green.log passes after impl; independently reproduced green and gate exit 0.",
-    "OFF-parity intrinsic verified: new file defines functions only with no top-level side effects; no existing engine path invokes gluerun_ctx_experiment_*, so the engine stays byte-identical when the file is present-but-uncalled; ctx-loader sources it without executing it.",
+    "OFF-parity intrinsic verified: new file defines functions only with no top-level side effects; no existing engine path invokes singular_ctx_experiment_*, so the engine stays byte-identical when the file is present-but-uncalled; ctx-loader sources it without executing it.",
     "Read-only and fail-safe pinned behaviorally over a fixture (tree_hash before/after, missing-input + empty-events + no-arg default paths), not by absence greps \u2014 satisfies planner-contract rule 9 (no temporal-negative / present-but-uncalled assertion).",
     "Schema/semantics consistent: emitted artifact carries schema const, both arms' escapeRate/accepted/flagged/cost rollup, and bias directional-disagreement rate; validates against the shipped v0 schema (additionalProperties:false) and is sorted-key canonical & deterministic across identical runs.",
-    "Acceptance criteria mapped 1:1 to test assertions (escape 2/3 & 1/2; bias 3/6=0.5; cost rollups; zeroed empty artifact); engine-clean stays green (lowercase gluerun_ brand is allowed, no banned project symbols introduced).",
+    "Acceptance criteria mapped 1:1 to test assertions (escape 2/3 & 1/2; bias 3/6=0.5; cost rollups; zeroed empty artifact); engine-clean stays green (lowercase singular_ brand is allowed, no banned project symbols introduced).",
     "Scope correctly bounded to measurement code + tests; node completion (operator A/B run + docs/orchestration/decisions.md) explicitly deferred in nextAction, matching the task's gate-candidate framing \u2014 no hidden scope expansion or branch drift.",
     "Non-blocking modeling note (documented, not a defect): 'accepted' is inferred from the presence of a ctx.paired_audit event; if a concrete downstream metrics producer is later wired, confirm its taskId/tokens/wallClockMs field names match, per the packet's nextAction."
   ],

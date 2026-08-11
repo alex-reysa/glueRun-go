@@ -3,12 +3,12 @@
 # engine_runtime): the read-only decision-record extra-spec producer
 # `engine/ctx-rehydrate-decision-source.sh`.
 #
-#   gluerun_ctx_rehydrate_decision_source [base_dir]
+#   singular_ctx_rehydrate_decision_source [base_dir]
 #
 # Prints the single class-tagged extra spec
 #   decision-record=<base_dir>/docs/orchestration/decisions.md
 # when that durable orchestration decision log EXISTS under base_dir (default
-# ${GLUERUN_ROOT:-.}), and prints nothing otherwise. It is deterministic,
+# ${SINGULAR_ROOT:-.}), and prints nothing otherwise. It is deterministic,
 # existence-gated, read-only (writes/renames/deletes nothing, appends no events),
 # never exits non-zero, and performs NO quarantine filtering of its own (the
 # assembler owns the single quarantine authority). It confers NO independence:
@@ -26,7 +26,7 @@ trap 'rm -rf "$tmp"' EXIT
 decision_source() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_decision_source "$@"
+    singular_ctx_rehydrate_decision_source "$@"
   ' _ "$@"
 }
 
@@ -57,9 +57,9 @@ empty="$(decision_source "$missing_base")" || fail "case3: leaf exited non-zero 
 gone="$(decision_source "$tmp/does-not-exist")" || fail "case3: leaf exited non-zero (missing base)"
 [[ -z "$gone" ]] || fail "case3: missing base_dir yielded output: [$gone]"
 
-# --- Case 4: default base_dir from GLUERUN_ROOT -----------------------------
-out_default="$(GLUERUN_ROOT="$base_dir" decision_source)" || fail "case4: leaf(default) exited non-zero"
-[[ "$out_default" == "$want" ]] || fail "case4: default base_dir (GLUERUN_ROOT) wrong.
+# --- Case 4: default base_dir from SINGULAR_ROOT -----------------------------
+out_default="$(SINGULAR_ROOT="$base_dir" decision_source)" || fail "case4: leaf(default) exited non-zero"
+[[ "$out_default" == "$want" ]] || fail "case4: default base_dir (SINGULAR_ROOT) wrong.
 got:   [$out_default]
 want:  [$want]"
 
@@ -81,7 +81,7 @@ snap_after="$(find "$base_dir" -type f -print0 | sort -z | xargs -0 shasum | sha
 [[ "$before_hash" == "$snap_before" ]] || fail "case6: fixtures drifted before purity snapshot (harness bug)"
 
 # --- Case 7: confers no independence ----------------------------------------
-tainted="$(bash -c 'source "'"$LIB"'"; gluerun_ctx_route_strategy_tainted rehydrate')" \
+tainted="$(bash -c 'source "'"$LIB"'"; singular_ctx_route_strategy_tainted rehydrate')" \
   || fail "case7: taint query exited non-zero"
 [[ "$tainted" == "1" ]] || fail "case7: rehydrate strategy no longer tainted (got [$tainted])"
 

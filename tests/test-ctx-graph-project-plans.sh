@@ -5,9 +5,9 @@
 # plan-critique records) into projected context-graph.v0 JSONL lines by composing
 # the integrated identity convention + emitters (engine/ctx-graph.sh,
 # engine/ctx-graph-project.sh):
-#   gluerun_graph_project_plan_versions <eventsPath>          -> plan-version nodes (+ revises/supersedes edges)
-#   gluerun_graph_project_decisions     <eventsPath>          -> decision nodes (no edges)
-#   gluerun_graph_project_critique      <planCritiqueRecord>  -> critique node + finding nodes
+#   singular_graph_project_plan_versions <eventsPath>          -> plan-version nodes (+ revises/supersedes edges)
+#   singular_graph_project_decisions     <eventsPath>          -> decision nodes (no edges)
+#   singular_graph_project_critique      <planCritiqueRecord>  -> critique node + finding nodes
 #
 # Asserts: each plan.revised event yields exactly one claim `plan-version` node,
 # and with a non-empty data.revisesRunId additionally one `revises` + one
@@ -19,7 +19,7 @@
 # attributes.severity, with ids stable + collision-free per (node,runId,findingId);
 # every emitted line validates against the SHIPPED schema; evidence invariance
 # (every node claim — no model path mints authoritative); idempotence (re-running
-# emits byte-identical lines, so gluerun_graph_canonicalize collapses to the same
+# emits byte-identical lines, so singular_graph_canonicalize collapses to the same
 # canonical set); and OFF-parity/no-writes — sourcing the file invokes nothing and
 # the mappers touch NO filesystem (pinned by before/after directory snapshots).
 set -uo pipefail
@@ -41,14 +41,14 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ -f "$PLANS" ]] || fail "impl not present yet: $PLANS (strict-test-first RED)"
 
 # OFF-parity / no-writes: sourcing the file must invoke nothing and write no
-# file. Snapshot an empty cwd around the source; confirm GLUERUN_CTX_GRAPH is
+# file. Snapshot an empty cwd around the source; confirm SINGULAR_CTX_GRAPH is
 # not required (default OFF).
 snap_dir="$(mktemp -d)"
 VALIDATOR="$(mktemp)"
 work_root="$(mktemp -d)"
 trap 'rm -rf "$snap_dir" "$VALIDATOR" "$work_root"' EXIT
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$snap_dir" && source "$GRAPH" && source "$PROJECT" && source "$PLANS" ) \
   || fail "sourcing $PLANS failed"
@@ -63,8 +63,8 @@ source "$PROJECT" || fail "sourcing $PROJECT failed"
 source "$CORPUS"  || fail "sourcing $CORPUS failed"
 # shellcheck disable=SC1090
 source "$PLANS"   || fail "sourcing $PLANS failed"
-for fn in gluerun_graph_project_plan_versions gluerun_graph_project_decisions \
-          gluerun_graph_project_critique; do
+for fn in singular_graph_project_plan_versions singular_graph_project_decisions \
+          singular_graph_project_critique; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $PLANS"
 done
 
@@ -168,7 +168,7 @@ cat > "$ev_plans" <<JSON
 {"ts":"2026-07-12T11:05:00Z","type":"context.strategy_selected","message":"noise","data":{"node":"$NODE","runId":"$RUN_B"}}
 JSON
 
-pv_out="$(gluerun_graph_project_plan_versions "$ev_plans")" || fail "project_plan_versions failed"
+pv_out="$(singular_graph_project_plan_versions "$ev_plans")" || fail "project_plan_versions failed"
 [[ -n "$pv_out" ]] || fail "project_plan_versions produced no output"
 printf '%s\n' "$pv_out" | validates || fail "a plan-version line failed schema validation:
 $pv_out"
@@ -186,8 +186,8 @@ while IFS= read -r l; do
     || fail "plan-version node must be claim, got: $l"
 done <<< "$(lines_where "$pv_out" kind node)"
 # Cross-record id agreement: both edges run new-version -> prior-version node id.
-nodeA="$(gluerun_graph_node_id "$(gluerun_graph_identity plan-version "$NODE" "$RUN_A")")"
-nodeB="$(gluerun_graph_node_id "$(gluerun_graph_identity plan-version "$NODE" "$RUN_B")")"
+nodeA="$(singular_graph_node_id "$(singular_graph_identity plan-version "$NODE" "$RUN_A")")"
+nodeB="$(singular_graph_node_id "$(singular_graph_identity plan-version "$NODE" "$RUN_B")")"
 while IFS= read -r l; do
   [[ -n "$l" ]] || continue
   [[ "$(printf '%s' "$l" | jq_field from)" == "$nodeB" ]] \
@@ -199,7 +199,7 @@ done <<< "$(lines_where "$pv_out" kind edge)"
 [[ "$(lines_where "$pv_out" kind edge | grep -cF "\"from\":\"$nodeA\"")" == "0" ]] \
   || fail "revisesRunId-absent event must emit no revises/supersedes edge"
 # Idempotence: re-running over the same source emits byte-identical lines.
-pv_out_b="$(gluerun_graph_project_plan_versions "$ev_plans")" || fail "second project_plan_versions failed"
+pv_out_b="$(singular_graph_project_plan_versions "$ev_plans")" || fail "second project_plan_versions failed"
 [[ "$pv_out" == "$pv_out_b" ]] || fail "project_plan_versions is not idempotent"
 
 # --- Slice 2: decision mapper ------------------------------------------------
@@ -212,7 +212,7 @@ cat > "$ev_dec" <<JSON
 {"ts":"2026-07-12T10:04:00Z","type":"plan.revised","message":"noise","data":{"node":"$NODE","runId":"$RUN_A"}}
 JSON
 
-dec_out="$(gluerun_graph_project_decisions "$ev_dec")" || fail "project_decisions failed"
+dec_out="$(singular_graph_project_decisions "$ev_dec")" || fail "project_decisions failed"
 [[ -n "$dec_out" ]] || fail "project_decisions produced no output"
 printf '%s\n' "$dec_out" | validates || fail "a decision line failed schema validation:
 $dec_out"
@@ -232,7 +232,7 @@ distinct_ids="$(lines_where "$dec_out" kind node | while IFS= read -r l; do
 done | LC_ALL=C sort -u | grep -c .)"
 [[ "$distinct_ids" == "4" ]] || fail "decision ids not collision-free per (type,node,runId,ts): got $distinct_ids"
 # Idempotence.
-dec_out_b="$(gluerun_graph_project_decisions "$ev_dec")" || fail "second project_decisions failed"
+dec_out_b="$(singular_graph_project_decisions "$ev_dec")" || fail "second project_decisions failed"
 [[ "$dec_out" == "$dec_out_b" ]] || fail "project_decisions is not idempotent"
 
 # --- Slice 3: critique/finding mapper ----------------------------------------
@@ -241,7 +241,7 @@ FID1="f-0123456789ab"
 FID2="f-abcdef012345"
 cat > "$crit" <<JSON
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "$NODE",
   "runId": "$RUN_A",
   "batchTaskIds": ["TASK-0078"],
@@ -255,7 +255,7 @@ cat > "$crit" <<JSON
 }
 JSON
 
-cr_out="$(gluerun_graph_project_critique "$crit")" || fail "project_critique failed"
+cr_out="$(singular_graph_project_critique "$crit")" || fail "project_critique failed"
 [[ -n "$cr_out" ]] || fail "project_critique produced no output"
 printf '%s\n' "$cr_out" | validates || fail "a critique line failed schema validation:
 $cr_out"
@@ -270,8 +270,8 @@ while IFS= read -r l; do
     || fail "critique/finding node must be claim, got: $l"
 done <<< "$(lines_where "$cr_out" kind node)"
 # Finding ids are stable + collision-free per (node,runId,findingId) and carry severity.
-finding1_node="$(gluerun_graph_node_id "$(gluerun_graph_identity finding "$NODE" "$RUN_A" "$FID1")")"
-finding2_node="$(gluerun_graph_node_id "$(gluerun_graph_identity finding "$NODE" "$RUN_A" "$FID2")")"
+finding1_node="$(singular_graph_node_id "$(singular_graph_identity finding "$NODE" "$RUN_A" "$FID1")")"
+finding2_node="$(singular_graph_node_id "$(singular_graph_identity finding "$NODE" "$RUN_A" "$FID2")")"
 [[ "$finding1_node" != "$finding2_node" ]] || fail "distinct findingId produced identical node id"
 printf '%s\n' "$cr_out" | grep -qF "\"id\":\"$finding1_node\"" \
   || fail "finding node id != node_id(identity('finding',node,runId,findingId)) for f1"
@@ -285,7 +285,7 @@ sev2="$(printf '%s\n' "$cr_out" | grep -F "\"id\":\"$finding2_node\"" \
   | python3 -c 'import json,sys;print(json.load(sys.stdin).get("attributes",{}).get("severity",""))')"
 [[ "$sev2" == "note" ]] || fail "finding f2 must project attributes.severity=note, got '$sev2'"
 # Idempotence.
-cr_out_b="$(gluerun_graph_project_critique "$crit")" || fail "second project_critique failed"
+cr_out_b="$(singular_graph_project_critique "$crit")" || fail "second project_critique failed"
 [[ "$cr_out" == "$cr_out_b" ]] || fail "project_critique is not idempotent"
 
 # --- Evidence invariance (fail-closed): NO model path mints authoritative ------
@@ -295,17 +295,17 @@ for stream in "$pv_out" "$dec_out" "$cr_out"; do
 done
 
 # --- Determinism through the canonicalizer: same set collapses identically -----
-canon_a="$(printf '%s\n' "$pv_out" | gluerun_graph_canonicalize)"
-canon_b="$(printf '%s\n' "$pv_out_b" | gluerun_graph_canonicalize)"
+canon_a="$(printf '%s\n' "$pv_out" | singular_graph_canonicalize)"
+canon_b="$(printf '%s\n' "$pv_out_b" | singular_graph_canonicalize)"
 [[ "$canon_a" == "$canon_b" ]] || fail "canonicalize over repeated projection is not stable"
 
 # --- No-writes: mappers print JSONL and touch NO filesystem -------------------
 w="$work_root/nowrite"; mkdir -p "$w"
 w_before="$(cd "$w" && find . | LC_ALL=C sort)"
 ( cd "$w" \
-  && gluerun_graph_project_plan_versions "$ev_plans" >/dev/null \
-  && gluerun_graph_project_decisions "$ev_dec" >/dev/null \
-  && gluerun_graph_project_critique "$crit" >/dev/null )
+  && singular_graph_project_plan_versions "$ev_plans" >/dev/null \
+  && singular_graph_project_decisions "$ev_dec" >/dev/null \
+  && singular_graph_project_critique "$crit" >/dev/null )
 w_after="$(cd "$w" && find . | LC_ALL=C sort)"
 [[ "$w_before" == "$w_after" ]] || fail "a mapper wrote filesystem artifacts (must be pure stdout)"
 

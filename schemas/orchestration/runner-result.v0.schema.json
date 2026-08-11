@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.runner-result.v0",
-  "title": "gluerun Provider Runner Result",
+  "$id": "singular.orchestration.runner-result.v0",
+  "title": "singular Provider Runner Result",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
     "recordedAt"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.runner-result.v0" },
+    "schema": { "const": "singular.orchestration.runner-result.v0" },
     "contractVersion": { "const": 1 },
     "provider": {
       "type": "string",

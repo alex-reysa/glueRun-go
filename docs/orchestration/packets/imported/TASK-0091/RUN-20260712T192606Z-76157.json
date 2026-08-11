@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.state-packet.v0",
+  "schema": "singular.orchestration.state-packet.v0",
   "packetId": "PKT-TASK-0091-20260712T193900Z",
   "runId": "RUN-20260712T192606Z-76157",
   "taskId": "TASK-0091",
@@ -11,28 +11,28 @@
   "headSha": "7d0265efd7cb301613a8aa430699e924b35989c4",
   "workspace": "/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.worktrees/TASK-0091",
   "ownedFiles": [
-    "cli/gluerun",
+    "cli/singular",
     "tests/test-cli-experiment.sh"
   ],
   "changedFiles": [
-    "cli/gluerun",
+    "cli/singular",
     "tests/test-cli-experiment.sh"
   ],
   "commands": [
     {
       "cmd": "bash tests/test-cli-experiment.sh",
       "exitCode": 1,
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "cmd": "bash tests/test-cli-experiment.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "cmd": "bash tests/run.sh",
       "exitCode": 0,
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "tests": [
@@ -40,33 +40,33 @@
       "name": "test-cli-experiment.sh",
       "phase": "red",
       "status": "failed",
-      "logRef": ".gluerun-evidence/red.log"
+      "logRef": ".singular-evidence/red.log"
     },
     {
       "name": "test-cli-experiment.sh",
       "phase": "green",
       "status": "passed",
-      "logRef": ".gluerun-evidence/green.log"
+      "logRef": ".singular-evidence/green.log"
     },
     {
       "name": "tests/run.sh (full-suite gate)",
       "phase": "regression",
       "status": "passed",
-      "logRef": ".gluerun-evidence/regression.log"
+      "logRef": ".singular-evidence/regression.log"
     }
   ],
   "evidence": [
     {
       "kind": "red-log",
-      "ref": ".gluerun-evidence/red.log"
+      "ref": ".singular-evidence/red.log"
     },
     {
       "kind": "green-log",
-      "ref": ".gluerun-evidence/green.log"
+      "ref": ".singular-evidence/green.log"
     },
     {
       "kind": "regression-log",
-      "ref": ".gluerun-evidence/regression.log"
+      "ref": ".singular-evidence/regression.log"
     },
     {
       "kind": "gate-check",

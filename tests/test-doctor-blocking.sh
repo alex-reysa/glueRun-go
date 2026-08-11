@@ -34,7 +34,7 @@ make_repo() { # dir schemaVersion [enginePin]
   git -C "$dir" config user.email blocking@example.com
   git -C "$dir" config user.name blocking
   git -C "$dir" commit -q --allow-empty -m init
-  python3 - "$dir/gluerun.config.json" "$sv" <<'PY'
+  python3 - "$dir/singular.config.json" "$sv" <<'PY'
 import json, sys
 path, sv = sys.argv[1:]
 data = {
@@ -52,7 +52,7 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
   cat >"$dir/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     {
       "id": "M0.scaffold",
@@ -66,15 +66,15 @@ PY
   ]
 }
 EOF
-  [[ -z "$pin" ]] || printf '%s\n' "$pin" >"$dir/.gluerun-version"
+  [[ -z "$pin" ]] || printf '%s\n' "$pin" >"$dir/.singular-version"
 }
 
 doctor() { # repo [args...]
   local dir="$1"; shift
   (
     cd "$dir" \
-      && env HOME="$fakehome" GLUERUN_ENGINE_HOME="$ROOT" \
-        bash "$ROOT/cli/gluerun" doctor "$@" 2>/dev/null
+      && env HOME="$fakehome" SINGULAR_ENGINE_HOME="$ROOT" \
+        bash "$ROOT/cli/singular" doctor "$@" 2>/dev/null
   )
 }
 
@@ -90,27 +90,27 @@ python3 - "$report" "$esv" <<'PY' || exit 1
 import json, sys
 data = json.loads(sys.argv[1])
 engine_schema = sys.argv[2]
-assert data["schema"] == "gluerun.doctor-report.v1", data["schema"]
+assert data["schema"] == "singular.doctor-report.v1", data["schema"]
 assert data["blocking"] == {
     "checkId": "schema.version",
-    "code": "GLUERUN_SCHEMA_MISMATCH",
+    "code": "SINGULAR_SCHEMA_MISMATCH",
 }, data["blocking"]
 by_id = {item["id"]: item for item in data["checks"]}
 
 primary = by_id["schema.version"]
 assert primary["status"] == "fail", primary
-assert primary["details"]["code"] == "GLUERUN_SCHEMA_MISMATCH", primary["details"]
+assert primary["details"]["code"] == "SINGULAR_SCHEMA_MISMATCH", primary["details"]
 assert primary["message"].startswith(
     f"schemaVersion mismatch: repo v0 vs engine {engine_schema}"
 ), primary["message"]
-assert primary["remediation"] == "Run: gluerun setup", primary["remediation"]
-assert primary["details"]["alternateRemediation"] == "Run: gluerun migrate", primary["details"]
+assert primary["remediation"] == "Run: singular setup", primary["remediation"]
+assert primary["details"]["alternateRemediation"] == "Run: singular migrate", primary["details"]
 
 for check_id in ("dag.evaluation", "capability.profiles", "config.source-conflict"):
     item = by_id[check_id]
     assert item["status"] == "skip", item
     assert item["details"]["blockedBy"] == "schema.version", item
-    assert "GLUERUN_SCHEMA_MISMATCH" in item["message"], item["message"]
+    assert "SINGULAR_SCHEMA_MISMATCH" in item["message"], item["message"]
 
 # Host truth is not a derivative of the repo's schema and must still be answered.
 for check_id in ("runtime.bash", "runtime.python", "git.disposable-worktree"):
@@ -141,9 +141,9 @@ assert next(
 PY
 
 # --- (c) the historical AXON state: repo pinned 0.3.0, operator on 0.16.0 -----
-# GLUERUN_ENGINE_HOME outranks the pin, which is exactly how an operator ends up
+# SINGULAR_ENGINE_HOME outranks the pin, which is exactly how an operator ends up
 # probing a repo with an engine the repo never asked for. Doctor has to say that
-# out loud: until now it never read .gluerun-version at all.
+# out loud: until now it never read .singular-version at all.
 make_repo "$tmp/repo-pinned" v0 0.3.0
 report="$(doctor "$tmp/repo-pinned" --json)" || true
 python3 - "$report" "$(tr -d '[:space:]' <"$ROOT/VERSION")" <<'PY' || exit 1
@@ -175,8 +175,8 @@ first_skip="$(printf '%s\n' "$out" | grep -n "blocked by schema.version" | head 
 first_info="$(printf '%s\n' "$out" | grep -n "^  info " | head -n1 | cut -d: -f1)"
 [[ -z "$first_info" || "$primary_line" -lt "$first_info" ]] \
   || fail "no skipped check may be printed before the diagnosis that blocked it"
-[[ "$out" == *"remediation: Run: gluerun setup"* ]] \
-  || fail "human remediation must point at gluerun setup: $out"
+[[ "$out" == *"remediation: Run: singular setup"* ]] \
+  || fail "human remediation must point at singular setup: $out"
 
 # --- (e) the cascade guard must not SWALLOW environmental checks --------------
 #
@@ -202,8 +202,8 @@ doctor_broken() { # repo [args...]
   (
     cd "$dir" \
       && env HOME="$brokenhome" CODEX_HOME="$brokenhome/.codex" \
-        GLUERUN_ENGINE_HOME="$ROOT" \
-        bash "$ROOT/cli/gluerun" doctor "$@" 2>/dev/null
+        SINGULAR_ENGINE_HOME="$ROOT" \
+        bash "$ROOT/cli/singular" doctor "$@" 2>/dev/null
   )
 }
 
@@ -215,8 +215,8 @@ for variant in matched mismatched; do
     mismatched) dir="$tmp/repo-env-mismatched"; sv="v0" ;;
   esac
   make_repo "$dir" "$sv"
-  mkdir -p "$dir/.gluerun-state"
-  printf '99999999\n' >"$dir/.gluerun-state/autonomate.pid"
+  mkdir -p "$dir/.singular-state"
+  printf '99999999\n' >"$dir/.singular-state/autonomate.pid"
   report="$(doctor_broken "$dir" --json)" || true
   python3 - "$report" "$variant" <<'PY' || exit 1
 import json, sys
@@ -228,7 +228,7 @@ by_id = {item["id"]: item for item in data["checks"]}
 if variant == "mismatched":
     assert data["blocking"] == {
         "checkId": "schema.version",
-        "code": "GLUERUN_SCHEMA_MISMATCH",
+        "code": "SINGULAR_SCHEMA_MISMATCH",
     }, data["blocking"]
     assert by_id["schema.legacy-ids"]["status"] == "skip", by_id["schema.legacy-ids"]
     assert by_id["schema.legacy-ids"]["details"]["blockedBy"] == "schema.version", \

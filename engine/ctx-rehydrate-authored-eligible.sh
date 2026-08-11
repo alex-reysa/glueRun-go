@@ -8,15 +8,15 @@
 # byte-identical to prior behavior.
 #
 # This is the SECOND slice of the explicitly-OPTIONAL authored-knowledge
-# deliverable. The first slice (gluerun_ctx_rehydrate_authored_select) emits the
+# deliverable. The first slice (singular_ctx_rehydrate_authored_select) emits the
 # surviving authored-knowledge entries as JSON Lines but does NOT filter on
 # `load-when` or `freshness`. This slice adds that filter. It is NOT part of the
 # `rehydrate-path` node's requiredCompletion and does NOT gate the node.
-# GLUERUN_CTX_MANIFEST (default 0) gates the later packet wire-in, NOT this pure
+# SINGULAR_CTX_MANIFEST (default 0) gates the later packet wire-in, NOT this pure
 # leaf. The JSONL contract is the whole interface: it takes NO dependency on any
 # singular-brain runtime.
 #
-#   gluerun_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
+#   singular_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
 #
 # Reads the selector's JSON Lines on stdin — one authored-knowledge record per
 # line, each carrying "id", "source" (body|path), "class":"authored-knowledge",
@@ -43,8 +43,8 @@
 # Malformed JSONL lines are skipped and empty input yields empty output
 # (fail-soft).
 
-# gluerun_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
-gluerun_ctx_rehydrate_authored_eligible() {
+# singular_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
+singular_ctx_rehydrate_authored_eligible() {
   # Triggers arrive as argv; the selector JSONL arrives on stdin. The pure
   # renderer reads stdin and receives the trigger context as its own argv. The
   # program is passed via -c (NOT a heredoc) so python's stdin stays bound to the

@@ -7,7 +7,7 @@
 import { S } from "../app.js";
 import { apiFetch } from "../core/api.js";
 
-// ---- DAG (gluerun.codex.dag.v0) ----
+// ---- DAG (singular.codex.dag.v0) ----
 let dag = null;
 let dagInflight = false;
 let lastGatesSig = null;
@@ -53,7 +53,7 @@ export function dagIndex() {
   return idxCache;
 }
 
-// ---- Timeline (gluerun.codex.timeline.v0) ----
+// ---- Timeline (singular.codex.timeline.v0) ----
 let timeline = null;
 let tlInflight = false;
 

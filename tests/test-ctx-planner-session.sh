@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Covers the planner session-meta library brick engine/ctx-planner-session.sh:
-# a pure per-node path helper + a default-OFF GLUERUN_PLANNER_SESSION finalize
-# wrapper that reuses the gluerun.orchestration.session-meta.v0 shape (via
-# gluerun_session_meta_finalize) adding role "planner" and an additive optional
+# a pure per-node path helper + a default-OFF SINGULAR_PLANNER_SESSION finalize
+# wrapper that reuses the singular.orchestration.session-meta.v0 shape (via
+# singular_session_meta_finalize) adding role "planner" and an additive optional
 # `node` field. Asserts:
-#   (path) the canonical path is .gluerun-state/sessions/planner/<node>.json under
-#          the runtime state dir (GLUERUN_STATE_DIR) and never under docs/;
+#   (path) the canonical path is .singular-state/sessions/planner/<node>.json under
+#          the runtime state dir (SINGULAR_STATE_DIR) and never under docs/;
 #   (a) success (rc 0) + knob ON -> a valid finalized meta at the canonical path
 #       with role "planner", node == target node, and headShaAtCreate == the head
 #       sha passed at planning time;
@@ -27,8 +27,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/state"
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
 
@@ -37,10 +37,10 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX_PS" ]] || fail "engine not present yet: $CTX_PS"
 # shellcheck disable=SC1090
 source "$CTX_PS" || fail "sourcing $CTX_PS failed"
-[[ "$(type -t gluerun_ctx_planner_session_path)" == "function" ]] \
-  || fail "gluerun_ctx_planner_session_path not defined by $CTX_PS"
-[[ "$(type -t gluerun_ctx_planner_session_finalize)" == "function" ]] \
-  || fail "gluerun_ctx_planner_session_finalize not defined by $CTX_PS"
+[[ "$(type -t singular_ctx_planner_session_path)" == "function" ]] \
+  || fail "singular_ctx_planner_session_path not defined by $CTX_PS"
+[[ "$(type -t singular_ctx_planner_session_finalize)" == "function" ]] \
+  || fail "singular_ctx_planner_session_finalize not defined by $CTX_PS"
 
 NODE="planner-session-meta"
 HEAD_SHA="1d593959e95783c627cd00888a05558368458d58"
@@ -48,19 +48,19 @@ HEAD_SHA="1d593959e95783c627cd00888a05558368458d58"
 # ---------------------------------------------------------------------------
 # (path) Canonical per-node path under the runtime state dir, never under docs/.
 # ---------------------------------------------------------------------------
-canon="$(gluerun_ctx_planner_session_path "$NODE")"
-[[ "$canon" == "$GLUERUN_STATE_DIR/sessions/planner/$NODE.json" ]] \
-  || fail "path: expected $GLUERUN_STATE_DIR/sessions/planner/$NODE.json, got $canon"
-[[ "$canon" == *"/.gluerun-state/"* || "$canon" == "$GLUERUN_STATE_DIR/"* ]] \
+canon="$(singular_ctx_planner_session_path "$NODE")"
+[[ "$canon" == "$SINGULAR_STATE_DIR/sessions/planner/$NODE.json" ]] \
+  || fail "path: expected $SINGULAR_STATE_DIR/sessions/planner/$NODE.json, got $canon"
+[[ "$canon" == *"/.singular-state/"* || "$canon" == "$SINGULAR_STATE_DIR/"* ]] \
   || fail "path: not under the runtime state dir: $canon"
 [[ "$canon" != *"/docs/"* ]] || fail "path: session-meta placed under docs/ (runtime state, not repo truth): $canon"
 
 # ---------------------------------------------------------------------------
 # (a) success (rc 0) + knob ON -> valid finalized meta with role/node/headSha.
 # ---------------------------------------------------------------------------
-export GLUERUN_PLANNER_SESSION=1
+export SINGULAR_PLANNER_SESSION=1
 rm -f "$canon"
-gluerun_ctx_planner_session_finalize "$NODE" 0 "TASK-0007" "RUN-1" \
+singular_ctx_planner_session_finalize "$NODE" 0 "TASK-0007" "RUN-1" \
   "codex-run.sh" "deadbeef" "$HEAD_SHA" 1 \
   || fail "success+ON: finalize crashed"
 [[ -f "$canon" ]] || fail "success+ON: no finalized meta at $canon"
@@ -68,7 +68,7 @@ python3 - "$canon" "$NODE" "$HEAD_SHA" <<'PY' || fail "success+ON: finalized met
 import json, sys
 path, node, head = sys.argv[1:4]
 doc = json.load(open(path))
-assert doc.get("schema") == "gluerun.orchestration.session-meta.v0", doc
+assert doc.get("schema") == "singular.orchestration.session-meta.v0", doc
 assert doc.get("role") == "planner", doc
 assert doc.get("node") == node, doc
 assert doc.get("taskId") == "TASK-0007", doc
@@ -82,7 +82,7 @@ PY
 #     invariance: a rejected planner lineage is not extended).
 # ---------------------------------------------------------------------------
 rm -f "$canon"
-gluerun_ctx_planner_session_finalize "$NODE" 1 "TASK-0007" "RUN-2" \
+singular_ctx_planner_session_finalize "$NODE" 1 "TASK-0007" "RUN-2" \
   "codex-run.sh" "deadbeef" "$HEAD_SHA" 1 \
   || fail "failed+ON: finalize crashed"
 [[ ! -e "$canon" ]] || fail "failed+ON: a resumable meta was written for a failed planner run"
@@ -90,23 +90,23 @@ gluerun_ctx_planner_session_finalize "$NODE" 1 "TASK-0007" "RUN-2" \
 # ---------------------------------------------------------------------------
 # (c) knob OFF (unset AND =0) -> no-op / no file written, independent of rc.
 # ---------------------------------------------------------------------------
-unset GLUERUN_PLANNER_SESSION
+unset SINGULAR_PLANNER_SESSION
 rm -f "$canon"
-gluerun_ctx_planner_session_finalize "$NODE" 0 "TASK-0007" "RUN-3" \
+singular_ctx_planner_session_finalize "$NODE" 0 "TASK-0007" "RUN-3" \
   "codex-run.sh" "deadbeef" "$HEAD_SHA" 1 \
   || fail "OFF(unset): finalize crashed"
 [[ ! -e "$canon" ]] || fail "OFF(unset): finalized meta written while knob OFF"
 
-export GLUERUN_PLANNER_SESSION=0
+export SINGULAR_PLANNER_SESSION=0
 rm -f "$canon"
-gluerun_ctx_planner_session_finalize "$NODE" 0 "TASK-0007" "RUN-4" \
+singular_ctx_planner_session_finalize "$NODE" 0 "TASK-0007" "RUN-4" \
   "codex-run.sh" "deadbeef" "$HEAD_SHA" 1 \
   || fail "OFF(=0): finalize crashed"
 [[ ! -e "$canon" ]] || fail "OFF(=0): finalized meta written while knob OFF"
 
 # OFF is a no-op independent of rc (a failed run under OFF is still a no-op).
 rm -f "$canon"
-gluerun_ctx_planner_session_finalize "$NODE" 1 "TASK-0007" "RUN-5" \
+singular_ctx_planner_session_finalize "$NODE" 1 "TASK-0007" "RUN-5" \
   "codex-run.sh" "deadbeef" "$HEAD_SHA" 1 \
   || fail "OFF(=0, rc!=0): finalize crashed"
 [[ ! -e "$canon" ]] || fail "OFF(=0, rc!=0): finalized meta written while knob OFF"

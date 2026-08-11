@@ -18,9 +18,9 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/state" "$tmp/tasks"
 
 run_lib() {
-  GLUERUN_ROOT="$tmp" \
-  GLUERUN_STATE_DIR="$tmp/state" \
-  GLUERUN_TASKS_DIR="$tmp/tasks" \
+  SINGULAR_ROOT="$tmp" \
+  SINGULAR_STATE_DIR="$tmp/state" \
+  SINGULAR_TASKS_DIR="$tmp/tasks" \
   bash -c "source '$ENGINE_HOME/engine/lib.sh'; $1"
 }
 
@@ -53,25 +53,25 @@ write_task() {
 #    (the 0.4.0 deadlock: a parked task froze its node forever).
 write_task "$tmp/tasks/TASK-0001.md" TASK-0001 blocked node-a src/a.ts "first attempt"
 write_task "$tmp/cand.md" TASK-0002 ready node-a src/a.ts "second attempt"
-run_lib "gluerun_find_duplicate_task_signature '$tmp/cand.md' node-a" >/dev/null 2>&1 \
+run_lib "singular_find_duplicate_task_signature '$tmp/cand.md' node-a" >/dev/null 2>&1 \
   && fail "blocked predecessor must not block a successor candidate"
 
 # Same for superseded/failed/cancelled.
 for st in superseded failed cancelled; do
   write_task "$tmp/tasks/TASK-0001.md" TASK-0001 "$st" node-a src/a.ts "first attempt"
-  run_lib "gluerun_find_duplicate_task_signature '$tmp/cand.md' node-a" >/dev/null 2>&1 \
+  run_lib "singular_find_duplicate_task_signature '$tmp/cand.md' node-a" >/dev/null 2>&1 \
     && fail "$st predecessor must not block a successor candidate"
 done
 
 # 2. An OPEN twin (running) with the same DAG node + owned files IS a duplicate.
 write_task "$tmp/tasks/TASK-0001.md" TASK-0001 running node-a src/a.ts "first attempt"
-dup="$(run_lib "gluerun_find_duplicate_task_signature '$tmp/cand.md' node-a" 2>/dev/null)" \
+dup="$(run_lib "singular_find_duplicate_task_signature '$tmp/cand.md' node-a" 2>/dev/null)" \
   || fail "running twin must be a duplicate"
 assert_contains "$dup" '"existingTaskId":"TASK-0001"' "duplicate names the twin"
 
 # 3. Same owned files under DIFFERENT DAG nodes are not duplicates.
 write_task "$tmp/tasks/TASK-0001.md" TASK-0001 running node-b src/a.ts "other node work"
-run_lib "gluerun_find_duplicate_task_signature '$tmp/cand.md' node-a" >/dev/null 2>&1 \
+run_lib "singular_find_duplicate_task_signature '$tmp/cand.md' node-a" >/dev/null 2>&1 \
   && fail "different DAG nodes with same owned files must not match"
 
 # 4. Unknown nodes on both sides: only a FULL signature matches (0.4.0 treated
@@ -87,20 +87,20 @@ tb = open(b).read()
 tb = re.sub(r"# TASK-0002: .*", "# TASK-0002: identical title", tb)
 open(b, "w").write(tb)
 PY
-run_lib "gluerun_find_duplicate_task_signature '$tmp/cand.md' ''" >/dev/null 2>&1 \
+run_lib "singular_find_duplicate_task_signature '$tmp/cand.md' ''" >/dev/null 2>&1 \
   || fail "full-signature nodeless twin must match"
 write_task "$tmp/cand.md" TASK-0002 ready "" src/a.ts "a different title entirely"
-run_lib "gluerun_find_duplicate_task_signature '$tmp/cand.md' ''" >/dev/null 2>&1 \
+run_lib "singular_find_duplicate_task_signature '$tmp/cand.md' ''" >/dev/null 2>&1 \
   && fail "nodeless owned-files-only overlap must NOT match"
 
 # 5. Supersedes bypass: candidate explicitly replacing an OPEN twin passes.
 write_task "$tmp/tasks/TASK-0001.md" TASK-0001 running node-a src/a.ts "first attempt"
 write_task "$tmp/cand.md" TASK-0002 ready node-a src/a.ts "replacement attempt" "Supersedes: TASK-0001"
-run_lib "gluerun_find_duplicate_task_signature '$tmp/cand.md' node-a" >/dev/null 2>&1 \
+run_lib "singular_find_duplicate_task_signature '$tmp/cand.md' node-a" >/dev/null 2>&1 \
   && fail "Supersedes header must bypass the guard"
 
 # 6. Parser: dagNode + supersedes fields surface in task JSON.
-json="$(run_lib "gluerun_task_json '$tmp/cand.md'")"
+json="$(run_lib "singular_task_json '$tmp/cand.md'")"
 assert_contains "$json" '"dagNode":"node-a"' "dagNode parsed"
 assert_contains "$json" '"supersedes":["TASK-0001"]' "supersedes parsed"
 
@@ -109,10 +109,10 @@ assert_contains "$json" '"supersedes":["TASK-0001"]' "supersedes parsed"
 rm -f "$tmp/cand.md"
 write_task "$tmp/tasks/TASK-0001.md" TASK-0001 integrated node-a src/a.ts "landed work"
 write_task "$tmp/tasks/TASK-0002.md" TASK-0002 ready node-a src/a.ts "accidental twin"
-out="$(run_lib gluerun_list_ready_tasks)"
+out="$(run_lib singular_list_ready_tasks)"
 [[ "$out" == *TASK-0002* ]] && fail "ready twin of integrated work must be suppressed"
 write_task "$tmp/tasks/TASK-0001.md" TASK-0001 blocked node-a src/a.ts "parked work"
-out="$(run_lib gluerun_list_ready_tasks)"
+out="$(run_lib singular_list_ready_tasks)"
 [[ "$out" == *TASK-0002* ]] || fail "ready successor of a blocked task must be dispatchable"
 
 echo "PASS: test-duplicate-guard"

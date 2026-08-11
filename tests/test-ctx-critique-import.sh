@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Covers the critique-import gate engine/ctx-critique-import.sh: the pure,
 # read-only DECISION the L0 importer will consult to honor plan-critique
-# verdicts behind the default-OFF GLUERUN_PLAN_CRITIQUE knob. This brick reads
+# verdicts behind the default-OFF SINGULAR_PLAN_CRITIQUE knob. This brick reads
 # ONLY the persisted plan-critique.json (written by engine/ctx-plan-critic.sh)
 # and the knob, and returns the import disposition. It appends no events, spawns
 # no runner, and mutates nothing — the disposition event and lease handling
 # belong to the follow-up reconcile.sh wiring slice.
 #
 # Asserts:
-#   (OFF) GLUERUN_PLAN_CRITIQUE unset or "0" -> observe-only: a staged dir whose
+#   (OFF) SINGULAR_PLAN_CRITIQUE unset or "0" -> observe-only: a staged dir whose
 #         record verdict is revise/park, AND a staged dir with NO record, ALL
 #         yield the SAME `import` disposition (verdict not enforced), so an OFF
 #         import path is byte-identical to today.
-#   (ON)  GLUERUN_PLAN_CRITIQUE=1 with a valid record: approve -> import; revise
+#   (ON)  SINGULAR_PLAN_CRITIQUE=1 with a valid record: approve -> import; revise
 #         -> reject; park -> reject; the three verdict classes are distinguishable
 #         in the function result.
 #   (ON fail-closed) a missing record, an unreadable/invalid-JSON record, a
@@ -24,7 +24,7 @@
 #   (pure) after a decision the isolated events log and staged inputs are
 #         unchanged (no events appended, no files written) and no runner is run.
 #   (present-but-uncalled) no existing engine path invokes the new functions.
-# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and temp dirs so
+# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and temp dirs so
 # the suite never mutates real run state.
 set -uo pipefail
 
@@ -39,9 +39,9 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/state" "$tmp/orch"
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-export GLUERUN_ORCH_DIR="$tmp/orch"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+export SINGULAR_ORCH_DIR="$tmp/orch"
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
 
@@ -50,14 +50,14 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX_CI" ]] || fail "engine not present yet: $CTX_CI"
 # shellcheck disable=SC1090
 source "$CTX_CI" || fail "sourcing $CTX_CI failed"
-[[ "$(type -t gluerun_ctx_critique_import_decide)" == "function" ]] \
-  || fail "gluerun_ctx_critique_import_decide not defined by $CTX_CI"
-[[ "$(type -t gluerun_ctx_critique_import_record_path)" == "function" ]] \
-  || fail "gluerun_ctx_critique_import_record_path not defined by $CTX_CI"
+[[ "$(type -t singular_ctx_critique_import_decide)" == "function" ]] \
+  || fail "singular_ctx_critique_import_decide not defined by $CTX_CI"
+[[ "$(type -t singular_ctx_critique_import_record_path)" == "function" ]] \
+  || fail "singular_ctx_critique_import_record_path not defined by $CTX_CI"
 
 # Point the events log at an isolated temp file.
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+: > "$SINGULAR_EVENTS_FILE"
 
 # A sentinel runner: if the gate ever spawns a runner, this file appears. The
 # gate is pure/read-only, so it must NEVER be created.
@@ -69,7 +69,7 @@ touch "$SENTINEL"
 exit 0
 STUBEOF
 chmod +x "$STUB"
-export GLUERUN_RUNNER="$STUB"
+export SINGULAR_RUNNER="$STUB"
 
 # --- Helpers -----------------------------------------------------------------
 make_stage_dir() { # <name> -> prints path; seeds staged candidate inputs
@@ -84,7 +84,7 @@ write_record() { # <stage_dir> <verdict>
   local d="$1" v="$2"
   cat > "$d/plan-critique.json" <<JSON
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "node-x",
   "runId": "RUN-x",
   "batchTaskIds": ["TASK-0007", "TASK-0008"],
@@ -99,7 +99,7 @@ JSON
 # decide <stage_dir> -> sets globals DISP REASON OBS RC
 decide() {
   local out rc=0
-  out="$(gluerun_ctx_critique_import_decide "$1")" || rc=$?
+  out="$(singular_ctx_critique_import_decide "$1")" || rc=$?
   RC=$rc
   DISP="$(printf '%s' "$out" | cut -f1)"
   REASON="$(printf '%s' "$out" | cut -f2)"
@@ -112,14 +112,14 @@ no_runner() {
 
 # --- record_path is pure and canonical --------------------------------------
 sd0="$(make_stage_dir "path")"
-[[ "$(gluerun_ctx_critique_import_record_path "$sd0")" == "$sd0/plan-critique.json" ]] \
+[[ "$(singular_ctx_critique_import_record_path "$sd0")" == "$sd0/plan-critique.json" ]] \
   || fail "record_path not canonical"
 
 # ---------------------------------------------------------------------------
 # OFF path (observe-only): revise/park record AND no record ALL -> import.
 # ---------------------------------------------------------------------------
 # Unset knob -> observe-only.
-unset GLUERUN_PLAN_CRITIQUE 2>/dev/null || true
+unset SINGULAR_PLAN_CRITIQUE 2>/dev/null || true
 sd="$(make_stage_dir "off-revise")"; write_record "$sd" revise
 decide "$sd"
 [[ "$RC" -eq 0 && "$DISP" == "import" ]] || fail "OFF/revise: expected import, got '$DISP' rc=$RC"
@@ -136,8 +136,8 @@ decide "$sd"
 [[ "$RC" -eq 0 && "$DISP" == "import" ]] || fail "OFF/missing: expected import, got '$DISP' rc=$RC"
 no_runner "OFF/missing"
 
-# Explicit GLUERUN_PLAN_CRITIQUE=0 with a revise record -> still import.
-export GLUERUN_PLAN_CRITIQUE=0
+# Explicit SINGULAR_PLAN_CRITIQUE=0 with a revise record -> still import.
+export SINGULAR_PLAN_CRITIQUE=0
 sd="$(make_stage_dir "off0-revise")"; write_record "$sd" revise
 decide "$sd"
 [[ "$RC" -eq 0 && "$DISP" == "import" ]] || fail "OFF0/revise: expected import, got '$DISP' rc=$RC"
@@ -146,7 +146,7 @@ no_runner "OFF0/revise"
 # ---------------------------------------------------------------------------
 # ON path: enforce the persisted verdict. approve -> import; revise/park -> reject.
 # ---------------------------------------------------------------------------
-export GLUERUN_PLAN_CRITIQUE=1
+export SINGULAR_PLAN_CRITIQUE=1
 
 sd="$(make_stage_dir "on-approve")"; write_record "$sd" approve
 decide "$sd"
@@ -211,15 +211,15 @@ no_runner "ON/badverdict"
 # Pure and read-only: a decision appends no events and writes no files, and
 # leaves the staged inputs byte-identical.
 # ---------------------------------------------------------------------------
-export GLUERUN_PLAN_CRITIQUE=1
+export SINGULAR_PLAN_CRITIQUE=1
 sd="$(make_stage_dir "pure")"; write_record "$sd" revise
-: > "$GLUERUN_EVENTS_FILE"
-before_events="$(cat "$GLUERUN_EVENTS_FILE" 2>/dev/null || true)"
+: > "$SINGULAR_EVENTS_FILE"
+before_events="$(cat "$SINGULAR_EVENTS_FILE" 2>/dev/null || true)"
 before_ls="$(cd "$sd" && ls -1 | sort)"
 before_sum="$( (cd "$sd" && cat ./*) | shasum 2>/dev/null || (cd "$sd" && cat ./*) | cksum )"
 decide "$sd"
 [[ "$RC" -ne 0 && "$DISP" == "reject" ]] || fail "pure: expected reject on revise"
-after_events="$(cat "$GLUERUN_EVENTS_FILE" 2>/dev/null || true)"
+after_events="$(cat "$SINGULAR_EVENTS_FILE" 2>/dev/null || true)"
 after_ls="$(cd "$sd" && ls -1 | sort)"
 after_sum="$( (cd "$sd" && cat ./*) | shasum 2>/dev/null || (cd "$sd" && cat ./*) | cksum )"
 [[ "$before_events" == "$after_events" ]] || fail "pure: events log mutated by a decision"
@@ -231,7 +231,7 @@ no_runner "pure"
 # ---------------------------------------------------------------------------
 # present-but-uncalled: no existing engine path invokes the new functions.
 # ---------------------------------------------------------------------------
-callers="$(grep -rl 'gluerun_ctx_critique_import_decide\|gluerun_ctx_critique_import_record_path' \
+callers="$(grep -rl 'singular_ctx_critique_import_decide\|singular_ctx_critique_import_record_path' \
   "$ENGINE_HOME/engine" 2>/dev/null | grep -v '/ctx-critique-import.sh$' || true)"
 : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
 

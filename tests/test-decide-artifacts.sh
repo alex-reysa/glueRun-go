@@ -3,7 +3,7 @@ set -euo pipefail
 
 # 0.6.0: decide.sh writes durable console artifacts — decider-codex.log
 # (runner output, previously /dev/null) and session-decider.json (role
-# decider via gluerun_session_meta_finalize). The verdict path is unchanged.
+# decider via singular_session_meta_finalize). The verdict path is unchanged.
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
@@ -15,8 +15,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/repo"
 mkdir -p "$root/docs/orchestration/prompts" "$root/schemas/orchestration" \
-  "$root/.gluerun-state/leases" "$root/.gluerun-state/runs" \
-  "$root/.gluerun-state/inbox" "$root/.worktrees"
+  "$root/.singular-state/leases" "$root/.singular-state/runs" \
+  "$root/.singular-state/inbox" "$root/.worktrees"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 cp "$ENGINE_HOME/templates/prompts/decider.md" "$root/docs/orchestration/prompts/decider.md"
@@ -26,7 +26,7 @@ printf '# Decisions\n\n## Decision Log\n\n' >"$root/docs/orchestration/decisions
 git -C "$root" add .
 git -C "$root" -c user.name=t -c user.email=t@t commit -q -m init
 
-cat >"$root/.gluerun-state/leases/TASK-0001.json" <<EOF
+cat >"$root/.singular-state/leases/TASK-0001.json" <<EOF
 {"taskId":"TASK-0001","branch":"agent/x/TASK-0001","area":"x","owner":"l2-developer",
  "ownedFiles":["a.go"],"forbiddenFiles":[],"baseSha":"target","batchId":"B","runId":"RUN-D",
  "worktree":"$root","status":"running","retryCount":0,"maxRetries":3,
@@ -49,24 +49,24 @@ while [[ $# -gt 0 ]]; do
 done
 echo "decider runner stdout chatter"
 echo "decider runner stderr chatter" >&2
-[[ -n "$meta" ]] && printf '{"schema":"gluerun.orchestration.session-meta.v0","provider":"fake","model":"fake-1","effort":"low","exitCode":0}\n' >"$meta"
-printf '{"schema":"gluerun.orchestration.decider-verdict.v0","taskId":"TASK-0001","failureClass":"gate-red","action":"retry","rationale":"try again","nextOwner":"l1","confidence":"medium"}\n' >"$out"
+[[ -n "$meta" ]] && printf '{"schema":"singular.orchestration.session-meta.v0","provider":"fake","model":"fake-1","effort":"low","exitCode":0}\n' >"$meta"
+printf '{"schema":"singular.orchestration.decider-verdict.v0","taskId":"TASK-0001","failureClass":"gate-red","action":"retry","rationale":"try again","nextOwner":"l1","confidence":"medium"}\n' >"$out"
 SH
 chmod +x "$stub"
 
-out="$(env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-  GLUERUN_ORCH_DIR="$root/docs/orchestration" GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
-  GLUERUN_LEASES_DIR="$root/.gluerun-state/leases" GLUERUN_RUNS_DIR="$root/.gluerun-state/runs" \
-  GLUERUN_INBOX_DIR="$root/.gluerun-state/inbox" GLUERUN_WORKTREES_DIR="$root/.worktrees" \
-  GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" GLUERUN_TARGET_BRANCH=target \
-  GLUERUN_DECIDER_SCHEMA="$root/schemas/orchestration/decider-verdict.v0.schema.json" \
-  GLUERUN_RUNNER="$stub" GLUERUN_DECIDER_TIMEOUT_SEC=30 \
+out="$(env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+  SINGULAR_ORCH_DIR="$root/docs/orchestration" SINGULAR_TASKS_DIR="$root/docs/orchestration/tasks" \
+  SINGULAR_LEASES_DIR="$root/.singular-state/leases" SINGULAR_RUNS_DIR="$root/.singular-state/runs" \
+  SINGULAR_INBOX_DIR="$root/.singular-state/inbox" SINGULAR_WORKTREES_DIR="$root/.worktrees" \
+  SINGULAR_EVENTS_FILE="$root/.singular-state/events.ndjson" SINGULAR_TARGET_BRANCH=target \
+  SINGULAR_DECIDER_SCHEMA="$root/schemas/orchestration/decider-verdict.v0.schema.json" \
+  SINGULAR_RUNNER="$stub" SINGULAR_DECIDER_TIMEOUT_SEC=30 \
   "$SCRIPT_DIR/decide.sh" --task TASK-0001 --failure-class gate-red \
     --branch agent/x/TASK-0001 --run RUN-D --worktree "$root" 2>&1)"
 
 assert_contains "$out" "action=retry" "verdict path unchanged"
 
-run_dir="$root/.gluerun-state/runs/RUN-D"
+run_dir="$root/.singular-state/runs/RUN-D"
 [[ -f "$run_dir/decider-codex.log" ]] || fail "decider-codex.log missing"
 log="$(cat "$run_dir/decider-codex.log")"
 assert_contains "$log" "decider runner stdout chatter" "stdout captured"

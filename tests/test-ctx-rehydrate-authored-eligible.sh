@@ -4,7 +4,7 @@
 # `engine/ctx-rehydrate-authored-eligible.sh` ships a PURE, read-only,
 # present-but-uncalled eligibility filter
 #
-#   gluerun_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
+#   singular_ctx_rehydrate_authored_eligible <trigger> [<trigger> ...]
 #
 # that reads the selector's JSON-Lines (one authored-knowledge record per line,
 # each carrying id / source / class=authored-knowledge / authoritative=false /
@@ -40,7 +40,7 @@ trap 'rm -rf "$tmp"' EXIT
 eligible() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_authored_eligible "$@"
+    singular_ctx_rehydrate_authored_eligible "$@"
   ' _ "$@"
 }
 

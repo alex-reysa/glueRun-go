@@ -4,7 +4,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.gluerun.orchestrator</string>
+  <string>com.singular.orchestrator</string>
   <!-- Stays disabled until a manual full loop passes. install.sh writes this
        file to ~/Library/LaunchAgents/ but never loads it. -->
   <key>Disabled</key>
@@ -12,19 +12,23 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>__GLUERUN_REPO_ROOT__/scripts/orchestration/launchd/run-orchestrator.sh</string>
+    <string>__SINGULAR_RUNNER__</string>
     <string>--watchdog</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>GLUERUN_TARGET_BRANCH</key>
-    <string>__GLUERUN_TARGET_BRANCH__</string>
+    <key>SINGULAR_ROOT</key>
+    <string>__SINGULAR_REPO_ROOT__</string>
+    <key>SINGULAR_ENGINE_HOME</key>
+    <string>__SINGULAR_ENGINE_HOME__</string>
+    <key>SINGULAR_TARGET_BRANCH</key>
+    <string>__SINGULAR_TARGET_BRANCH__</string>
   </dict>
   <key>StartInterval</key>
   <integer>1800</integer>
   <key>StandardOutPath</key>
-  <string>__GLUERUN_REPO_ROOT__/.gluerun-state/launchd.out.log</string>
+  <string>__SINGULAR_REPO_ROOT__/.singular-state/launchd.out.log</string>
   <key>StandardErrorPath</key>
-  <string>__GLUERUN_REPO_ROOT__/.gluerun-state/launchd.err.log</string>
+  <string>__SINGULAR_REPO_ROOT__/.singular-state/launchd.err.log</string>
 </dict>
 </plist>

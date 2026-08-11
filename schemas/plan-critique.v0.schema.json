@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "gluerun.orchestration.plan-critique.v0",
-  "title": "gluerun Plan Critique",
+  "$id": "singular.orchestration.plan-critique.v0",
+  "title": "singular Plan Critique",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,7 +15,7 @@
     "rationale"
   ],
   "properties": {
-    "schema": { "const": "gluerun.orchestration.plan-critique.v0" },
+    "schema": { "const": "singular.orchestration.plan-critique.v0" },
     "node": { "type": "string", "minLength": 1 },
     "runId": { "type": "string", "minLength": 1 },
     "batchTaskIds": {

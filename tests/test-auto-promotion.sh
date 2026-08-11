@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# P3 (0.5.0): GLUERUN_AUTO_PROMOTE_GATES defaults ON — the reconcile
+# P3 (0.5.0): SINGULAR_AUTO_PROMOTE_GATES defaults ON — the reconcile
 # empty-queue pass invokes the promoter WITHOUT the env being set (0.4.0
 # default 0 + a dispatch-budget condition meant it effectively never fired),
 # and integrate.sh emits the gates_promoted_this_run counter.
@@ -21,7 +21,7 @@ assert_not_contains() { [[ "$1" != *"$2"* ]] || fail "$3: unexpected '$2' in: $1
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 root="$tmp/repo"
-mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates" "$root/.gluerun-state"
+mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates" "$root/.singular-state"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 git -C "$root" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
@@ -35,23 +35,23 @@ SH
 chmod +x "$fake_promoter"
 
 common_env() {
-  env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ORCH_DIR="$root/docs/orchestration" GLUERUN_TASKS_DIR="$root/docs/orchestration/tasks" \
-    GLUERUN_LEASES_DIR="$root/.gluerun-state/leases" GLUERUN_INBOX_DIR="$root/.gluerun-state/inbox" \
-    GLUERUN_RUNS_DIR="$root/.gluerun-state/runs" GLUERUN_WORKTREES_DIR="$root/.worktrees" \
-    GLUERUN_EVENTS_FILE="$root/.gluerun-state/events.ndjson" \
-    GLUERUN_TARGET_BRANCH=target GLUERUN_PUSH=0 GLUERUN_GENERATE=0 \
-    GLUERUN_PROMOTER="$fake_promoter" "$@"
+  env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ORCH_DIR="$root/docs/orchestration" SINGULAR_TASKS_DIR="$root/docs/orchestration/tasks" \
+    SINGULAR_LEASES_DIR="$root/.singular-state/leases" SINGULAR_INBOX_DIR="$root/.singular-state/inbox" \
+    SINGULAR_RUNS_DIR="$root/.singular-state/runs" SINGULAR_WORKTREES_DIR="$root/.worktrees" \
+    SINGULAR_EVENTS_FILE="$root/.singular-state/events.ndjson" \
+    SINGULAR_TARGET_BRANCH=target SINGULAR_PUSH=0 SINGULAR_GENERATE=0 \
+    SINGULAR_PROMOTER="$fake_promoter" "$@"
 }
 
-# 1. Default env (no GLUERUN_AUTO_PROMOTE_GATES): empty-queue reconcile pass
+# 1. Default env (no SINGULAR_AUTO_PROMOTE_GATES): empty-queue reconcile pass
 #    attempts promotion via the configured promoter.
 out="$(common_env "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"
 assert_contains "$out" "attempting gate promotion" "empty-queue pass fires by default"
 assert_contains "$out" "FAKE-PROMOTER argv:--from-reconcile --frontier" "configured promoter invoked"
 
 # 2. Opt-out restores 0.4.0 silence.
-out="$(common_env env GLUERUN_AUTO_PROMOTE_GATES=0 "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"
+out="$(common_env env SINGULAR_AUTO_PROMOTE_GATES=0 "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"
 assert_not_contains "$out" "attempting gate promotion" "opt-out suppresses the pass"
 
 # 3. integrate.sh always reports the promotion counter (0 on an empty run).

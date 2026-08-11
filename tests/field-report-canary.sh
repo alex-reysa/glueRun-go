@@ -12,7 +12,7 @@ repo="$tmp/repo"
 mkdir -p "$repo"
 git -C "$tmp" init -q repo
 printf '{"schemaVersion":"v2","targetBranch":"main"}\n' \
-  >"$repo/gluerun.config.json"
+  >"$repo/singular.config.json"
 
 printf 'CANARY %-32s' "captured-26-node-replay"
 replay_log="$tmp/captured-replay.log"

@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0090",
   "runId": "RUN-20260712T192606Z-76079",
   "branch": "agent/graph/TASK-0090-graph-requiredcompletion-guard",
@@ -14,7 +14,7 @@
     "scope-check.log ('1 changed path(s), all allowed')",
     "secret-scan.log ('secret-scan: clean')",
     "git diff d6bd9be..346b2d8 (M tests/test-ctx-graph.sh, +448/-0, single file)",
-    "engine/ctx-graph-{rebuild,sync,query,project,project-plans,project-records,corpus}.sh + cli/gluerun + schemas/context-graph.v0.schema.json (all pre-exist; composed functions gluerun_graph_rebuild/sync/query_neighbors/query_lineage/query_open_contradictions defined)"
+    "engine/ctx-graph-{rebuild,sync,query,project,project-plans,project-records,corpus}.sh + cli/singular + schemas/context-graph.v0.schema.json (all pre-exist; composed functions singular_graph_rebuild/sync/query_neighbors/query_lineage/query_open_contradictions defined)"
   ],
   "commandsRun": [
     "git log --oneline -8; git rev-parse --abbrev-ref HEAD; git status --porcelain",
@@ -22,15 +22,15 @@
     "cat packet.json gate-check.json; ls -laR worker-evidence/",
     "cat red.log green.log; tail regression.log gate-check.log; cat scope-check.log secret-scan.log",
     "git diff d6bd9be..HEAD -- tests/test-ctx-graph.sh",
-    "ls engine/ctx-graph*.sh cli/gluerun schemas/context-graph.v0.schema.json; grep -rn 'gluerun_graph_(rebuild|sync|query_*)()' engine/",
+    "ls engine/ctx-graph*.sh cli/singular schemas/context-graph.v0.schema.json; grep -rn 'singular_graph_(rebuild|sync|query_*)()' engine/",
     "grep -n 'test-*.sh' tests/run.sh; grep -n test-ctx-graph gate-check.log regression.log",
     "bash tests/test-ctx-graph.sh (independent) -> exit 0, 'all assertions passed'; git status --porcelain -> clean"
   ],
   "findings": [
-    "Scope compliant: the sole changed file is tests/test-ctx-graph.sh (the owned file); no forbidden/out-of-scope file was modified (git diff, scope-check.log, packet.changedFiles all agree). The referenced engine modules (ctx-graph-rebuild/sync/query/etc.) and cli/gluerun pre-exist from prior integrated tasks and are unmodified.",
+    "Scope compliant: the sole changed file is tests/test-ctx-graph.sh (the owned file); no forbidden/out-of-scope file was modified (git diff, scope-check.log, packet.changedFiles all agree). The referenced engine modules (ctx-graph-rebuild/sync/query/etc.) and cli/singular pre-exist from prior integrated tasks and are unmodified.",
     "Test-first evidence present and consistent: red.log shows the guard fails closed ('impl not present yet') and green.log shows it passes; both re-confirmed independently (my run exited 0 with repo left clean).",
     "Gate is green with exit 0: tests/run.sh reports 111 passed / 0 failed in both worker-evidence/regression.log and gate-check.log, and test-ctx-graph.sh is discovered by the run.sh test-*.sh glob and passes there (line 42).",
-    "The Slice 4 capstone exercises the real INTEGRATED functions (rebuild/sync/query over the mappers+writer) over a single fixture stateDir and asserts rebuild determinism, loss-free delete/rebuild, sync==rebuild (scratch + incremental), query readers (neighbors/lineage/open-contradictions), authoritative(commit,gate-result)/claim split, per-line validity against the SHIPPED schema, and OFF-parity (GLUERUN_CTX_GRAPH unset/0 sources with no writes; hermetic `gluerun graph` refuses identically to an unknown command with no corpus dir created). No projection logic is re-implemented in the test.",
+    "The Slice 4 capstone exercises the real INTEGRATED functions (rebuild/sync/query over the mappers+writer) over a single fixture stateDir and asserts rebuild determinism, loss-free delete/rebuild, sync==rebuild (scratch + incremental), query readers (neighbors/lineage/open-contradictions), authoritative(commit,gate-result)/claim split, per-line validity against the SHIPPED schema, and OFF-parity (SINGULAR_CTX_GRAPH unset/0 sources with no writes; hermetic `singular graph` refuses identically to an unknown command with no corpus dir created). No projection logic is re-implemented in the test.",
     "Foundation compliant: OFF-parity and no-writes are pinned behaviorally via before/after directory snapshots and refusal-equivalence, never a temporal absence-grep; provenance/status/schema constants in the fixture are internally consistent.",
     "Minor (non-blocking) note: because this task guards already-shipped integrated functions, the RED was produced by temporarily hiding engine/ctx-graph-rebuild.sh (restored byte-identical, zero net diff), so the RED demonstrates only the file-existence precondition failing closed \u2014 it does not empirically demonstrate the behavioral assertions failing on wrong rebuild/sync/query output. This is inherent to an additive composed-guard test over pre-existing impl; the behavioral assertions are nonetheless green over the real functions."
   ],

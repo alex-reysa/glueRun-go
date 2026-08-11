@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0030",
   "runId": "RUN-20260711T124712Z-79857",
   "branch": "agent/plancritic/TASK-0030-critic-recheck-context",
@@ -9,9 +9,9 @@
     "gate-check.json: cmd 'bash tests/test-ctx-critic-recheck-context.sh && bash tests/test-engine-clean.sh' exitCode 0",
     "worker-evidence/red.log: 'FAIL: engine not present yet: .../engine/ctx-critic-recheck-context.sh' (test guard line 62 \u2014 legitimate RED before impl)",
     "worker-evidence/green.log: 'ctx-critic-recheck-context tests passed'",
-    "worker-evidence/regression.log: green + 'engine-clean: engine/ + schemas/ are free of GLUERUN-specific symbols'",
+    "worker-evidence/regression.log: green + 'engine-clean: engine/ + schemas/ are free of consumer-specific symbols'",
     "git diff 7669b74..f359494 --name-status: only A engine/ctx-critic-recheck-context.sh, A tests/test-ctx-critic-recheck-context.sh (HEAD~1==baseRef; single clean commit)",
-    "engine/ctx-critic-recheck-context.sh (149 lines): two pure/read-only functions gluerun_ctx_critic_recheck_accepted_diff (git diff with fail-safe rev-parse guards, always exit 0) and gluerun_ctx_critic_recheck_context (id-sorted plan-critique.v0 checklist + accepted diff into out_file only)",
+    "engine/ctx-critic-recheck-context.sh (149 lines): two pure/read-only functions singular_ctx_critic_recheck_accepted_diff (git diff with fail-safe rev-parse guards, always exit 0) and singular_ctx_critic_recheck_context (id-sorted plan-critique.v0 checklist + accepted diff into out_file only)",
     "tests/test-ctx-critic-recheck-context.sh (263 lines): asserts (a) present-but-uncalled auto-source, (b) read-only diff reader + empty/indeterminate/non-repo fail-safe, (c) header+checklist+diff composition, (d) byte-stable determinism, (e) graceful degradation, (f) purity (no events, no state/input mutation, no runner)",
     "engine/lib.sh:3851-3857 ctx-loader loop auto-sources engine/ctx-*.sh \u2014 confirms present-but-uncalled auto-source path"
   ],

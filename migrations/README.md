@@ -2,9 +2,9 @@
 
 The engine's data contract version lives in the root `SCHEMA_VERSION` file
 (currently `v2`). Each consumer repo declares the schema it was scaffolded
-against in `gluerun.config.json` → `schemaVersion`. When an engine release bumps
+against in `singular.config.json` → `schemaVersion`. When an engine release bumps
 `SCHEMA_VERSION`, it must ship migration scripts here so existing repos can
-catch up via `gluerun migrate`.
+catch up via `singular migrate`.
 
 ## Naming contract
 
@@ -13,13 +13,13 @@ migrations/<fromSchema>-to-<toSchema>.sh      e.g. v0-to-v1.sh
 ```
 
 - `<fromSchema>` / `<toSchema>` are schema version tokens (`v0`, `v1`, ...),
-  exactly as written in `SCHEMA_VERSION` and in `gluerun.config.json`.
+  exactly as written in `SCHEMA_VERSION` and in `singular.config.json`.
 - One script per single step. A repo two schemas behind is migrated by the
   chain (`v0-to-v1.sh`, then `v1-to-v2.sh`) — never by a skip-level script.
 
-## Execution (what `gluerun migrate` does)
+## Execution (what `singular migrate` does)
 
-1. Reads the repo's `gluerun.config.json` `schemaVersion` and the resolved
+1. Reads the repo's `singular.config.json` `schemaVersion` and the resolved
    engine's `SCHEMA_VERSION`.
 2. If they match: prints "up to date" and exits 0 (no-op).
 3. If the repo is behind: discovers `migrations/<current>-to-*.sh` in the
@@ -28,16 +28,16 @@ migrations/<fromSchema>-to-<toSchema>.sh      e.g. v0-to-v1.sh
 4. Each script is invoked as `bash <script> <repo-root>` — the target repo's
    absolute path is `$1`. Scripts run with the engine install as their
    on-disk location; they must not assume any particular CWD.
-5. **After each script exits 0, `gluerun migrate` itself rewrites
-   `schemaVersion` in the repo's `gluerun.config.json` to the script's
+5. **After each script exits 0, `singular migrate` itself rewrites
+   `schemaVersion` in the repo's `singular.config.json` to the script's
    `<toSchema>`.** Scripts must NOT edit `schemaVersion` themselves; they
    migrate content, the runner does the bookkeeping.
 6. If a script exits nonzero, migration stops immediately; the repo's
    `schemaVersion` is left at the last completed step.
 
-## Dry run (`gluerun migrate --dry-run`)
+## Dry run (`singular migrate --dry-run`)
 
-`gluerun migrate --dry-run` walks the same discovery as step 3 and prints the
+`singular migrate --dry-run` walks the same discovery as step 3 and prints the
 resolved chain — one `would run: <script> (<from> -> <to>)` line per step —
 then exits.
 
@@ -49,8 +49,8 @@ then exits.
   invoked with a "pretend" flag, must not implement one, and must not try to
   detect one — a script that runs is a script that migrates.
 - The operator-facing safety therefore comes from outside the script: the chain
-  plan above, plus `gluerun setup`, which hashes every gate result before
-  migrating (`.gluerun-state/setup/gates-pre-migrate.json`) and afterwards
+  plan above, plus `singular setup`, which hashes every gate result before
+  migrating (`.singular-state/setup/gates-pre-migrate.json`) and afterwards
   verifies each historical verdict (`node`, `status`, `authoritative`,
   `recordedAt`) survived, refusing to report success when one did not.
 
@@ -58,7 +58,7 @@ then exits.
 
 Only per-repo, committed orchestration surface in the target repo (`$1`):
 
-- `gluerun.config.json` — key renames/moves/shape changes (except
+- `singular.config.json` — key renames/moves/shape changes (except
   `schemaVersion`, see above).
 - `docs/orchestration/**` — DAG manifest, task packets, area docs, gate docs,
   prompt skeletons.
@@ -67,25 +67,25 @@ Only per-repo, committed orchestration surface in the target repo (`$1`):
   validating the complete authoritative set; consumer-only custom schemas must
   be preserved.
 
-A migration script must NOT touch: engine files, `~/.gluerun/`, `.gluerun-state/`
-(runtime state), `.worktrees/`, the repo's source code, or `.gluerun-version`
-(engine pinning is `gluerun update`'s job, not a schema concern). Scripts should
+A migration script must NOT touch: engine files, `~/.singular/`, `.singular-state/`
+(runtime state), `.worktrees/`, the repo's source code, or `.singular-version`
+(engine pinning is `singular update`'s job, not a schema concern). Scripts should
 be idempotent where practical — re-running on an already-migrated repo must
 not corrupt it.
 
 ## Missing migrations are a hard error
 
 If a repo's `schemaVersion` is behind the engine's and no
-`<current>-to-*.sh` script exists for the next step, `gluerun migrate` fails
+`<current>-to-*.sh` script exists for the next step, `singular migrate` fails
 with a nonzero exit ("no migration found for X -> Y; see CHANGELOG.md").
 There is no silent fallback: a schema bump without a shipped migration path
-is a release bug. `gluerun doctor` reports the same mismatch as a FAIL, and
-`gluerun update` warns and points at `gluerun migrate` when the freshly pinned
+is a release bug. `singular doctor` reports the same mismatch as a FAIL, and
+`singular update` warns and points at `singular migrate` when the freshly pinned
 engine's schema differs from the repo's.
 
 The current public contract is `v2`. `migrations/v0-to-v1.sh` backfills the
 original scaffold and rewrites legacy `pmgo.orchestration.*` namespace
-references to `gluerun.orchestration.*`. `migrations/v1-to-v2.sh` stages and
+references to `singular.orchestration.*`. `migrations/v1-to-v2.sh` stages and
 validates the authoritative schema bundle, replaces matching consumer mirrors,
 adds the role/capability, evidence, bootstrap, resource, and control-state
 configuration defaults when absent, and creates the human-gate and strict-gate

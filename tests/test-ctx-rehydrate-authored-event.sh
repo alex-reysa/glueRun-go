@@ -6,17 +6,17 @@
 # manifest, the config-gated authored-knowledge manifest entries — the recorded
 # counterpart of the section TASK-0062 injects into the rehydration prompt.
 #
-#   gluerun_ctx_rehydrate_event_data \
+#   singular_ctx_rehydrate_event_data \
 #     <role> <task-id> <run-id> <attempt> <reason> <run_dir> [extra-id=path ...]
 #
-# The builder merges `gluerun_ctx_rehydrate_authored_config_manifest implement`
+# The builder merges `singular_ctx_rehydrate_authored_config_manifest implement`
 # (the SAME `implement` trigger TASK-0062 injects with) into the event's nested
 # `manifest` under a distinguishable `authored` key, so the recorded authored
 # entries match the injected authored section (consistency invariant). Each
 # authored entry carries id + sha256 + class=authored-knowledge +
 # authoritative=false and is NEVER recorded as authoritative / host-verified. The
-# config gate (TASK-0061) internally checks GLUERUN_CTX_MANIFEST (default 0) and
-# the OPTIONAL gluerun.config.json `contextManifest` field, so with either OFF it
+# config gate (TASK-0061) internally checks SINGULAR_CTX_MANIFEST (default 0) and
+# the OPTIONAL singular.config.json `contextManifest` field, so with either OFF it
 # returns empty and nothing is merged (OFF-parity: byte-identical to the
 # durable-only payload). This OPTIONAL feature is NOT part of the node's
 # requiredCompletion and does NOT gate the node.
@@ -28,11 +28,11 @@
 #   - Durable sources unaffected: manifest.sources (TASK-0055) stay recorded
 #     unchanged; authored entries are additive under their own key.
 #   - Never authoritative: no authored entry is host-verified / authoritative.
-#   - OFF-parity: with GLUERUN_CTX_MANIFEST unset, no authored entries merge and
+#   - OFF-parity: with SINGULAR_CTX_MANIFEST unset, no authored entries merge and
 #     the event data is byte-identical to the durable-only payload.
 #   - Valid JSON: the merged event data parses as a single JSON object.
 #   - Minimal delegation: the merge delegates into
-#     gluerun_ctx_rehydrate_authored_config_manifest; no config/selection/render
+#     singular_ctx_rehydrate_authored_config_manifest; no config/selection/render
 #     logic is inlined into engine/ctx-rehydrate-event.sh.
 #   - Pure / read-only: the builder mutates nothing on disk and appends no events.
 set -uo pipefail
@@ -44,7 +44,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export GLUERUN_ROOT="$tmp"
+export SINGULAR_ROOT="$tmp"
 
 run_dir="$tmp/run-state/RUN-REHYDRATE-AUTHORED-EVENT"
 mkdir -p "$run_dir"
@@ -60,7 +60,7 @@ printf '{"findings":[]}\n' >"$run_dir/findings-status.json"
 authored_manifest="$tmp/authored-manifest.json"
 cat >"$authored_manifest" <<'JSON'
 {
-  "schema": "gluerun.orchestration.authored-knowledge-manifest.v0",
+  "schema": "singular.orchestration.authored-knowledge-manifest.v0",
   "entries": [
     { "id": "zeta-body",  "body": "AUTHORED BODY zeta",  "load-when": ["implement"], "freshness": "current" },
     { "id": "plan-only",  "body": "planner body",        "load-when": ["planner"],   "freshness": "current" },
@@ -70,31 +70,31 @@ cat >"$authored_manifest" <<'JSON'
 JSON
 
 # --- Fixture config declaring an ABSOLUTE contextManifest path ---------------
-config="$tmp/gluerun.config.json"
+config="$tmp/singular.config.json"
 cat >"$config" <<JSON
 { "contextManifest": "$authored_manifest" }
 JSON
 
 # Event builder invoked with an explicit gate flag + config file.
-#   $1 = GLUERUN_CTX_MANIFEST value (empty string => unset)
-#   $2 = GLUERUN_JSON_CONFIG_FILE
+#   $1 = SINGULAR_CTX_MANIFEST value (empty string => unset)
+#   $2 = SINGULAR_JSON_CONFIG_FILE
 #   $3.. = event_data args
 event_data() {
   local flag="$1" cfg="$2"; shift 2
   if [[ -n "$flag" ]]; then
-    GLUERUN_CTX_MANIFEST="$flag" GLUERUN_JSON_CONFIG_FILE="$cfg" \
-      bash -c 'source "'"$LIB"'"; gluerun_ctx_rehydrate_event_data "$@"' _ "$@"
+    SINGULAR_CTX_MANIFEST="$flag" SINGULAR_JSON_CONFIG_FILE="$cfg" \
+      bash -c 'source "'"$LIB"'"; singular_ctx_rehydrate_event_data "$@"' _ "$@"
   else
-    GLUERUN_JSON_CONFIG_FILE="$cfg" \
-      bash -c 'unset GLUERUN_CTX_MANIFEST; source "'"$LIB"'"; gluerun_ctx_rehydrate_event_data "$@"' _ "$@"
+    SINGULAR_JSON_CONFIG_FILE="$cfg" \
+      bash -c 'unset SINGULAR_CTX_MANIFEST; source "'"$LIB"'"; singular_ctx_rehydrate_event_data "$@"' _ "$@"
   fi
 }
 
 # The delegation target the merged `authored` block must equal (same trigger).
 config_manifest() {
   local flag="$1" cfg="$2"; shift 2
-  GLUERUN_CTX_MANIFEST="$flag" GLUERUN_JSON_CONFIG_FILE="$cfg" \
-    bash -c 'source "'"$LIB"'"; gluerun_ctx_rehydrate_authored_config_manifest "$@"' _ "$@"
+  SINGULAR_CTX_MANIFEST="$flag" SINGULAR_JSON_CONFIG_FILE="$cfg" \
+    bash -c 'source "'"$LIB"'"; singular_ctx_rehydrate_authored_config_manifest "$@"' _ "$@"
 }
 
 before_hash="$(find "$run_dir" -type f -print0 | sort -z | xargs -0 shasum | shasum | awk '{print $1}')"
@@ -126,7 +126,7 @@ for s in srcs:
 ' || fail "case1: authored entries not recorded with id+sha256+class+authoritative"
 
 # --- Case 2: consistency with injection (same `implement` trigger) ----------
-# The recorded authored block equals gluerun_ctx_rehydrate_authored_config_manifest.
+# The recorded authored block equals singular_ctx_rehydrate_authored_config_manifest.
 want_authored="$(config_manifest 1 "$config" implement)" \
   || fail "case2: config manifest delegate non-zero"
 [[ -n "${want_authored//[$'\n' ]/}" ]] || fail "case2: fixture sanity — delegate produced nothing"
@@ -177,7 +177,7 @@ on2="$(event_data 1 "$config" implementer T-1 R-1 2 window-pressure "$run_dir")"
 [[ "$on" == "$on2" ]] || fail "case6: ON event data not byte-identical across runs"
 
 # --- Case 7: armed but unconfigured -> OFF-parity (fail-soft) ---------------
-# GLUERUN_CTX_MANIFEST=1 but the config declares no contextManifest field.
+# SINGULAR_CTX_MANIFEST=1 but the config declares no contextManifest field.
 config_absent="$tmp/cfg-absent.json"
 cat >"$config_absent" <<'JSON'
 { "targetBranch": "main" }
@@ -192,7 +192,7 @@ assert "authored" not in json.load(sys.stdin)["manifest"], "authored merged with
 # --- Case 8: purity / read-only, no events appended -------------------------
 after_hash="$(find "$run_dir" -type f -print0 | sort -z | xargs -0 shasum | shasum | awk '{print $1}')"
 [[ "$before_hash" == "$after_hash" ]] || fail "case8: builder mutated the source tree (not read-only)"
-[[ ! -e "$tmp/.gluerun-state/events.ndjson" ]] \
+[[ ! -e "$tmp/.singular-state/events.ndjson" ]] \
   || fail "case8: builder appended events (should PRODUCE data only)"
 
 echo "ctx-rehydrate-authored-event tests passed"

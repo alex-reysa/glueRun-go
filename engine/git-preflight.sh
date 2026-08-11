@@ -4,9 +4,9 @@
 # CONTRACT
 #   Sourceable library. Defines one public function:
 #
-#       gluerun_git_source_preflight <dir>   # 0 = usable, 1 = rejected
+#       singular_git_source_preflight <dir>   # 0 = usable, 1 = rejected
 #
-#   Silent on success. On failure it prints ONE GLUERUN_TEST_SOURCE_UNSUPPORTED
+#   Silent on success. On failure it prints ONE SINGULAR_TEST_SOURCE_UNSUPPORTED
 #   block to stderr and returns 1 — the caller exits. This exists so that
 #   running the suite from a Git *archive* (tarball, `git archive`, vendored
 #   copy) produces one diagnosis instead of dozens of unrelated per-test
@@ -26,7 +26,7 @@
 
 # Run a command under timeout(1)/gtimeout(1) when one exists, else plainly.
 # $1 is the timeout binary ("" for none); the rest is the command.
-gluerun_git_preflight__run() {
+singular_git_preflight__run() {
   local tmo="${1:-}"
   shift
   if [[ -n "$tmo" ]]; then
@@ -36,7 +36,7 @@ gluerun_git_preflight__run() {
   "$@"
 }
 
-gluerun_git_source_preflight() {
+singular_git_source_preflight() {
   local dir="${1:-}"
   local detail="" head="" actual="" parent="" probe="" tmo=""
 
@@ -56,14 +56,14 @@ gluerun_git_source_preflight() {
     detail="HEAD does not resolve to a commit (no history): $dir"
   else
     head="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
-    parent="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-git-preflight.XXXXXX" 2>/dev/null || true)"
+    parent="$(mktemp -d "${TMPDIR:-/tmp}/singular-git-preflight.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$parent" || ! -d "$parent" ]]; then
       detail="could not create a temporary directory for the disposable-worktree probe"
     else
       probe="$parent/wt"
-      if gluerun_git_preflight__run "$tmo" git -C "$dir" worktree add --detach "$probe" HEAD >/dev/null 2>&1; then
+      if singular_git_preflight__run "$tmo" git -C "$dir" worktree add --detach "$probe" HEAD >/dev/null 2>&1; then
         actual="$(git -C "$probe" rev-parse HEAD 2>/dev/null || true)"
-        if ! gluerun_git_preflight__run "$tmo" git -C "$dir" worktree remove --force "$probe" >/dev/null 2>&1; then
+        if ! singular_git_preflight__run "$tmo" git -C "$dir" worktree remove --force "$probe" >/dev/null 2>&1; then
           detail="disposable worktree could not be removed again: $probe"
         elif [[ -z "$actual" || "$actual" != "$head" ]]; then
           detail="disposable worktree HEAD mismatch (expected ${head:-<none>}, got ${actual:-<none>})"
@@ -77,7 +77,7 @@ gluerun_git_source_preflight() {
 
   if [[ -n "$detail" ]]; then
     {
-      echo "GLUERUN_TEST_SOURCE_UNSUPPORTED"
+      echo "SINGULAR_TEST_SOURCE_UNSUPPORTED"
       echo "The full regression suite cannot run from a Git archive because it requires"
       echo "history and disposable worktrees."
       echo "Recovery: run from a clean Git clone."

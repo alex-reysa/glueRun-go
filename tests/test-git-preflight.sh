@@ -9,7 +9,7 @@ set -euo pipefail
 #
 #   a  a real repo with a commit -> accepted, silently
 #   b  a git-archive extraction of the same layout -> exactly ONE
-#      GLUERUN_TEST_SOURCE_UNSUPPORTED block, nonzero exit, ZERO per-test lines
+#      SINGULAR_TEST_SOURCE_UNSUPPORTED block, nonzero exit, ZERO per-test lines
 #   c  a repo with no commits -> rejected, detail names HEAD
 #   d  the same fixture as a real clone -> the suite runs and exits 0
 #
@@ -39,7 +39,7 @@ if git -C "$tmp" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 git_commit() { # dir message
-  git -C "$1" -c user.email=gluerun@gluerun.local -c user.name=gluerun \
+  git -C "$1" -c user.email=singular@singular.local -c user.name=singular \
     commit -q -m "$2"
 }
 
@@ -63,7 +63,7 @@ git_commit "$fixture" "fixture"
 out="$(
   set -euo pipefail
   . "$PREFLIGHT"
-  gluerun_git_source_preflight "$fixture" 2>&1
+  singular_git_source_preflight "$fixture" 2>&1
 )" || fail "a: preflight rejected a real repo: $out"
 [[ -z "$out" ]] || fail "a: preflight must be silent on success, got: $out"
 
@@ -77,7 +77,7 @@ git -C "$fixture" archive HEAD | tar -x -C "$archive"
 rc=0
 out="$("$BASH" "$archive/tests/run.sh" </dev/null 2>&1)" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "b: the suite must refuse to run from an archive (exit $rc): $out"
-blocks="$(printf '%s\n' "$out" | grep -c '^GLUERUN_TEST_SOURCE_UNSUPPORTED$' || true)"
+blocks="$(printf '%s\n' "$out" | grep -c '^SINGULAR_TEST_SOURCE_UNSUPPORTED$' || true)"
 [[ "$blocks" -eq 1 ]] || fail "b: expected exactly 1 rejection block, got $blocks: $out"
 assert_contains "$out" "The full regression suite cannot run from a Git archive because it requires" "b: block line 2"
 assert_contains "$out" "history and disposable worktrees." "b: block line 3"
@@ -94,10 +94,10 @@ git -C "$empty" init -q -b main 2>/dev/null || git -C "$empty" init -q
 rc=0
 out="$(
   . "$PREFLIGHT"
-  gluerun_git_source_preflight "$empty" 2>&1
+  singular_git_source_preflight "$empty" 2>&1
 )" || rc=$?
 [[ "$rc" -eq 1 ]] || fail "c: expected return 1 for a repo with no commits, got $rc: $out"
-assert_contains "$out" "GLUERUN_TEST_SOURCE_UNSUPPORTED" "c: block header"
+assert_contains "$out" "SINGULAR_TEST_SOURCE_UNSUPPORTED" "c: block header"
 assert_contains "$out" "detail: HEAD does not resolve to a commit" "c: detail names HEAD"
 
 # --- d) the same fixture as a real clone runs the suite normally ------------
@@ -106,7 +106,7 @@ out="$("$BASH" "$fixture/tests/run.sh" </dev/null 2>&1)" || rc=$?
 [[ "$rc" -eq 0 ]] || fail "d: the suite must run from a real repo, exit $rc: $out"
 assert_contains "$out" "PASS  test-dummy.sh" "d: the dummy test ran"
 assert_contains "$out" "SUMMARY: 1 passed, 0 failed" "d: harness summary is intact"
-[[ "$out" != *"GLUERUN_TEST_SOURCE_UNSUPPORTED"* ]] || fail "d: a real repo must not be rejected: $out"
+[[ "$out" != *"SINGULAR_TEST_SOURCE_UNSUPPORTED"* ]] || fail "d: a real repo must not be rejected: $out"
 
 # The probe must not leak worktree metadata into the repo it probed.
 leaked="$(git -C "$fixture" worktree list | wc -l | tr -d ' ')"

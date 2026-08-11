@@ -3,7 +3,7 @@
 # engine/ctx-plan-revise-loop.sh (stage S3-plan-revision, area plancritic, layer
 # engine_runtime, kind runtime). This is the requiredCompletion-cited node test.
 #
-# gluerun_plan_revise_loop <node> <run_id> <stage_dir> [worktree] composes ONLY
+# singular_plan_revise_loop <node> <run_id> <stage_dir> [worktree] composes ONLY
 # the already-integrated engine helpers into the bounded in-lineage
 #   critique -> decide(revise|import|park) -> [assemble prompt -> resume|fresh ->
 #   provider final message -> host-side transactional re-stage
@@ -12,10 +12,10 @@
 # loop, printing EXACTLY one terminal outcome line (`import` or `park <reason>`)
 # and driving no state beyond the stage dir + the pinned event log.
 #
-# Fully hermetic: STUB critic runner (via GLUERUN_RUNNER, consumed by the
-# integrated gluerun_ctx_plan_critic_run) and STUB planner runner (via
-# GLUERUN_PLAN_REVISE_PLANNER). Pins GLUERUN_EVENTS_FILE, the stage dir,
-# GLUERUN_PLAN_CRITIQUE=1, and GLUERUN_PLAN_REVISE_MAX.
+# Fully hermetic: STUB critic runner (via SINGULAR_RUNNER, consumed by the
+# integrated singular_ctx_plan_critic_run) and STUB planner runner (via
+# SINGULAR_PLAN_REVISE_PLANNER). Pins SINGULAR_EVENTS_FILE, the stage dir,
+# SINGULAR_PLAN_CRITIQUE=1, and SINGULAR_PLAN_REVISE_MAX.
 #
 # Exercises the full walk:
 #   (A) critique -> revise -> approve -> import, resume path (strategy=resume,
@@ -50,14 +50,14 @@ printf '# Plan Critic Prompt\n' > "$REPO/docs/orchestration/prompts/plan-critic.
 git -C "$REPO" add .
 git -C "$REPO" -c user.name=test -c user.email=test@example.local commit -q -m init
 
-export GLUERUN_ROOT="$REPO"
-export GLUERUN_STATE_DIR="$REPO/.gluerun-state"
-export GLUERUN_ORCH_DIR="$REPO/docs/orchestration"
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-export GLUERUN_TARGET_BRANCH=target
-export GLUERUN_PLAN_CRITIQUE=1
-export GLUERUN_PLAN_REVISE_MAX=1
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_ROOT="$REPO"
+export SINGULAR_STATE_DIR="$REPO/.singular-state"
+export SINGULAR_ORCH_DIR="$REPO/docs/orchestration"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+export SINGULAR_TARGET_BRANCH=target
+export SINGULAR_PLAN_CRITIQUE=1
+export SINGULAR_PLAN_REVISE_MAX=1
+: > "$SINGULAR_EVENTS_FILE"
 
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
@@ -66,16 +66,16 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX" ]] || fail "engine not present yet: $CTX"
 # shellcheck disable=SC1090
 source "$CTX" || fail "sourcing $CTX failed"
-[[ "$(type -t gluerun_plan_revise_loop)" == "function" ]] \
-  || fail "gluerun_plan_revise_loop not defined by $CTX"
+[[ "$(type -t singular_plan_revise_loop)" == "function" ]] \
+  || fail "singular_plan_revise_loop not defined by $CTX"
 
 NODE="plan-revision-loop"
 HEAD="$(git -C "$REPO" rev-parse target)"
-TPL_SHA="$(gluerun_sha256_file "$REPO/docs/orchestration/prompts/l1-planner.md")"
+TPL_SHA="$(singular_sha256_file "$REPO/docs/orchestration/prompts/l1-planner.md")"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-META="$GLUERUN_STATE_DIR/sessions/planner/$NODE.json"
+META="$SINGULAR_STATE_DIR/sessions/planner/$NODE.json"
 
-# --- STUB critic runner (GLUERUN_RUNNER) -------------------------------------
+# --- STUB critic runner (SINGULAR_RUNNER) -------------------------------------
 # Pops the next verdict from a per-scenario sequence file and writes a critique
 # with three findings (three distinct sha-derived ids), so the disposition
 # classifier sees a full findings set. Ignores the prompt content.
@@ -97,7 +97,7 @@ fi
 cat > "$out" <<JSON
 Here is my critique:
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "STUB",
   "runId": "STUB",
   "batchTaskIds": ["TASK-9999"],
@@ -114,9 +114,9 @@ JSON
 exit 0
 CEOF
 chmod +x "$CRITIC"
-export GLUERUN_RUNNER="$CRITIC"
+export SINGULAR_RUNNER="$CRITIC"
 
-# --- STUB planner runner (GLUERUN_PLAN_REVISE_PLANNER) ------------------------
+# --- STUB planner runner (SINGULAR_PLAN_REVISE_PLANNER) ------------------------
 # Returns a complete task-batch.v0 through --output-last-message. It deliberately
 # knows nothing about the orchestration staging directory: the host materializes
 # and transactionally swaps the candidate set after validation. The batch
@@ -200,19 +200,19 @@ Forbidden files:
 - The revised slice passes.
 """.format(task_id=task_id, index=index, note=notes[index])
         tasks.append({"taskId": task_id, "markdown": markdown})
-doc = {"schema": "gluerun.orchestration.task-batch.v0", "tasks": tasks}
+doc = {"schema": "singular.orchestration.task-batch.v0", "tasks": tasks}
 with open(out, "w", encoding="utf-8") as f:
     json.dump(doc, f)
 PY
 exit 0
 PEOF
 chmod +x "$PLANNER"
-export GLUERUN_PLAN_REVISE_PLANNER="$PLANNER"
+export SINGULAR_PLAN_REVISE_PLANNER="$PLANNER"
 
 # --- helpers -----------------------------------------------------------------
 ev_count() { # <type>
-  [[ -f "$GLUERUN_EVENTS_FILE" ]] || { echo 0; return; }
-  local n; n="$(grep -c "\"type\":\"$1\"" "$GLUERUN_EVENTS_FILE" 2>/dev/null || true)"
+  [[ -f "$SINGULAR_EVENTS_FILE" ]] || { echo 0; return; }
+  local n; n="$(grep -c "\"type\":\"$1\"" "$SINGULAR_EVENTS_FILE" 2>/dev/null || true)"
   echo "${n:-0}"
 }
 
@@ -224,7 +224,7 @@ forge_meta() {
 import json, sys
 path, cwd, now, node, tpl, head, runner = sys.argv[1:8]
 doc = {
-    "schema": "gluerun.orchestration.session-meta.v0",
+    "schema": "singular.orchestration.session-meta.v0",
     "provider": "codex", "sessionId": "SID-PLANNER", "model": "m", "effort": "e",
     "cwd": cwd, "exitCode": 0, "createdAt": now,
     "role": "planner", "node": node, "runner": runner,
@@ -236,7 +236,7 @@ PY
 
 # dispositions[] recorded by the last plan.revised event (id -> disposition set).
 plan_revised_dispositions() {
-  python3 - "$GLUERUN_EVENTS_FILE" <<'PY'
+  python3 - "$SINGULAR_EVENTS_FILE" <<'PY'
 import json, sys
 last = None
 try:
@@ -296,7 +296,7 @@ MD
 
 candidate_digest() { # <stage-dir>
   local candidate_batch_dir
-  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$1")" \
+  candidate_batch_dir="$(singular_task_batch_candidate_dir "$1")" \
     || fail "cannot resolve authoritative candidate batch for $1"
   python3 - "$candidate_batch_dir" <<'PY'
 import glob, hashlib, os, sys
@@ -314,21 +314,21 @@ PY
 # =============================================================================
 # (A) critique -> revise -> approve -> import, RESUME path, all dispositions.
 # =============================================================================
-export GLUERUN_PLANNER_SESSION=1
+export SINGULAR_PLANNER_SESSION=1
 forge_meta
-: > "$GLUERUN_EVENTS_FILE"
+: > "$SINGULAR_EVENTS_FILE"
 export CRITIC_SEQ_FILE="$tmp/seqA"; printf 'revise\napprove\n' > "$CRITIC_SEQ_FILE"
 export PLANNER_FAIL_ON_RESUME=0
 export PLANNER_INVOKED_FILE="$tmp/planner-A"
 sdA="$(new_stage A)"
-outA="$(gluerun_plan_revise_loop "$NODE" "RUN-A" "$sdA" "$REPO")" \
+outA="$(singular_plan_revise_loop "$NODE" "RUN-A" "$sdA" "$REPO")" \
   || fail "A: loop must exit 0 on the happy walk"
 [[ "$outA" == "import" ]] || fail "A: terminal outcome must be exactly 'import' (got '$outA')"
 [[ "$(printf '%s\n' "$outA" | grep -c .)" -eq 1 ]] || fail "A: must print exactly one terminal line"
 [[ -e "$PLANNER_INVOKED_FILE" ]] || fail "A: planner runner was never invoked for the revision round"
 [[ "$(ev_count context.strategy_selected)" -ge 1 ]] || fail "A: no context.strategy_selected event"
 # Resume path: the selected strategy is resume and there is NO resume-failure.
-grep -q '"strategy":"resume"' "$GLUERUN_EVENTS_FILE" || fail "A: expected a resume strategy event"
+grep -q '"strategy":"resume"' "$SINGULAR_EVENTS_FILE" || fail "A: expected a resume strategy event"
 [[ "$(ev_count context.resume_failed)" -eq 0 ]] || fail "A: resume succeeded; must be NO context.resume_failed"
 [[ "$(ev_count plan.revised)" -ge 1 ]] || fail "A: no plan.revised disposition event"
 [[ "$(ev_count plan.critiqued)" -ge 2 ]] || fail "A: expected re-critique (>=2 plan.critiqued)"
@@ -343,15 +343,15 @@ done
 # (B) rc-86 resume-refused -> fresh fallback recorded -> re-stage -> import.
 # =============================================================================
 forge_meta
-: > "$GLUERUN_EVENTS_FILE"
+: > "$SINGULAR_EVENTS_FILE"
 export CRITIC_SEQ_FILE="$tmp/seqB"; printf 'revise\napprove\n' > "$CRITIC_SEQ_FILE"
 export PLANNER_FAIL_ON_RESUME=1
 export PLANNER_INVOKED_FILE="$tmp/planner-B"
 sdB="$(new_stage B)"
-outB="$(gluerun_plan_revise_loop "$NODE" "RUN-B" "$sdB" "$REPO")" \
+outB="$(singular_plan_revise_loop "$NODE" "RUN-B" "$sdB" "$REPO")" \
   || fail "B: loop must exit 0 on the rc-86 fresh-fallback walk"
 [[ "$outB" == "import" ]] || fail "B: terminal outcome must be 'import' (got '$outB')"
-grep -q '"strategy":"resume"' "$GLUERUN_EVENTS_FILE" || fail "B: expected a resume strategy event before the refusal"
+grep -q '"strategy":"resume"' "$SINGULAR_EVENTS_FILE" || fail "B: expected a resume strategy event before the refusal"
 [[ "$(ev_count context.resume_failed)" -ge 1 ]] || fail "B: rc-86 must record a context.resume_failed event"
 [[ "$(ev_count plan.revised)" -ge 1 ]] || fail "B: fresh fallback must still record dispositions"
 [[ -e "$PLANNER_INVOKED_FILE" ]] || fail "B: fresh fallback re-run must invoke the planner runner"
@@ -359,29 +359,29 @@ grep -q '"strategy":"resume"' "$GLUERUN_EVENTS_FILE" || fail "B: expected a resu
 # =============================================================================
 # (C) budget exhaustion -> park revise-budget-exhausted (recorded), FRESH path.
 # =============================================================================
-unset GLUERUN_PLANNER_SESSION  # -> resume decider returns `fresh disabled`
-: > "$GLUERUN_EVENTS_FILE"
+unset SINGULAR_PLANNER_SESSION  # -> resume decider returns `fresh disabled`
+: > "$SINGULAR_EVENTS_FILE"
 export CRITIC_SEQ_FILE="$tmp/seqC"; printf 'revise\nrevise\n' > "$CRITIC_SEQ_FILE"
 export PLANNER_FAIL_ON_RESUME=0
 export PLANNER_INVOKED_FILE="$tmp/planner-C"
 sdC="$(new_stage C)"
-outC="$(gluerun_plan_revise_loop "$NODE" "RUN-C" "$sdC" "$REPO")" \
+outC="$(singular_plan_revise_loop "$NODE" "RUN-C" "$sdC" "$REPO")" \
   || fail "C: loop must exit 0 on the budget-exhaustion walk"
 [[ "$outC" == "park revise-budget-exhausted" ]] \
   || fail "C: terminal outcome must be 'park revise-budget-exhausted' (got '$outC')"
 [[ "$(ev_count plan.revise_parked)" -ge 1 ]] || fail "C: budget-exhaustion park must be recorded"
-grep -q '"strategy":"fresh"' "$GLUERUN_EVENTS_FILE" || fail "C: expected a fresh strategy event"
-# Exactly one bounded revision round ran (GLUERUN_PLAN_REVISE_MAX=1).
+grep -q '"strategy":"fresh"' "$SINGULAR_EVENTS_FILE" || fail "C: expected a fresh strategy event"
+# Exactly one bounded revision round ran (SINGULAR_PLAN_REVISE_MAX=1).
 [[ "$(ev_count plan.revised)" -eq 1 ]] || fail "C: exactly one bounded revision round expected"
 
 # =============================================================================
 # (D) approve at round 0 -> import with NO revision attempted.
 # =============================================================================
-: > "$GLUERUN_EVENTS_FILE"
+: > "$SINGULAR_EVENTS_FILE"
 export CRITIC_SEQ_FILE="$tmp/seqD"; printf 'approve\n' > "$CRITIC_SEQ_FILE"
 export PLANNER_INVOKED_FILE="$tmp/planner-D"
 sdD="$(new_stage D)"
-outD="$(gluerun_plan_revise_loop "$NODE" "RUN-D" "$sdD" "$REPO")" \
+outD="$(singular_plan_revise_loop "$NODE" "RUN-D" "$sdD" "$REPO")" \
   || fail "D: loop must exit 0 on an immediate approve"
 [[ "$outD" == "import" ]] || fail "D: immediate approve must import (got '$outD')"
 [[ "$(ev_count plan.revised)" -eq 0 ]] || fail "D: no revision must be attempted on an approve verdict"
@@ -394,7 +394,7 @@ outD="$(gluerun_plan_revise_loop "$NODE" "RUN-D" "$sdD" "$REPO")" \
 # =============================================================================
 assert_revision_failure() { # <label> <planner-mode> <failure-class>
   local label="$1" mode="$2" failure_class="$3" stage before after result
-  : >"$GLUERUN_EVENTS_FILE"
+  : >"$SINGULAR_EVENTS_FILE"
   export CRITIC_SEQ_FILE="$tmp/seq-$label"
   printf 'revise\n' >"$CRITIC_SEQ_FILE"
   export PLANNER_MODE="$mode"
@@ -402,7 +402,7 @@ assert_revision_failure() { # <label> <planner-mode> <failure-class>
   export PLANNER_INVOKED_FILE="$tmp/planner-$label"
   stage="$(new_stage "$label")"
   before="$(candidate_digest "$stage")"
-  result="$(gluerun_plan_revise_loop "$NODE" "RUN-$label" "$stage" "$REPO")" \
+  result="$(singular_plan_revise_loop "$NODE" "RUN-$label" "$stage" "$REPO")" \
     || fail "$label: failure path must return a terminal park outcome"
   after="$(candidate_digest "$stage")"
   [[ "$result" == "park revision-staging-failed" ]] \
@@ -411,7 +411,7 @@ assert_revision_failure() { # <label> <planner-mode> <failure-class>
     || fail "$label: invalid revision changed the prior candidate set"
   [[ "$(ev_count plan.revised)" -eq 0 ]] \
     || fail "$label: disposition recorded before a successful stage replacement"
-  grep -q "\"failureClass\":\"$failure_class\"" "$GLUERUN_EVENTS_FILE" \
+  grep -q "\"failureClass\":\"$failure_class\"" "$SINGULAR_EVENTS_FILE" \
     || fail "$label: missing failureClass=$failure_class"
 }
 
@@ -475,23 +475,23 @@ Forbidden files:
 """.format(task_id=task_id, index=index)
     tasks.append({"taskId": task_id, "markdown": markdown})
 with open(sys.argv[1], "w", encoding="utf-8") as f:
-    json.dump({"schema": "gluerun.orchestration.task-batch.v0", "tasks": tasks}, f)
+    json.dump({"schema": "singular.orchestration.task-batch.v0", "tasks": tasks}, f)
 PY
 printf '%s\n' '{"type":"thread.started","thread_id":"fake-revision-thread"}'
 exit 0
 CEO
 chmod +x "$FAKE_CODEX"
 
-: >"$GLUERUN_EVENTS_FILE"
+: >"$SINGULAR_EVENTS_FILE"
 export CRITIC_SEQ_FILE="$tmp/seqI"; printf 'revise\napprove\n' >"$CRITIC_SEQ_FILE"
-export GLUERUN_PLAN_REVISE_PLANNER="$ENGINE_HOME/engine/codex-run.sh"
-export GLUERUN_CODEX_BIN="$FAKE_CODEX"
-export GLUERUN_CODEX_TIMEOUT_SEC=0
-export GLUERUN_CODEX_IDLE_SEC=0
+export SINGULAR_PLAN_REVISE_PLANNER="$ENGINE_HOME/engine/codex-run.sh"
+export SINGULAR_CODEX_BIN="$FAKE_CODEX"
+export SINGULAR_CODEX_TIMEOUT_SEC=0
+export SINGULAR_CODEX_IDLE_SEC=0
 export FAKE_CODEX_ARGS
 sdI="$(new_stage I)"
 beforeI="$(candidate_digest "$sdI")"
-outI="$(gluerun_plan_revise_loop "$NODE" "RUN-I" "$sdI" "$REPO")" \
+outI="$(singular_plan_revise_loop "$NODE" "RUN-I" "$sdI" "$REPO")" \
   || fail "I: real codex-run parser walk must exit 0"
 afterI="$(candidate_digest "$sdI")"
 [[ "$outI" == "import" ]] || fail "I: real parser walk must import (got '$outI')"
@@ -501,8 +501,8 @@ afterI="$(candidate_digest "$sdI")"
 [[ "$beforeI" != "$afterI" ]] || fail "I: valid parser-backed revision did not replace candidates"
 [[ "$(ev_count plan.revised)" -eq 1 ]] \
   || fail "I: parser-backed revision must record dispositions after staging"
-export GLUERUN_PLAN_REVISE_PLANNER="$PLANNER"
-unset GLUERUN_CODEX_BIN GLUERUN_CODEX_TIMEOUT_SEC GLUERUN_CODEX_IDLE_SEC FAKE_CODEX_ARGS
+export SINGULAR_PLAN_REVISE_PLANNER="$PLANNER"
+unset SINGULAR_CODEX_BIN SINGULAR_CODEX_TIMEOUT_SEC SINGULAR_CODEX_IDLE_SEC FAKE_CODEX_ARGS
 
 # =============================================================================
 # (J) A hard interruption after generation construction but before the pointer
@@ -519,8 +519,8 @@ done
 beforeJ="$(candidate_digest "$sdJ")"
 readyJ="$tmp/publish-J.ready"
 releaseJ="$tmp/publish-J.release"
-GLUERUN_TEST_BATCH_PUBLISH_READY="$readyJ" \
-GLUERUN_TEST_BATCH_PUBLISH_RELEASE="$releaseJ" \
+SINGULAR_TEST_BATCH_PUBLISH_READY="$readyJ" \
+SINGULAR_TEST_BATCH_PUBLISH_RELEASE="$releaseJ" \
   python3 "$ENGINE_HOME/engine/task_batch_publish.py" publish \
     --stage-dir "$sdJ" --candidate-dir "$replacementJ" >/dev/null 2>&1 &
 publish_pidJ=$!
@@ -539,7 +539,7 @@ afterJ="$(candidate_digest "$sdJ")"
   || fail "J: interrupted publication exposed replacement candidate bytes"
 [[ ! -e "$sdJ/.candidate-current.json" ]] \
   || fail "J: interrupted pre-swap publication wrote the authoritative pointer"
-gluerun_task_batch_replace_stage "$replacementJ" "$sdJ" \
+singular_task_batch_replace_stage "$replacementJ" "$sdJ" \
   || fail "J: retry after interruption did not recover"
 after_retryJ="$(candidate_digest "$sdJ")"
 [[ "$after_retryJ" != "$beforeJ" ]] \
@@ -557,10 +557,10 @@ for candidateK in "$sdK"/TASK-*.candidate.md; do
   cp "$candidateK" "$replacementK1/"
   printf '\nFirst generation bytes.\n' >>"$replacementK1/$(basename "$candidateK")"
 done
-gluerun_task_batch_replace_stage "$replacementK1" "$sdK" \
+singular_task_batch_replace_stage "$replacementK1" "$sdK" \
   || fail "K: could not seed the first immutable generation"
 oldK="$(candidate_digest "$sdK")"
-resolvedK="$(gluerun_task_batch_candidate_dir "$sdK")"
+resolvedK="$(singular_task_batch_candidate_dir "$sdK")"
 for candidateK in "$resolvedK"/TASK-*.candidate.md; do
   cp "$candidateK" "$replacementK2/"
   chmod u+w "$replacementK2/$(basename "$candidateK")"
@@ -583,8 +583,8 @@ releaseK="$tmp/publish-K.release"
 seen_oldK="$tmp/reader-K.old"
 seen_newK="$tmp/reader-K.new"
 reader_errorK="$tmp/reader-K.error"
-GLUERUN_TEST_BATCH_PUBLISH_READY="$readyK" \
-GLUERUN_TEST_BATCH_PUBLISH_RELEASE="$releaseK" \
+SINGULAR_TEST_BATCH_PUBLISH_READY="$readyK" \
+SINGULAR_TEST_BATCH_PUBLISH_RELEASE="$releaseK" \
   python3 "$ENGINE_HOME/engine/task_batch_publish.py" publish \
     --stage-dir "$sdK" --candidate-dir "$replacementK2" >/dev/null 2>&1 &
 publish_pidK=$!
@@ -626,7 +626,7 @@ wait "$reader_pidK" || fail "K: concurrent reader did not observe only complete 
 # =============================================================================
 # (L) present-but-uncalled: no existing engine path invokes the new function.
 # =============================================================================
-callers="$(grep -rl "gluerun_plan_revise_loop" "$ENGINE_HOME/engine" 2>/dev/null \
+callers="$(grep -rl "singular_plan_revise_loop" "$ENGINE_HOME/engine" 2>/dev/null \
   | grep -v '/ctx-plan-revise-loop.sh$' || true)"
 : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
 

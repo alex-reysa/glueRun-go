@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Serve a read-only glueRun-go orchestration console for the Codex Browser panel.
+"""Serve a read-only singular orchestration console for the Codex Browser panel.
 
-The server reads only durable glueRun-go records and runs read-only checks. It never
+The server reads only durable singular records and runs read-only checks. It never
 mutates orchestration state, leases, worktrees, gates, branches, or the STOP
 sentinel. The UI is served from sibling ``assets/`` files (index.html, styles.css,
 app.js); the backend exposes a small read-only JSON API.
@@ -32,19 +32,19 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 
-DEFAULT_REPO = os.environ.get("GLUERUN_REPO", ".")
+DEFAULT_REPO = os.environ.get("SINGULAR_REPO", ".")
 TARGET_BRANCH = "agent/integration"
 
 
 def _load_human_gate_validator():
     """Load the engine-owned contract validator so console state cannot drift.
 
-    The console and engine ship together.  GLUERUN_ENGINE_HOME supports installed
+    The console and engine ship together.  SINGULAR_ENGINE_HOME supports installed
     layouts; the source-tree location keeps development and packaged tests simple.
     Missing validator code fails closed in ``collect_human_gates``.
     """
     candidates = []
-    configured = os.environ.get("GLUERUN_ENGINE_HOME")
+    configured = os.environ.get("SINGULAR_ENGINE_HOME")
     if configured:
         candidates.append(Path(configured) / "engine" / "human_gate.py")
     candidates.append(Path(__file__).resolve().parents[2] / "engine" / "human_gate.py")
@@ -53,7 +53,7 @@ def _load_human_gate_validator():
             continue
         try:
             spec = importlib.util.spec_from_file_location(
-                "_gluerun_human_gate_contract", path
+                "_singular_human_gate_contract", path
             )
             if spec is None or spec.loader is None:
                 continue
@@ -80,12 +80,12 @@ VALIDATE_HUMAN_GATE = _load_human_gate_validator()
 # quotes the offending line into secret-scan.log when it blocks a commit, and
 # secret-scan.log is in PLAIN_LOG_NAMES. The gate that stops a credential
 # reaching git writes it into a file the console streams. This repo's own
-# .gluerun-state carries JWT-shaped strings in exactly that file today.
+# .singular-state carries JWT-shaped strings in exactly that file today.
 
 def _engine_file(relative: str) -> Path | None:
     """Locate an engine-owned file the same way the human-gate validator does."""
     candidates = []
-    configured = os.environ.get("GLUERUN_ENGINE_HOME")
+    configured = os.environ.get("SINGULAR_ENGINE_HOME")
     if configured:
         candidates.append(Path(configured) / "engine" / relative)
     candidates.append(Path(__file__).resolve().parents[2] / "engine" / relative)
@@ -162,10 +162,10 @@ def _load_secret_rules() -> tuple[tuple[re.Pattern, str, int], ...]:
                     rules.append((re.compile(regex),
                                   f"[redacted:{_slugify_pattern_label(label)}]", 0))
                 except re.error as exc:
-                    print(f"gluerun console: skipping unusable secret pattern "
+                    print(f"singular console: skipping unusable secret pattern "
                           f"{label!r}: {exc}", file=sys.stderr)
         except OSError as exc:
-            print(f"gluerun console: secret pattern file unreadable ({exc}); "
+            print(f"singular console: secret pattern file unreadable ({exc}); "
                   "display rules still apply", file=sys.stderr)
     for kind, regex in _DISPLAY_PATTERNS:
         compiled = re.compile(regex)
@@ -173,7 +173,7 @@ def _load_secret_rules() -> tuple[tuple[re.Pattern, str, int], ...]:
     return tuple(rules)
 
 
-REDACT_ENABLED = os.environ.get("GLUERUN_CONSOLE_REDACT", "1") not in ("0", "false", "no")
+REDACT_ENABLED = os.environ.get("SINGULAR_CONSOLE_REDACT", "1") not in ("0", "false", "no")
 _SECRET_RULES = _load_secret_rules()
 _SECRET_PREFILTER = re.compile("|".join(re.escape(s) for s in _PREFILTER_LITERALS))
 
@@ -254,10 +254,10 @@ def redact_lines(records: list) -> list:
 
 
 def load_repo_target_branch(repo) -> str:
-    """Read targetBranch from the target repo's gluerun.config.json so the console is
+    """Read targetBranch from the target repo's singular.config.json so the console is
     not bound to any one project's integration branch. Falls back to the default."""
     try:
-        with open(os.path.join(str(repo), "gluerun.config.json"), encoding="utf-8") as f:
+        with open(os.path.join(str(repo), "singular.config.json"), encoding="utf-8") as f:
             tb = json.load(f).get("targetBranch")
         if isinstance(tb, str) and tb:
             return tb
@@ -275,7 +275,7 @@ TASK_ID_RE = re.compile(r"^TASK-\d+$")
 TASKS_DIR_REL = "docs/orchestration/tasks"
 AREAS_DIR_REL = "docs/orchestration/areas"
 PROMPTS_DIR_REL = "docs/orchestration/prompts"
-STATE_DIR_REL = ".gluerun-state"
+STATE_DIR_REL = ".singular-state"
 EVENTS_LOG_REL = "events.ndjson"            # within the state dir
 AUTONOMATE_LOG_REL = "autonomate.out.log"   # within the state dir
 
@@ -348,15 +348,15 @@ ROLE_PROMPT_MAP = {
 
 # Declared role/skill catalog — sourced from docs/operating-model-selfdevelop.md
 # (§4.3 worker types, §8 test-first policy, §9 skills model, §14 autonomous decider).
-# This is REFERENCE data, not a live registry: glueRun-go records only owner/role on
+# This is REFERENCE data, not a live registry: singular records only owner/role on
 # leases and packets (uniformly l2-developer today); other roles are inferred from
 # run artifacts. Served static via /api/roles and cached client-side.
 ROLE_CATALOG = {
-    "schema": "gluerun.codex.role-catalog.v0",
+    "schema": "singular.codex.role-catalog.v0",
     "source": "operating-model-selfdevelop.md §4.3 worker types · §8 test-first · §9 skills · §14 decider",
     "note": (
         "Declared roles and disciplines from the operating model. This is a reference "
-        "catalog, not a live registry — glueRun-go records no per-agent skill list. Owner/role "
+        "catalog, not a live registry — singular records no per-agent skill list. Owner/role "
         "is recorded on leases and packets (uniformly l2-developer today); other roles are "
         "inferred from which prompt files exist in a task's run directory."
     ),
@@ -429,7 +429,7 @@ def strip_ticks(value: str) -> str:
 
 def run_command(repo: Path, cmd: list[str], timeout: int = 12) -> dict[str, Any]:
     env = os.environ.copy()
-    env["GLUERUN_TARGET_BRANCH"] = TARGET_BRANCH
+    env["SINGULAR_TARGET_BRANCH"] = TARGET_BRANCH
     try:
         proc = subprocess.run(
             cmd,
@@ -678,7 +678,7 @@ L1_ACTIVE_STATUSES = {"proposed", "planning", "active"}
 
 
 def collect_l1_leases(repo: Path) -> list[dict[str, Any]]:
-    """Durable L1 node leases (.gluerun-state/l1-leases/<node>.json), written by the
+    """Durable L1 node leases (.singular-state/l1-leases/<node>.json), written by the
     live L1 fanout. Absent when fanout is off. Read-only. The `active` flag is the
     honest "deployed planner" signal — lease-file existence alone is NOT activity;
     a released/failed lease is history, not a live agent."""
@@ -743,8 +743,8 @@ def collect_pid_files(repo: Path) -> list[dict[str, Any]]:
 # original inline checks.
 PROCESS_MATCHERS: dict[str, Any] = {
     "includeSubstrings": ["scripts/orchestration", "autonomate", "l1-drive", "/.worktrees/"],
-    "includeAllOf": [["codex", "gluerun", "exec"]],
-    "excludeSubstrings": ["gluerun_graph_server.py", " rg "],
+    "includeAllOf": [["codex", "singular", "exec"]],
+    "excludeSubstrings": ["singular_graph_server.py", " rg "],
     "excludeSubstringsLowered": ["cursor helper"],
 }
 
@@ -973,7 +973,7 @@ def _task_projection(origin_state: Any, state_totals: dict) -> dict[str, Any]:
     is genuinely both "leased and running" and "ready" by header.
 
     The engine already computes the authoritative answer under the origin lock
-    every cycle (gluerun_write_origin_state), so project from it rather than
+    every cycle (singular_write_origin_state), so project from it rather than
     inventing a third derivation, and carry a `revision` so a client can tell
     two payloads apart instead of silently blending them.
     """
@@ -1338,7 +1338,7 @@ def collect_task_detail(repo: Path, task_id: str) -> dict[str, Any] | None:
     detail["integrateRuns"] = find_integrate_runs(repo, task_id)
     detail["gates"] = find_gate_refs(repo, task_id)
     detail["events"] = collect_task_events(repo, task_id)
-    # Observed-this-run agents + tools (honest proxies; glueRun-go has no skill registry).
+    # Observed-this-run agents + tools (honest proxies; singular has no skill registry).
     run_dir = (state_path(repo, "runs") / run_id) if run_id else None
     detail["agentsInvolved"] = {
         "owner": (lease or {}).get("owner"),
@@ -1356,7 +1356,7 @@ def collect_task_detail(repo: Path, task_id: str) -> dict[str, Any] | None:
     # input is missing. See the "Provenance (read-only derivation)" section.
     detail["provenance"] = build_task_provenance(repo, detail, lease)
     detail["generatedAt"] = utc_now()
-    detail["schema"] = "gluerun.codex.task-detail.v0"
+    detail["schema"] = "singular.codex.task-detail.v0"
     return detail
 
 
@@ -1569,7 +1569,7 @@ def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
         "reserveBytes": 2147483648,
         "estimatedWorktreeBytes": 268435456,
     }
-    config = read_json(repo / "gluerun.config.json", {}) or {}
+    config = read_json(repo / "singular.config.json", {}) or {}
     resources = config.get("resources") if isinstance(config, dict) else {}
     resources = resources if isinstance(resources, dict) else {}
     config_env = config.get("env") if isinstance(config, dict) else {}
@@ -1588,9 +1588,9 @@ def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
 
     configured = integer(
         os.environ.get(
-            "GLUERUN_MAX_CONCURRENT",
+            "SINGULAR_MAX_CONCURRENT",
             config_env.get(
-                "GLUERUN_MAX_CONCURRENT",
+                "SINGULAR_MAX_CONCURRENT",
                 resources.get("maxConcurrent", defaults["configuredSlots"]),
             ),
         ),
@@ -1598,9 +1598,9 @@ def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
     )
     reserve = integer(
         os.environ.get(
-            "GLUERUN_DISK_RESERVE_BYTES",
+            "SINGULAR_DISK_RESERVE_BYTES",
             config_env.get(
-                "GLUERUN_DISK_RESERVE_BYTES",
+                "SINGULAR_DISK_RESERVE_BYTES",
                 resources.get("diskReserveBytes", defaults["reserveBytes"]),
             ),
         ),
@@ -1608,9 +1608,9 @@ def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
     )
     estimate = integer(
         os.environ.get(
-            "GLUERUN_ESTIMATED_WORKTREE_BYTES",
+            "SINGULAR_ESTIMATED_WORKTREE_BYTES",
             config_env.get(
-                "GLUERUN_ESTIMATED_WORKTREE_BYTES",
+                "SINGULAR_ESTIMATED_WORKTREE_BYTES",
                 resources.get(
                     "estimatedWorktreeBytes", defaults["estimatedWorktreeBytes"]
                 ),
@@ -1632,7 +1632,7 @@ def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
     except OSError:
         latest = None
     prior = read_json(latest, None) if latest else None
-    if isinstance(prior, dict) and prior.get("schema") == "gluerun.orchestration.resource-plan.v0":
+    if isinstance(prior, dict) and prior.get("schema") == "singular.orchestration.resource-plan.v0":
         configured = integer(prior.get("configuredSlots"), configured)
         reserve = integer(prior.get("reserveBytes"), reserve)
         estimate = integer(
@@ -1653,7 +1653,7 @@ def collect_resource_plan_native(repo: Path) -> dict[str, Any]:
     else:
         reason = "disk-limited-concurrency"
     return {
-        "schema": "gluerun.orchestration.resource-plan.v0",
+        "schema": "singular.orchestration.resource-plan.v0",
         "configuredSlots": configured,
         "effectiveSlots": effective,
         "freeBytes": free,
@@ -1743,7 +1743,7 @@ def collect_snapshot(repo: Path) -> dict[str, Any]:
         state_totals[task["state"]] = state_totals.get(task["state"], 0) + 1
 
     snapshot: dict[str, Any] = {
-        "schema": "gluerun.codex.orchestration-graph.v1",
+        "schema": "singular.codex.orchestration-graph.v1",
         "generatedAt": utc_now(),
         "repo": str(repo),
         "targetBranch": TARGET_BRANCH,
@@ -1939,7 +1939,7 @@ def classify_codex_record(obj: dict[str, Any]) -> dict[str, Any] | None:
     compact terminal line. Pure — no I/O, no time. Returns None to drop a record
     (e.g. an item.started agent_message which has no text yet)."""
     schema = obj.get("schema")
-    if schema == "gluerun.orchestration.provider-error.v0":
+    if schema == "singular.orchestration.provider-error.v0":
         retryable = bool(obj.get("retryable"))
         return {
             "kind": "diagnostic",
@@ -1952,7 +1952,7 @@ def classify_codex_record(obj: dict[str, Any]) -> dict[str, Any] | None:
                 dedupe_key=f"provider:{obj.get('provider')}:{obj.get('kind')}:{obj.get('providerCode')}",
             ),
         }
-    if schema == "gluerun.orchestration.gate-report.v0":
+    if schema == "singular.orchestration.gate-report.v0":
         outcome = str(obj.get("outcome") or "")
         acknowledged = outcome == "passed-with-acknowledged-baseline"
         return {
@@ -2250,7 +2250,7 @@ def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float,
         lifecycle = read_json(path / "run-status.json", None)
         if (
             isinstance(lifecycle, dict)
-            and lifecycle.get("schema") == "gluerun.orchestration.run-status.v0"
+            and lifecycle.get("schema") == "singular.orchestration.run-status.v0"
             and lifecycle.get("runId") == name
         ):
             _apply_run_status(session, lifecycle)
@@ -2262,7 +2262,7 @@ def _classify_run_dir(repo: Path, path: Path, name: str, mtime: float,
     lifecycle = read_json(path / "run-status.json", None)
     lifecycle = lifecycle if (
         isinstance(lifecycle, dict)
-        and lifecycle.get("schema") == "gluerun.orchestration.run-status.v0"
+        and lifecycle.get("schema") == "singular.orchestration.run-status.v0"
         and lifecycle.get("runId") == name
     ) else None
     session = None
@@ -2342,7 +2342,7 @@ def _session_meta_compact(meta: dict[str, Any]) -> dict[str, Any]:
 
 
 def _attach_session_meta(sess: dict[str, Any], path: Path) -> None:
-    """Merge durable session-meta (gluerun.orchestration.session-meta.v0) into
+    """Merge durable session-meta (singular.orchestration.session-meta.v0) into
     a session row. Flat fields mirror the implementer — the pane's primary
     agent; sessionMeta carries the per-role split for the Agents surface.
     No-op when the run wrote no meta (graceful degradation)."""
@@ -2424,7 +2424,7 @@ def derive_planner_state(*, fresh: bool, has_batch: bool, critique: Any,
 
     Two signal sources, and which one leads depends on the path taken:
       * plan-critique.json sits beside planner-batch.json, but ONLY on the
-        fanout path (engine/l1-plan-node.sh sets GLUERUN_PLANNING_ARTIFACT_DIR).
+        fanout path (engine/l1-plan-node.sh sets SINGULAR_PLANNING_ARTIFACT_DIR).
         The serial reconcile path never writes one.
       * events carry the disposition on both paths, so they are load-bearing.
 
@@ -2825,7 +2825,7 @@ def collect_human_gates(repo: Path) -> list[dict[str, Any]]:
 def collect_sessions(repo: Path) -> dict[str, Any]:
     sessions = discover_sessions(repo)
     return {
-        "schema": "gluerun.codex.sessions.v0",
+        "schema": "singular.codex.sessions.v0",
         "generatedAt": utc_now(),
         "repo": str(repo.resolve()),
         "sessions": sessions,
@@ -2911,7 +2911,7 @@ def read_session(repo: Path, session_id: str, cursor: int | None, limit: int,
     # quotes the offending line into it — is served through exactly this path.
     lines = redact_lines(lines)
     return {
-        "schema": "gluerun.codex.session-lines.v0",
+        "schema": "singular.codex.session-lines.v0",
         "sessionId": session_id,
         "file": target.name,
         "logFiles": log_files,
@@ -2932,7 +2932,7 @@ def read_session(repo: Path, session_id: str, cursor: int | None, limit: int,
 # durable causal chain: source-doc Stage Card -> DAG node -> planner run -> task
 # -> worker run -> evidence packet -> audit -> integration commit -> gate result.
 # Like the session terminal this is a STRICT READ-ONLY observer: pure filesystem
-# reads of durable glueRun-go records, NO subprocesses (no make/git/ps), no writes.
+# reads of durable singular records, NO subprocesses (no make/git/ps), no writes.
 # Heavy inputs (the multi-MB events.ndjson, the DAG, the plan doc) are read behind
 # small single-flight TTL caches so the 2s overlay poll never re-scans them.
 
@@ -3271,7 +3271,7 @@ def stage_section_hash(section_text: str) -> str:
 
 def build_source_refs(node: dict[str, Any], doc_lines: list[str]) -> list[dict[str, Any]]:
     """Stage-level source references for a node: link node.stage -> Stage Card with a
-    content hash for drift stability. Per-node precise refs are a future glueRun-go
+    content hash for drift stability. Per-node precise refs are a future singular
     enhancement; the 'why' sentence comes from node.description + requiredCompletion."""
     stage = str(node.get("stage") or "")
     reason = str(node.get("description") or "").strip()
@@ -3674,7 +3674,7 @@ def collect_node_detail(repo: Path, node_id: str) -> dict[str, Any] | None:
         f"{node_def.get('description','')} Required completion: {node_def.get('requiredCompletion')}." )
     source_refs = build_source_refs(node_def, load_stage_doc(repo))
     return {
-        "schema": "gluerun.codex.node-detail.v0",
+        "schema": "singular.codex.node-detail.v0",
         "generatedAt": utc_now(),
         "nodeId": node_id,
         "definition": node_def,
@@ -3746,7 +3746,7 @@ def collect_area_nodes(repo: Path, area: str) -> dict[str, Any] | None:
             "taskCounts": {"total": total, "integrated": integ, "open": total - integ},
             "frontier": bool(is_frontier),
         })
-    return {"schema": "gluerun.codex.area-nodes.v0", "generatedAt": utc_now(),
+    return {"schema": "singular.codex.area-nodes.v0", "generatedAt": utc_now(),
             "area": area, "nodes": out_nodes}
 
 
@@ -3776,7 +3776,7 @@ def collect_events_overlay(repo: Path, cursor: int | None, limit: int,
             row["areaId"] = node_area.get(row["nodeId"])
         rows.append(row)
     rows = rows[-limit:]
-    return {"schema": "gluerun.codex.events-overlay.v0", "generatedAt": utc_now(),
+    return {"schema": "singular.codex.events-overlay.v0", "generatedAt": utc_now(),
             "rows": rows, "cursor": window["cursor"], "size": window["size"], "reset": window["reset"]}
 
 
@@ -3790,9 +3790,9 @@ def collect_events_overlay(repo: Path, cursor: int | None, limit: int,
 # shell config (for env-overridable DEFAULTS — there is no single runtime config
 # file). No subprocesses.
 
-STATUS_REL = ".gluerun-state/STATUS.md"
-CIRCUIT_REL = ".gluerun-state/circuit.json"
-STOP_REL = ".gluerun-state/STOP"
+STATUS_REL = ".singular-state/STATUS.md"
+CIRCUIT_REL = ".singular-state/circuit.json"
+STOP_REL = ".singular-state/STOP"
 ORCH_SCRIPTS_REL = "scripts/orchestration"
 PLATFORM_VISION_REL = "docs/core/platform-vision.md"
 
@@ -3810,70 +3810,70 @@ PLATFORM_VISION_REL = "docs/core/platform-vision.md"
 # defaults via parse_shell_default.
 SETTINGS_SPEC = [
     ("Models & reasoning · role matrix", "matrix", [
-        ("GLUERUN_CODEX_MODEL", "model", "gpt-5.5", "model", "",
+        ("SINGULAR_CODEX_MODEL", "model", "gpt-5.5", "model", "",
          "Codex model all three roles run on"),
-        ("GLUERUN_CODEX_SERVICE_TIER", "service tier", "default", "enum", "",
+        ("SINGULAR_CODEX_SERVICE_TIER", "service tier", "default", "enum", "",
          "API service tier (default = standard queue)"),
-        ("GLUERUN_CODEX_PLANNER_REASONING_EFFORT", "planner reasoning", "xhigh", "reasoning", "",
+        ("SINGULAR_CODEX_PLANNER_REASONING_EFFORT", "planner reasoning", "xhigh", "reasoning", "",
          "effort the L1 area planner spends — plan quality gates everything downstream"),
-        ("GLUERUN_CODEX_L2_REASONING_EFFORT", "worker reasoning", "medium", "reasoning", "",
+        ("SINGULAR_CODEX_L2_REASONING_EFFORT", "worker reasoning", "medium", "reasoning", "",
          "effort each L2 developer worker spends on a task slice"),
-        ("GLUERUN_CODEX_AUDITOR_REASONING_EFFORT", "auditor reasoning", "high", "reasoning", "",
+        ("SINGULAR_CODEX_AUDITOR_REASONING_EFFORT", "auditor reasoning", "high", "reasoning", "",
          "effort the diff auditor spends reviewing a packet before the gate"),
     ]),
     ("Throughput · work flowing per cycle", "list", [
-        ("GLUERUN_MAX_CONCURRENT", "max concurrent workers", "1", "count", "",
+        ("SINGULAR_MAX_CONCURRENT", "max concurrent workers", "1", "count", "",
          "L2 workers running at the same time"),
-        ("GLUERUN_MAX_DISPATCH", "max dispatch / cycle", "follows max concurrent", "derived", "",
+        ("SINGULAR_MAX_DISPATCH", "max dispatch / cycle", "follows max concurrent", "derived", "",
          "tasks dispatched per cycle; unset, so it follows max concurrent workers"),
-        ("GLUERUN_MAX_L1_CONCURRENT", "max parallel L1 planners", "3", "count", "",
+        ("SINGULAR_MAX_L1_CONCURRENT", "max parallel L1 planners", "3", "count", "",
          "area planners that may plan at once — only when parallel planning is on (below)"),
-        ("GLUERUN_ENABLE_L1_PARALLEL", "L1 parallel planning", "0", "bool", "",
+        ("SINGULAR_ENABLE_L1_PARALLEL", "L1 parallel planning", "0", "bool", "",
          "off = plan one area at a time; gates the parallel-planner limit above"),
-        ("GLUERUN_L1_TASKS_PER_NODE", "tasks per planner node", "1", "count", "",
+        ("SINGULAR_L1_TASKS_PER_NODE", "tasks per planner node", "1", "count", "",
          "tasks an L1 planner emits per DAG node"),
-        ("GLUERUN_L2_SLICE_BUDGET", "L2 slice budget", "1", "count", "",
+        ("SINGULAR_L2_SLICE_BUDGET", "L2 slice budget", "1", "count", "",
          "starting work-slices granted to a worker per task"),
-        ("GLUERUN_L2_SLICE_BUDGET_MAX", "L2 slice budget cap", "3", "count", "",
+        ("SINGULAR_L2_SLICE_BUDGET_MAX", "L2 slice budget cap", "3", "count", "",
          "hard ceiling the slice budget can grow to"),
     ]),
     ("Safety limits", "list", [
-        ("GLUERUN_MAX_RETRIES", "max task retries", "3", "count", "",
+        ("SINGULAR_MAX_RETRIES", "max task retries", "3", "count", "",
          "attempts on a failing task before it is parked as a blocked escalation"),
-        ("GLUERUN_MAX_CONSEC_FAILS", "circuit-breaker threshold", "5", "count", "",
+        ("SINGULAR_MAX_CONSEC_FAILS", "circuit-breaker threshold", "5", "count", "",
          "consecutive failures that trip the breaker and halt the loop"),
-        ("GLUERUN_MAX_HOURS", "loop budget", "20", "duration", "h",
+        ("SINGULAR_MAX_HOURS", "loop budget", "20", "duration", "h",
          "wall-clock hours before the loop voluntarily exits"),
-        ("GLUERUN_MIN_DISK_GB", "min free disk", "2", "bytes", "GB",
+        ("SINGULAR_MIN_DISK_GB", "min free disk", "2", "bytes", "GB",
          "loop refuses to start a cycle below this free-space floor"),
-        ("GLUERUN_L1_STALE_MINUTES", "L1 stale timeout", "60", "duration", "min",
+        ("SINGULAR_L1_STALE_MINUTES", "L1 stale timeout", "60", "duration", "min",
          "an L1 planner lease idle this long is reclaimed as stale"),
-        ("GLUERUN_PLANNER_BACKOFF_SECONDS", "planner backoff", "900", "duration", "s",
+        ("SINGULAR_PLANNER_BACKOFF_SECONDS", "planner backoff", "900", "duration", "s",
          "wait after a planner error before re-planning"),
-        ("GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS", "planner quota backoff", "1800", "duration", "s",
+        ("SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS", "planner quota backoff", "1800", "duration", "s",
          "longer wait after a planner quota / rate-limit rejection"),
-        ("GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS", "planner overload backoff", "180", "duration", "s",
+        ("SINGULAR_PLANNER_OVERLOAD_BACKOFF_SECONDS", "planner overload backoff", "180", "duration", "s",
          "short wait after a provider 503/529; transient capacity, not a usage limit"),
-        ("GLUERUN_OVERLOAD_WAIT_BUDGET", "overload wait budget", "3600", "duration", "s",
+        ("SINGULAR_OVERLOAD_WAIT_BUDGET", "overload wait budget", "3600", "duration", "s",
          "total overload sleep-through before the loop writes STOP (separate from the quota budget)"),
     ]),
     ("Loop behavior", "list", [
-        ("GLUERUN_AUTO_INTEGRATE", "auto-integrate", "1", "bool", "",
+        ("SINGULAR_AUTO_INTEGRATE", "auto-integrate", "1", "bool", "",
          "on = merge passing worker branches into the target automatically"),
-        ("GLUERUN_PUSH", "push to remote", "1", "bool", "",
+        ("SINGULAR_PUSH", "push to remote", "1", "bool", "",
          "on = push the target branch to origin after integrating"),
-        ("GLUERUN_GENERATE", "task generation", "1", "bool", "",
+        ("SINGULAR_GENERATE", "task generation", "1", "bool", "",
          "on = let planners generate new tasks; off = drain the existing queue only"),
-        ("GLUERUN_SLEEP", "cycle sleep", "20", "duration", "s",
+        ("SINGULAR_SLEEP", "cycle sleep", "20", "duration", "s",
          "pause between loop cycles"),
         # Home's "enable auto-briefing" button POSTs this key. It was absent from
         # SETTINGS_SPEC and from every _CONFIG_* tuple, so the write whitelist
         # rejected it with 400 and the button could never work. Listing it here
         # makes it writable AND gives it a labelled System-panel row, rather than
         # leaving it a writable-but-invisible knob.
-        ("GLUERUN_SUPERVISOR_INTERVAL_MIN", "auto-briefing interval", "0", "duration", "min",
+        ("SINGULAR_SUPERVISOR_INTERVAL_MIN", "auto-briefing interval", "0", "duration", "min",
          "minutes between automatic read-only supervisor briefings; 0 = off"),
-        ("GLUERUN_TARGET_BRANCH", "target branch", "codex/gluerun-bootstrap-target", "identifier", "",
+        ("SINGULAR_TARGET_BRANCH", "target branch", "codex/singular-bootstrap-target", "identifier", "",
          "branch the loop integrates and pushes to"),
     ]),
 ]
@@ -3886,11 +3886,11 @@ def _apply_bool_value(item: dict[str, Any]) -> dict[str, Any]:
 
     The single place the bool derivation lives. It used to be inline in
     collect_settings only, so _overlay_config_env — which rewrites `value` when
-    gluerun.config.json env{} sets a key — left a STALE boolValue behind. The
+    singular.config.json env{} sets a key — left a STALE boolValue behind. The
     frontend short-circuits on `boolValue === true`, so a bool key set to "0" in
     config rendered as ON: the System panel showed the opposite of the truth for
-    GLUERUN_AUTO_INTEGRATE, GLUERUN_PUSH, GLUERUN_GENERATE and
-    GLUERUN_ENABLE_L1_PARALLEL.
+    SINGULAR_AUTO_INTEGRATE, SINGULAR_PUSH, SINGULAR_GENERATE and
+    SINGULAR_ENABLE_L1_PARALLEL.
     """
     if item.get("kind") == "bool":
         item["boolValue"] = str(item.get("value") or "").strip().lower() in _BOOL_TRUE
@@ -3898,7 +3898,7 @@ def _apply_bool_value(item: dict[str, Any]) -> dict[str, Any]:
 
 # Where the env-overridable shell DEFAULTS live. SETTINGS_SOURCE is an adapter
 # template ("{engineHome}" / "{repo}" placeholders); None means "no adapter
-# source configured" and the resolver falls back to $GLUERUN_ENGINE_HOME/engine,
+# source configured" and the resolver falls back to $SINGULAR_ENGINE_HOME/engine,
 # then to the legacy in-repo scripts/orchestration layout (exact old behavior).
 SETTINGS_SOURCE: str | None = None
 SETTINGS_FILE_NAMES = ("lib.sh", "codex-run.sh", "reconcile.sh", "autonomate.sh")
@@ -3907,10 +3907,10 @@ SETTINGS_FILE_NAMES = ("lib.sh", "codex-run.sh", "reconcile.sh", "autonomate.sh"
 def resolve_settings_dir(repo: Path) -> Path:
     """Resolve the directory holding the orchestration shell defaults.
 
-    Precedence: adapter ``settingsSource`` template -> ``$GLUERUN_ENGINE_HOME/engine``
+    Precedence: adapter ``settingsSource`` template -> ``$SINGULAR_ENGINE_HOME/engine``
     -> legacy ``<repo>/scripts/orchestration``. A template that needs {engineHome}
     while the env var is unset cannot resolve and falls through."""
-    engine_home = os.environ.get("GLUERUN_ENGINE_HOME") or ""
+    engine_home = os.environ.get("SINGULAR_ENGINE_HOME") or ""
     template = SETTINGS_SOURCE
     if template and not ("{engineHome}" in template and not engine_home):
         return Path(template.replace("{engineHome}", engine_home).replace("{repo}", str(repo)))
@@ -3926,7 +3926,7 @@ def parse_shell_default(text: str, key: str) -> str | None:
 
 
 def parse_env_overrides(repo: Path, keys: set[str]) -> dict[str, str]:
-    """Read `.gluerun-state/.env` and return {KEY: value} for the given config keys ONLY.
+    """Read `.singular-state/.env` and return {KEY: value} for the given config keys ONLY.
 
     Whitelisted to `keys` (the SETTINGS_SPEC knobs), so secrets in .env — DATABASE_URL,
     POSTGRES_*, PG*, passwords — are never parsed or surfaced to the dashboard. Read-only.
@@ -3958,7 +3958,7 @@ def collect_settings(repo: Path) -> list[dict[str, Any]]:
 
     Output: [{title, category(alias), layout, items:[{envKey,key,label,value,default,
     source,overridden,kind,unit,meaning,boolValue?}]}]. `value` is the EFFECTIVE config:
-    the `.gluerun-state/.env` override if set, else the shell default. `source` is "env" or
+    the `.singular-state/.env` override if set, else the shell default. `source` is "env" or
     "default" and `default` carries the shell default for reference. Secrets in .env are
     never read (parse_env_overrides is whitelisted to the settings keys). Read-only.
     """
@@ -3978,11 +3978,11 @@ def collect_settings(repo: Path) -> list[dict[str, Any]]:
         rows = []
         for key, label, fallback, kind, unit, meaning in items:
             default_val = parse_shell_default(text, key) or fallback
-            # Derived knobs (e.g. GLUERUN_MAX_DISPATCH -> $max_concurrent): the shell default
+            # Derived knobs (e.g. SINGULAR_MAX_DISPATCH -> $max_concurrent): the shell default
             # is unresolved, but an explicit .env override IS the real, resolved value.
             if default_val.startswith("$"):
                 default_val = "follows max concurrent"
-            if key == "GLUERUN_CODEX_SERVICE_TIER" and default_val in ("", "default"):
+            if key == "SINGULAR_CODEX_SERVICE_TIER" and default_val in ("", "default"):
                 default_val = "default"
             override = overrides.get(key)
             if override not in (None, ""):
@@ -4185,7 +4185,7 @@ def compute_plan_progress(registry: dict[str, Any], gate_status: dict[str, str],
 
 
 def parse_status_md(text: str) -> dict[str, Any]:
-    """Parse the operator-facing .gluerun-state/STATUS.md. Pure."""
+    """Parse the operator-facing .singular-state/STATUS.md. Pure."""
     def grab(rx, cast=str):
         m = re.search(rx, text)
         if not m:
@@ -4311,7 +4311,7 @@ def compute_loop_pulse(index: dict[str, Any], registry: dict[str, Any],
 # --------------------------------------------------------------------------- #
 #
 # "Ready by dependency" and "runnable now" are different numbers and only the
-# first one was ever observable. engine/lib.sh `gluerun_select_l1_frontier`
+# first one was ever observable. engine/lib.sh `singular_select_l1_frontier`
 # computes the second — one node per area, no write-scope overlap, capped — and
 # then throws the reasons away with the loop's stdout. Safe serialization
 # therefore looks exactly like a broken parallel engine. What follows is a
@@ -4320,7 +4320,7 @@ def compute_loop_pulse(index: dict[str, Any], registry: dict[str, Any],
 
 # What the replica models, declared in the payload as `policy` so the UI never
 # implies more coverage than exists. The engine's pending-promotion pre-filter
-# (gluerun_l1_fanout -> gluerun_node_pending_promotion) is deliberately NOT
+# (singular_l1_fanout -> singular_node_pending_promotion) is deliberately NOT
 # replicated: it asks whether a node's tasks are all complete-but-unpromoted,
 # which depends on supersession chains across superseded/archived task files
 # that the console's task projection does not reconstruct. Guessing it could
@@ -4329,11 +4329,11 @@ def compute_loop_pulse(index: dict[str, Any], registry: dict[str, Any],
 # loop's own log says so when it happens.
 _L1_SELECTION_POLICY = ("node-lease", "area-lease", "scope-overlap", "cap")
 
-# engine/lib.sh: GLUERUN_AREA_PREFIX="${GLUERUN_AREA_PREFIX:-internal/}".
+# engine/lib.sh: SINGULAR_AREA_PREFIX="${SINGULAR_AREA_PREFIX:-internal/}".
 _DEFAULT_AREA_PREFIX = "internal/"
 
 def _cfg_area_paths(cfg: dict[str, Any]) -> str | None:
-    """config `areas` {area: path | [paths]} -> the GLUERUN_AREA_PATHS text."""
+    """config `areas` {area: path | [paths]} -> the SINGULAR_AREA_PATHS text."""
     areas = cfg.get("areas")
     if not isinstance(areas, dict):
         return None
@@ -4345,20 +4345,20 @@ def _cfg_area_paths(cfg: dict[str, Any]) -> str | None:
     return "\n".join(lines)
 
 
-# Structured gluerun.config.json fields that engine/lib.sh's
-# gluerun_json_config_to_env turns into these env vars. env{} still wins: the
+# Structured singular.config.json fields that engine/lib.sh's
+# singular_json_config_to_env turns into these env vars. env{} still wins: the
 # loader emits the env map last, so it overrides on every source.
 _CONFIG_DERIVED_ENV = {
-    "GLUERUN_AREA_PATHS": _cfg_area_paths,
-    "GLUERUN_AREA_PREFIX": lambda cfg: cfg.get("areaPrefix"),
+    "SINGULAR_AREA_PATHS": _cfg_area_paths,
+    "SINGULAR_AREA_PREFIX": lambda cfg: cfg.get("areaPrefix"),
 }
 
 
 def _engine_env_value(repo: Path, key: str) -> str | None:
     """One engine env knob, resolved from the repo's files. Read-only.
 
-    Precedence mirrors collect_config: `.gluerun-state/.env` (whitelisted to this
-    key, so secrets are never parsed) > gluerun.config.json env{} > the
+    Precedence mirrors collect_config: `.singular-state/.env` (whitelisted to this
+    key, so secrets are never parsed) > singular.config.json env{} > the
     structured config field engine/lib.sh derives the same variable from. The
     console's OWN process environment is deliberately not consulted: the console
     observes the repo's configuration, it is not a participant in the loop's
@@ -4367,7 +4367,7 @@ def _engine_env_value(repo: Path, key: str) -> str | None:
     override = parse_env_overrides(repo, {key}).get(key)
     if override not in (None, ""):
         return override
-    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = read_json(repo / "singular.config.json", None)
     cfg = cfg if isinstance(cfg, dict) else {}
     env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
     value = env.get(key)
@@ -4383,18 +4383,18 @@ def _engine_env_value(repo: Path, key: str) -> str | None:
 
 def _l1_area_scopes(repo: Path, areas: Any) -> dict[str, list[str]]:
     """{area: [write-scope path...]}, mirroring engine/lib.sh
-    `gluerun_l1_area_write_scopes`: the GLUERUN_AREA_PATHS map (one
+    `singular_l1_area_write_scopes`: the SINGULAR_AREA_PATHS map (one
     "area=path1[:path2]" per line) when the area is mapped, else
-    GLUERUN_AREA_PREFIX (default internal/) + area + "/". Read-only."""
+    SINGULAR_AREA_PREFIX (default internal/) + area + "/". Read-only."""
     mapped: dict[str, list[str]] = {}
-    raw = _engine_env_value(repo, "GLUERUN_AREA_PATHS") or ""
+    raw = _engine_env_value(repo, "SINGULAR_AREA_PATHS") or ""
     for line in raw.splitlines():
         line = line.strip()
         if not line or "=" not in line:
             continue
         key, _, value = line.partition("=")
         mapped[key] = [part for part in value.split(":") if part]
-    prefix = _engine_env_value(repo, "GLUERUN_AREA_PREFIX") or _DEFAULT_AREA_PREFIX
+    prefix = _engine_env_value(repo, "SINGULAR_AREA_PREFIX") or _DEFAULT_AREA_PREFIX
     out: dict[str, list[str]] = {}
     for area in (areas or []):
         area = str(area)
@@ -4407,14 +4407,14 @@ def _l1_area_scopes(repo: Path, areas: Any) -> dict[str, list[str]]:
 def _l1_selection_limits(repo: Path) -> tuple[bool, int]:
     """(enabled, cap) exactly as the engine resolves them. Read-only.
 
-    GLUERUN_ENABLE_L1_PARALLEL != "1" means there is no fanout at all — the loop
+    SINGULAR_ENABLE_L1_PARALLEL != "1" means there is no fanout at all — the loop
     advances one node per cycle — so the honest cap is 1, not whatever
-    GLUERUN_MAX_L1_CONCURRENT happens to say. When enabled, gluerun_l1_fanout's
+    SINGULAR_MAX_L1_CONCURRENT happens to say. When enabled, singular_l1_fanout's
     own rule applies: default 3, and any non-numeric or zero value floors to 1."""
-    enabled = str(_engine_env_value(repo, "GLUERUN_ENABLE_L1_PARALLEL") or "").strip() == "1"
+    enabled = str(_engine_env_value(repo, "SINGULAR_ENABLE_L1_PARALLEL") or "").strip() == "1"
     if not enabled:
         return False, 1
-    raw = _engine_env_value(repo, "GLUERUN_MAX_L1_CONCURRENT")
+    raw = _engine_env_value(repo, "SINGULAR_MAX_L1_CONCURRENT")
     raw = "3" if raw in (None, "") else str(raw).strip()
     return True, (int(raw) if raw.isdigit() and int(raw) >= 1 else 1)
 
@@ -4422,7 +4422,7 @@ def _l1_selection_limits(repo: Path) -> tuple[bool, int]:
 def compute_l1_selection_native(frontier_entries: Any, l1_leases: Any,
                                 area_scopes: Any, cap: Any,
                                 enabled: bool = True) -> dict[str, Any]:
-    """Replica of engine/lib.sh `gluerun_select_l1_frontier`. Pure.
+    """Replica of engine/lib.sh `singular_select_l1_frontier`. Pure.
 
     Returns {"selected": [node...], "exclusions": {node: {"rule", "detail"}}}.
     `selected` is the same node list the engine would plan for the same frontier,
@@ -4643,11 +4643,11 @@ def collect_overview(repo: Path) -> dict[str, Any]:
         "plannerPrompt": {
             "note": "each L1 planner prompt is assembled per run from a template + the DAG "
                     "node's fields + the existing-task list; the assembled prompt is saved at",
-            "ref": ".gluerun-state/runs/<id>/planner-prompt.md",
+            "ref": ".singular-state/runs/<id>/planner-prompt.md",
         },
     }
     return {
-        "schema": "gluerun.codex.plan-overview.v0",
+        "schema": "singular.codex.plan-overview.v0",
         "generatedAt": utc_now(),
         "progress": progress,
         "stages": stages,
@@ -4673,7 +4673,7 @@ def load_overview(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# /api/dag — full DAG view for the Plan surface (gluerun.codex.dag.v0)        #
+# /api/dag — full DAG view for the Plan surface (singular.codex.dag.v0)        #
 # --------------------------------------------------------------------------- #
 
 _DAG_TASK_BUCKETS = ("integrated", "active", "ready", "blocked", "failed", "other")
@@ -4886,7 +4886,7 @@ def collect_dag_view(repo: Path) -> dict[str, Any]:
              for aid in sorted(area_nodes)]
 
     return {
-        "schema": "gluerun.codex.dag.v0",
+        "schema": "singular.codex.dag.v0",
         "generatedAt": utc_now(),
         "validate": validate,
         "layers": [str(x) for x in raw.get("layers")] if isinstance(raw.get("layers"), list) else [],
@@ -4908,7 +4908,7 @@ def load_dag_view(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# /api/timeline — real execution intervals (gluerun.codex.timeline.v0)        #
+# /api/timeline — real execution intervals (singular.codex.timeline.v0)        #
 # --------------------------------------------------------------------------- #
 
 _INTERVAL_SOFT_CLOSE_TYPES = ("l1.task_accepted", "l1.task_failed",
@@ -5064,7 +5064,7 @@ def collect_timeline(repo: Path) -> dict[str, Any]:
     except OSError:
         pass
     return {
-        "schema": "gluerun.codex.timeline.v0",
+        "schema": "singular.codex.timeline.v0",
         "generatedAt": utc_now(),
         "now": utc_now(),
         "window": {"truncated": truncated},
@@ -5109,7 +5109,7 @@ def load_timeline(repo: Path) -> dict[str, Any]:
 # Provider registry (single source of truth for /api/providers + derivation)   #
 # --------------------------------------------------------------------------- #
 #
-# One dict per agent-CLI runtime glueRun can drive. Probe logic reads this table
+# One dict per agent-CLI runtime singular can drive. Probe logic reads this table
 # (no per-provider if-ladders): ``authProbe`` names a non-interactive status
 # subcommand + a parser; ``inference`` names a pure FS/env fallback. Auth
 # resolution order is CLI status -> env-key presence -> credential-file
@@ -5165,82 +5165,82 @@ def _provider_from_runner(runner: str) -> str:
 
 def _engine_dir(env: dict[str, str] | None = None) -> Path:
     """Directory holding the runner scripts, resolved like resolve_settings_dir:
-    ``$GLUERUN_ENGINE_HOME/engine`` when set (how ``gluerun console`` launches the
+    ``$SINGULAR_ENGINE_HOME/engine`` when set (how ``singular console`` launches the
     server), else the installed layout ``plugin/../engine`` relative to __file__."""
     env = env if env is not None else os.environ
-    home = env.get("GLUERUN_ENGINE_HOME")
+    home = env.get("SINGULAR_ENGINE_HOME")
     if home:
         return Path(home) / "engine"
     return Path(__file__).resolve().parent.parent.parent / "engine"
 
 
 # --------------------------------------------------------------------------- #
-# /api/config — resolved per-role runner config (gluerun.codex.config.v0)     #
+# /api/config — resolved per-role runner config (singular.codex.config.v0)     #
 # --------------------------------------------------------------------------- #
 # Key families mirror engine/claude-run.sh + engine/codex-run.sh resolution;
 # the trailing literal is the runner script's own fallback default.
 
 _CONFIG_ROLE_KEYS = {
     "claude": {
-        "planner":     ("GLUERUN_CLAUDE_PLANNER_MODEL", "GLUERUN_CLAUDE_PLANNER_EFFORT", "xhigh"),
-        "implementer": ("GLUERUN_CLAUDE_L2_MODEL", "GLUERUN_CLAUDE_L2_EFFORT", "medium"),
-        "auditor":     ("GLUERUN_CLAUDE_AUDITOR_MODEL", "GLUERUN_CLAUDE_AUDITOR_EFFORT", "xhigh"),
-        "decider":     ("GLUERUN_CLAUDE_DECIDER_MODEL", "GLUERUN_CLAUDE_DECIDER_EFFORT", None),
+        "planner":     ("SINGULAR_CLAUDE_PLANNER_MODEL", "SINGULAR_CLAUDE_PLANNER_EFFORT", "xhigh"),
+        "implementer": ("SINGULAR_CLAUDE_L2_MODEL", "SINGULAR_CLAUDE_L2_EFFORT", "medium"),
+        "auditor":     ("SINGULAR_CLAUDE_AUDITOR_MODEL", "SINGULAR_CLAUDE_AUDITOR_EFFORT", "xhigh"),
+        "decider":     ("SINGULAR_CLAUDE_DECIDER_MODEL", "SINGULAR_CLAUDE_DECIDER_EFFORT", None),
     },
     "codex": {
-        "planner":     ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_PLANNER_REASONING_EFFORT", "high"),
-        "implementer": ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_L2_REASONING_EFFORT", "medium"),
-        "auditor":     ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_AUDITOR_REASONING_EFFORT", "high"),
-        "decider":     ("GLUERUN_CODEX_MODEL", "GLUERUN_CODEX_DECIDER_REASONING_EFFORT", "high"),
+        "planner":     ("SINGULAR_CODEX_MODEL", "SINGULAR_CODEX_PLANNER_REASONING_EFFORT", "high"),
+        "implementer": ("SINGULAR_CODEX_MODEL", "SINGULAR_CODEX_L2_REASONING_EFFORT", "medium"),
+        "auditor":     ("SINGULAR_CODEX_MODEL", "SINGULAR_CODEX_AUDITOR_REASONING_EFFORT", "high"),
+        "decider":     ("SINGULAR_CODEX_MODEL", "SINGULAR_CODEX_DECIDER_REASONING_EFFORT", "high"),
     },
     # 0.9.0 providers: gemini/opencode/cursor/grok expose a single flat model key
     # (no per-role model, no reasoning-effort mapping v1). An empty fallback means
     # "CLI default" — the runner omits the model flag when the key is unset.
-    "gemini":   {r: ("GLUERUN_GEMINI_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
-    "opencode": {r: ("GLUERUN_OPENCODE_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
-    "cursor":   {r: ("GLUERUN_CURSOR_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
-    "grok":     {r: ("GLUERUN_GROK_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
+    "gemini":   {r: ("SINGULAR_GEMINI_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
+    "opencode": {r: ("SINGULAR_OPENCODE_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
+    "cursor":   {r: ("SINGULAR_CURSOR_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
+    "grok":     {r: ("SINGULAR_GROK_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
 }
-_CONFIG_MODEL_FALLBACK = {"claude": ("GLUERUN_CLAUDE_MODEL", "claude-opus-4-8"),
-                          "codex": ("GLUERUN_CODEX_MODEL", "gpt-5.5"),
-                          "gemini": ("GLUERUN_GEMINI_MODEL", ""),
-                          "opencode": ("GLUERUN_OPENCODE_MODEL", ""),
-                          "cursor": ("GLUERUN_CURSOR_MODEL", ""),
-                          "grok": ("GLUERUN_GROK_MODEL", "")}
-_CONFIG_EFFORT_FALLBACK = {"claude": "GLUERUN_CLAUDE_EFFORT", "codex": None,
+_CONFIG_MODEL_FALLBACK = {"claude": ("SINGULAR_CLAUDE_MODEL", "claude-opus-4-8"),
+                          "codex": ("SINGULAR_CODEX_MODEL", "gpt-5.5"),
+                          "gemini": ("SINGULAR_GEMINI_MODEL", ""),
+                          "opencode": ("SINGULAR_OPENCODE_MODEL", ""),
+                          "cursor": ("SINGULAR_CURSOR_MODEL", ""),
+                          "grok": ("SINGULAR_GROK_MODEL", "")}
+_CONFIG_EFFORT_FALLBACK = {"claude": "SINGULAR_CLAUDE_EFFORT", "codex": None,
                            "gemini": None, "opencode": None, "cursor": None, "grok": None}
-_CONFIG_LIMIT_KEYS = (("maxConcurrent", "GLUERUN_MAX_CONCURRENT"),
-                      ("maxDispatch", "GLUERUN_MAX_DISPATCH"),
-                      ("l1Parallel", "GLUERUN_ENABLE_L1_PARALLEL"),
-                      ("sliceBudget", "GLUERUN_L2_SLICE_BUDGET"),
-                      ("pairedAuditPct", "GLUERUN_PAIRED_AUDIT_PCT"))
-_CONFIG_FLAG_KEYS = (("ctxPacket", "GLUERUN_CTX_PACKET"),
-                     ("ctxRouting", "GLUERUN_CTX_ROUTING"),
-                     ("ctxArtifactScan", "GLUERUN_CTX_ARTIFACT_SCAN"),
-                     ("planCritique", "GLUERUN_PLAN_CRITIQUE"),
-                     ("plannerSession", "GLUERUN_PLANNER_SESSION"))
+_CONFIG_LIMIT_KEYS = (("maxConcurrent", "SINGULAR_MAX_CONCURRENT"),
+                      ("maxDispatch", "SINGULAR_MAX_DISPATCH"),
+                      ("l1Parallel", "SINGULAR_ENABLE_L1_PARALLEL"),
+                      ("sliceBudget", "SINGULAR_L2_SLICE_BUDGET"),
+                      ("pairedAuditPct", "SINGULAR_PAIRED_AUDIT_PCT"))
+_CONFIG_FLAG_KEYS = (("ctxPacket", "SINGULAR_CTX_PACKET"),
+                     ("ctxRouting", "SINGULAR_CTX_ROUTING"),
+                     ("ctxArtifactScan", "SINGULAR_CTX_ARTIFACT_SCAN"),
+                     ("planCritique", "SINGULAR_PLAN_CRITIQUE"),
+                     ("plannerSession", "SINGULAR_PLANNER_SESSION"))
 
 
 def collect_config(repo: Path) -> dict[str, Any]:
     """Resolved per-role model/effort + limits/flags for the Agents surface.
-    Precedence mirrors the engine: .gluerun-state/.env override (whitelisted
-    keys only — secrets are never read) > gluerun.config.json env{} > the
+    Precedence mirrors the engine: .singular-state/.env override (whitelisted
+    keys only — secrets are never read) > singular.config.json env{} > the
     runner script's fallback default. Read-only."""
     repo = repo.resolve()
-    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = read_json(repo / "singular.config.json", None)
     cfg = cfg if isinstance(cfg, dict) else {}
     cfg_env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
-    # env{} GLUERUN_RUNNER wins over the top-level "runner" key (engine/lib.sh
+    # env{} SINGULAR_RUNNER wins over the top-level "runner" key (engine/lib.sh
     # emits env{} last, so it overrides on every source) — the runner switch is
     # written there via POST /api/settings.
-    runner = str(cfg_env.get("GLUERUN_RUNNER") or cfg.get("runner") or "codex-run.sh")
+    runner = str(cfg_env.get("SINGULAR_RUNNER") or cfg.get("runner") or "codex-run.sh")
     provider = _provider_from_runner(runner)
 
     role_keys = _CONFIG_ROLE_KEYS.get(provider)
     if role_keys is None:
         # Runner outside the registry: fall back to the flat single-model
-        # convention GLUERUN_<PROVIDER>_MODEL (no per-role model, no effort).
-        flat = f"GLUERUN_{provider.upper().replace('-', '_')}_MODEL"
+        # convention SINGULAR_<PROVIDER>_MODEL (no per-role model, no effort).
+        flat = f"SINGULAR_{provider.upper().replace('-', '_')}_MODEL"
         role_keys = {r: (flat, None, None) for r in ("planner", "implementer", "auditor", "decider")}
         fallback_model_key, fallback_model = flat, ""
         fallback_effort_key = None
@@ -5295,7 +5295,7 @@ def collect_config(repo: Path) -> dict[str, Any]:
         return out
 
     return {
-        "schema": "gluerun.codex.config.v0",
+        "schema": "singular.codex.config.v0",
         "generatedAt": utc_now(),
         "runner": runner,
         "provider": provider,
@@ -5314,38 +5314,38 @@ def load_config_view(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Settings write (gluerun.codex.settings.v0)                                   #
+# Settings write (singular.codex.settings.v0)                                   #
 # --------------------------------------------------------------------------- #
 #
 # The ONLY write surface in the console. It edits the whitelisted env{} block of
-# gluerun.config.json (never leases, gates, worktrees, or the STOP sentinel), so
+# singular.config.json (never leases, gates, worktrees, or the STOP sentinel), so
 # the operator can retune the loop without hand-editing JSON. collect_settings
 # stays read-only and untouched — this layer validates + applies, then invalidates
 # the config/overview caches so the next read reflects the change.
 
-# GLUERUN_SLEEP / GLUERUN_MAX_HOURS bound the current nap and the loop's wall
+# SINGULAR_SLEEP / SINGULAR_MAX_HOURS bound the current nap and the loop's wall
 # budget, so a change only takes effect once autonomate loops back around; every
 # other knob is consumed at the top of the next cycle.
 #
-# GLUERUN_SUPERVISOR_INTERVAL_MIN belongs here too: engine/autonomate.sh sources
+# SINGULAR_SUPERVISOR_INTERVAL_MIN belongs here too: engine/autonomate.sh sources
 # lib.sh once at startup and then reads the knob from its own shell env inside
 # the loop, so a write does NOT take effect next cycle. Reporting it as
 # next-cycle would promise an effect that never arrives.
-_LOOP_RESTART_KEYS = {"GLUERUN_SLEEP", "GLUERUN_MAX_HOURS",
-                      "GLUERUN_SUPERVISOR_INTERVAL_MIN"}
+_LOOP_RESTART_KEYS = {"SINGULAR_SLEEP", "SINGULAR_MAX_HOURS",
+                      "SINGULAR_SUPERVISOR_INTERVAL_MIN"}
 
 # 0.9.0 providers: writable keys not covered by SETTINGS_SPEC or the _CONFIG_*
 # structures. The four *_MODEL keys are already whitelisted via _CONFIG_MODEL_FALLBACK;
-# these are the ones with no other home. GLUERUN_RUNNER switches the default runner:
+# these are the ones with no other home. SINGULAR_RUNNER switches the default runner:
 # engine/lib.sh emits the config env{} block AFTER the top-level "runner" key, so on
-# every source the env{} GLUERUN_RUNNER wins — writing it here (kind "runner",
+# every source the env{} SINGULAR_RUNNER wins — writing it here (kind "runner",
 # validated to a bare <name>-run.sh) retargets the loop next cycle. The three
 # *_TIMEOUT_SEC knobs bound the new runners' wall budget.
 _PROVIDER_WRITE_KINDS = {
-    "GLUERUN_RUNNER": "runner",
-    "GLUERUN_GEMINI_TIMEOUT_SEC": "count",
-    "GLUERUN_OPENCODE_TIMEOUT_SEC": "count",
-    "GLUERUN_CURSOR_TIMEOUT_SEC": "count",
+    "SINGULAR_RUNNER": "runner",
+    "SINGULAR_GEMINI_TIMEOUT_SEC": "count",
+    "SINGULAR_OPENCODE_TIMEOUT_SEC": "count",
+    "SINGULAR_CURSOR_TIMEOUT_SEC": "count",
 }
 _RUNNER_VALUE_RE = re.compile(r"^[a-z][a-z0-9-]*-run\.sh$")
 
@@ -5390,7 +5390,7 @@ def _settings_write_spec() -> tuple[set[str], dict[str, str]]:
     for key, kind in _PROVIDER_WRITE_KINDS.items():
         whitelist.add(key)
         kinds[key] = kind
-    # Derived knobs (e.g. GLUERUN_MAX_DISPATCH) are read-only even though they
+    # Derived knobs (e.g. SINGULAR_MAX_DISPATCH) are read-only even though they
     # also appear in _CONFIG_LIMIT_KEYS — the derived exclusion wins.
     whitelist -= derived
     return whitelist, kinds
@@ -5459,7 +5459,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
     tmp_name = ""
     try:
         with tempfile.NamedTemporaryFile(
-                "w", dir=str(path.parent), prefix=".gluerun-cfg-", suffix=".json",
+                "w", dir=str(path.parent), prefix=".singular-cfg-", suffix=".json",
                 delete=False, encoding="utf-8") as tf:
             tf.write(text)
             tmp_name = tf.name
@@ -5474,11 +5474,11 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 
 def apply_settings_changes(repo: Path, changes: Any) -> tuple[int, dict[str, Any]]:
-    """Validate + apply a batch of settings changes to gluerun.config.json's env{}.
+    """Validate + apply a batch of settings changes to singular.config.json's env{}.
     Pure of HTTP so tests can exercise it directly. Returns (status_code, payload).
 
     Rejects (400, nothing written) any unknown/read-only key or any value that
-    fails kind-typed validation. Requires an existing gluerun.config.json object
+    fails kind-typed validation. Requires an existing singular.config.json object
     (else 409). An empty-string value deletes the key (reverts to default); every
     other top-level config key and unrelated env key is preserved."""
     repo = Path(repo)
@@ -5495,10 +5495,10 @@ def apply_settings_changes(repo: Path, changes: Any) -> tuple[int, dict[str, Any
         if not ok:
             return 400, {"error": result, "key": key}
         normalized[key] = result
-    cfg_path = repo / "gluerun.config.json"
+    cfg_path = repo / "singular.config.json"
     obj = read_json(cfg_path, None)
     if not isinstance(obj, dict):
-        return 409, {"error": "no gluerun.config.json — initialize the repo first"}
+        return 409, {"error": "no singular.config.json — initialize the repo first"}
     env = obj.get("env")
     if not isinstance(env, dict):
         env = {}
@@ -5511,7 +5511,7 @@ def apply_settings_changes(repo: Path, changes: Any) -> tuple[int, dict[str, Any
     _atomic_write_text(cfg_path, json.dumps(obj, indent=2) + "\n")
     _CONFIG_CACHE.invalidate()
     _OVERVIEW_CACHE.invalidate()
-    # A runner switch (GLUERUN_RUNNER) or model/timeout change moves the config-
+    # A runner switch (SINGULAR_RUNNER) or model/timeout change moves the config-
     # derived provider fields (activeRunner/isDefaultRunner/roles), so drop the
     # 60s providers cache too — the next /api/providers reflects the write.
     _PROVIDERS_CACHE.invalidate()
@@ -5525,7 +5525,7 @@ def apply_settings_changes(repo: Path, changes: Any) -> tuple[int, dict[str, Any
 
 
 def _overlay_config_env(repo: Path, groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Overlay gluerun.config.json env{} onto collect_settings rows.
+    """Overlay singular.config.json env{} onto collect_settings rows.
 
     collect_settings (byte-pinned; untouched) only knows .env + shell defaults,
     but the engine's authoritative layer — and the target POST /api/settings
@@ -5533,7 +5533,7 @@ def _overlay_config_env(repo: Path, groups: list[dict[str, Any]]) -> list[dict[s
     stale defaults for keys the config actually sets, and saved edits never
     appear to land. A .env row keeps source "env"; otherwise a config-set key
     wins over the shell default and reads source "config"."""
-    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = read_json(repo / "singular.config.json", None)
     env = cfg.get("env") if isinstance(cfg, dict) and isinstance(cfg.get("env"), dict) else {}
     if not env:
         return groups
@@ -5555,7 +5555,7 @@ def collect_settings_view(repo: Path) -> dict[str, Any]:
     the UI can label when a change lands."""
     whitelist, _kinds = _settings_write_spec()
     return {
-        "schema": "gluerun.codex.settings.v0",
+        "schema": "singular.codex.settings.v0",
         "generatedAt": utc_now(),
         "groups": _overlay_config_env(repo, collect_settings(repo)),
         "appliesAt": {k: _settings_applies_at(k) for k in sorted(whitelist)},
@@ -5563,7 +5563,7 @@ def collect_settings_view(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# /api/providers — runtime status probes (gluerun.providers.v0)               #
+# /api/providers — runtime status probes (singular.providers.v0)               #
 # --------------------------------------------------------------------------- #
 #
 # collect_providers is the DELIBERATE exception to NewCollectorsNoSubprocessTests:
@@ -5964,8 +5964,8 @@ _PROVIDER_RESOLVER_LOCK = threading.Lock()
 def _load_provider_resolver():
     """Import engine/provider_resolver.py in-process (never a subprocess).
 
-    The console daemon never sources lib.sh — cli/gluerun execs it with only
-    GLUERUN_ENGINE_HOME — so it used to resolve providers with a bare
+    The console daemon never sources lib.sh — cli/singular execs it with only
+    SINGULAR_ENGINE_HOME — so it used to resolve providers with a bare
     shutil.which over its own PATH. That is how the Providers card came to
     report an unauthenticated /opt/homebrew/bin/codex while the orchestration
     was driving a different Codex entirely.
@@ -5980,7 +5980,7 @@ def _load_provider_resolver():
             return _PROVIDER_RESOLVER_CACHE[key]
         module = None
         if path is not None:
-            name = "_gluerun_provider_resolver"
+            name = "_singular_provider_resolver"
             try:
                 spec = importlib.util.spec_from_file_location(name, path)
                 if spec is not None and spec.loader is not None:
@@ -6003,22 +6003,22 @@ def _load_provider_resolver():
 def _provider_resolution_env(repo: Path, env: dict[str, str]) -> dict[str, str]:
     """The environment the ENGINE would see, not the console's own.
 
-    engine/lib.sh evals `export K=V` for every gluerun.config.json env{} key
+    engine/lib.sh evals `export K=V` for every singular.config.json env{} key
     AFTER the process environment exists, so config WINS. os.environ alone is
     not sufficient — that asymmetry is the split-brain itself.
 
-    Known residual gap: gluerun.config.sh and .gluerun-state/config.local.sh are
+    Known residual gap: singular.config.sh and .singular-state/config.local.sh are
     shell files sourced after env{}, and the console does not eval shell. If one
-    of those sets GLUERUN_CODEX_BIN the console can still disagree, which is why
+    of those sets SINGULAR_CODEX_BIN the console can still disagree, which is why
     the payload carries `authoritative`.
     """
     merged = dict(env)
-    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = read_json(repo / "singular.config.json", None)
     cfg_env = cfg.get("env") if isinstance(cfg, dict) else None
     if isinstance(cfg_env, dict):
         for key, value in cfg_env.items():
-            # GLUERUN_BASH_BIN is bootstrap-only and skipped by lib.sh too.
-            if key == "GLUERUN_BASH_BIN" or not isinstance(value, (str, int, float)):
+            # SINGULAR_BASH_BIN is bootstrap-only and skipped by lib.sh too.
+            if key == "SINGULAR_BASH_BIN" or not isinstance(value, (str, int, float)):
                 continue
             merged[str(key)] = str(value)
     return merged
@@ -6050,7 +6050,7 @@ def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path,
         "runnerScript": spec["runnerScript"],
     }
     # How this executable was chosen, so the card can say "pinned by
-    # GLUERUN_CODEX_BIN" vs "found on PATH" — the row that would have made the
+    # SINGULAR_CODEX_BIN" vs "found on PATH" — the row that would have made the
     # original split-brain self-evident instead of a two-hour investigation.
     out["resolution"] = {
         "source": resolution.source if resolution else "path",
@@ -6060,7 +6060,7 @@ def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path,
         "message": resolution.message if resolution else "",
         "authoritative": resolution is not None,
     }
-    # Additive quota field (gluerun.providers.v0 stays; not byte-pinned). Set on
+    # Additive quota field (singular.providers.v0 stays; not byte-pinned). Set on
     # both the installed and not-installed paths so the field is always present.
     out["quota"] = _provider_quota(spec["id"], exe is not None, home)
     if exe is None:
@@ -6078,12 +6078,12 @@ def _probe_provider(spec: dict[str, Any], env: dict[str, str], home: Path,
 
 
 def _active_runner(repo: Path) -> str:
-    """Basename of the runner the engine would launch: config env{} GLUERUN_RUNNER
+    """Basename of the runner the engine would launch: config env{} SINGULAR_RUNNER
     (wins in engine/lib.sh) > top-level "runner" > engine default codex-run.sh."""
-    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = read_json(repo / "singular.config.json", None)
     cfg = cfg if isinstance(cfg, dict) else {}
     env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
-    runner = env.get("GLUERUN_RUNNER") or cfg.get("runner") or "codex-run.sh"
+    runner = env.get("SINGULAR_RUNNER") or cfg.get("runner") or "codex-run.sh"
     return os.path.basename(str(runner))
 
 
@@ -6167,7 +6167,7 @@ def _compute_providers(repo: Path, env: dict[str, str], home: Path) -> dict[str,
     attention = (counts.get("warning", 0) + counts.get("error", 0)
                  + counts.get("missing", 0) + counts.get("misconfigured", 0))
     return {
-        "schema": "gluerun.providers.v0",
+        "schema": "singular.providers.v0",
         "checkedAt": checked_at,
         "repo": str(repo),
         "activeProvider": active_provider,
@@ -6190,7 +6190,7 @@ _PROVIDERS_CACHE = _ComputeCache(
 def collect_providers(repo: Path, refresh: bool = False, *,
                       env: dict[str, str] | None = None,
                       home: Path | None = None) -> dict[str, Any]:
-    """Runtime provider/runtime status (gluerun.providers.v0). Subprocess-based
+    """Runtime provider/runtime status (singular.providers.v0). Subprocess-based
     (version + auth probes) but cached 60s; ``refresh`` bypasses + repopulates.
 
     ``env``/``home`` overrides bypass the cache (tests point probes at a fake
@@ -6205,7 +6205,7 @@ def collect_providers(repo: Path, refresh: bool = False, *,
 
 
 # --------------------------------------------------------------------------- #
-# Prompts (gluerun.codex.prompts.v0)                                           #
+# Prompts (singular.codex.prompts.v0)                                           #
 # --------------------------------------------------------------------------- #
 #
 # Read-only view of the durable role prompt library plus per-role attribution.
@@ -6243,7 +6243,7 @@ def collect_prompts(repo: Path) -> dict[str, Any]:
             prompts.append({"name": path.name, "bytes": st.st_size,
                             "mtime": int(st.st_mtime), "role": PROMPT_ROLE_MAP.get(path.name)})
     prompts.sort(key=lambda p: p["name"])
-    return {"schema": "gluerun.codex.prompts.v0", "generatedAt": utc_now(), "prompts": prompts}
+    return {"schema": "singular.codex.prompts.v0", "generatedAt": utc_now(), "prompts": prompts}
 
 
 def collect_prompt(repo: Path, name: str) -> dict[str, Any] | None:
@@ -6268,7 +6268,7 @@ def collect_prompt(repo: Path, name: str) -> dict[str, Any] | None:
 
 
 # --------------------------------------------------------------------------- #
-# Raw primitives (gluerun.codex.raw.v0)                                        #
+# Raw primitives (singular.codex.raw.v0)                                        #
 # --------------------------------------------------------------------------- #
 #
 # A read-only "view source" for the durable records behind the console — task
@@ -6283,22 +6283,22 @@ RAW_ROOTS: dict[str, dict[str, Any]] = {
     "task": {"base": "docs/orchestration/tasks", "re": r"^TASK-\d+\.md$", "superseded": True},
     "gate": {"base": "docs/orchestration/gates", "re": r"^[A-Za-z0-9._-]+\.gate-result\.json$"},
     "gate-review": {"base": "docs/orchestration/gates/evidence", "re": r"^[A-Za-z0-9._-]+\.json$"},
-    "lease": {"base": ".gluerun-state/leases", "re": r"^TASK-\d+\.json$"},
-    "l1-lease": {"base": ".gluerun-state/l1-leases", "re": r"^[A-Za-z0-9._-]+\.json$"},
-    "dispatch": {"base": ".gluerun-state/dispatch", "re": r"^TASK-\d+\.json$"},
-    "inbox": {"base": ".gluerun-state/inbox", "re": r"^[A-Za-z0-9._-]+\.json$"},
+    "lease": {"base": ".singular-state/leases", "re": r"^TASK-\d+\.json$"},
+    "l1-lease": {"base": ".singular-state/l1-leases", "re": r"^[A-Za-z0-9._-]+\.json$"},
+    "dispatch": {"base": ".singular-state/dispatch", "re": r"^TASK-\d+\.json$"},
+    "inbox": {"base": ".singular-state/inbox", "re": r"^[A-Za-z0-9._-]+\.json$"},
     # explicit-name allowlist under the state dir
-    "state": {"base": ".gluerun-state",
+    "state": {"base": ".singular-state",
               "allow": {"origin-state.json", "circuit.json", "planner-backoff.json",
                         "STATUS.md", "task-id-counter"}},
     # singletons: the request name must equal the file's basename
-    "config": {"singleton": "gluerun.config.json"},
+    "config": {"singleton": "singular.config.json"},
     "dag": {"singleton": "docs/orchestration/dag.v0.json"},
 }
 
 
 # Env-var names whose VALUE is a credential. Key-name based, not value-shape
-# based, and that is the whole point: GLUERUN_CLAUDE_MODEL="claude-opus-4-8" and
+# based, and that is the whole point: SINGULAR_CLAUDE_MODEL="claude-opus-4-8" and
 # ANTHROPIC_API_KEY="sk-ant-..." are both long opaque strings, and only the name
 # tells them apart. Value-shape detection would either miss short credentials or
 # redact model ids and break the Providers surface.
@@ -6308,7 +6308,7 @@ _CONFIG_SECRET_NAME_RE = re.compile(
 
 
 def _redact_config_env(content: str) -> tuple[str, bool]:
-    """Mask credential-valued keys inside gluerun.config.json's env{} block.
+    """Mask credential-valued keys inside singular.config.json's env{} block.
 
     Dropping env{} outright is not an option: providers/surface.js reads
     obj.env from this endpoint to drive the per-provider model knobs. Leaving it
@@ -6383,7 +6383,7 @@ def collect_raw(repo: Path, root: str, name: str) -> dict[str, Any] | None:
         content, redacted = _redact_config_env(content)
     content = redact_secrets(content)
     out: dict[str, Any] = {
-        "schema": "gluerun.codex.raw.v0",
+        "schema": "singular.codex.raw.v0",
         "root": root,
         "name": name,
         "path": str(path),
@@ -6402,7 +6402,7 @@ def collect_raw(repo: Path, root: str, name: str) -> dict[str, Any] | None:
 
 
 # --------------------------------------------------------------------------- #
-# Home (gluerun.codex.home.v0)                                                 #
+# Home (singular.codex.home.v0)                                                 #
 # --------------------------------------------------------------------------- #
 #
 # The console's landing digest: one glanceable health verdict, an attention feed
@@ -6463,7 +6463,7 @@ def _parse_ts(value: Any) -> dt.datetime | None:
 
 
 def _breaker_threshold(repo: Path) -> int:
-    """Circuit-breaker trip count = the GLUERUN_MAX_CONSEC_FAILS shell default
+    """Circuit-breaker trip count = the SINGULAR_MAX_CONSEC_FAILS shell default
     parsed from the settings-dir files (fallback 3)."""
     text = ""
     settings_dir = resolve_settings_dir(repo)
@@ -6472,7 +6472,7 @@ def _breaker_threshold(repo: Path) -> int:
             text += "\n" + (settings_dir / name).read_text(errors="replace")
         except OSError:
             pass
-    raw = parse_shell_default(text, "GLUERUN_MAX_CONSEC_FAILS")
+    raw = parse_shell_default(text, "SINGULAR_MAX_CONSEC_FAILS")
     try:
         return int(raw) if raw is not None else 3
     except ValueError:
@@ -6488,7 +6488,7 @@ _BRIEFING_NARRATIVE_CAP = 4000
 
 
 def _load_supervisor_briefing(repo: Path) -> dict[str, Any] | None:
-    """The latest supervisor briefing (.gluerun-state/supervisor/latest.json),
+    """The latest supervisor briefing (.singular-state/supervisor/latest.json),
     filtered to known keys with the narrative capped. None when absent. Pure FS."""
     raw = read_json(state_path(repo, "supervisor", "latest.json"), None)
     if not isinstance(raw, dict):
@@ -6501,11 +6501,11 @@ def _load_supervisor_briefing(repo: Path) -> dict[str, Any] | None:
 
 
 def _supervisor_config(repo: Path) -> dict[str, Any]:
-    """{intervalMin, enabled} from config env GLUERUN_SUPERVISOR_INTERVAL_MIN
+    """{intervalMin, enabled} from config env SINGULAR_SUPERVISOR_INTERVAL_MIN
     (0/unset/invalid = disabled — matches the engine's inert default). Pure FS."""
-    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = read_json(repo / "singular.config.json", None)
     env = cfg.get("env") if isinstance(cfg, dict) and isinstance(cfg.get("env"), dict) else {}
-    raw = env.get("GLUERUN_SUPERVISOR_INTERVAL_MIN")
+    raw = env.get("SINGULAR_SUPERVISOR_INTERVAL_MIN")
     try:
         interval = int(str(raw).strip()) if raw not in (None, "") else 0
     except (ValueError, TypeError):
@@ -6667,7 +6667,7 @@ def collect_home(repo: Path) -> dict[str, Any]:
     supervisor = _supervisor_config(repo)
 
     return {
-        "schema": "gluerun.codex.home.v0",
+        "schema": "singular.codex.home.v0",
         "generatedAt": utc_now(),
         "health": health,
         "attention": attention,
@@ -6697,7 +6697,7 @@ def load_home(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Supervisor ask / report (gluerun.orchestration.ask.v0)                       #
+# Supervisor ask / report (singular.orchestration.ask.v0)                       #
 # --------------------------------------------------------------------------- #
 #
 # The console's ONLY two write endpoints beyond /api/settings. Each POST is a
@@ -6801,7 +6801,7 @@ def collect_ask(repo: Path, run_id: str, *, answer_cap: int = ASK_ANSWER_CAP) ->
         whitelist, _kinds = _settings_write_spec()
         proposed = {str(k): str(v) for k, v in raw_proposed.items() if k in whitelist}
     return {
-        "schema": "gluerun.orchestration.ask.v0",
+        "schema": "singular.orchestration.ask.v0",
         "runId": run_id,
         "state": state,
         # Model output is among the likeliest places for a credential the model
@@ -6824,17 +6824,17 @@ def collect_asks(repo: Path) -> dict[str, Any]:
         detail = collect_ask(repo, name, answer_cap=ASK_LIST_ANSWER_CAP)
         if detail is not None:
             asks.append(detail)
-    return {"schema": "gluerun.orchestration.asks.v0", "generatedAt": utc_now(), "asks": asks}
+    return {"schema": "singular.orchestration.asks.v0", "generatedAt": utc_now(), "asks": asks}
 
 
 def _spawn_engine_script(repo: Path, script: str, args: list[str]) -> None:
     """Launch an engine script detached from the request. DELIBERATE subprocess
     exception: a list argv (never shell=True), cwd=repo, start_new_session=True so
-    the readonly runner survives the HTTP response; GLUERUN_ROOT is pinned to the
+    the readonly runner survives the HTTP response; SINGULAR_ROOT is pinned to the
     served repo (lib.sh honors it). Inherits the server env otherwise (the console
-    sets GLUERUN_ENGINE_HOME; the child self-resolves it from its own path too)."""
+    sets SINGULAR_ENGINE_HOME; the child self-resolves it from its own path too)."""
     engine_script = _engine_dir() / script
-    child_env = {**os.environ, "GLUERUN_ROOT": str(repo)}
+    child_env = {**os.environ, "SINGULAR_ROOT": str(repo)}
     subprocess.Popen(
         ["bash", str(engine_script), *args],
         cwd=str(repo), env=child_env,
@@ -6861,7 +6861,7 @@ def spawn_ask(repo: Path, question: str) -> tuple[int, dict[str, Any]]:
             _atomic_write_text(run_dir / "question.md", question + "\n")
             now = utc_now()
             _atomic_write_text(run_dir / "ask.json", json.dumps({
-                "schema": "gluerun.orchestration.ask.v0", "runId": run_id,
+                "schema": "singular.orchestration.ask.v0", "runId": run_id,
                 "state": "pending", "question": question[:ASK_QUESTION_STORE_CAP],
                 "createdAt": now, "updatedAt": now,
             }, indent=2) + "\n")
@@ -6911,10 +6911,10 @@ def spawn_report(repo: Path) -> tuple[int, dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- #
-# Plan threads registry (gluerun.plans.v0)                                     #
+# Plan threads registry (singular.plans.v0)                                     #
 # --------------------------------------------------------------------------- #
 
-# A plan id as minted by `gluerun plan archive` (plan-<UTCstamp>[-<slug>]). Also
+# A plan id as minted by `singular plan archive` (plan-<UTCstamp>[-<slug>]). Also
 # the sole gate for the ?plan= filesystem-root param, so the charset is tight.
 PLAN_ID_RE = re.compile(r"^plan-[A-Za-z0-9-]{1,64}$")
 
@@ -6930,7 +6930,7 @@ def _plan_entry(src: dict[str, Any]) -> dict[str, Any]:
 
 def collect_plans(repo: Path) -> dict[str, Any]:
     """Pure-filesystem read of the archived-plan registry. Reads
-    ``.gluerun-state/plans/index.json`` and self-heals by also scanning
+    ``.singular-state/plans/index.json`` and self-heals by also scanning
     ``plans/*/manifest.json`` for any archived dir missing from the index
     (merge by id; index entries win). Sorted newest-first. Missing/empty →
     ``plans: []``."""
@@ -6955,7 +6955,7 @@ def collect_plans(repo: Path) -> dict[str, Any]:
             if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]:
                 entries[item["id"]] = _plan_entry(item)
     plans = sorted(entries.values(), key=lambda p: p.get("archivedAt") or "", reverse=True)
-    return {"schema": "gluerun.plans.v0", "generatedAt": utc_now(), "plans": plans}
+    return {"schema": "singular.plans.v0", "generatedAt": utc_now(), "plans": plans}
 
 
 _PLANS_CACHE = _ComputeCache(collect_plans, 6.0)
@@ -6967,7 +6967,7 @@ def load_plans(repo: Path) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Console adapter (gluerun.console-adapter.v0)                                     #
+# Console adapter (singular.console-adapter.v0)                                     #
 # --------------------------------------------------------------------------- #
 #
 # Everything project-shaped in this console (role catalog, event map, id
@@ -6976,9 +6976,9 @@ def load_plans(repo: Path) -> dict[str, Any]:
 # ONCE at startup (mirroring load_repo_target_branch + its call in main()),
 # with per-KEY precedence:
 #
-#   (a) repo override   — gluerun.config.json "console" block (inline object),
+#   (a) repo override   — singular.config.json "console" block (inline object),
 #                         then docs/orchestration/console-adapter.json
-#   (b) engine-shipped  — $GLUERUN_ENGINE_HOME/plugin/adapters/
+#   (b) engine-shipped  — $SINGULAR_ENGINE_HOME/plugin/adapters/
 #                         console-adapter.<schemaVersion>.json
 #   (c) built-in        — the module constants above (exact legacy behavior)
 #
@@ -6987,7 +6987,7 @@ def load_plans(repo: Path) -> dict[str, Any]:
 # layer (or one malformed key) warns to stderr and falls through — the console
 # never crashes over adapter content.
 
-CONSOLE_ADAPTER_SCHEMA = "gluerun.console-adapter.v0"
+CONSOLE_ADAPTER_SCHEMA = "singular.console-adapter.v0"
 
 
 def _build_builtin_console_adapter() -> dict[str, Any]:
@@ -7052,7 +7052,7 @@ def builtin_console_adapter() -> dict[str, Any]:
 
 
 def _adapter_warn(msg: str) -> None:
-    print(f"gluerun console adapter: {msg}", file=sys.stderr)
+    print(f"singular console adapter: {msg}", file=sys.stderr)
 
 
 def _read_adapter_layer(path: Path, origin: str) -> dict[str, Any] | None:
@@ -7078,7 +7078,7 @@ def load_console_adapter(repo, engine_home: str | None = None,
     """Resolve the effective console adapter for ``repo`` with per-KEY precedence
     repo override > engine-shipped > built-in. Never raises on adapter content."""
     repo = Path(repo)
-    cfg = read_json(repo / "gluerun.config.json", None)
+    cfg = read_json(repo / "singular.config.json", None)
     cfg = cfg if isinstance(cfg, dict) else {}
     if schema_version is None:
         sv = cfg.get("schemaVersion")
@@ -7099,7 +7099,7 @@ def load_console_adapter(repo, engine_home: str | None = None,
     if isinstance(inline, dict):
         overlay(inline)
     elif inline is not None:
-        _adapter_warn("ignoring gluerun.config.json 'console': must be an object")
+        _adapter_warn("ignoring singular.config.json 'console': must be an object")
     return merged
 
 
@@ -7646,7 +7646,7 @@ class Handler(BaseHTTPRequestHandler):
                 "snapshotAgeSeconds": int(age) if age is not None else None,
                 "lastSnapshotError": SNAPSHOT_CACHE.last_error,
                 # Surfaced so a disabled security control cannot be silently
-                # off: GLUERUN_CONSOLE_REDACT=0 is answerable without a browser.
+                # off: SINGULAR_CONSOLE_REDACT=0 is answerable without a browser.
                 "redaction": REDACT_ENABLED,
             })
             return
@@ -7751,8 +7751,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Serve a read-only gluerun orchestration console for a target repo.")
-    parser.add_argument("--repo", default=os.environ.get("GLUERUN_REPO", DEFAULT_REPO), help="target repo path (defaults to GLUERUN_REPO or cwd)")
+    parser = argparse.ArgumentParser(description="Serve a read-only singular orchestration console for a target repo.")
+    parser.add_argument("--repo", default=os.environ.get("SINGULAR_REPO", DEFAULT_REPO), help="target repo path (defaults to SINGULAR_REPO or cwd)")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host")
     parser.add_argument("--port", type=int, default=8765, help="Bind port")
     parser.add_argument("--snapshot", action="store_true", help="Print one JSON snapshot and exit")
@@ -7769,18 +7769,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--providers", action="store_true", help="Print the runtime provider/runtime status JSON and exit")
     parser.add_argument("--prompts", action="store_true", help="Print the role prompt library JSON and exit")
     parser.add_argument("--prompt", help="Print one prompt's content JSON (e.g. auditor.md) and exit")
-    parser.add_argument("--raw", help="Print one raw record JSON (e.g. config/gluerun.config.json) and exit")
+    parser.add_argument("--raw", help="Print one raw record JSON (e.g. config/singular.config.json) and exit")
     parser.add_argument("--home", action="store_true", help="Print the home landing digest JSON and exit")
     parser.add_argument("--plans", action="store_true", help="Print the archived-plan registry JSON and exit")
     return parser.parse_args(argv)
 
 
 def write_console_state(repo: Path, url: str) -> list[Path]:
-    """Persist the served URL + pid into the repo's state dir so `gluerun
-    console --ensure/--status/--stop` and `gluerun status` can find a running
+    """Persist the served URL + pid into the repo's state dir so `singular
+    console --ensure/--status/--stop` and `singular status` can find a running
     console. Best-effort: failures warn to stderr, never abort serving. Opt
-    out with GLUERUN_CONSOLE_NO_STATE=1."""
-    if os.environ.get("GLUERUN_CONSOLE_NO_STATE") == "1":
+    out with SINGULAR_CONSOLE_NO_STATE=1."""
+    if os.environ.get("SINGULAR_CONSOLE_NO_STATE") == "1":
         return []
     written: list[Path] = []
     for path, content in ((state_path(repo, "console.url"), url),
@@ -7790,7 +7790,7 @@ def write_console_state(repo: Path, url: str) -> list[Path]:
             path.write_text(content + "\n")
             written.append(path)
         except OSError as exc:
-            print(f"gluerun console: could not write {path}: {exc}", file=sys.stderr)
+            print(f"singular console: could not write {path}: {exc}", file=sys.stderr)
     return written
 
 
@@ -7799,7 +7799,7 @@ def remove_console_state(paths: list[Path]) -> None:
         try:
             path.unlink(missing_ok=True)
         except OSError as exc:
-            print(f"gluerun console: could not remove {path}: {exc}", file=sys.stderr)
+            print(f"singular console: could not remove {path}: {exc}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -7813,7 +7813,7 @@ def main(argv: list[str] | None = None) -> int:
     # Resolve the console adapter once at startup (repo > engine-shipped >
     # built-in, per key). With no adapter resolvable this is a no-op and the
     # console behaves exactly as before.
-    apply_console_adapter(load_console_adapter(repo, os.environ.get("GLUERUN_ENGINE_HOME")))
+    apply_console_adapter(load_console_adapter(repo, os.environ.get("SINGULAR_ENGINE_HOME")))
     if args.task:
         detail = collect_task_detail(repo, args.task)
         if detail is None:
@@ -7894,7 +7894,7 @@ def main(argv: list[str] | None = None) -> int:
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     bound_port = server.server_address[1]
     url = f"http://{args.host}:{bound_port}"
-    print(f"gluerun orchestration console serving {repo} at {url}", flush=True)
+    print(f"singular orchestration console serving {repo} at {url}", flush=True)
     state_files = write_console_state(repo, url)
 
     def _on_sigterm(signum: int, frame: Any) -> None:

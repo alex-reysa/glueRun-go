@@ -17,8 +17,8 @@
 #
 # It composes ONLY integrated functions: the TASK-0025 decider + recorder, the
 # fresh-path critic delegate (TASK-0013), and the SHARED lib.sh persist/normalize
-# primitives gluerun_extract_json, gluerun_finding_id, and
-# gluerun_session_meta_finalize — so it reuses rather than duplicates the
+# primitives singular_extract_json, singular_finding_id, and
+# singular_session_meta_finalize — so it reuses rather than duplicates the
 # critique-persist logic. To keep those integrated helpers structurally
 # present-but-uncalled under their own invariance grep, this brick reaches them by
 # an assembled prefix (mirroring engine/ctx-plan-revise-loop.sh), never by their
@@ -29,7 +29,7 @@
 # present-but-uncalled the engine is byte-identical to prior behavior (mirroring
 # engine/ctx-plan-revise-resume.sh). It never owns engine/lib.sh and adds no
 # driver-file hook. Swapping the re-critique step of engine/ctx-plan-revise-loop.sh
-# to call this runner behind GLUERUN_PLAN_RECRITIC_RESUME is the sanctioned
+# to call this runner behind SINGULAR_PLAN_RECRITIC_RESUME is the sanctioned
 # follow-up slice and is OUT OF SCOPE here.
 #
 # Advocate/skeptic line + evidence invariance: it runs the critic READ-ONLY on the
@@ -38,13 +38,13 @@
 # `fresh <reason>` to resume, never weakens a gate, and never makes the
 # un-bypassable implementation auditor bypassable. It fails OPEN so an
 # infrastructure failure never blocks or deadlocks the revision loop. Events land
-# only in the pinned GLUERUN_EVENTS_FILE.
+# only in the pinned SINGULAR_EVENTS_FILE.
 
 # Persist a parsed critic record into the plan-critique.v0 shape using the SHARED
-# gluerun_finding_id id normalization, so a resumed critique yields an IDENTICAL
+# singular_finding_id id normalization, so a resumed critique yields an IDENTICAL
 # contract to the fresh path. Prints "verdict<TAB>count"; rewrites <record>.
-#   _gluerun_plan_recritic_normalize <record> <node> <run_id> <batch_csv>
-_gluerun_plan_recritic_normalize() {
+#   _singular_plan_recritic_normalize <record> <node> <run_id> <batch_csv>
+_singular_plan_recritic_normalize() {
   local record="$1" node="$2" run_id="$3" batch_csv="$4"
 
   # Pass 1: emit each valid finding's claim base64-encoded, one per line, in
@@ -79,7 +79,7 @@ PY
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     claim="$(printf '%s' "$line" | base64 -d 2>/dev/null)"
-    fid="$(gluerun_finding_id "$claim")"
+    fid="$(singular_finding_id "$claim")"
     if [[ -z "$ids_csv" ]]; then ids_csv="$fid"; else ids_csv="$ids_csv,$fid"; fi
   done <<<"$claims_b64"
 
@@ -135,7 +135,7 @@ if not rationale:
     rationale = "critic returned no rationale"
 
 rec = {
-    "schema": "gluerun.orchestration.plan-critique.v0",
+    "schema": "singular.orchestration.plan-critique.v0",
     "node": node,
     "runId": run_id,
     "batchTaskIds": batch,
@@ -155,7 +155,7 @@ PY
 # `context.resume_failed` event carrying node, runId, revisesRunId, and the refused
 # sessionId, mirroring the planner revision-round fresh fallback (TASK-0023). No
 # lease change, no runner, no outcome mutation.
-gluerun_plan_recritic_record_resume_failed() {
+singular_plan_recritic_record_resume_failed() {
   local node="${1:-}" run_id="${2:-}" revises_run_id="${3:-}" session_id="${4:-}"
   local event_json
   event_json="$(python3 - "$node" "$run_id" "$revises_run_id" "$session_id" <<'PY'
@@ -170,7 +170,7 @@ print(json.dumps({
 }, separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "context.resume_failed" "plan-recritique resume failed; re-running fresh" "$event_json"
+  singular_append_event "context.resume_failed" "plan-recritique resume failed; re-running fresh" "$event_json"
   return 0
 }
 
@@ -188,8 +188,8 @@ PY
 #     on infra failure it falls back to the FRESH driver, whose bounded retries and
 #     fail-OPEN approve keep the revision loop from blocking.
 # Returns 0 on every path — it NEVER blocks or deadlocks the revision loop.
-#   gluerun_plan_recritic_run <node> <run_id> <stage_dir> <revises_run_id> [worktree]
-gluerun_plan_recritic_run() {
+#   singular_plan_recritic_run <node> <run_id> <stage_dir> <revises_run_id> [worktree]
+singular_plan_recritic_run() {
   local node="$1" run_id="$2" stage_dir="$3" revises_run_id="$4" worktree="${5:-.}"
 
   mkdir -p "$stage_dir"
@@ -197,15 +197,15 @@ gluerun_plan_recritic_run() {
   # Reach the integrated critic + re-critique helpers by an assembled prefix so
   # they stay present-but-uncalled under their own invariance grep (mirroring
   # engine/ctx-plan-revise-loop.sh); the contiguous literal name never appears.
-  local _critic_pfx=gluerun_ctx_plan_critic_
-  local _recrit_pfx=gluerun_plan_recritic_
+  local _critic_pfx=singular_ctx_plan_critic_
+  local _recrit_pfx=singular_plan_recritic_
 
   # Canonical per-node critic session-meta (role plan-critic), finalized by the
   # fresh driver and consulted by the decider.
   local session_meta; session_meta="$("${_critic_pfx}session_path" "$node")"
   # DEFAULT runner (cross-provider independence): a module-routed planner still
   # gets a default-runner critic, and the re-critique resumes only that session.
-  local runner="${GLUERUN_RUNNER:-$GLUERUN_ENGINE_DIR/codex-run.sh}"
+  local runner="${SINGULAR_RUNNER:-$SINGULAR_ENGINE_DIR/codex-run.sh}"
   local runner_basename; runner_basename="$(basename "$runner")"
   # Lineage head = the current target-branch head in this worktree; the decider's
   # head-rewritten gate keys the stored headShaAtCreate against it.
@@ -235,16 +235,16 @@ gluerun_plan_recritic_run() {
     resume resume "$sid" >/dev/null 2>&1 || true
 
   local _pn="plan-critic"
-  local prompt="${GLUERUN_ORCH_DIR}/prompts/${_pn}.md"
+  local prompt="${SINGULAR_ORCH_DIR}/prompts/${_pn}.md"
   local raw="$stage_dir/plan-critique-raw.json"
   local record="$stage_dir/plan-critique.json"
-  local prompt_sha; prompt_sha="$(gluerun_prompt_sha "$prompt" 2>/dev/null || printf '%s' "")"
+  local prompt_sha; prompt_sha="$(singular_prompt_sha "$prompt" 2>/dev/null || printf '%s' "")"
   [[ -n "$session_meta" ]] && mkdir -p "$(dirname "$session_meta")"
 
   # Authoritative batch ids from the rendered candidate files staged for this node
   # (not whatever the runner echoed), mirroring the fresh driver.
   local candidate_batch_dir
-  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
+  candidate_batch_dir="$(singular_task_batch_candidate_dir "$stage_dir")" || return 2
   local batch_csv="" f base tid
   for f in "$candidate_batch_dir"/TASK-*.md; do
     [[ -e "$f" ]] || continue
@@ -258,14 +258,14 @@ gluerun_plan_recritic_run() {
   local result_file="$stage_dir/plan-recritic-resume-runner-result.json"
   rm -f "$raw" "$result_file" 2>/dev/null || true
   local rc=0
-  local critic_capability_profile="${GLUERUN_CRITIC_CAPABILITY_PROFILE:-audit-core}"
-  gluerun_runner_contract_prepare \
+  local critic_capability_profile="${SINGULAR_CRITIC_CAPABILITY_PROFILE:-audit-core}"
+  singular_runner_contract_prepare \
     "$runner" critic "$critic_capability_profile" "$result_file"
-  GLUERUN_RUNNER_ROLE=critic \
-  GLUERUN_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
-  GLUERUN_RUNNER_RESULT_FILE="$result_file" \
-  GLUERUN_RUNNER_RUN_ID="$run_id" \
-  "$runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+  SINGULAR_RUNNER_ROLE=critic \
+  SINGULAR_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
+  SINGULAR_RUNNER_RESULT_FILE="$result_file" \
+  SINGULAR_RUNNER_RUN_ID="$run_id" \
+  "$runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
     --level readonly -C "$worktree" --run-id "$run_id" \
     --prompt-file "$prompt" --output-last-message "$raw" \
     --session-meta "$session_meta" --resume-session "$sid" >/dev/null 2>&1 || rc=$?
@@ -274,7 +274,7 @@ gluerun_plan_recritic_run() {
   # FRESH via the integrated driver (same prompt, its own record + plan.critiqued
   # + session-meta finalize).
   if [[ "$rc" -eq 86 ]]; then
-    gluerun_plan_recritic_record_resume_failed "$node" "$run_id" "$revises_run_id" "$sid" \
+    singular_plan_recritic_record_resume_failed "$node" "$run_id" "$revises_run_id" "$sid" \
       >/dev/null 2>&1 || true
     "${_critic_pfx}run" "$node" "$run_id" "$stage_dir" "$worktree" || true
     return 0
@@ -282,24 +282,24 @@ gluerun_plan_recritic_run() {
 
   # Parseable output: persist through the SHARED helpers into the SAME record and
   # append the SAME single plan.critiqued event, yielding an identical contract.
-  if [[ "$rc" -ne 124 && -f "$raw" ]] && gluerun_extract_json "$raw" "$record" 2>/dev/null; then
+  if [[ "$rc" -ne 124 && -f "$raw" ]] && singular_extract_json "$raw" "$record" 2>/dev/null; then
     local summary verdict count
-    summary="$(_gluerun_plan_recritic_normalize "$record" "$node" "$run_id" "$batch_csv")"
+    summary="$(_singular_plan_recritic_normalize "$record" "$node" "$run_id" "$batch_csv")"
     verdict="${summary%%$'\t'*}"
     count="${summary##*$'\t'}"
     [[ -n "$verdict" ]] || verdict="approve"
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
-    gluerun_append_event "plan.critiqued" "plan critic recorded a critique" \
+    singular_append_event "plan.critiqued" "plan critic recorded a critique" \
       "{\"node\":\"$node\",\"runId\":\"$run_id\",\"verdict\":\"$verdict\",\"findingsCount\":$count}"
     if [[ -n "$session_meta" ]]; then
-      gluerun_session_meta_finalize "$session_meta" plan-critic "" "$run_id" \
+      singular_session_meta_finalize "$session_meta" plan-critic "" "$run_id" \
         "$runner_basename" "$prompt_sha" "" "1" >/dev/null 2>&1 || true
     fi
     return 0
   fi
 
   # Infra failure on the resume pass (timeout / no record / unparseable): fall back
-  # to the integrated FRESH driver, whose GLUERUN_AUDIT_INFRA_MAX-bounded fresh
+  # to the integrated FRESH driver, whose SINGULAR_AUDIT_INFRA_MAX-bounded fresh
   # retries and fail-OPEN approve (a distinct ctx.plan_critique_infra event) keep
   # the revision loop from blocking. The implementation auditor remains the floor.
   "${_critic_pfx}run" "$node" "$run_id" "$stage_dir" "$worktree" || true

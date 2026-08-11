@@ -3,7 +3,7 @@
 > **COMPLETED 2026-07-13:** the operator path below was executed —
 > `docs/context-build-plan/experiment-report.md` merged, per-knob decisions
 > recorded, and `docs/orchestration/gates/experiment-run.gate-result.json`
-> published (operator-promoted via GLUERUN_FORCE_EVAL_GATE=1). The text
+> published (operator-promoted via SINGULAR_FORCE_EVAL_GATE=1). The text
 > below is the historical hand-off record as written before completion.
 
 Status: **operator-blocked, planner-cannot-advance.** This record surfaces the
@@ -37,8 +37,8 @@ additional engine/CLI task would duplicate integrated work:
   result-section delta+audit (TASK-0098), full report body (TASK-0100).
 - Provenance + validity — per-run knob-state emitter (TASK-0093), l1-drive
   recording hook (TASK-0095), per-arm knob-state consistency audit (TASK-0097).
-- Operator CLI surface `gluerun experiment-report` behind
-  `GLUERUN_CTX_EXPERIMENT` (TASK-0091).
+- Operator CLI surface `singular experiment-report` behind
+  `SINGULAR_CTX_EXPERIMENT` (TASK-0091).
 
 The `ab-harness` gate is already published
 (`docs/orchestration/gates/ab-harness.gate-result.json`), so the harness to run
@@ -47,12 +47,12 @@ both arms is in place.
 ## Operator completion path (the node's only remaining path)
 
 1. **Run the paired-audited A/B experiment** on a real backlog (≥ 40 accepted
-   tasks per arm where feasible), via `GLUERUN_CTX_AB`:
+   tasks per arm where feasible), via `SINGULAR_CTX_AB`:
    - Arm A (control) = M0 knob-state, continuity knobs OFF.
    - Arm B (treatment) = critique+revision + context packets + routing +
      rehydrate ON.
-   - `GLUERUN_PAIRED_AUDIT_PCT=25` in **both** arms;
-     `GLUERUN_CRITIC_RECHECK_PCT=25` in **arm B**.
+   - `SINGULAR_PAIRED_AUDIT_PCT=25` in **both** arms;
+     `SINGULAR_CRITIC_RECHECK_PCT=25` in **arm B**.
 2. **Author `docs/context-build-plan/experiment-report.md`** from the integrated
    tooling above: primary escape-rate, cost, and bias measurements plus the
    secondary (attempts-to-accept, findings-per-attempt, tokens/wall-clock,
@@ -63,7 +63,7 @@ both arms is in place.
    opt-in, whether the Stage 6 graph earns further investment or is frozen).
 4. **Publish `docs/orchestration/gates/experiment-run.gate-result.json`**
    manually with the evidence attached (schema
-   `gluerun.orchestration.gate-result.v0`, matching the existing gate results in
+   `singular.orchestration.gate-result.v0`, matching the existing gate results in
    `docs/orchestration/gates/`).
 
 Until step 4 is published with the report and per-knob decisions attached, the

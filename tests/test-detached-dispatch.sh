@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Detached dispatch (GLUERUN_DETACHED_DISPATCH=1): reconcile spawns workers and
+# Detached dispatch (SINGULAR_DETACHED_DISPATCH=1): reconcile spawns workers and
 # returns without waiting; outcomes are attributed by the reaper on later
 # cycles via dispatch records + exit files. These tests cover: fast cycle
 # return with lock release, pre-lease double-dispatch/scope protection, reap
@@ -37,7 +37,7 @@ make_repo() {
   mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/packets/imported" \
     "$root/docs/orchestration/areas/artifact" \
     "$root/docs/orchestration/gates" \
-    "$root/docs/orchestration/prompts" "$root/schemas/orchestration" "$root/.gluerun-state"
+    "$root/docs/orchestration/prompts" "$root/schemas/orchestration" "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$root/docs/orchestration/prompts/l1-planner.md"
@@ -61,7 +61,7 @@ EOF
 
 write_task() {
   local id="$1" status="$2" owned="$3" depends="${4:-[]}"
-  cat >"$GLUERUN_TASKS_DIR/$id.md" <<EOF
+  cat >"$SINGULAR_TASKS_DIR/$id.md" <<EOF
 # $id: Task $id
 
 Status: $status
@@ -101,25 +101,25 @@ with_fixture() {
   local tmp
   tmp="$(mktemp -d)"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-  export GLUERUN_LEASES_DIR="$GLUERUN_STATE_DIR/leases"
-  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-  export GLUERUN_WORKTREES_DIR="$GLUERUN_ROOT/.worktrees"
-  export GLUERUN_ORIGIN_STATE_FILE="$GLUERUN_STATE_DIR/origin-state.json"
-  export GLUERUN_GIT_LOCK_DIR="$GLUERUN_STATE_DIR/locks/git-op.lock"
-  export GLUERUN_DISPATCH_DIR="$GLUERUN_STATE_DIR/dispatch"
-  export GLUERUN_PACKET_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/state-packet.v0.schema.json"
-  export GLUERUN_AUDIT_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/audit-verdict.v0.schema.json"
-  export GLUERUN_DECIDER_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/decider-verdict.v0.schema.json"
-  export GLUERUN_STOP_FILE="$GLUERUN_STATE_DIR/STOP"
-  export GLUERUN_STATUS_FILE="$GLUERUN_STATE_DIR/STATUS.md"
-  export GLUERUN_BREAKER_FILE="$GLUERUN_STATE_DIR/circuit.json"
-  export GLUERUN_PLANNER_BACKOFF_FILE="$GLUERUN_STATE_DIR/planner-backoff.json"
-  export GLUERUN_TARGET_BRANCH="target"
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+  export SINGULAR_LEASES_DIR="$SINGULAR_STATE_DIR/leases"
+  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+  export SINGULAR_WORKTREES_DIR="$SINGULAR_ROOT/.worktrees"
+  export SINGULAR_ORIGIN_STATE_FILE="$SINGULAR_STATE_DIR/origin-state.json"
+  export SINGULAR_GIT_LOCK_DIR="$SINGULAR_STATE_DIR/locks/git-op.lock"
+  export SINGULAR_DISPATCH_DIR="$SINGULAR_STATE_DIR/dispatch"
+  export SINGULAR_PACKET_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/state-packet.v0.schema.json"
+  export SINGULAR_AUDIT_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/audit-verdict.v0.schema.json"
+  export SINGULAR_DECIDER_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/decider-verdict.v0.schema.json"
+  export SINGULAR_STOP_FILE="$SINGULAR_STATE_DIR/STOP"
+  export SINGULAR_STATUS_FILE="$SINGULAR_STATE_DIR/STATUS.md"
+  export SINGULAR_BREAKER_FILE="$SINGULAR_STATE_DIR/circuit.json"
+  export SINGULAR_PLANNER_BACKOFF_FILE="$SINGULAR_STATE_DIR/planner-backoff.json"
+  export SINGULAR_TARGET_BRANCH="target"
   source "$SCRIPT_DIR/lib.sh"
 }
 
@@ -130,9 +130,9 @@ make_sleep_stub() {
 #!/usr/bin/env bash
 set -euo pipefail
 tid="\$1"
-echo "\$tid" >>"\$GLUERUN_STATE_DIR/dispatch.log"
+echo "\$tid" >>"\$SINGULAR_STATE_DIR/dispatch.log"
 sleep $secs
-ec_file="\$GLUERUN_STATE_DIR/\$tid.ec"
+ec_file="\$SINGULAR_STATE_DIR/\$tid.ec"
 [[ -f "\$ec_file" ]] && exit "\$(cat "\$ec_file")"
 exit 0
 EOF
@@ -140,8 +140,8 @@ EOF
 }
 
 actuate() {
-  GLUERUN_L1_DRIVER="$1" GLUERUN_GENERATE=0 GLUERUN_AUTO_INTEGRATE=0 \
-    GLUERUN_MAX_CONCURRENT="$2" GLUERUN_MAX_DISPATCH="$2" GLUERUN_DETACHED_DISPATCH="$3" \
+  SINGULAR_L1_DRIVER="$1" SINGULAR_GENERATE=0 SINGULAR_AUTO_INTEGRATE=0 \
+    SINGULAR_MAX_CONCURRENT="$2" SINGULAR_MAX_DISPATCH="$2" SINGULAR_DETACHED_DISPATCH="$3" \
     "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true
 }
 
@@ -151,7 +151,7 @@ field_of() {
 
 wait_for_exit_files() {
   local count="$1" tries=0
-  while [[ "$(find "$GLUERUN_DISPATCH_DIR" -name '*.exit' 2>/dev/null | wc -l | tr -d ' ')" -lt "$count" ]]; do
+  while [[ "$(find "$SINGULAR_DISPATCH_DIR" -name '*.exit' 2>/dev/null | wc -l | tr -d ' ')" -lt "$count" ]]; do
     tries=$((tries + 1))
     [[ "$tries" -ge 50 ]] && fail "timed out waiting for $count exit file(s)"
     sleep 0.2
@@ -162,7 +162,7 @@ test_detached_cycle_returns_fast_and_releases_lock() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "[]"
   write_task TASK-0002 ready internal/artifact/b.go "[]"
-  local stub="$GLUERUN_ROOT/stub.sh"
+  local stub="$SINGULAR_ROOT/stub.sh"
   make_sleep_stub "$stub" 5
 
   local start out elapsed
@@ -173,7 +173,7 @@ test_detached_cycle_returns_fast_and_releases_lock() {
   assert_eq "2" "$(field_of "$out" dispatched_this_run)" "detached cycle dispatched both tasks"
   assert_eq "1" "$(field_of "$out" detached_dispatch)" "detached flag reported"
   [[ "$elapsed" -lt 4 ]] || fail "detached cycle blocked on workers (took ${elapsed}s with 5s stubs)"
-  [[ ! -f "$GLUERUN_STATE_DIR/locks/origin.lock.json" ]] || fail "origin lock still held after detached cycle"
+  [[ ! -f "$SINGULAR_STATE_DIR/locks/origin.lock.json" ]] || fail "origin lock still held after detached cycle"
 
   # While the stubs sleep: pre-leases hold the slots and the next cycle defers.
   local out2
@@ -184,18 +184,18 @@ test_detached_cycle_returns_fast_and_releases_lock() {
 
   # Drain: blocks until the stubs finish, then reaps both.
   local drain_out
-  drain_out="$(GLUERUN_DRAIN_TIMEOUT_SECS=30 "$SCRIPT_DIR/reconcile.sh" --drain 2>&1)" || fail "drain did not exit cleanly"
+  drain_out="$(SINGULAR_DRAIN_TIMEOUT_SECS=30 "$SCRIPT_DIR/reconcile.sh" --drain 2>&1)" || fail "drain did not exit cleanly"
   assert_contains "$drain_out" "no launched dispatch records remain" "drain completed"
-  assert_contains "$(cat "$GLUERUN_DISPATCH_DIR/TASK-0001.json")" '"state": "reaped"' "TASK-0001 record finalized"
-  assert_contains "$(cat "$GLUERUN_DISPATCH_DIR/TASK-0002.json")" '"state": "reaped"' "TASK-0002 record finalized"
-  [[ -z "$(find "$GLUERUN_DISPATCH_DIR" -name '*.exit' 2>/dev/null)" ]] || fail "exit files not cleaned up after reap"
+  assert_contains "$(cat "$SINGULAR_DISPATCH_DIR/TASK-0001.json")" '"state": "reaped"' "TASK-0001 record finalized"
+  assert_contains "$(cat "$SINGULAR_DISPATCH_DIR/TASK-0002.json")" '"state": "reaped"' "TASK-0002 record finalized"
+  [[ -z "$(find "$SINGULAR_DISPATCH_DIR" -name '*.exit' 2>/dev/null)" ]] || fail "exit files not cleaned up after reap"
 }
 
 test_detached_pre_lease_blocks_scope_overlap() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/shared.go "[]"
   write_task TASK-0002 ready internal/artifact/shared.go "[]"
-  local stub="$GLUERUN_ROOT/stub.sh"
+  local stub="$SINGULAR_ROOT/stub.sh"
   make_sleep_stub "$stub" 4
 
   local out
@@ -207,18 +207,18 @@ test_detached_pre_lease_blocks_scope_overlap() {
   local out2
   out2="$(actuate "$stub" 2 1)"
   assert_eq "0" "$(field_of "$out2" dispatched_this_run)" "scope overlap with a pre-leased running task blocks dispatch"
-  assert_eq "1" "$(wc -l <"$GLUERUN_STATE_DIR/dispatch.log" | tr -d ' ')" "driver invoked exactly once"
+  assert_eq "1" "$(wc -l <"$SINGULAR_STATE_DIR/dispatch.log" | tr -d ' ')" "driver invoked exactly once"
 
-  GLUERUN_DRAIN_TIMEOUT_SECS=30 "$SCRIPT_DIR/reconcile.sh" --drain >/dev/null 2>&1 || true
+  SINGULAR_DRAIN_TIMEOUT_SECS=30 "$SCRIPT_DIR/reconcile.sh" --drain >/dev/null 2>&1 || true
 }
 
 test_detached_reap_attributes_ok_and_failed() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "[]"
   write_task TASK-0002 ready internal/artifact/b.go "[]"
-  local stub="$GLUERUN_ROOT/stub.sh"
+  local stub="$SINGULAR_ROOT/stub.sh"
   make_sleep_stub "$stub" 0
-  echo 9 >"$GLUERUN_STATE_DIR/TASK-0002.ec"
+  echo 9 >"$SINGULAR_STATE_DIR/TASK-0002.ec"
 
   local out
   out="$(actuate "$stub" 2 1)"
@@ -233,20 +233,20 @@ test_detached_reap_attributes_ok_and_failed() {
   assert_eq "0" "$(field_of "$out2" workers_running)" "no workers left running"
 
   local events
-  events="$(cat "$GLUERUN_STATE_DIR/events.ndjson")"
+  events="$(cat "$SINGULAR_STATE_DIR/events.ndjson")"
   assert_contains "$events" '"type":"origin.dispatch_reaped"' "dispatch_reaped events emitted"
   assert_contains "$events" '"taskId":"TASK-0002","exitCode":9' "failure attributed with its exit code"
 
   # The stubs never took lease ownership, so the wrapper cleared the
   # pre-leases: the tasks are re-dispatchable, not stuck holding slots.
-  [[ ! -f "$GLUERUN_LEASES_DIR/TASK-0001.json" ]] || fail "pre-lease for TASK-0001 not cleared"
-  [[ ! -f "$GLUERUN_LEASES_DIR/TASK-0002.json" ]] || fail "pre-lease for TASK-0002 not cleared"
+  [[ ! -f "$SINGULAR_LEASES_DIR/TASK-0001.json" ]] || fail "pre-lease for TASK-0001 not cleared"
+  [[ ! -f "$SINGULAR_LEASES_DIR/TASK-0002.json" ]] || fail "pre-lease for TASK-0002 not cleared"
 }
 
 test_detached_crash_detected_by_pid() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "[]"
-  local stub="$GLUERUN_ROOT/stub.sh"
+  local stub="$SINGULAR_ROOT/stub.sh"
   make_sleep_stub "$stub" 30
 
   local out
@@ -254,7 +254,7 @@ test_detached_crash_detected_by_pid() {
   assert_eq "1" "$(field_of "$out" dispatched_this_run)" "worker dispatched"
 
   local pid
-  pid="$(gluerun_json_field "$GLUERUN_DISPATCH_DIR/TASK-0001.json" pid)"
+  pid="$(singular_json_field "$SINGULAR_DISPATCH_DIR/TASK-0001.json" pid)"
   [[ -n "$pid" ]] || fail "dispatch record has no pid"
   # Kill the detached session (wrapper + stub) without letting it write an
   # exit file -- simulates a hard crash / SIGKILL.
@@ -265,19 +265,19 @@ test_detached_crash_detected_by_pid() {
   # 0.5.0 tree-liveness treats recent run-dir writes as maybe-alive (bounded
   # conservatism); disable the mtime window so the simulated hard crash reaps
   # immediately in this fixture.
-  out2="$(GLUERUN_TREE_ACTIVITY_WINDOW_SEC=0 actuate "$stub" 0 1)"
+  out2="$(SINGULAR_TREE_ACTIVITY_WINDOW_SEC=0 actuate "$stub" 0 1)"
   assert_eq "1" "$(field_of "$out2" reaped_failures)" "crash counted as a reap failure"
-  assert_contains "$(cat "$GLUERUN_STATE_DIR/events.ndjson")" '"outcome":"crashed"' "crash outcome recorded"
-  assert_eq "failed" "$(gluerun_json_field "$GLUERUN_LEASES_DIR/TASK-0001.json" status)" "crashed worker's lease marked failed"
+  assert_contains "$(cat "$SINGULAR_STATE_DIR/events.ndjson")" '"outcome":"crashed"' "crash outcome recorded"
+  assert_eq "failed" "$(singular_json_field "$SINGULAR_LEASES_DIR/TASK-0001.json" status)" "crashed worker's lease marked failed"
 }
 
 test_batch_mode_shadow_accounting_parity() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "[]"
   write_task TASK-0002 ready internal/artifact/b.go "[]"
-  local stub="$GLUERUN_ROOT/stub.sh"
+  local stub="$SINGULAR_ROOT/stub.sh"
   make_sleep_stub "$stub" 0
-  echo 9 >"$GLUERUN_STATE_DIR/TASK-0002.ec"
+  echo 9 >"$SINGULAR_STATE_DIR/TASK-0002.ec"
 
   # Batch mode (flag off): the wait loop stays authoritative and emits
   # worker_reaped; records + exit files are left for the shadow reaper.
@@ -294,8 +294,8 @@ test_batch_mode_shadow_accounting_parity() {
 
   # Parity: in-cycle wait accounting and out-of-process reap accounting agree.
   local waited reaped
-  waited="$(grep -c '"type":"origin.worker_reaped"' "$GLUERUN_STATE_DIR/events.ndjson" || true)"
-  reaped="$(grep -c '"type":"origin.dispatch_reaped"' "$GLUERUN_STATE_DIR/events.ndjson" || true)"
+  waited="$(grep -c '"type":"origin.worker_reaped"' "$SINGULAR_STATE_DIR/events.ndjson" || true)"
+  reaped="$(grep -c '"type":"origin.dispatch_reaped"' "$SINGULAR_STATE_DIR/events.ndjson" || true)"
   assert_eq "$waited" "$reaped" "shadow reap count matches wait-loop reap count"
   assert_eq "2" "$waited" "both workers accounted"
 }
@@ -303,47 +303,47 @@ test_batch_mode_shadow_accounting_parity() {
 test_autonomate_breaker_semantics_detached() {
   with_fixture
   write_task TASK-0001 ready internal/artifact/a.go "[]"
-  local stub="$GLUERUN_ROOT/stub.sh"
+  local stub="$SINGULAR_ROOT/stub.sh"
   make_sleep_stub "$stub" 4
 
   # Dispatch-only cycle: NOT progress (no reset) and NOT failure (no trip).
   local out
-  out="$(cd "$GLUERUN_ROOT" && GLUERUN_L1_DRIVER="$stub" GLUERUN_GENERATE=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_PUSH=0 \
-    GLUERUN_MAX_CONCURRENT=1 GLUERUN_MAX_DISPATCH=1 GLUERUN_DETACHED_DISPATCH=1 \
+  out="$(cd "$SINGULAR_ROOT" && SINGULAR_L1_DRIVER="$stub" SINGULAR_GENERATE=0 SINGULAR_AUTO_INTEGRATE=0 SINGULAR_PUSH=0 \
+    SINGULAR_MAX_CONCURRENT=1 SINGULAR_MAX_DISPATCH=1 SINGULAR_DETACHED_DISPATCH=1 \
     "$SCRIPT_DIR/autonomate.sh" --once 2>&1)" || true
   assert_contains "$out" "dispatched_this_run=1" "autonomate cycle dispatched"
   assert_not_contains "$out" "breaker ->" "dispatch-only detached cycle must not trip the breaker"
-  assert_eq "0" "$(gluerun_breaker_count)" "breaker untouched by dispatch-only cycle"
-  GLUERUN_DRAIN_TIMEOUT_SECS=30 "$SCRIPT_DIR/reconcile.sh" --drain >/dev/null 2>&1 || true
+  assert_eq "0" "$(singular_breaker_count)" "breaker untouched by dispatch-only cycle"
+  SINGULAR_DRAIN_TIMEOUT_SECS=30 "$SCRIPT_DIR/reconcile.sh" --drain >/dev/null 2>&1 || true
 
   # Reap-failure cycle (a previously detached worker failed): trips the breaker.
   with_fixture
-  gluerun_dispatch_record_write "TASK-9001" "RUN-FAKE" "99999999" "" "/dev/null" "sha" "batch"
-  gluerun_dispatch_exit_write "TASK-9001" 9
+  singular_dispatch_record_write "TASK-9001" "RUN-FAKE" "99999999" "" "/dev/null" "sha" "batch"
+  singular_dispatch_exit_write "TASK-9001" 9
   local out2
-  out2="$(cd "$GLUERUN_ROOT" && GLUERUN_GENERATE=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_PUSH=0 \
-    GLUERUN_MAX_CONCURRENT=0 GLUERUN_MAX_DISPATCH=0 GLUERUN_DETACHED_DISPATCH=1 \
+  out2="$(cd "$SINGULAR_ROOT" && SINGULAR_GENERATE=0 SINGULAR_AUTO_INTEGRATE=0 SINGULAR_PUSH=0 \
+    SINGULAR_MAX_CONCURRENT=0 SINGULAR_MAX_DISPATCH=0 SINGULAR_DETACHED_DISPATCH=1 \
     "$SCRIPT_DIR/autonomate.sh" --once 2>&1)" || true
   assert_contains "$out2" "reaped_failures=1" "reap failure surfaced to autonomate"
   assert_contains "$out2" "breaker -> 1" "reap failure trips the breaker"
-  assert_eq "1" "$(gluerun_breaker_count)" "breaker incremented by reap failure"
+  assert_eq "1" "$(singular_breaker_count)" "breaker incremented by reap failure"
 }
 
 test_atomic_state_writes_leave_no_tmp() {
   with_fixture
-  gluerun_lease_write TASK-0001 agent/artifact/TASK-0001 artifact l2 "internal/a.go" running RUN-X "" sha batch '["internal/a.go"]' "[]"
-  gluerun_lease_set_status TASK-0001 needs-review
-  gluerun_lease_update_owned TASK-0001 '["internal/a.go","internal/b.go"]'
-  gluerun_lease_bump_retry TASK-0001 >/dev/null
+  singular_lease_write TASK-0001 agent/artifact/TASK-0001 artifact l2 "internal/a.go" running RUN-X "" sha batch '["internal/a.go"]' "[]"
+  singular_lease_set_status TASK-0001 needs-review
+  singular_lease_update_owned TASK-0001 '["internal/a.go","internal/b.go"]'
+  singular_lease_bump_retry TASK-0001 >/dev/null
   write_task TASK-0002 ready internal/artifact/b.go "[]"
-  gluerun_task_set_status "$GLUERUN_TASKS_DIR/TASK-0002.md" blocked
+  singular_task_set_status "$SINGULAR_TASKS_DIR/TASK-0002.md" blocked
 
-  [[ -z "$(find "$GLUERUN_LEASES_DIR" "$GLUERUN_TASKS_DIR" -name '*.tmp' 2>/dev/null)" ]] \
+  [[ -z "$(find "$SINGULAR_LEASES_DIR" "$SINGULAR_TASKS_DIR" -name '*.tmp' 2>/dev/null)" ]] \
     || fail "atomic writes left .tmp residue"
-  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$GLUERUN_LEASES_DIR/TASK-0001.json" \
+  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$SINGULAR_LEASES_DIR/TASK-0001.json" \
     || fail "lease not valid JSON after atomic writes"
-  assert_eq "needs-review" "$(gluerun_json_field "$GLUERUN_LEASES_DIR/TASK-0001.json" status)" "status survived atomic rewrite chain"
-  assert_contains "$(cat "$GLUERUN_TASKS_DIR/TASK-0002.md")" "Status: blocked" "task status rewritten atomically"
+  assert_eq "needs-review" "$(singular_json_field "$SINGULAR_LEASES_DIR/TASK-0001.json" status)" "status survived atomic rewrite chain"
+  assert_contains "$(cat "$SINGULAR_TASKS_DIR/TASK-0002.md")" "Status: blocked" "task status rewritten atomically"
 }
 
 test_detached_cycle_returns_fast_and_releases_lock

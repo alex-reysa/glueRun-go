@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0049",
   "runId": "RUN-20260712T022612Z-11119",
   "branch": "agent/routing/TASK-0049-route-metrics-splits",
@@ -23,7 +23,7 @@
     "bash tests/test-ctx-route-metrics.sh && bash tests/test-engine-clean.sh (re-run -> EXIT=0)",
     "grep -nE parity symbols in engine/ctx-metrics.sh",
     "cat tests/test-engine-clean.sh",
-    "grep -rn gluerun_ctx_route_metrics_json (callers, excluding owned files) -> none",
+    "grep -rn singular_ctx_route_metrics_json (callers, excluding owned files) -> none",
     "git status --porcelain (clean)",
     "git rev-parse HEAD",
     "bash -n on both owned files (syntax OK)"
@@ -31,9 +31,9 @@
   "findings": [
     "File scope: true worker diff (baseRef 815c9ab..HEAD, single commit f700085) adds ONLY the two owned files; no forbidden file touched; working tree clean; HEAD matches packet.headSha.",
     "Test-first: red.log fails on absent extractor, green.log + regression.log pass; independently re-ran the full suite to exit 0. RED is a 'file-absent' red (does not exercise a wrong implementation), which is the established new-module test-first pattern in this repo \u2014 valid but weak; noted, not blocking.",
-    "Parity/schema consistency verified: extractor's ACCEPTED_CLASSES {\"\",\"accepted\",\"none\"} matches engine/ctx-metrics.sh exactly; the parity test reconciles per-role split totals against ctx-metrics aggregate.{worker,reviewer}StrategyCounts and passes; schema id gluerun.orchestration.ctx-route-metrics.v0 with deterministic sorted-key JSON + trailing newline.",
+    "Parity/schema consistency verified: extractor's ACCEPTED_CLASSES {\"\",\"accepted\",\"none\"} matches engine/ctx-metrics.sh exactly; the parity test reconciles per-role split totals against ctx-metrics aggregate.{worker,reviewer}StrategyCounts and passes; schema id singular.orchestration.ctx-route-metrics.v0 with deterministic sorted-key JSON + trailing newline.",
     "Lifecycle/provenance: extractor has zero callers anywhere in the repo and is auto-sourced by the engine/lib.sh ctx-*.sh loop, so it is genuinely present-but-uncalled and engine behavior stays byte-identical, matching packet nextAction (metrics wiring deferred, out of scope).",
-    "engine-clean regression passes legitimately: the file's symbols (gluerun_ctx_route_metrics_json, GLUERUN_RUNS_DIR) are not in test-engine-clean.sh's banned list (glueRun-go/storage_proof/\u2026); no abstraction-gate violation.",
+    "engine-clean regression passes legitimately: the file's symbols (singular_ctx_route_metrics_json, SINGULAR_RUNS_DIR) are not in test-engine-clean.sh's banned list (singular/storage_proof/\u2026); no abstraction-gate violation.",
     "No hidden scope expansion or branch drift: one commit in range, only two owned files, both bash -n clean.",
     "Minor (non-blocking): events_file arg is accepted for signature parity with ctx-metrics.sh but not consumed by the split logic (only runs_dir is read) \u2014 this is intentional per the docstring, not a defect."
   ],

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-worktree="$GLUERUN_ROOT"
+worktree="$SINGULAR_ROOT"
 base=""
 allow_prefixes=()
 forbid_prefixes=()

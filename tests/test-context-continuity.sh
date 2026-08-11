@@ -22,7 +22,7 @@ set -euo pipefail
 #   7. decider provenance (needs-fix->retry took the fast-path; no decider prompt)
 #   8. final outcome     (exit 0 ACCEPTED, lease accepted, packet in inbox)
 #
-# Robustness: GLUERUN_SESSION_AFFINITY=1 + GLUERUN_DECIDER_FAST=1 set explicitly. If the
+# Robustness: SINGULAR_SESSION_AFFINITY=1 + SINGULAR_DECIDER_FAST=1 set explicitly. If the
 # attempt-2 implementer resume can't engage through the host gates, we assert
 # strategy=fresh with a KNOWN gate reason rather than hard-failing — the point is
 # the composition + event wiring, not forcing a resume.
@@ -50,12 +50,12 @@ make_repo() {
   local root="$1"
   mkdir -p "$root/docs/orchestration/prompts" \
     "$root/docs/orchestration/tasks" \
-    "$root/.gluerun-state"
+    "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/templates/prompts/l2-test-first-developer.md" "$root/docs/orchestration/prompts/l2-test-first-developer.md"
   cp "$ENGINE_HOME/templates/prompts/auditor.md" "$root/docs/orchestration/prompts/auditor.md"
-  printf '.gluerun-state/\n.worktrees/\n.gluerun-evidence/\n' >"$root/.gitignore"
+  printf '.singular-state/\n.worktrees/\n.singular-evidence/\n' >"$root/.gitignore"
   git -C "$root" add .
   git -C "$root" -c user.name=test -c user.email=test@example.local commit -q -m init
 }
@@ -65,31 +65,31 @@ with_fixture() {
   tmp="$(mktemp -d)"
   FIXTURE_TMP="$tmp"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-  export GLUERUN_LEASES_DIR="$GLUERUN_STATE_DIR/leases"
-  export GLUERUN_EVENTS_FILE="$GLUERUN_STATE_DIR/events.ndjson"
-  export GLUERUN_STOP_FILE="$GLUERUN_STATE_DIR/STOP"
-  export GLUERUN_WORKTREES_DIR="$GLUERUN_ROOT/.worktrees"
-  export GLUERUN_TARGET_BRANCH="target"
-  export GLUERUN_ENGINE_HOME="$ENGINE_HOME"
-  unset GLUERUN_MODULES GLUERUN_WORKER_RED_LOG GLUERUN_WORKER_CONTRACT_EXTRA GLUERUN_RUNNER \
-    GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE GLUERUN_ATTEMPT_TASK_ID GLUERUN_ATTEMPT_STARTED_AT \
-    GLUERUN_WORKER_INFRA_MAX GLUERUN_AUDIT_INFRA_MAX 2>/dev/null || true
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+  export SINGULAR_LEASES_DIR="$SINGULAR_STATE_DIR/leases"
+  export SINGULAR_EVENTS_FILE="$SINGULAR_STATE_DIR/events.ndjson"
+  export SINGULAR_STOP_FILE="$SINGULAR_STATE_DIR/STOP"
+  export SINGULAR_WORKTREES_DIR="$SINGULAR_ROOT/.worktrees"
+  export SINGULAR_TARGET_BRANCH="target"
+  export SINGULAR_ENGINE_HOME="$ENGINE_HOME"
+  unset SINGULAR_MODULES SINGULAR_WORKER_RED_LOG SINGULAR_WORKER_CONTRACT_EXTRA SINGULAR_RUNNER \
+    SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE SINGULAR_ATTEMPT_TASK_ID SINGULAR_ATTEMPT_STARTED_AT \
+    SINGULAR_WORKER_INFRA_MAX SINGULAR_AUDIT_INFRA_MAX 2>/dev/null || true
   # Defaults, set EXPLICITLY for this composition proof.
-  export GLUERUN_SESSION_AFFINITY=1
-  export GLUERUN_DECIDER_FAST=1
-  export GLUERUN_FIX_PROMPT_STRUCTURED=1
+  export SINGULAR_SESSION_AFFINITY=1
+  export SINGULAR_DECIDER_FAST=1
+  export SINGULAR_FIX_PROMPT_STRUCTURED=1
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib.sh"
 }
 
 write_generic_task() {
-  cat >"$GLUERUN_TASKS_DIR/TASK-0001.md" <<'EOF'
+  cat >"$SINGULAR_TASKS_DIR/TASK-0001.md" <<'EOF'
 # TASK-0001: Generic widget parser
 
 Status: ready
@@ -150,19 +150,19 @@ cdir="\${MOCK_COUNTER_DIR:-/tmp/mock-counters}"; mkdir -p "\$cdir"
 if [[ "\$level" == "l2" ]]; then
   wc_file="\$cdir/worker-calls"; n=0; [[ -f "\$wc_file" ]] && n="\$(cat "\$wc_file")"; n=\$((n+1)); printf '%s' "\$n" >"\$wc_file"
   printf '%s\n' "\$argv" >> "\$cdir/worker-argv.log"
-  mkdir -p "\$chdir/internal/widget" "\$chdir/.gluerun-evidence"
+  mkdir -p "\$chdir/internal/widget" "\$chdir/.singular-evidence"
   # A DIFFERENT change per attempt -> a real fix diff between the two audited heads.
   printf 'package widget\n// implementation revision %s\nfunc Parse() {}\n' "\$n" >"\$chdir/internal/widget/parser.go"
-  printf 'red v%s\n' "\$n" >"\$chdir/.gluerun-evidence/red.log"
-  printf 'green v%s\n' "\$n" >"\$chdir/.gluerun-evidence/green.log"
-  printf 'regression v%s\n' "\$n" >"\$chdir/.gluerun-evidence/regression.log"
+  printf 'red v%s\n' "\$n" >"\$chdir/.singular-evidence/red.log"
+  printf 'green v%s\n' "\$n" >"\$chdir/.singular-evidence/green.log"
+  printf 'regression v%s\n' "\$n" >"\$chdir/.singular-evidence/regression.log"
   [[ -n "\$out" ]] && python3 - "\$out" "\$n" <<'PY'
 import json, sys
 out, n = sys.argv[1], sys.argv[2]
-json.dump({"schema":"gluerun.orchestration.state-packet.v0","packetId":"p"+n,"runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"uncommitted","workspace":"/tmp","ownedFiles":["internal/widget/parser.go"],"changedFiles":["internal/widget/parser.go"],"commands":[{"cmd":"true","exitCode":0,"logRef":""}],"tests":[{"name":"t","phase":"red","status":"fail","logRef":""},{"name":"t","phase":"green","status":"pass","logRef":""}],"evidence":[{"kind":"red","ref":".gluerun-evidence/red.log"}],"blockers":[],"nextAction":"finish the parser","createdAt":"2026-01-01T00:00:00Z"}, open(out,"w"))
+json.dump({"schema":"singular.orchestration.state-packet.v0","packetId":"p"+n,"runId":"r","taskId":"TASK-0001","area":"widget","role":"l2-developer","status":"needs-review","baseRef":"target","branch":"agent/widget/TASK-0001-generic","headSha":"uncommitted","workspace":"/tmp","ownedFiles":["internal/widget/parser.go"],"changedFiles":["internal/widget/parser.go"],"commands":[{"cmd":"true","exitCode":0,"logRef":""}],"tests":[{"name":"t","phase":"red","status":"fail","logRef":""},{"name":"t","phase":"green","status":"pass","logRef":""}],"evidence":[{"kind":"red","ref":".singular-evidence/red.log"}],"blockers":[],"nextAction":"finish the parser","createdAt":"2026-01-01T00:00:00Z"}, open(out,"w"))
 PY
   # The runner's job: write a session id into the meta so the NEXT attempt can resume.
-  [[ -n "\$meta" ]] && gluerun_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$chdir" 0
+  [[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$chdir" 0
   exit 0
 fi
 
@@ -173,7 +173,7 @@ if [[ "\$n" -le 1 ]]; then
   # Attempt 1: needs-fix with two requiredFixes.
   [[ -n "\$out" ]] && python3 - "\$out" <<'PY'
 import json, sys
-json.dump({"schema":"gluerun.orchestration.audit-verdict.v0","taskId":"TASK-0001","runId":"r","branch":"agent/widget/TASK-0001-generic","verdict":"needs-fix","evidenceReviewed":["runs/r/gate-check.json"],"commandsRun":["git diff"],"findings":[],"requiredFixes":["F-alpha","F-beta"],"rationale":"two fixes required"}, open(sys.argv[1],"w"))
+json.dump({"schema":"singular.orchestration.audit-verdict.v0","taskId":"TASK-0001","runId":"r","branch":"agent/widget/TASK-0001-generic","verdict":"needs-fix","evidenceReviewed":["runs/r/gate-check.json"],"commandsRun":["git diff"],"findings":[],"requiredFixes":["F-alpha","F-beta"],"rationale":"two fixes required"}, open(sys.argv[1],"w"))
 PY
 else
   # Attempt 2: accepted AND findingsStatus resolving both prior findings.
@@ -182,10 +182,10 @@ import json, hashlib, sys
 def fid(t):
     norm=" ".join(str(t).replace("\`","").lower().split())
     return "f-"+hashlib.sha256(norm.encode()).hexdigest()[:12]
-json.dump({"schema":"gluerun.orchestration.audit-verdict.v0","taskId":"TASK-0001","runId":"r","branch":"agent/widget/TASK-0001-generic","verdict":"accepted","evidenceReviewed":["runs/r/gate-check.json"],"commandsRun":["git diff"],"findings":[],"requiredFixes":[],"rationale":"both fixes verified","findingsStatus":{fid("F-alpha"):"resolved",fid("F-beta"):"resolved"}}, open(sys.argv[1],"w"))
+json.dump({"schema":"singular.orchestration.audit-verdict.v0","taskId":"TASK-0001","runId":"r","branch":"agent/widget/TASK-0001-generic","verdict":"accepted","evidenceReviewed":["runs/r/gate-check.json"],"commandsRun":["git diff"],"findings":[],"requiredFixes":[],"rationale":"both fixes verified","findingsStatus":{fid("F-alpha"):"resolved",fid("F-beta"):"resolved"}}, open(sys.argv[1],"w"))
 PY
 fi
-[[ -n "\$meta" ]] && gluerun_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$chdir" 0
+[[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$chdir" 0
 exit 0
 STUB
   chmod +x "$stub"
@@ -195,14 +195,14 @@ test_full_cycle_integration() {
   with_fixture
   write_generic_task
   local stub="$FIXTURE_TMP/mock-cycle-runner.sh"; make_cycle_runner "$stub"
-  export GLUERUN_RUNNER="$stub"
+  export SINGULAR_RUNNER="$stub"
   export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters"
   mkdir -p "$MOCK_COUNTER_DIR"
 
   # Pre-compute the two finding ids for the requiredFixes (text-derived).
   local id_alpha id_beta
-  id_alpha="$(gluerun_finding_id 'F-alpha')"
-  id_beta="$(gluerun_finding_id 'F-beta')"
+  id_alpha="$(singular_finding_id 'F-alpha')"
+  id_beta="$(singular_finding_id 'F-beta')"
 
   local out rc=0
   out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
@@ -210,22 +210,22 @@ test_full_cycle_integration() {
   # ===== 8. Final outcome (assert first so a non-accept dumps the run output) ===
   assert_eq "$rc" "0" "run must exit 0 (ACCEPTED); driver output:"$'\n'"$out"
   assert_contains "$out" "ACCEPTED: TASK-0001" "final: ACCEPTED line"
-  assert_eq "$(gluerun_lease_field TASK-0001 status)" "accepted" "final: lease status accepted"
+  assert_eq "$(singular_lease_field TASK-0001 status)" "accepted" "final: lease status accepted"
 
   local run_dir
-  run_dir="$(ls -d "$GLUERUN_RUNS_DIR"/RUN-* 2>/dev/null | head -1)"
+  run_dir="$(ls -d "$SINGULAR_RUNS_DIR"/RUN-* 2>/dev/null | head -1)"
   [[ -n "$run_dir" ]] || fail "no run dir produced"
   local run_id; run_id="$(basename "$run_dir")"
-  local events; events="$(cat "$GLUERUN_EVENTS_FILE")"
+  local events; events="$(cat "$SINGULAR_EVENTS_FILE")"
 
   # Worker ran twice (two attempts), auditor twice.
   assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "2" "cycle: worker invoked twice"
   assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "2" "cycle: auditor invoked twice"
 
   # Packet landed in the inbox under the run id.
-  local inbox_packet="$GLUERUN_INBOX_DIR/$run_id.json"
+  local inbox_packet="$SINGULAR_INBOX_DIR/$run_id.json"
   assert_file "$inbox_packet" "final: accepted packet enqueued in inbox"
-  assert_eq "$(gluerun_json_field "$inbox_packet" status)" "accepted" "final: inbox packet status accepted"
+  assert_eq "$(singular_json_field "$inbox_packet" status)" "accepted" "final: inbox packet status accepted"
 
   # ===== 5. Attempts archive: 2 entries, right failureClass per attempt ========
   local idx="$run_dir/attempts/index.json"
@@ -263,7 +263,7 @@ test_full_cycle_integration() {
   local w2_findings
   w2_findings="$(awk '/^### Authoritative findings/{f=1;next} /^### Evidence/{f=0} f' "$w2_file")"
   assert_contains "$w2_findings" "F-alpha" "cycle: findings section carries F-alpha"
-  assert_not_contains "$w2_findings" '"schema": "gluerun.orchestration.audit-verdict' "cycle: no raw audit JSON in the findings section"
+  assert_not_contains "$w2_findings" '"schema": "singular.orchestration.audit-verdict' "cycle: no raw audit JSON in the findings section"
   assert_not_contains "$w2_findings" '"requiredFixes":' "cycle: no raw audit JSON fields in the findings section"
 
   # ===== 2. Re-audit delta: attempt-1 audit == base; attempt-2 has diff+contract =
@@ -293,13 +293,13 @@ test_full_cycle_integration() {
   # ===== 4. Capsules: implementer head/scope; reviewer diffRange@2 =============
   local icap="$run_dir/implementer-capsule.json"
   assert_file "$icap" "capsule: implementer capsule present"
-  assert_eq "$(gluerun_json_field "$icap" headSha)" "$head2" "capsule: implementer headSha == new commit"
+  assert_eq "$(singular_json_field "$icap" headSha)" "$head2" "capsule: implementer headSha == new commit"
   assert_eq "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ownedFiles"])' "$icap")" \
     "['internal/widget/parser.go']" "capsule: implementer ownedFiles == current scope"
   local rcap="$run_dir/reviewer-capsule.json"
   assert_file "$rcap" "capsule: reviewer capsule present"
-  assert_eq "$(gluerun_json_field "$rcap" auditedHeadSha)" "$head2" "capsule: reviewer auditedHeadSha == attempt-2 head"
-  assert_eq "$(gluerun_json_field "$rcap" diffRange)" "$head1..$head2" "capsule: reviewer diffRange non-empty @attempt2"
+  assert_eq "$(singular_json_field "$rcap" auditedHeadSha)" "$head2" "capsule: reviewer auditedHeadSha == attempt-2 head"
+  assert_eq "$(singular_json_field "$rcap" diffRange)" "$head1..$head2" "capsule: reviewer diffRange non-empty @attempt2"
 
   # ===== 6. Strategy events: fresh@1, resume-or-valid-reason@2; reviewer split ==
   # context.strategy_selected emitted for BOTH roles.
@@ -319,7 +319,7 @@ for line in open(sys.argv[1]):
     d = e.get("data", {})
     if d.get("role") == "implementer" and d.get("attempt") == 1:
         want = (d.get("strategy"), d.get("reason"))
-print("%s %s" % want if want else "MISSING")' "$GLUERUN_EVENTS_FILE")"
+print("%s %s" % want if want else "MISSING")' "$SINGULAR_EVENTS_FILE")"
   assert_eq "$impl1" "fresh no-session" "strategy: attempt-1 implementer is fresh/no-session"
 
   # Attempt-2 implementer strategy: resume (gates pass) OR a KNOWN fresh reason.
@@ -334,7 +334,7 @@ for line in open(sys.argv[1]):
     d = e.get("data", {})
     if d.get("role") == "implementer" and d.get("attempt") == 2:
         want = (d.get("strategy"), d.get("reason"))
-print("%s %s" % want if want else "MISSING X")' "$GLUERUN_EVENTS_FILE")
+print("%s %s" % want if want else "MISSING X")' "$SINGULAR_EVENTS_FILE")
   [[ "$impl2_strategy" != "MISSING" ]] || fail "strategy: attempt-2 implementer strategy event missing"
   if [[ "$impl2_strategy" == "resume" ]]; then
     OBSERVED_ATTEMPT2_STRATEGY="resume"
@@ -363,7 +363,7 @@ for line in open(sys.argv[1]):
         # A reviewer resume must carry the reviewer session, NEVER the worker one.
         if d.get("sessionId") == "WORKER-SID":
             print("LEAK"); sys.exit(0)
-print("OK")' "$GLUERUN_EVENTS_FILE")"
+print("OK")' "$SINGULAR_EVENTS_FILE")"
   assert_eq "$rev_session_leak" "OK" "strategy: reviewer strategy event never uses the implementer session id"
   if grep -q -- "WORKER-SID" "$MOCK_COUNTER_DIR/auditor-argv.log"; then
     fail "strategy: auditor argv leaked the implementer session id (WORKER-SID)"
@@ -378,14 +378,14 @@ for line in open(sys.argv[1]):
     try: e = json.loads(line)
     except Exception: continue
     if e.get("type") == "decider.fast_path":
-        d = e.get("data", {}); print(d.get("failureClass"), d.get("action")); break' "$GLUERUN_EVENTS_FILE")"
+        d = e.get("data", {}); print(d.get("failureClass"), d.get("action")); break' "$SINGULAR_EVENTS_FILE")"
   assert_eq "$fp_fc" "audit-needs-fix retry" "decider: fast-path resolved audit-needs-fix -> retry"
   # No decider prompt was ever rendered (the fast-path skips decide.sh entirely).
   local decider_prompts
-  decider_prompts="$(find "$GLUERUN_RUNS_DIR" -name 'decider-prompt-*.md' 2>/dev/null || true)"
+  decider_prompts="$(find "$SINGULAR_RUNS_DIR" -name 'decider-prompt-*.md' 2>/dev/null || true)"
   assert_eq "$decider_prompts" "" "decider: no decider-prompt-*.md (fast-path skipped the model)"
   # The needs-fix retry bumped the lease (a real retry, not an infra retry).
-  assert_eq "$(gluerun_lease_field TASK-0001 retryCount)" "1" "decider: needs-fix retry bumped retryCount"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "1" "decider: needs-fix retry bumped retryCount"
 
   echo "ok: full continuity cycle (attempt-2 strategy: ${OBSERVED_ATTEMPT2_STRATEGY})"
 }

@@ -206,7 +206,7 @@ def main() -> None:
     except (OSError, json.JSONDecodeError):
         previous = {}
     if (
-        previous.get("schema") == "gluerun.orchestration.bootstrap-result.v0"
+        previous.get("schema") == "singular.orchestration.bootstrap-result.v0"
         and previous.get("configSha256") == config_sha
         and previous.get("worktree") == str(worktree)
         and previous.get("headSha") == head_sha
@@ -278,7 +278,7 @@ def main() -> None:
         )
 
     atomic_json(marker, {
-        "schema": "gluerun.orchestration.bootstrap-result.v0",
+        "schema": "singular.orchestration.bootstrap-result.v0",
         "worktree": str(worktree),
         "configSha256": config_sha,
         "headSha": head_sha,

@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0040",
   "runId": "RUN-20260711T194943Z-32792",
   "branch": "agent/packets/TASK-0040-assumption-ledger-drive-wirein",
@@ -22,7 +22,7 @@
     "git diff --stat/--name-status/--numstat 6fd09cc 750ca96",
     "git diff 6fd09cc 750ca96 -- engine/l1-drive.sh",
     "git log --oneline 6fd09cc..750ca96",
-    "grep -rn gluerun_ctx_assumptions_assemble/_transition definitions in engine/",
+    "grep -rn singular_ctx_assumptions_assemble/_transition definitions in engine/",
     "grep -n l2-active-prompt.md / auditor-active-prompt.md in engine/l1-drive.sh",
     "grep sourcing chain: lib.sh source lines and ctx-*.sh loader block",
     "sed schemas/orchestration/audit-verdict.v0.schema.json"

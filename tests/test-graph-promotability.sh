@@ -24,11 +24,11 @@ mkdir -p "$repo/docs/orchestration/gates"
 git -C "$tmp" init -q repo
 git -C "$repo" config user.email test@example.com
 git -C "$repo" config user.name test
-printf '{"schemaVersion":"v2","targetBranch":"main"}\n' >"$repo/gluerun.config.json"
-printf '.gluerun-state/\n' >"$repo/.gitignore"
+printf '{"schemaVersion":"v2","targetBranch":"main"}\n' >"$repo/singular.config.json"
+printf '.singular-state/\n' >"$repo/.gitignore"
 cat >"$repo/docs/orchestration/dag.v0.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     {"id": "loc-00-contract", "stage": "loc", "area": "loc", "layer": "contract",
      "kind": "build", "dependsOn": [], "requiredCompletion": "done"},
@@ -119,7 +119,7 @@ printf 'INVOKED %s\n' "\$*" >>"$repo/promoter-invocations.log"
 exit 0
 EOF
 chmod +x "$tripwire"
-promoter_out="$(GLUERUN_PROMOTER="$tripwire" python3 "$ROOT/engine/doctor.py" \
+promoter_out="$(SINGULAR_PROMOTER="$tripwire" python3 "$ROOT/engine/doctor.py" \
   --engine-home "$ROOT" --repo-root "$repo" --bash "$(command -v bash)" \
   --bash-version "$BASH_VERSION" --json 2>/dev/null || true)"
 status="$(check_field "$promoter_out" status)"
@@ -130,12 +130,12 @@ pass "a configured project promoter is reported, never executed"
 
 # --- 4. the shipped promoter answers --registers without side effects -------
 registers() {
-  GLUERUN_ROOT="$repo" GLUERUN_ENGINE_HOME="$ROOT" GLUERUN_TARGET_BRANCH=main \
-    bash "$ROOT/gluerun-ext/promote-gate.sh" --registers "$1" >/dev/null 2>&1
+  SINGULAR_ROOT="$repo" SINGULAR_ENGINE_HOME="$ROOT" SINGULAR_TARGET_BRANCH=main \
+    bash "$ROOT/singular-ext/promote-gate.sh" --registers "$1" >/dev/null 2>&1
 }
 registers D2.contract || fail "a registered node should answer 0"
 registers loc-00-contract && fail "an unregistered node should answer non-zero"
-[[ ! -e "$repo/.gluerun-state/locks/origin.lock.json" ]] \
+[[ ! -e "$repo/.singular-state/locks/origin.lock.json" ]] \
   || fail "a registry query must not take the origin lock (doctor would contend with a live loop)"
 [[ ! -d "$repo/docs/orchestration/gates/evidence" ]] \
   || fail "a registry query must not create directories"

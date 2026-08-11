@@ -4,14 +4,14 @@ set -euo pipefail
 # claude-run.sh — Claude Code drop-in replacement for codex-run.sh.
 #
 # Same CLI surface and same output contract as codex-run.sh so the orchestration
-# can dispatch the `claude` CLI instead of `codex` by setting GLUERUN_RUNNER to this
-# script (per-call sites honor ${GLUERUN_RUNNER:-$SCRIPT_DIR/codex-run.sh}).
+# can dispatch the `claude` CLI instead of `codex` by setting SINGULAR_RUNNER to this
+# script (per-call sites honor ${SINGULAR_RUNNER:-$SCRIPT_DIR/codex-run.sh}).
 #
 # Contract preserved:
 #   --worktree/-C, --prompt-file, --level l1|l2|readonly, --run-id,
 #   --output-last-message, --output-schema, --no-output-capture, --allow-prefix.
 #   The final assistant message text is written to --output-last-message so the
-#   existing gluerun_extract_json / gluerun_l1_prepare_worker_packet pipeline can dig
+#   existing singular_extract_json / singular_l1_prepare_worker_packet pipeline can dig
 #   the JSON packet/verdict out of it exactly as it does for codex output.
 #
 # Privilege levels (mapped from codex sandbox semantics):
@@ -40,9 +40,9 @@ allow_prefixes=()
 # Session affinity (T-E5): both ADDITIVE. NEITHER passed => behavior byte-identical to HEAD.
 session_meta_path=""
 resume_session_id=""
-runner_role="${GLUERUN_RUNNER_ROLE:-unknown}"
-capability_profile="${GLUERUN_RUNNER_CAPABILITY_PROFILE:-default}"
-result_file="${GLUERUN_RUNNER_RESULT_FILE:-}"
+runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
+capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
+result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
 describe_contract="no"
 
 while [[ $# -gt 0 ]]; do
@@ -66,7 +66,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$describe_contract" == "yes" ]]; then
-  gluerun_runner_describe_contract claude
+  singular_runner_describe_contract claude
   exit 0
 fi
 
@@ -74,18 +74,18 @@ if [[ -z "$run_id" ]]; then
   run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 fi
 if [[ -z "$result_file" ]]; then
-  result_file="$(gluerun_runner_default_result_file "$run_id")"
+  result_file="$(singular_runner_default_result_file "$run_id")"
 fi
 runner_result_written="no"
 ro_journal=""
-gluerun_claude_result_on_exit() {
+singular_claude_result_on_exit() {
   local rc=$?
   trap - EXIT
   # An interrupted run leaves claude and its descendants alive; they would keep
   # writing to the worktree while the guard restores it, and the restore would
   # lose the race. Kill first, then restore.
-  if [[ -n "${cl_pid:-}" ]] && declare -f gluerun_kill_tree >/dev/null 2>&1; then
-    gluerun_kill_tree "$cl_pid" 0 session 2>/dev/null || true
+  if [[ -n "${cl_pid:-}" ]] && declare -f singular_kill_tree >/dev/null 2>&1; then
+    singular_kill_tree "$cl_pid" 0 session 2>/dev/null || true
     wait "$cl_pid" 2>/dev/null || true
     cl_pid=""
   fi
@@ -93,20 +93,20 @@ gluerun_claude_result_on_exit() {
   # outcome. This is the path that matters: ask/supervise/decide background this
   # runner and kill it on timeout, and the old guard was straight-line code
   # after the run, so on every timeout it simply never executed.
-  gluerun_readonly_guard_restore "${ro_journal:-}" || true
+  singular_readonly_guard_restore "${ro_journal:-}" || true
   ro_journal=""
   if [[ "$runner_result_written" != "yes" ]]; then
-    gluerun_runner_result_write claude "$run_id" "$runner_role" "$capability_profile" \
+    singular_runner_result_write claude "$run_id" "$runner_role" "$capability_profile" \
       "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
   fi
   [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
   [[ -n "${strict_mcp_dir:-}" ]] && rm -rf "$strict_mcp_dir" 2>/dev/null || true
   exit "$rc"
 }
-trap gluerun_claude_result_on_exit EXIT
+trap singular_claude_result_on_exit EXIT
 # Exiting from a signal handler runs the EXIT trap, so these buy the guard a
 # chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
-# itself remains uncoverable; `gluerun_readonly_guard_sweep` is the answer there.
+# itself remains uncoverable; `singular_readonly_guard_sweep` is the answer there.
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -116,7 +116,7 @@ if [[ -z "$worktree" ]]; then
   exit 2
 fi
 
-gluerun_require_target_branch
+singular_require_target_branch
 
 claude_bin="$(command -v claude 2>/dev/null || true)"
 
@@ -132,29 +132,29 @@ case "$level" in
 esac
 
 profile_rc=0
-gluerun_runner_capability_prepare claude "$runner_role" "$capability_profile" \
+singular_runner_capability_prepare claude "$runner_role" "$capability_profile" \
   "$worktree" "$claude_bin" || profile_rc=$?
-capability_profile="$GLUERUN_RESOLVED_CAPABILITY_PROFILE"
+capability_profile="$SINGULAR_RESOLVED_CAPABILITY_PROFILE"
 profile_provider_args=()
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
-  profile_provider_args=("${GLUERUN_RESOLVED_PROVIDER_ARGS[@]}")
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+  profile_provider_args=("${SINGULAR_RESOLVED_PROVIDER_ARGS[@]}")
 fi
 [[ "$profile_rc" -eq 0 ]] || exit "$profile_rc"
-gluerun_runner_reject_strict_legacy_extra_args \
-  claude GLUERUN_CLAUDE_EXTRA_ARGS "${GLUERUN_CLAUDE_EXTRA_ARGS:-}" || exit $?
+singular_runner_reject_strict_legacy_extra_args \
+  claude SINGULAR_CLAUDE_EXTRA_ARGS "${SINGULAR_CLAUDE_EXTRA_ARGS:-}" || exit $?
 [[ -n "$claude_bin" ]] || { echo "claude CLI not found on PATH" >&2; exit 127; }
 profile_native_args=()
 strict_mcp_config=""
-if [[ "$GLUERUN_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
+if [[ "$SINGULAR_RESOLVED_CAPABILITY_STRICT" == "yes" ]]; then
   # A temp DIRECTORY with trailing X's, holding a fixed-name file. The template
   # must end in the X's: BSD/macOS mktemp only substitutes TRAILING X's, so the
   # old "...XXXXXX.json" template created a file named literally
-  # "gluerun-claude-empty-mcp.XXXXXX.json". That works once, and the EXIT trap
+  # "singular-claude-empty-mcp.XXXXXX.json". That works once, and the EXIT trap
   # removes it — but any hard kill (a stopped run, an OOM, a reboot mid-run)
   # leaves the literal name behind, and every later strict claude run then dies
   # with "mktemp: mkstemp failed: File exists" until someone deletes it by hand.
   # A persistent, self-inflicted provider outage from a leaked temp file.
-  strict_mcp_dir="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-claude-mcp.XXXXXX")"
+  strict_mcp_dir="$(mktemp -d "${TMPDIR:-/tmp}/singular-claude-mcp.XXXXXX")"
   strict_mcp_config="$strict_mcp_dir/mcp.json"
   printf '{"mcpServers":{}}\n' >"$strict_mcp_config"
   profile_native_args+=(--safe-mode --strict-mcp-config --mcp-config "$strict_mcp_config")
@@ -168,7 +168,7 @@ fi
 
 run_dir=""
 if [[ "$capture_packet" == "yes" ]]; then
-  run_dir="$GLUERUN_STATE_DIR/runs/$run_id"
+  run_dir="$SINGULAR_STATE_DIR/runs/$run_id"
   mkdir -p "$run_dir"
   if [[ -z "$output_last_message" ]]; then
     output_last_message="$run_dir/last-message.json"
@@ -176,46 +176,46 @@ if [[ "$capture_packet" == "yes" ]]; then
 fi
 
 # --- Model selection (mirrors codex reasoning-effort-by-role keying) -------------
-gluerun_claude_model() {
+singular_claude_model() {
   local level="$1" prompt_file="$2" prompt_name
   prompt_name="$(basename "${prompt_file:-}")"
   case "$level" in
     l2)
-      printf '%s\n' "${GLUERUN_CLAUDE_L2_MODEL:-${GLUERUN_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
+      printf '%s\n' "${SINGULAR_CLAUDE_L2_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
     l0|l1)
-      printf '%s\n' "${GLUERUN_CLAUDE_L1_MODEL:-${GLUERUN_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
+      printf '%s\n' "${SINGULAR_CLAUDE_L1_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
     readonly|read-only)
       case "$prompt_name" in
-        planner-prompt.md)    printf '%s\n' "${GLUERUN_CLAUDE_PLANNER_MODEL:-${GLUERUN_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
-        auditor-*.md)    printf '%s\n' "${GLUERUN_CLAUDE_AUDITOR_MODEL:-${GLUERUN_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
-        decider-prompt-*.md)  printf '%s\n' "${GLUERUN_CLAUDE_DECIDER_MODEL:-${GLUERUN_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
-        *)                    printf '%s\n' "${GLUERUN_CLAUDE_MODEL:-claude-opus-4-8}" ;;
+        planner-prompt.md)    printf '%s\n' "${SINGULAR_CLAUDE_PLANNER_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
+        auditor-*.md)    printf '%s\n' "${SINGULAR_CLAUDE_AUDITOR_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
+        decider-prompt-*.md)  printf '%s\n' "${SINGULAR_CLAUDE_DECIDER_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
+        *)                    printf '%s\n' "${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}" ;;
       esac ;;
   esac
 }
-claude_model="$(gluerun_claude_model "$level" "$prompt_file")"
+claude_model="$(singular_claude_model "$level" "$prompt_file")"
 
 # --- Reasoning-effort selection (per-role, env-overridable; empty = model default).
 # Implementer (l2) runs Opus at medium effort for bulk code-writing; the gatekeeping
 # planner + auditor run at xhigh. Decider/L1/other left at the model default (empty).
-gluerun_claude_effort() {
+singular_claude_effort() {
   local level="$1" prompt_file="$2" prompt_name
   prompt_name="$(basename "${prompt_file:-}")"
   case "$level" in
     l2)
-      printf '%s\n' "${GLUERUN_CLAUDE_L2_EFFORT:-${GLUERUN_CLAUDE_EFFORT:-medium}}" ;;
+      printf '%s\n' "${SINGULAR_CLAUDE_L2_EFFORT:-${SINGULAR_CLAUDE_EFFORT:-medium}}" ;;
     readonly|read-only)
       case "$prompt_name" in
-        planner-prompt.md) printf '%s\n' "${GLUERUN_CLAUDE_PLANNER_EFFORT:-${GLUERUN_CLAUDE_EFFORT:-xhigh}}" ;;
-        auditor-*.md) printf '%s\n' "${GLUERUN_CLAUDE_AUDITOR_EFFORT:-${GLUERUN_CLAUDE_EFFORT:-xhigh}}" ;;
-        decider-prompt-*.md) printf '%s\n' "${GLUERUN_CLAUDE_DECIDER_EFFORT:-${GLUERUN_CLAUDE_EFFORT:-}}" ;;
-        *) printf '%s\n' "${GLUERUN_CLAUDE_EFFORT:-}" ;;
+        planner-prompt.md) printf '%s\n' "${SINGULAR_CLAUDE_PLANNER_EFFORT:-${SINGULAR_CLAUDE_EFFORT:-xhigh}}" ;;
+        auditor-*.md) printf '%s\n' "${SINGULAR_CLAUDE_AUDITOR_EFFORT:-${SINGULAR_CLAUDE_EFFORT:-xhigh}}" ;;
+        decider-prompt-*.md) printf '%s\n' "${SINGULAR_CLAUDE_DECIDER_EFFORT:-${SINGULAR_CLAUDE_EFFORT:-}}" ;;
+        *) printf '%s\n' "${SINGULAR_CLAUDE_EFFORT:-}" ;;
       esac ;;
     *)
-      printf '%s\n' "${GLUERUN_CLAUDE_EFFORT:-}" ;;
+      printf '%s\n' "${SINGULAR_CLAUDE_EFFORT:-}" ;;
   esac
 }
-claude_effort="$(gluerun_claude_effort "$level" "$prompt_file")"
+claude_effort="$(singular_claude_effort "$level" "$prompt_file")"
 
 # ---- Session affinity: resume-refusal gate (exit 86) ------------------------
 # Model selection lives in the runner. Refuse to resume a session recorded under
@@ -244,7 +244,7 @@ PY
 fi
 
 if [[ "$level" == "l2" ]]; then
-  export GOCACHE="${GLUERUN_GO_BUILD_CACHE:-/private/tmp/gluerun-go-build-cache}"
+  export GOCACHE="${SINGULAR_GO_BUILD_CACHE:-/private/tmp/singular-build-cache}"
   mkdir -p "$GOCACHE"
 fi
 
@@ -253,20 +253,20 @@ cmd=("$claude_bin" -p --output-format json --model "$claude_model")
 if [[ ${#profile_native_args[@]} -gt 0 ]]; then
   cmd+=("${profile_native_args[@]}")
 fi
-if [[ "$GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
+if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
   cmd+=("${profile_provider_args[@]}")
 fi
 [[ -n "$claude_effort" ]] && cmd+=(--effort "$claude_effort")
 # Session resume (T-E5): -r <id> resumes; --fork-session forks a fresh branch off
-# the resumed session when GLUERUN_CLAUDE_FORK_ON_RESUME=1. Additive: absent flag ->
+# the resumed session when SINGULAR_CLAUDE_FORK_ON_RESUME=1. Additive: absent flag ->
 # cmd is unchanged from HEAD.
 if [[ -n "$resume_session_id" ]]; then
   cmd+=(-r "$resume_session_id")
-  [[ "${GLUERUN_CLAUDE_FORK_ON_RESUME:-0}" == "1" ]] && cmd+=(--fork-session)
+  [[ "${SINGULAR_CLAUDE_FORK_ON_RESUME:-0}" == "1" ]] && cmd+=(--fork-session)
 fi
 
 # Runaway protection: no --max-turns exists, so cap dollar spend per run.
-claude_budget="${GLUERUN_CLAUDE_MAX_BUDGET_USD:-5}"
+claude_budget="${SINGULAR_CLAUDE_MAX_BUDGET_USD:-5}"
 if [[ "$claude_budget" != "0" && -n "$claude_budget" ]]; then
   cmd+=(--max-budget-usd "$claude_budget")
 fi
@@ -276,7 +276,7 @@ fi
 # constraint is far stickier than a user-prompt one and keeps every role's final
 # message parseable. Do NOT instruct literal id reuse here — the planner is
 # expected to renumber placeholder TASK ids to the next free id. Env-overridable.
-claude_system_prompt="${GLUERUN_CLAUDE_SYSTEM_PROMPT:-Your FINAL assistant message MUST be exactly one JSON object and nothing else: no prose, no preamble, no \"Here is\", no code fences, no trailing commentary. If you cannot comply, still emit a single JSON object describing the problem.}"
+claude_system_prompt="${SINGULAR_CLAUDE_SYSTEM_PROMPT:-Your FINAL assistant message MUST be exactly one JSON object and nothing else: no prose, no preamble, no \"Here is\", no code fences, no trailing commentary. If you cannot comply, still emit a single JSON object describing the problem.}"
 if [[ "$readonly_run" == "yes" ]]; then
   # Deny file-mutation tools (first line); the post-run restore guard is the
   # working-tree backstop. Bash stays available for read-only review (git diff,
@@ -303,26 +303,26 @@ if [[ -n "$claude_system_prompt" ]]; then
 fi
 cmd+=(--dangerously-skip-permissions)
 
-if [[ -n "${GLUERUN_CLAUDE_EXTRA_ARGS:-}" ]]; then
+if [[ -n "${SINGULAR_CLAUDE_EXTRA_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
-  cmd+=(${GLUERUN_CLAUDE_EXTRA_ARGS})
+  cmd+=(${SINGULAR_CLAUDE_EXTRA_ARGS})
 fi
 
 # --- Read-only snapshot (for restore-after) -------------------------------------
 if [[ "$readonly_run" == "yes" ]]; then
-  ro_journal="$(gluerun_readonly_guard_capture "$worktree" "claude-$run_id")"
+  ro_journal="$(singular_readonly_guard_capture "$worktree" "claude-$run_id")"
 fi
 
 # --- Run claude in the working directory ----------------------------------------
 # stdout (the --output-format json envelope) and stderr (CLI notices/errors) are
 # captured to SEPARATE files so a stray stderr line never corrupts the JSON parse.
-envelope="$(mktemp "${TMPDIR:-/tmp}/gluerun-claude-env.XXXXXX")"
+envelope="$(mktemp "${TMPDIR:-/tmp}/singular-claude-env.XXXXXX")"
 envelope_err="$envelope.err"
 
 # The provider as a SESSION LEADER. This function is only ever invoked as a
 # background job, so `cd` is contained to that job's subshell and
-# gluerun_setsid_exec — the LAST command — replaces it: $! in the caller is the
-# leader itself (pid == pgid), which is what lets gluerun_kill_tree group-kill
+# singular_setsid_exec — the LAST command — replaces it: $! in the caller is the
+# leader itself (pid == pgid), which is what lets singular_kill_tree group-kill
 # claude and everything it spawned with one negative pid, no `ps` involved.
 #
 # This replaced a local ps-tree walk that built its target list from `ps -A` and
@@ -334,15 +334,15 @@ envelope_err="$envelope.err"
 # therefore to the exec'd provider) rather than to a nested subshell.
 run_claude() {
   cd "$worktree" || exit 1
-  gluerun_setsid_exec "${cmd[@]}"
+  singular_setsid_exec "${cmd[@]}"
 }
 
 exit_code=0
 echo "claude-run: level=$level model=$claude_model worktree=$worktree run_id=$run_id" >&2
 # Wall-clock guard: `claude -p` has no --max-turns, so an agentic session can loop;
 # bound it (default 1200s) and kill the whole process tree on timeout so a stuck
-# run never holds a worker slot indefinitely. Set GLUERUN_CLAUDE_TIMEOUT_SEC=0 to disable.
-claude_timeout="${GLUERUN_CLAUDE_TIMEOUT_SEC:-1200}"
+# run never holds a worker slot indefinitely. Set SINGULAR_CLAUDE_TIMEOUT_SEC=0 to disable.
+claude_timeout="${SINGULAR_CLAUDE_TIMEOUT_SEC:-1200}"
 # claude always runs in the BACKGROUND, even with the timeout disabled. bash
 # defers a trapped signal until the foreground child finishes, so a foreground
 # `run_claude` would swallow the SIGTERM that ask/supervise/decide send on their
@@ -354,7 +354,7 @@ else
   run_claude >"$envelope" 2>"$envelope_err" & cl_pid=$!
 fi
 if [[ -n "$run_dir" && -d "$run_dir" ]]; then
-  gluerun_session_record_write "$run_dir/runner-session.json" "$cl_pid" 2>/dev/null || true
+  singular_session_record_write "$run_dir/runner-session.json" "$cl_pid" 2>/dev/null || true
 fi
 if [[ "$claude_timeout" =~ ^[0-9]+$ && "$claude_timeout" -gt 0 ]]; then
   cl_deadline=$((SECONDS + claude_timeout)); cl_timed_out="no"
@@ -364,7 +364,7 @@ if [[ "$claude_timeout" =~ ^[0-9]+$ && "$claude_timeout" -gt 0 ]]; then
       # TERM the whole session, then KILL what is left: a provider CLI has no
       # restore guard of its own, so it gets a short courtesy grace, not the
       # runner's full trap budget.
-      gluerun_kill_tree "$cl_pid" "$(gluerun_provider_kill_grace_sec)" session
+      singular_kill_tree "$cl_pid" "$(singular_provider_kill_grace_sec)" session
       wait "$cl_pid" 2>/dev/null || true
       # Clear immediately after the wait (not just at the join below) so a
       # signal landing in the gap cannot have the EXIT trap re-kill a reaped
@@ -406,7 +406,7 @@ sid = env.get("session_id") if isinstance(env, dict) else None
 sys.stdout.write(sid if isinstance(sid, str) else "")
 PY
 )"
-  gluerun_claude_session_meta_write "$session_meta_path" "$session_id" "$claude_model" \
+  singular_claude_session_meta_write "$session_meta_path" "$session_id" "$claude_model" \
     "$claude_effort" "$worktree" "$exit_code" || true
 fi
 
@@ -451,7 +451,7 @@ fi
 # holds the timeout and signal paths; a second restore of a consumed journal is
 # a no-op.
 if [[ "$readonly_run" == "yes" ]]; then
-  gluerun_readonly_guard_restore "$ro_journal" || true
+  singular_readonly_guard_restore "$ro_journal" || true
   ro_journal=""
 fi
 
@@ -480,7 +480,7 @@ if [[ -n "$resume_session_id" && "$exit_code" -ne 0 ]]; then
   fi
 fi
 
-if gluerun_runner_result_write claude "$run_id" "$runner_role" "$capability_profile" \
+if singular_runner_result_write claude "$run_id" "$runner_role" "$capability_profile" \
   "$result_file" "$exit_code" "$envelope" "$envelope_err" "$output_last_message"; then
   runner_result_written="yes"
 fi

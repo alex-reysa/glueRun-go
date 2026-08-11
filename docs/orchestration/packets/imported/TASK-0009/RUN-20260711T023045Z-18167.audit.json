@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0009",
   "runId": "RUN-20260711T023045Z-18167",
   "branch": "agent/session/TASK-0009-planner-resume-decider",
@@ -15,18 +15,18 @@
     "secret-scan.log ('secret-scan: clean')",
     "worker-packet-validation.log ('ok')",
     "module-packet-guard.log (empty = no violations)",
-    "engine/ctx-planner-resume.sh (218 lines: gluerun_planner_resume_decide + template/lease helpers, 11 fail-closed gates)",
+    "engine/ctx-planner-resume.sh (218 lines: singular_planner_resume_decide + template/lease helpers, 11 fail-closed gates)",
     "tests/test-ctx-planner-resume.sh (225 lines: per-gate + happy-path + one-line/exit-0 contract assertions)",
     "docs/orchestration/prompts/l1-planner.md (template-sha gate target present)",
-    "engine/lib.sh (ctx-*.sh auto-source loop line 3857; gluerun_sha256_file line 2585)"
+    "engine/lib.sh (ctx-*.sh auto-source loop line 3857; singular_sha256_file line 2585)"
   ],
   "commandsRun": [
     "git branch --show-current; git log --oneline -5; git status --porcelain",
     "git diff --stat/--name-only f9a3af6..52955c2 (2 files, +443, -0)",
     "git rev-parse HEAD (== 52955c2, matches packet headSha)",
     "git show --stat 52955c2 (only the 2 owned files)",
-    "grep -rn gluerun_planner_resume_decide engine/ tests/ docs/ (no invocation outside def+test)",
-    "grep -n ctx- engine/lib.sh; grep -rn gluerun_sha256_file() engine/",
+    "grep -rn singular_planner_resume_decide engine/ tests/ docs/ (no invocation outside def+test)",
+    "grep -n ctx- engine/lib.sh; grep -rn singular_sha256_file() engine/",
     "bash tests/test-ctx-planner-resume.sh (EXIT=0, green reproduced)",
     "bash tests/test-engine-clean.sh (EXIT=0)",
     "bash tests/test-ctx-loader.sh (EXIT=0)",
@@ -35,9 +35,9 @@
   "findings": [
     "File scope clean: diff touches only the two owned files (engine/ctx-planner-resume.sh, tests/test-ctx-planner-resume.sh), 443 insertions / 0 deletions, no forbidden file modified; scope-check and secret-scan clean.",
     "Test-first evidence valid: red.log fails (exit 1) because the engine file is absent, green.log passes (exit 0) with all 11 gate assertions plus happy path after implementation; packet records red exit 1 / green exit 0.",
-    "No hidden scope expansion: grep confirms gluerun_planner_resume_decide is defined-but-uncalled \u2014 zero invocations in any engine path; the generate-tasks call site, rc-86 fresh fallback, role=planner strategy events, and finalize->decide TEMPLATE-sha round-trip are explicitly deferred and remain out of scope.",
+    "No hidden scope expansion: grep confirms singular_planner_resume_decide is defined-but-uncalled \u2014 zero invocations in any engine path; the generate-tasks call site, rc-86 fresh fallback, role=planner strategy events, and finalize->decide TEMPLATE-sha round-trip are explicitly deferred and remain out of scope.",
     "Byte-identical invariant holds: independently re-ran test-engine-clean.sh, test-ctx-loader.sh, test-ctx-planner-session.sh (all EXIT=0) and the target test (EXIT=0); gate + regression logs both report 32 passed, 0 failed and gate exit 0.",
-    "Schema/lifecycle consistency: reuses gluerun.orchestration.session-meta.v0 with an additive optional 'node' field, single-line resume/fresh contract, ordered fail-closed gates (first failing gate names the reason), never exits non-zero \u2014 asserted by the one-line/exit-0 contract tests.",
+    "Schema/lifecycle consistency: reuses singular.orchestration.session-meta.v0 with an additive optional 'node' field, single-line resume/fresh contract, ordered fail-closed gates (first failing gate names the reason), never exits non-zero \u2014 asserted by the one-line/exit-0 contract tests.",
     "Minor (non-blocking): the RED failure trips at the file-existence guard (test line 49) rather than on behavioral gate assertions, matching the repo's ctx-planner-session precedent; the green log exercises all behavioral gates, so test-first intent is satisfied."
   ],
   "requiredFixes": [],

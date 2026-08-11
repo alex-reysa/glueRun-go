@@ -1,9 +1,9 @@
 {
-  "schema": "gluerun.console-adapter.v0",
+  "schema": "singular.console-adapter.v0",
   "roleCatalog": {
-    "schema": "gluerun.codex.role-catalog.v0",
+    "schema": "singular.codex.role-catalog.v0",
     "source": "operating-model-selfdevelop.md \u00a74.3 worker types \u00b7 \u00a78 test-first \u00b7 \u00a79 skills \u00b7 \u00a714 decider",
-    "note": "Declared roles and disciplines from the operating model. This is a reference catalog, not a live registry \u2014 glueRun-go records no per-agent skill list. Owner/role is recorded on leases and packets (uniformly l2-developer today); other roles are inferred from which prompt files exist in a task's run directory.",
+    "note": "Declared roles and disciplines from the operating model. This is a reference catalog, not a live registry \u2014 singular records no per-agent skill list. Owner/role is recorded on leases and packets (uniformly l2-developer today); other roles are inferred from which prompt files exist in a task's run directory.",
     "layers": [
       {
         "id": "L0",
@@ -539,7 +539,7 @@
       "layout": "matrix",
       "items": [
         {
-          "envKey": "GLUERUN_CODEX_MODEL",
+          "envKey": "SINGULAR_CODEX_MODEL",
           "label": "model",
           "default": "gpt-5.5",
           "kind": "model",
@@ -547,7 +547,7 @@
           "meaning": "Codex model all three roles run on"
         },
         {
-          "envKey": "GLUERUN_CODEX_SERVICE_TIER",
+          "envKey": "SINGULAR_CODEX_SERVICE_TIER",
           "label": "service tier",
           "default": "default",
           "kind": "enum",
@@ -555,7 +555,7 @@
           "meaning": "API service tier (default = standard queue)"
         },
         {
-          "envKey": "GLUERUN_CODEX_PLANNER_REASONING_EFFORT",
+          "envKey": "SINGULAR_CODEX_PLANNER_REASONING_EFFORT",
           "label": "planner reasoning",
           "default": "xhigh",
           "kind": "reasoning",
@@ -563,7 +563,7 @@
           "meaning": "effort the L1 area planner spends \u2014 plan quality gates everything downstream"
         },
         {
-          "envKey": "GLUERUN_CODEX_L2_REASONING_EFFORT",
+          "envKey": "SINGULAR_CODEX_L2_REASONING_EFFORT",
           "label": "worker reasoning",
           "default": "medium",
           "kind": "reasoning",
@@ -571,7 +571,7 @@
           "meaning": "effort each L2 developer worker spends on a task slice"
         },
         {
-          "envKey": "GLUERUN_CODEX_AUDITOR_REASONING_EFFORT",
+          "envKey": "SINGULAR_CODEX_AUDITOR_REASONING_EFFORT",
           "label": "auditor reasoning",
           "default": "high",
           "kind": "reasoning",
@@ -585,7 +585,7 @@
       "layout": "list",
       "items": [
         {
-          "envKey": "GLUERUN_MAX_CONCURRENT",
+          "envKey": "SINGULAR_MAX_CONCURRENT",
           "label": "max concurrent workers",
           "default": "1",
           "kind": "count",
@@ -593,7 +593,7 @@
           "meaning": "L2 workers running at the same time"
         },
         {
-          "envKey": "GLUERUN_MAX_DISPATCH",
+          "envKey": "SINGULAR_MAX_DISPATCH",
           "label": "max dispatch / cycle",
           "default": "follows max concurrent",
           "kind": "derived",
@@ -601,7 +601,7 @@
           "meaning": "tasks dispatched per cycle; unset, so it follows max concurrent workers"
         },
         {
-          "envKey": "GLUERUN_MAX_L1_CONCURRENT",
+          "envKey": "SINGULAR_MAX_L1_CONCURRENT",
           "label": "max parallel L1 planners",
           "default": "3",
           "kind": "count",
@@ -609,7 +609,7 @@
           "meaning": "area planners that may plan at once \u2014 only when parallel planning is on (below)"
         },
         {
-          "envKey": "GLUERUN_ENABLE_L1_PARALLEL",
+          "envKey": "SINGULAR_ENABLE_L1_PARALLEL",
           "label": "L1 parallel planning",
           "default": "0",
           "kind": "bool",
@@ -617,7 +617,7 @@
           "meaning": "off = plan one area at a time; gates the parallel-planner limit above"
         },
         {
-          "envKey": "GLUERUN_L1_TASKS_PER_NODE",
+          "envKey": "SINGULAR_L1_TASKS_PER_NODE",
           "label": "tasks per planner node",
           "default": "1",
           "kind": "count",
@@ -625,7 +625,7 @@
           "meaning": "tasks an L1 planner emits per DAG node"
         },
         {
-          "envKey": "GLUERUN_L2_SLICE_BUDGET",
+          "envKey": "SINGULAR_L2_SLICE_BUDGET",
           "label": "L2 slice budget",
           "default": "1",
           "kind": "count",
@@ -633,7 +633,7 @@
           "meaning": "starting work-slices granted to a worker per task"
         },
         {
-          "envKey": "GLUERUN_L2_SLICE_BUDGET_MAX",
+          "envKey": "SINGULAR_L2_SLICE_BUDGET_MAX",
           "label": "L2 slice budget cap",
           "default": "3",
           "kind": "count",
@@ -647,7 +647,7 @@
       "layout": "list",
       "items": [
         {
-          "envKey": "GLUERUN_MAX_RETRIES",
+          "envKey": "SINGULAR_MAX_RETRIES",
           "label": "max task retries",
           "default": "3",
           "kind": "count",
@@ -655,7 +655,7 @@
           "meaning": "attempts on a failing task before it is parked as a blocked escalation"
         },
         {
-          "envKey": "GLUERUN_MAX_CONSEC_FAILS",
+          "envKey": "SINGULAR_MAX_CONSEC_FAILS",
           "label": "circuit-breaker threshold",
           "default": "5",
           "kind": "count",
@@ -663,7 +663,7 @@
           "meaning": "consecutive failures that trip the breaker and halt the loop"
         },
         {
-          "envKey": "GLUERUN_MAX_HOURS",
+          "envKey": "SINGULAR_MAX_HOURS",
           "label": "loop budget",
           "default": "20",
           "kind": "duration",
@@ -671,7 +671,7 @@
           "meaning": "wall-clock hours before the loop voluntarily exits"
         },
         {
-          "envKey": "GLUERUN_MIN_DISK_GB",
+          "envKey": "SINGULAR_MIN_DISK_GB",
           "label": "min free disk",
           "default": "2",
           "kind": "bytes",
@@ -679,7 +679,7 @@
           "meaning": "loop refuses to start a cycle below this free-space floor"
         },
         {
-          "envKey": "GLUERUN_L1_STALE_MINUTES",
+          "envKey": "SINGULAR_L1_STALE_MINUTES",
           "label": "L1 stale timeout",
           "default": "60",
           "kind": "duration",
@@ -687,7 +687,7 @@
           "meaning": "an L1 planner lease idle this long is reclaimed as stale"
         },
         {
-          "envKey": "GLUERUN_PLANNER_BACKOFF_SECONDS",
+          "envKey": "SINGULAR_PLANNER_BACKOFF_SECONDS",
           "label": "planner backoff",
           "default": "900",
           "kind": "duration",
@@ -695,7 +695,7 @@
           "meaning": "wait after a planner error before re-planning"
         },
         {
-          "envKey": "GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS",
+          "envKey": "SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS",
           "label": "planner quota backoff",
           "default": "1800",
           "kind": "duration",
@@ -703,7 +703,7 @@
           "meaning": "longer wait after a planner quota / rate-limit rejection"
         },
         {
-          "envKey": "GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS",
+          "envKey": "SINGULAR_PLANNER_OVERLOAD_BACKOFF_SECONDS",
           "label": "planner overload backoff",
           "default": "180",
           "kind": "duration",
@@ -711,7 +711,7 @@
           "meaning": "short wait after a provider 503/529; transient capacity, not a usage limit"
         },
         {
-          "envKey": "GLUERUN_OVERLOAD_WAIT_BUDGET",
+          "envKey": "SINGULAR_OVERLOAD_WAIT_BUDGET",
           "label": "overload wait budget",
           "default": "3600",
           "kind": "duration",
@@ -725,7 +725,7 @@
       "layout": "list",
       "items": [
         {
-          "envKey": "GLUERUN_AUTO_INTEGRATE",
+          "envKey": "SINGULAR_AUTO_INTEGRATE",
           "label": "auto-integrate",
           "default": "1",
           "kind": "bool",
@@ -733,7 +733,7 @@
           "meaning": "on = merge passing worker branches into the target automatically"
         },
         {
-          "envKey": "GLUERUN_PUSH",
+          "envKey": "SINGULAR_PUSH",
           "label": "push to remote",
           "default": "1",
           "kind": "bool",
@@ -741,7 +741,7 @@
           "meaning": "on = push the target branch to origin after integrating"
         },
         {
-          "envKey": "GLUERUN_GENERATE",
+          "envKey": "SINGULAR_GENERATE",
           "label": "task generation",
           "default": "1",
           "kind": "bool",
@@ -749,7 +749,7 @@
           "meaning": "on = let planners generate new tasks; off = drain the existing queue only"
         },
         {
-          "envKey": "GLUERUN_SLEEP",
+          "envKey": "SINGULAR_SLEEP",
           "label": "cycle sleep",
           "default": "20",
           "kind": "duration",
@@ -757,9 +757,9 @@
           "meaning": "pause between loop cycles"
         },
         {
-          "envKey": "GLUERUN_TARGET_BRANCH",
+          "envKey": "SINGULAR_TARGET_BRANCH",
           "label": "target branch",
-          "default": "codex/gluerun-bootstrap-target",
+          "default": "codex/singular-bootstrap-target",
           "kind": "identifier",
           "unit": "",
           "meaning": "branch the loop integrates and pushes to"
@@ -773,35 +773,35 @@
     "gatesDir": "docs/orchestration/gates",
     "tasksDir": "docs/orchestration/tasks",
     "areasDir": "docs/orchestration/areas",
-    "stateDir": ".gluerun-state",
+    "stateDir": ".singular-state",
     "eventsLog": "events.ndjson",
     "autonomateLog": "autonomate.out.log",
-    "statusFile": ".gluerun-state/STATUS.md",
-    "circuitFile": ".gluerun-state/circuit.json",
-    "stopFile": ".gluerun-state/STOP",
+    "statusFile": ".singular-state/STATUS.md",
+    "circuitFile": ".singular-state/circuit.json",
+    "stopFile": ".singular-state/STOP",
     "orchScriptsDir": "scripts/orchestration",
     "platformVision": "docs/core/platform-vision.md"
   },
   "commands": {
     "status": [
-      "gluerun",
+      "singular",
       "status"
     ],
     "validateDag": [
-      "gluerun",
+      "singular",
       "validate-dag"
     ],
     "areaGate": [
-      "gluerun",
+      "singular",
       "area-gate",
       "{node}"
     ],
     "nextArea": [
-      "gluerun",
+      "singular",
       "next-area"
     ],
     "nextAreas": [
-      "gluerun",
+      "singular",
       "next-areas"
     ]
   },
@@ -815,12 +815,12 @@
     "includeAllOf": [
       [
         "codex",
-        "gluerun",
+        "singular",
         "exec"
       ]
     ],
     "excludeSubstrings": [
-      "gluerun_graph_server.py",
+      "singular_graph_server.py",
       " rg "
     ],
     "excludeSubstringsLowered": [

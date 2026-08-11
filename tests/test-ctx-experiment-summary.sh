@@ -5,9 +5,9 @@
 # verbatim into ONE referenceable raw-metrics bundle — the single merged artifact
 # the operator's experiment-report.md points at.
 #
-#   * report   <- gluerun_ctx_experiment_report_json   [events_file] [metrics_file]
-#   * strategy <- gluerun_ctx_experiment_strategy_json  [events_file]
-#   * attempts <- gluerun_ctx_experiment_attempts_json  [runs_dir]    [events_file]
+#   * report   <- singular_ctx_experiment_report_json   [events_file] [metrics_file]
+#   * strategy <- singular_ctx_experiment_strategy_json  [events_file]
+#   * attempts <- singular_ctx_experiment_attempts_json  [runs_dir]    [events_file]
 #
 # The composers take DIFFERENT parameter lists; the summary routes each input to
 # the correct sub-composer per that function's EXISTING signature, capturing each
@@ -63,8 +63,8 @@ source "$SIB_STRATEGY" || fail "sourcing $SIB_STRATEGY failed"
 source "$SIB_ATTEMPTS" || fail "sourcing $SIB_ATTEMPTS failed"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-[[ "$(type -t gluerun_ctx_experiment_summary_json)" == "function" ]] \
-  || fail "gluerun_ctx_experiment_summary_json is not defined by $TOOL"
+[[ "$(type -t singular_ctx_experiment_summary_json)" == "function" ]] \
+  || fail "singular_ctx_experiment_summary_json is not defined by $TOOL"
 
 # --- minimal schema-driven validator (no jsonschema module ships here) --------
 VALIDATOR="$(mktemp)"
@@ -189,16 +189,16 @@ s_before="$(file_hash "$SIB_STRATEGY")"
 a_before="$(file_hash "$SIB_ATTEMPTS")"
 
 # --- Direct composer outputs (the ground truth the bundle must nest verbatim) --
-direct_report="$(gluerun_ctx_experiment_report_json "$events" "$metrics")"      || fail "report composer exited non-zero"
-direct_strategy="$(gluerun_ctx_experiment_strategy_json "$events")"             || fail "strategy composer exited non-zero"
-direct_attempts="$(gluerun_ctx_experiment_attempts_json "$runs" "$events")"     || fail "attempts composer exited non-zero"
+direct_report="$(singular_ctx_experiment_report_json "$events" "$metrics")"      || fail "report composer exited non-zero"
+direct_strategy="$(singular_ctx_experiment_strategy_json "$events")"             || fail "strategy composer exited non-zero"
+direct_attempts="$(singular_ctx_experiment_attempts_json "$runs" "$events")"     || fail "attempts composer exited non-zero"
 printf '%s' "$direct_report"   > "$tmp/d_report.json"
 printf '%s' "$direct_strategy" > "$tmp/d_strategy.json"
 printf '%s' "$direct_attempts" > "$tmp/d_attempts.json"
 
 # --- The composed bundle ------------------------------------------------------
-# Signature: gluerun_ctx_experiment_summary_json [runs_dir] [events_file] [metrics_file]
-bundle="$(gluerun_ctx_experiment_summary_json "$runs" "$events" "$metrics")" \
+# Signature: singular_ctx_experiment_summary_json [runs_dir] [events_file] [metrics_file]
+bundle="$(singular_ctx_experiment_summary_json "$runs" "$events" "$metrics")" \
   || fail "summary aggregator exited non-zero on a valid fixture"
 printf '%s' "$bundle" > "$tmp/bundle.json"
 printf '%s' "$bundle" | validates "$SCHEMA" || fail "bundle did not validate against $SCHEMA"
@@ -219,11 +219,11 @@ python3 - "$tmp/bundle.json" "$tmp/d_report.json" "$tmp/d_strategy.json" "$tmp/d
   <<'PY' || fail "bundle nesting not loss-preserving / not byte-identical to composers"
 import json, sys
 bundle = json.load(open(sys.argv[1]))
-assert bundle["schema"] == "gluerun.orchestration.ctx-experiment-summary.v0", bundle["schema"]
+assert bundle["schema"] == "singular.orchestration.ctx-experiment-summary.v0", bundle["schema"]
 for key, argi, subschema in (
-    ("report", 2, "gluerun.orchestration.ctx-experiment-report.v0"),
-    ("strategy", 3, "gluerun.orchestration.ctx-experiment-strategy.v0"),
-    ("attempts", 4, "gluerun.orchestration.ctx-experiment-attempts.v0"),
+    ("report", 2, "singular.orchestration.ctx-experiment-report.v0"),
+    ("strategy", 3, "singular.orchestration.ctx-experiment-strategy.v0"),
+    ("attempts", 4, "singular.orchestration.ctx-experiment-attempts.v0"),
 ):
     assert key in bundle, f"missing nested sub-artifact '{key}'"
     sub = bundle[key]
@@ -241,7 +241,7 @@ print("loss-preserving-ok")
 PY
 
 # --- Determinism: identical inputs -> byte-identical output -------------------
-bundle2="$(gluerun_ctx_experiment_summary_json "$runs" "$events" "$metrics")"
+bundle2="$(singular_ctx_experiment_summary_json "$runs" "$events" "$metrics")"
 [[ "$bundle" == "$bundle2" ]] || fail "bundle not deterministic across identical runs"
 
 # --- Read-only: input fixture tree + sibling engine files byte-unchanged ------
@@ -253,14 +253,14 @@ after="$(tree_hash "$fix")"
 [[ "$a_before" == "$(file_hash "$SIB_ATTEMPTS")" ]] || fail "engine/ctx-experiment-attempts.sh was mutated"
 
 # --- Fail-safe: every input missing -> well-formed, zeroed, schema-valid ------
-empty_report="$(gluerun_ctx_experiment_report_json "$tmp/no-events.ndjson" "$tmp/no-metrics.json")"
-empty_strategy="$(gluerun_ctx_experiment_strategy_json "$tmp/no-events.ndjson")"
-empty_attempts="$(gluerun_ctx_experiment_attempts_json "$tmp/no-runs" "$tmp/no-events.ndjson")"
+empty_report="$(singular_ctx_experiment_report_json "$tmp/no-events.ndjson" "$tmp/no-metrics.json")"
+empty_strategy="$(singular_ctx_experiment_strategy_json "$tmp/no-events.ndjson")"
+empty_attempts="$(singular_ctx_experiment_attempts_json "$tmp/no-runs" "$tmp/no-events.ndjson")"
 printf '%s' "$empty_report"   > "$tmp/e_report.json"
 printf '%s' "$empty_strategy" > "$tmp/e_strategy.json"
 printf '%s' "$empty_attempts" > "$tmp/e_attempts.json"
 
-empty_bundle="$(gluerun_ctx_experiment_summary_json "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")" \
+empty_bundle="$(singular_ctx_experiment_summary_json "$tmp/no-runs" "$tmp/no-events.ndjson" "$tmp/no-metrics.json")" \
   || fail "summary aggregator crashed on missing input (should fail safe)"
 printf '%s' "$empty_bundle" > "$tmp/e_bundle.json"
 printf '%s' "$empty_bundle" | validates "$SCHEMA" || fail "zeroed bundle did not validate against schema"
@@ -268,7 +268,7 @@ python3 - "$tmp/e_bundle.json" "$tmp/e_report.json" "$tmp/e_strategy.json" "$tmp
   <<'PY' || fail "empty-input bundle not well-formed / not the composers' own zeroed sub-objects"
 import json, sys
 b = json.load(open(sys.argv[1]))
-assert b["schema"] == "gluerun.orchestration.ctx-experiment-summary.v0", b["schema"]
+assert b["schema"] == "singular.orchestration.ctx-experiment-summary.v0", b["schema"]
 for key, argi in (("report", 2), ("strategy", 3), ("attempts", 4)):
     assert key in b, f"missing nested sub-artifact '{key}' on empty input"
     assert b[key] == json.load(open(sys.argv[argi])), f"nested '{key}' not the composer's own zeroed object"
@@ -280,10 +280,10 @@ print("empty-ok")
 PY
 
 # --- No-arg default invocation is also fail-safe -----------------------------
-GLUERUN_RUNS_DIR="$tmp/no-runs" \
-GLUERUN_EVENTS_FILE="$tmp/no-events.ndjson" \
-GLUERUN_CTX_EXPERIMENT_METRICS_FILE="$tmp/no-metrics.json" \
-  gluerun_ctx_experiment_summary_json >/dev/null \
+SINGULAR_RUNS_DIR="$tmp/no-runs" \
+SINGULAR_EVENTS_FILE="$tmp/no-events.ndjson" \
+SINGULAR_CTX_EXPERIMENT_METRICS_FILE="$tmp/no-metrics.json" \
+  singular_ctx_experiment_summary_json >/dev/null \
   || fail "no-arg default invocation crashed instead of failing safe"
 
 echo "ctx-experiment-summary tests passed"

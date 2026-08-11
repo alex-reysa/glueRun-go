@@ -26,7 +26,7 @@ make_repo() {
     "$root/docs/orchestration/prompts" \
     "$root/docs/orchestration/tasks" \
     "$root/schemas/orchestration" \
-    "$root/.gluerun-state"
+    "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$root/docs/orchestration/prompts/l1-planner.md"
@@ -43,7 +43,7 @@ Current status: complete
 EOF
   cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "layers": ["contract", "storage_substrate_base", "storage_proof"],
   "kinds": ["contract", "substrate", "storage"],
   "requiredNodes": ["S0.storage_substrate_base"],
@@ -89,7 +89,7 @@ EOF
 EOF
   cat >"$root/docs/orchestration/gates/D0.contract.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D0.contract",
   "status": "passed",
   "authoritative": true,
@@ -113,18 +113,18 @@ with_fixture() {
   local tmp
   tmp="$(mktemp -d)"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-  export GLUERUN_TARGET_BRANCH="target"
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+  export SINGULAR_TARGET_BRANCH="target"
 }
 
 test_validate_dag_rejects_missing_storage_substrate() {
   with_fixture
-  python3 - "$GLUERUN_ORCH_DIR/dag.v0.json" <<'PY'
+  python3 - "$SINGULAR_ORCH_DIR/dag.v0.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
@@ -157,11 +157,11 @@ test_area_gate_requires_authoritative_gate_result() {
 test_generate_tasks_dry_run_uses_manifest_frontier() {
   with_fixture
   local out state
-  state="$(cat "$GLUERUN_ORCH_DIR/areas/artifact/state.md")"
+  state="$(cat "$SINGULAR_ORCH_DIR/areas/artifact/state.md")"
   out="$("$SCRIPT_DIR/generate-tasks.sh" --dry-run --count 1 2>&1)"
   assert_contains "$out" "node=D1.contract" "generate dry-run reports manifest node"
   assert_contains "$out" "area=artifact" "generate dry-run reports manifest area"
-  assert_contains "$(cat "$GLUERUN_ORCH_DIR/areas/artifact/state.md")" "$state" "generate dry-run leaves area state untouched"
+  assert_contains "$(cat "$SINGULAR_ORCH_DIR/areas/artifact/state.md")" "$state" "generate dry-run leaves area state untouched"
 }
 
 make_area_complete_stub() {
@@ -184,12 +184,12 @@ EOF
 
 test_area_complete_output_is_not_authoritative() {
   with_fixture
-  local stub="$GLUERUN_ROOT/area-complete-stub.sh"
+  local stub="$SINGULAR_ROOT/area-complete-stub.sh"
   make_area_complete_stub "$stub"
   local before after out
-  before="$(cat "$GLUERUN_ORCH_DIR/areas/artifact/state.md")"
-  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --count 1 2>&1 || true)"
-  after="$(cat "$GLUERUN_ORCH_DIR/areas/artifact/state.md")"
+  before="$(cat "$SINGULAR_ORCH_DIR/areas/artifact/state.md")"
+  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --count 1 2>&1 || true)"
+  after="$(cat "$SINGULAR_ORCH_DIR/areas/artifact/state.md")"
   assert_contains "$out" "planner-failed" "AREA-COMPLETE is rejected as non-authoritative"
   assert_not_contains "$out" "area-complete:artifact" "AREA-COMPLETE no longer completes the area"
   [[ "$before" == "$after" ]] || fail "AREA-COMPLETE mutated area state"
@@ -197,7 +197,7 @@ test_area_complete_output_is_not_authoritative() {
 
 # Locate the prompt rendered by a --dry-run generate in the fixture's runs dir.
 read_dry_run_prompt() {
-  find "$GLUERUN_RUNS_DIR" -name planner-prompt.md -type f 2>/dev/null | head -1
+  find "$SINGULAR_RUNS_DIR" -name planner-prompt.md -type f 2>/dev/null | head -1
 }
 
 # Codex stub that emits a single canonical task owning TWO independent slices
@@ -237,7 +237,7 @@ md = (
     "## Acceptance Criteria\n\n- Tests first demonstrate the two slices.\n"
 )
 batch = {
-    "schema": "gluerun.orchestration.task-batch.v0",
+    "schema": "singular.orchestration.task-batch.v0",
     "tasks": [{"taskId": "TASK-0001", "markdown": md}],
 }
 with open(sys.argv[1], "w", encoding="utf-8") as f:
@@ -250,7 +250,7 @@ EOF
 test_slice_budget_guardrail_contract_clamped_to_one() {
   with_fixture
   local out prompt
-  out="$(GLUERUN_L2_SLICE_BUDGET=3 "$SCRIPT_DIR/generate-tasks.sh" --dry-run --count 1 2>&1)"
+  out="$(SINGULAR_L2_SLICE_BUDGET=3 "$SCRIPT_DIR/generate-tasks.sh" --dry-run --count 1 2>&1)"
   assert_contains "$out" "node=D1.contract" "default frontier is the contract node"
   assert_contains "$out" "slice_budget=1" "contract layer clamps the slice budget to 1"
   prompt="$(read_dry_run_prompt)"
@@ -262,7 +262,7 @@ test_slice_budget_guardrail_contract_clamped_to_one() {
 test_slice_budget_passthrough_on_unguarded_layer() {
   with_fixture
   local out prompt
-  out="$(GLUERUN_L2_SLICE_BUDGET=3 "$SCRIPT_DIR/generate-tasks.sh" --dry-run --node S0.storage_substrate_base --count 1 2>&1)"
+  out="$(SINGULAR_L2_SLICE_BUDGET=3 "$SCRIPT_DIR/generate-tasks.sh" --dry-run --node S0.storage_substrate_base --count 1 2>&1)"
   assert_contains "$out" "node=S0.storage_substrate_base" "node override selected the substrate node"
   assert_contains "$out" "slice_budget=3" "unguarded layer keeps the configured slice budget"
   prompt="$(read_dry_run_prompt)"
@@ -274,34 +274,34 @@ test_slice_budget_passthrough_on_unguarded_layer() {
 test_slice_budget_clamped_to_max() {
   with_fixture
   local out
-  out="$(GLUERUN_L2_SLICE_BUDGET=9 GLUERUN_L2_SLICE_BUDGET_MAX=3 "$SCRIPT_DIR/generate-tasks.sh" --dry-run --node S0.storage_substrate_base --count 1 2>&1)"
+  out="$(SINGULAR_L2_SLICE_BUDGET=9 SINGULAR_L2_SLICE_BUDGET_MAX=3 "$SCRIPT_DIR/generate-tasks.sh" --dry-run --node S0.storage_substrate_base --count 1 2>&1)"
   assert_contains "$out" "slice_budget=3" "budget 9 clamps to the configured max of 3"
 }
 
 test_slice_budget_rejects_non_integer() {
   with_fixture
   local out rc=0
-  out="$(GLUERUN_L2_SLICE_BUDGET=abc "$SCRIPT_DIR/generate-tasks.sh" --dry-run --count 1 2>&1)" || rc=$?
+  out="$(SINGULAR_L2_SLICE_BUDGET=abc "$SCRIPT_DIR/generate-tasks.sh" --dry-run --count 1 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "non-integer slice budget must fail"
-  assert_contains "$out" "GLUERUN_L2_SLICE_BUDGET must be an integer" "rejects non-integer slice budget"
+  assert_contains "$out" "SINGULAR_L2_SLICE_BUDGET must be an integer" "rejects non-integer slice budget"
 }
 
 test_slice_budget_fat_task_passes_validator() {
   with_fixture
-  local stub="$GLUERUN_ROOT/fat-batch-stub.sh"
+  local stub="$SINGULAR_ROOT/fat-batch-stub.sh"
   make_fat_batch_stub "$stub"
   local out task
-  out="$(GLUERUN_L2_SLICE_BUDGET=3 GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --count 1 2>&1 || true)"
+  out="$(SINGULAR_L2_SLICE_BUDGET=3 SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --count 1 2>&1 || true)"
   assert_contains "$out" "generated:TASK-0001" "fat multi-owned-file task passes the batch validator"
   assert_contains "$out" "slice_budget=3" "substrate node keeps the configured budget"
-  task="$(cat "$GLUERUN_TASKS_DIR/TASK-0001.md")"
+  task="$(cat "$SINGULAR_TASKS_DIR/TASK-0001.md")"
   assert_contains "$task" "internal/storage/a_test.go" "generated fat task owns the first slice pair"
   assert_contains "$task" "internal/storage/b_test.go" "generated fat task owns the second slice pair"
 }
 
 test_validate_dag_rejects_cycle() {
   with_fixture
-  python3 - "$GLUERUN_ORCH_DIR/dag.v0.json" <<'PY'
+  python3 - "$SINGULAR_ORCH_DIR/dag.v0.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
@@ -320,7 +320,7 @@ PY
 
 test_validate_dag_rejects_duplicate_node_id() {
   with_fixture
-  python3 - "$GLUERUN_ORCH_DIR/dag.v0.json" <<'PY'
+  python3 - "$SINGULAR_ORCH_DIR/dag.v0.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
@@ -337,7 +337,7 @@ PY
 
 test_validate_dag_rejects_unknown_layer() {
   with_fixture
-  python3 - "$GLUERUN_ORCH_DIR/dag.v0.json" <<'PY'
+  python3 - "$SINGULAR_ORCH_DIR/dag.v0.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
@@ -354,7 +354,7 @@ PY
 
 test_validate_dag_rejects_missing_dependency() {
   with_fixture
-  python3 - "$GLUERUN_ORCH_DIR/dag.v0.json" <<'PY'
+  python3 - "$SINGULAR_ORCH_DIR/dag.v0.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
@@ -371,9 +371,9 @@ PY
 
 test_gate_result_missing_required_field_rejected() {
   with_fixture
-  cat >"$GLUERUN_ORCH_DIR/gates/D1.contract.gate-result.json" <<'EOF'
+  cat >"$SINGULAR_ORCH_DIR/gates/D1.contract.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D1.contract",
   "status": "passed",
   "authoritative": true
@@ -388,9 +388,9 @@ EOF
 
 test_gate_result_rejects_malformed_evidence_object() {
   with_fixture
-  cat >"$GLUERUN_ORCH_DIR/gates/D1.contract.gate-result.json" <<'EOF'
+  cat >"$SINGULAR_ORCH_DIR/gates/D1.contract.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D1.contract",
   "status": "passed",
   "authoritative": true,
@@ -414,9 +414,9 @@ EOF
 
 test_deterministic_gate_requires_command_log_evidence() {
   with_fixture
-  cat >"$GLUERUN_ORCH_DIR/gates/D1.contract.gate-result.json" <<'EOF'
+  cat >"$SINGULAR_ORCH_DIR/gates/D1.contract.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D1.contract",
   "status": "passed",
   "authoritative": true,
@@ -440,10 +440,10 @@ EOF
 test_deterministic_gate_rejects_missing_log_file() {
   with_fixture
   local head
-  head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  cat >"$GLUERUN_ORCH_DIR/gates/D1.contract.gate-result.json" <<EOF
+  head="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  cat >"$SINGULAR_ORCH_DIR/gates/D1.contract.gate-result.json" <<EOF
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D1.contract",
   "status": "passed",
   "authoritative": true,
@@ -471,13 +471,13 @@ EOF
 
 test_deterministic_gate_rejects_bad_log_digest() {
   with_fixture
-  mkdir -p "$GLUERUN_ORCH_DIR/gates/evidence"
-  printf 'ok\n' >"$GLUERUN_ORCH_DIR/gates/evidence/test.log"
+  mkdir -p "$SINGULAR_ORCH_DIR/gates/evidence"
+  printf 'ok\n' >"$SINGULAR_ORCH_DIR/gates/evidence/test.log"
   local head
-  head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  cat >"$GLUERUN_ORCH_DIR/gates/D1.contract.gate-result.json" <<EOF
+  head="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  cat >"$SINGULAR_ORCH_DIR/gates/D1.contract.gate-result.json" <<EOF
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D1.contract",
   "status": "passed",
   "authoritative": true,
@@ -505,14 +505,14 @@ EOF
 
 test_deterministic_gate_accepts_valid_command_log() {
   with_fixture
-  mkdir -p "$GLUERUN_ORCH_DIR/gates/evidence"
-  printf 'ok\n' >"$GLUERUN_ORCH_DIR/gates/evidence/test.log"
+  mkdir -p "$SINGULAR_ORCH_DIR/gates/evidence"
+  printf 'ok\n' >"$SINGULAR_ORCH_DIR/gates/evidence/test.log"
   local digest head
-  digest="$(shasum -a 256 "$GLUERUN_ORCH_DIR/gates/evidence/test.log" | awk '{print $1}')"
-  head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD)"
-  cat >"$GLUERUN_ORCH_DIR/gates/D1.contract.gate-result.json" <<EOF
+  digest="$(shasum -a 256 "$SINGULAR_ORCH_DIR/gates/evidence/test.log" | awk '{print $1}')"
+  head="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  cat >"$SINGULAR_ORCH_DIR/gates/D1.contract.gate-result.json" <<EOF
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D1.contract",
   "status": "passed",
   "authoritative": true,
@@ -539,18 +539,18 @@ EOF
 
 test_generate_tasks_frozen_by_stop() {
   with_fixture
-  touch "$GLUERUN_STATE_DIR/STOP"
+  touch "$SINGULAR_STATE_DIR/STOP"
   local out
   out="$("$SCRIPT_DIR/generate-tasks.sh" --dry-run --count 1 2>&1)"
   assert_contains "$out" "frozen" "generate-tasks halts under the STOP sentinel"
   assert_not_contains "$out" "node=D1.contract" "generate-tasks selects no frontier under STOP"
-  [[ "$(find "$GLUERUN_TASKS_DIR" -name 'TASK-*.md' -type f 2>/dev/null | wc -l | tr -d ' ')" == "0" ]] \
+  [[ "$(find "$SINGULAR_TASKS_DIR" -name 'TASK-*.md' -type f 2>/dev/null | wc -l | tr -d ' ')" == "0" ]] \
     || fail "STOP must prevent task writes"
 }
 
 test_l1_drive_frozen_by_stop() {
   with_fixture
-  cat >"$GLUERUN_TASKS_DIR/TASK-0001.md" <<'EOF'
+  cat >"$SINGULAR_TASKS_DIR/TASK-0001.md" <<'EOF'
 # TASK-0001: Frozen dispatch fixture
 
 Status: ready
@@ -584,9 +584,9 @@ Forbidden files:
 
 - Pass.
 EOF
-  git -C "$GLUERUN_ROOT" add docs/orchestration/tasks/TASK-0001.md
-  git -C "$GLUERUN_ROOT" -c user.name=test -c user.email=test@example.local commit -q -m task
-  touch "$GLUERUN_STATE_DIR/STOP"
+  git -C "$SINGULAR_ROOT" add docs/orchestration/tasks/TASK-0001.md
+  git -C "$SINGULAR_ROOT" -c user.name=test -c user.email=test@example.local commit -q -m task
+  touch "$SINGULAR_STATE_DIR/STOP"
   local out
   out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 --dry-run 2>&1)"
   assert_contains "$out" "frozen" "l1-drive halts under STOP"
@@ -595,9 +595,9 @@ EOF
 
 write_passed_gate() {
   # args: node source-ref — emit a minimal valid grandfathered passing gate.
-  cat >"$GLUERUN_ORCH_DIR/gates/$1.gate-result.json" <<EOF
+  cat >"$SINGULAR_ORCH_DIR/gates/$1.gate-result.json" <<EOF
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$1",
   "status": "passed",
   "authoritative": true,
@@ -611,9 +611,9 @@ EOF
 
 write_blocked_gate() {
   # args: node source-ref — emit a minimal valid authoritative blocked gate.
-  cat >"$GLUERUN_ORCH_DIR/gates/$1.gate-result.json" <<EOF
+  cat >"$SINGULAR_ORCH_DIR/gates/$1.gate-result.json" <<EOF
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$1",
   "status": "blocked",
   "authoritative": true,
@@ -655,9 +655,9 @@ test_next_areas_no_virtual_completion() {
 
 test_next_areas_failed_gate_does_not_advance() {
   with_fixture
-  cat >"$GLUERUN_ORCH_DIR/gates/S0.storage_substrate_base.gate-result.json" <<'EOF'
+  cat >"$SINGULAR_ORCH_DIR/gates/S0.storage_substrate_base.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "S0.storage_substrate_base",
   "status": "failed",
   "authoritative": true,

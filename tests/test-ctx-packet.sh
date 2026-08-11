@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Covers the OPTIONAL, additive context-packet contract (stage S4-context-packets,
 # node context-packet-contract). `engine/ctx-packet.sh` ships a PURE, present-but-
-# uncalled helper `gluerun_ctx_packet_json <task-file>` that reads a task markdown
+# uncalled helper `singular_ctx_packet_json <task-file>` that reads a task markdown
 # READ-ONLY and prints normalized JSON:
 #   - a well-formed `## Context packet` block  -> stable sorted-key object
 #   - no `## Context packet` block             -> exactly `{}`
 #   - a block with a malformed assumption entry-> fail closed to `{}` + exactly one
 #                                                 `ctx.packet_malformed` warning event
-# The parser's only side effect is that one warning event (in GLUERUN_EVENTS_FILE);
+# The parser's only side effect is that one warning event (in SINGULAR_EVENTS_FILE);
 # it never mutates the task file or any other repo file.
 set -uo pipefail
 
@@ -23,15 +23,15 @@ trap 'rm -rf "$tmp"' EXIT
 
 # Parse a task file through the real engine helper in an isolated subshell so
 # lib.sh's `set -e` and the sourced ctx-*.sh files never contaminate this test
-# process. GLUERUN_ROOT is a scratch dir so any state (the malformed warning
+# process. SINGULAR_ROOT is a scratch dir so any state (the malformed warning
 # event) lands under $tmp, never in the repo. $2 optionally overrides the events
 # file so the malformed case can be inspected in isolation.
 parse() {
   local tf="$1" ev="${2:-$tmp/events.ndjson}"
-  GLUERUN_ROOT="$tmp" bash -c '
+  SINGULAR_ROOT="$tmp" bash -c '
     source "'"$LIB"'"
-    GLUERUN_EVENTS_FILE="'"$ev"'"
-    gluerun_ctx_packet_json "'"$tf"'"
+    SINGULAR_EVENTS_FILE="'"$ev"'"
+    singular_ctx_packet_json "'"$tf"'"
   '
 }
 
@@ -76,11 +76,11 @@ Exercise the full context-packet block.
 ### Rejected alternatives
 
 - A strict schema that rejects old tasks — breaks every TEMPLATE task
-- A GLUERUN flag — belongs to the downstream ledger node
+- A SINGULAR flag — belongs to the downstream ledger node
 
 ### Inspected symbols
 
-- gluerun_append_event — appends the malformed warning
+- singular_append_event — appends the malformed warning
 - ctx loader block — auto-sources this file
 
 ## Acceptance Criteria
@@ -127,7 +127,7 @@ cp "$TEMPLATE" "$absent"
 # --- Case 1: full packet -> normalized sorted-key object --------------------
 out_full="$(parse "$full")" || fail "full: parse exited non-zero"
 expected_full='{
-  "schema": "gluerun.orchestration.ctx-packet.v0",
+  "schema": "singular.orchestration.ctx-packet.v0",
   "decisions": [
     "Use a tolerant parser so old tasks keep validating",
     "Emit sorted-key JSON for stable diffs"
@@ -138,15 +138,15 @@ expected_full='{
   ],
   "rejectedAlternatives": [
     "A strict schema that rejects old tasks — breaks every TEMPLATE task",
-    "A GLUERUN flag — belongs to the downstream ledger node"
+    "A SINGULAR flag — belongs to the downstream ledger node"
   ],
   "inspectedSymbols": [
-    "gluerun_append_event — appends the malformed warning",
+    "singular_append_event — appends the malformed warning",
     "ctx loader block — auto-sources this file"
   ]
 }'
 json_eq "$out_full" "$expected_full" || fail "full: normalized object mismatch; got [$out_full]"
-assert_contains "$out_full" '"gluerun.orchestration.ctx-packet.v0"' "full: schema const present"
+assert_contains "$out_full" '"singular.orchestration.ctx-packet.v0"' "full: schema const present"
 
 # Deterministic: byte-identical stdout across repeated runs on identical input.
 out_full2="$(parse "$full")" || fail "full(2): parse exited non-zero"
@@ -159,7 +159,7 @@ out_absent="$(parse "$absent")" || fail "absent: parse exited non-zero"
 # --- Case 3: partial packet -> only present subsections populated ------------
 out_partial="$(parse "$partial")" || fail "partial: parse exited non-zero"
 expected_partial='{
-  "schema": "gluerun.orchestration.ctx-packet.v0",
+  "schema": "singular.orchestration.ctx-packet.v0",
   "decisions": ["Keep the slice tight"],
   "assumptions": [
     {"status": "violated", "claim": "the cache is warm", "basis": "cold-start trace shows a miss"}

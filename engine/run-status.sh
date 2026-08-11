@@ -53,7 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$run_id" && "$run_id" != */* && "$run_id" != "." && "$run_id" != ".." ]] || usage
-path="$GLUERUN_RUNS_DIR/$run_id/run-status.json"
+path="$SINGULAR_RUNS_DIR/$run_id/run-status.json"
 if [[ "$cmd" == "show" ]]; then
   [[ -f "$path" ]] || exit 1
   exec cat "$path"
@@ -74,7 +74,7 @@ case "$safe_cancel" in true|false) ;; *) echo "run-status: --safe-cancel must be
 
 mkdir -p "$(dirname "$path")"
 tmp="$path.tmp.$$"
-now="${GLUERUN_NOW:-$(gluerun_timestamp)}"
+now="${SINGULAR_NOW:-$(singular_timestamp)}"
 python3 - "$path" "$tmp" "$run_id" "$task_id" "$node" "$phase" "$state" \
   "$activity" "$safe_cancel" "$next_action" "$process_type" "$pid" "$pgid" \
   "$outcome" "$now" <<'PY'
@@ -92,7 +92,7 @@ except (OSError, json.JSONDecodeError):
 
 same_phase = old.get("phase") == phase
 record = {
-    "schema": "gluerun.orchestration.run-status.v0",
+    "schema": "singular.orchestration.run-status.v0",
     "runId": run_id,
     "phase": phase,
     "state": state,

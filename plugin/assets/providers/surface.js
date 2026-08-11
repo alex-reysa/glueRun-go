@@ -1,15 +1,15 @@
 /* providers/surface.js — the Providers surface (0.9.0 phase F).
 
    The 5th surface: a runtime status board over GET /api/providers
-   (gluerun.providers.v0). One card per agent-CLI provider (claude · codex ·
+   (singular.providers.v0). One card per agent-CLI provider (claude · codex ·
    gemini · opencode · cursor · grok) showing installed/auth status, the login
-   affordance when signed out, its env-key presence, the glueRun integration
+   affordance when signed out, its env-key presence, the singular integration
    (runner script + default badge + roles + last-use + session count), an
-   editable per-provider model knob (POST /api/settings → GLUERUN_<P>_MODEL) and
-   a "Use as default runner" action (POST GLUERUN_RUNNER).
+   editable per-provider model knob (POST /api/settings → SINGULAR_<P>_MODEL) and
+   a "Use as default runner" action (POST SINGULAR_RUNNER).
 
    Data: /api/providers (60s cache; ?refresh=1 forces a re-probe) drives the
-   cards; the current model values come from the raw gluerun.config.json env{}
+   cards; the current model values come from the raw singular.config.json env{}
    (via /api/raw/config — the authoritative layer the settings POST writes to).
    Live-only, exactly like Agents: the router redirects #providers → #home in
    historical mode and plans.js disables the nav button. The render is
@@ -30,12 +30,12 @@ const POLL_MS = 60000;   // cache-aligned with the server's 60s providers TTL
 // _CONFIG_MODEL_FALLBACK). claude/codex own per-role keys on the Agents surface;
 // this knob is the provider-wide default model.
 const MODEL_KEY = {
-  claude: "GLUERUN_CLAUDE_MODEL",
-  codex: "GLUERUN_CODEX_MODEL",
-  gemini: "GLUERUN_GEMINI_MODEL",
-  opencode: "GLUERUN_OPENCODE_MODEL",
-  cursor: "GLUERUN_CURSOR_MODEL",
-  grok: "GLUERUN_GROK_MODEL",
+  claude: "SINGULAR_CLAUDE_MODEL",
+  codex: "SINGULAR_CODEX_MODEL",
+  gemini: "SINGULAR_GEMINI_MODEL",
+  opencode: "SINGULAR_OPENCODE_MODEL",
+  cursor: "SINGULAR_CURSOR_MODEL",
+  grok: "SINGULAR_GROK_MODEL",
 };
 
 // status → pm-go status tone. missing renders a dashed, de-emphasised card.
@@ -49,7 +49,7 @@ const PV = {
   unavailable: false,    // 404 → server too old for /api/providers
   probed: false,
   timer: null,
-  configEnv: null,       // parsed gluerun.config.json env{} (current model values)
+  configEnv: null,       // parsed singular.config.json env{} (current model values)
   configInflight: false,
   selected: null,        // deep-link #providers/<id> highlight
   pendingScroll: false,  // scroll the selected card into view after the next render
@@ -61,7 +61,7 @@ const PV = {
 const providerById = (id) => (PV.data && (PV.data.providers || []).find((p) => p.id === id)) || null;
 const cssEsc = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"));
 const cardEl = (id) => document.querySelector(`.pv-card[data-provider="${cssEsc(id)}"]`);
-const shortKey = (k) => String(k || "").replace(/^GLUERUN_/, "").toLowerCase().replace(/_/g, " ");
+const shortKey = (k) => String(k || "").replace(/^SINGULAR_/, "").toLowerCase().replace(/_/g, " ");
 
 // ------------------------------------------------------------- data fetch -----
 async function fetchProviders(refresh) {
@@ -75,7 +75,7 @@ async function fetchProviders(refresh) {
   finally { PV.probed = true; PV.inflight = false; render(); }
 }
 
-// The current per-provider model values live in gluerun.config.json env{} — the
+// The current per-provider model values live in singular.config.json env{} — the
 // authoritative layer POST /api/settings writes to. /api/config only resolves the
 // active provider's roles, so we read the raw config env directly (the same
 // record the Agents "{}" config button opens).
@@ -83,7 +83,7 @@ async function fetchConfigEnv() {
   if (PV.configInflight || isHistorical()) return;
   PV.configInflight = true;
   try {
-    const res = await apiFetch("/api/raw/config/gluerun.config.json", { cache: "no-store" });
+    const res = await apiFetch("/api/raw/config/singular.config.json", { cache: "no-store" });
     if (res.ok) {
       const raw = await res.json();
       const obj = JSON.parse(raw.content || "{}");
@@ -395,7 +395,7 @@ function cancelConfirm() {
 function commitDefault(id) {
   const p = providerById(id);
   if (!p) { PV.confirmDefault = null; return; }
-  postSettings({ GLUERUN_RUNNER: p.runnerScript }, (ok) => {
+  postSettings({ SINGULAR_RUNNER: p.runnerScript }, (ok) => {
     PV.confirmDefault = null; PV.sig = null;
     if (ok && PV.data) {
       // Optimistic: the default runner is known the instant the write lands — move

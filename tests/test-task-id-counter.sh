@@ -28,23 +28,23 @@ mkdir -p "$tmp/worktrees/TASK-0018"
 mkdir -p "$tmp/docs/orchestration/packets/imported/TASK-0016"
 
 run_lib() {
-  GLUERUN_ROOT="$tmp" \
-  GLUERUN_STATE_DIR="$tmp/state" \
-  GLUERUN_ORCH_DIR="$tmp/docs/orchestration" \
-  GLUERUN_TASKS_DIR="$tmp/docs/orchestration/tasks" \
-  GLUERUN_LEASES_DIR="$tmp/state/leases" \
-  GLUERUN_DISPATCH_DIR="$tmp/state/dispatch" \
-  GLUERUN_WORKTREES_DIR="$tmp/worktrees" \
+  SINGULAR_ROOT="$tmp" \
+  SINGULAR_STATE_DIR="$tmp/state" \
+  SINGULAR_ORCH_DIR="$tmp/docs/orchestration" \
+  SINGULAR_TASKS_DIR="$tmp/docs/orchestration/tasks" \
+  SINGULAR_LEASES_DIR="$tmp/state/leases" \
+  SINGULAR_DISPATCH_DIR="$tmp/state/dispatch" \
+  SINGULAR_WORKTREES_DIR="$tmp/worktrees" \
   bash -c "source '$ENGINE_HOME/engine/lib.sh'; $1"
 }
 
 # 1. Scan max sees every surface: files, superseded/, lease, dispatch,
 #    worktree, imported packet dir, branch.
-max="$(run_lib gluerun_task_id_scan_max)"
+max="$(run_lib singular_task_id_scan_max)"
 [[ "$max" == "21" ]] || fail "scan max should be 21 (branch), got $max"
 
 # 2. First allocation continues past the branch id.
-next="$(run_lib 'gluerun_task_id_next 1')"
+next="$(run_lib 'singular_task_id_next 1')"
 [[ "$next" == "TASK-0022" ]] || fail "expected TASK-0022, got $next"
 
 # 3. Counter persists past artifact deletion (monotonic even when history is
@@ -52,20 +52,20 @@ next="$(run_lib 'gluerun_task_id_next 1')"
 rm -rf "$tmp/docs/orchestration/tasks" "$tmp/state/leases" "$tmp/state/dispatch" "$tmp/worktrees"
 mkdir -p "$tmp/docs/orchestration/tasks" "$tmp/state/leases" "$tmp/state/dispatch" "$tmp/worktrees"
 git -C "$tmp" branch -D "agent/core/TASK-0021-fixture" >/dev/null
-batch="$(run_lib 'gluerun_task_id_next 3')"
+batch="$(run_lib 'singular_task_id_next 3')"
 [[ "$batch" == $'TASK-0023\nTASK-0024\nTASK-0025' ]] || fail "expected 0023..0025, got: $batch"
 
 # 4. Counter behind reality self-heals from the scan.
 printf '5\n' >"$tmp/state/task-id-counter"
 : >"$tmp/docs/orchestration/tasks/TASK-0040.md"
-healed="$(run_lib 'gluerun_task_id_next 1')"
+healed="$(run_lib 'singular_task_id_next 1')"
 [[ "$healed" == "TASK-0041" ]] || fail "counter should self-heal to 41, got $healed"
 
 # 5. Corrupt counter treated as 0 and re-seeded from the scan (which sees the
 #    TASK-0040 file; the un-materialized 0041 allocation is lost — acceptable,
 #    the scan is the durable floor).
 printf 'garbage\n' >"$tmp/state/task-id-counter"
-after="$(run_lib 'gluerun_task_id_next 1')"
+after="$(run_lib 'singular_task_id_next 1')"
 [[ "$after" == "TASK-0041" ]] || fail "corrupt counter should re-seed from scan to 41, got $after"
 
 echo "PASS: test-task-id-counter"

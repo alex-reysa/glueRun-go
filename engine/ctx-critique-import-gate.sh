@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx-critique-import-gate.sh — the critique-import gate DISPOSITION the L0
 # importer will apply, built on top of the integrated pure decider
-# (the gluerun_ctx_critique_import_* DECISION in engine/ctx-critique-import.sh,
+# (the singular_ctx_critique_import_* DECISION in engine/ctx-critique-import.sh,
 # consulted below through its composed function name). TASK-0015
 # supplied the read-only DECISION (OFF is always import; ON maps approve->import
 # and revise/park/missing/invalid -> a reject carrying the stable reason token
@@ -30,7 +30,7 @@
 # auditor; the ON path only ever records a rejection and fails the lease — it
 # never fabricates an approval, and a missing record ON fails CLOSED to reject.
 #
-# Disposition semantics, gated on GLUERUN_PLAN_CRITIQUE (default 0):
+# Disposition semantics, gated on SINGULAR_PLAN_CRITIQUE (default 0):
 #   OFF (unset or "0"): observe-only — return the `import` disposition with ZERO
 #     side effects (no event, no lease change, staged files untouched), so an OFF
 #     flow is byte-identical to today (the recorded verdict is not enforced).
@@ -41,22 +41,22 @@
 #     disposition — exactly one origin.l1_import_rejected event with reason
 #     `plan-critique` carrying the node, runId, and observed classifier — sets
 #     the node lease status to failed (planning-failed) via
-#     gluerun_l1_lease_set_status, and returns the `reject` disposition.
+#     singular_l1_lease_set_status, and returns the `reject` disposition.
 #
 # Public entry point:
-#   gluerun_ctx_critique_import_gate <node> <stage_dir> [run_id]
+#   singular_ctx_critique_import_gate <node> <stage_dir> [run_id]
 #     Print a single TAB-separated line "<disposition>\t<reason>\t<observed>" and
 #     return the disposition as exit status:
 #       import -> exit 0, line "import\tok\t<observed>"
 #       reject -> exit 1, line "reject\tplan-critique\t<observed>"
 #     matching the integrated decider's contract. run_id defaults to
-#     ${GLUERUN_RUN_ID:-} and is recorded on the ON-reject event.
+#     ${SINGULAR_RUN_ID:-} and is recorded on the ON-reject event.
 
 # The critique-import gate DISPOSITION. Consults the integrated pure decider and
 # acts on its verdict. On the ON-reject path it records exactly one disposition
 # event and fails the node lease; on every other path it has ZERO side effects.
-gluerun_ctx_critique_import_gate() {
-  local node="$1" stage_dir="$2" run_id="${3:-${GLUERUN_RUN_ID:-}}"
+singular_ctx_critique_import_gate() {
+  local node="$1" stage_dir="$2" run_id="${3:-${SINGULAR_RUN_ID:-}}"
 
   # Consult the integrated, pure/read-only decider. Its output line is the same
   # "<disposition>\t<reason>\t<observed>" contract this gate re-emits; we never
@@ -72,7 +72,7 @@ gluerun_ctx_critique_import_gate() {
   # it. The follow-up import-path hook consumes this gate, not the raw decider.
   local _op=decide
   local out rc=0
-  out="$("gluerun_ctx_critique_import_${_op}" "$stage_dir")" || rc=$?
+  out="$("singular_ctx_critique_import_${_op}" "$stage_dir")" || rc=$?
   local disposition reason observed
   disposition="$(printf '%s' "$out" | cut -f1)"
   reason="$(printf '%s' "$out" | cut -f2)"
@@ -103,9 +103,9 @@ PY
 )"
   # Exactly one origin.l1_import_rejected event carrying node, runId, and the
   # observed classifier under the stable reason token.
-  gluerun_append_event "origin.l1_import_rejected" "$reason" "$event_json"
+  singular_append_event "origin.l1_import_rejected" "$reason" "$event_json"
   # Handle the node lease as planning-failed so the frontier can be re-planned.
-  gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
+  singular_l1_lease_set_status "$node" failed 2>/dev/null || true
 
   printf '%s\t%s\t%s\n' "$disposition" "$reason" "$observed"
   return 1

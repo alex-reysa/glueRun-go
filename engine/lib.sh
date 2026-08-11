@@ -5,42 +5,42 @@ set -euo pipefail
 # and restore it afterwards so a committed config cannot change the interpreter
 # used to run the engine. Operators may set it in the process/service
 # environment (including launchd's local env file).
-_gluerun_bootstrap_bash_bin="${GLUERUN_BASH_BIN:-}"
+_singular_bootstrap_bash_bin="${SINGULAR_BASH_BIN:-}"
 
-gluerun_repo_root() {
+singular_repo_root() {
   git rev-parse --show-toplevel
 }
 
 # Engine install location. The engine ships its OWN schemas (and other engine
 # assets); resolve them relative to THIS file, not the consumer repo, so a repo
-# that holds only config still validates. GLUERUN_ROOT remains the *consumer* repo.
-# Override GLUERUN_ENGINE_HOME / GLUERUN_SCHEMA_DIR when vendoring or testing.
-# Where this file actually lives. GLUERUN_ENGINE_DIR below is an overridable
+# that holds only config still validates. SINGULAR_ROOT remains the *consumer* repo.
+# Override SINGULAR_ENGINE_HOME / SINGULAR_SCHEMA_DIR when vendoring or testing.
+# Where this file actually lives. SINGULAR_ENGINE_DIR below is an overridable
 # knob — tests shim it to a directory of selected ctx-*.sh symlinks to control
 # which bricks load — so engine EXECUTABLES must not resolve through it, or a
 # shimmed brick lookup silently takes bootstrap-worktree.sh and readonly_guard.py
 # with it.
-GLUERUN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GLUERUN_ENGINE_DIR="${GLUERUN_ENGINE_DIR:-$GLUERUN_LIB_DIR}"
-GLUERUN_ENGINE_HOME="${GLUERUN_ENGINE_HOME:-$(cd "$GLUERUN_ENGINE_DIR/.." && pwd)}"
-GLUERUN_SCHEMA_DIR="${GLUERUN_SCHEMA_DIR:-$GLUERUN_ENGINE_HOME/schemas}"
+SINGULAR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SINGULAR_ENGINE_DIR="${SINGULAR_ENGINE_DIR:-$SINGULAR_LIB_DIR}"
+SINGULAR_ENGINE_HOME="${SINGULAR_ENGINE_HOME:-$(cd "$SINGULAR_ENGINE_DIR/.." && pwd)}"
+SINGULAR_SCHEMA_DIR="${SINGULAR_SCHEMA_DIR:-$SINGULAR_ENGINE_HOME/schemas}"
 
-GLUERUN_ROOT="${GLUERUN_ROOT:-$(gluerun_repo_root)}"
-GLUERUN_ORCH_DIR="${GLUERUN_ORCH_DIR:-$GLUERUN_ROOT/docs/orchestration}"
-GLUERUN_STATE_DIR="${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}"
+SINGULAR_ROOT="${SINGULAR_ROOT:-$(singular_repo_root)}"
+SINGULAR_ORCH_DIR="${SINGULAR_ORCH_DIR:-$SINGULAR_ROOT/docs/orchestration}"
+SINGULAR_STATE_DIR="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}"
 
 # ---- Consumer configuration --------------------------------------------------
 # All per-repo variation lives in the CONSUMER repo, never in engine files. The
 # engine loads, in increasing precedence (each can override the previous),
 # BEFORE the ${VAR:-default} block below so a repo's settings win:
-#   gluerun.config.json          declarative: targetBranch, gateCommand, runner,
+#   singular.config.json          declarative: targetBranch, gateCommand, runner,
 #                             areas{}, proofLayers[], identity{}, prewarm, env{}
-#   gluerun.config.sh            optional shell extras (computed values / functions)
-#   .gluerun-state/config.local.sh  gitignored operator overrides + secrets
+#   singular.config.sh            optional shell extras (computed values / functions)
+#   .singular-state/config.local.sh  gitignored operator overrides + secrets
 # Never edit engine/ to customize a repo — put it in these files.
 
-# Translate the declarative JSON config into GLUERUN_* env exports.
-gluerun_json_config_to_env() {
+# Translate the declarative JSON config into SINGULAR_* env exports.
+singular_json_config_to_env() {
   python3 - "$1" <<'PY'
 import json, sys, shlex, re
 cfg = json.load(open(sys.argv[1]))
@@ -49,110 +49,110 @@ _VAR = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 def setv(var, val):
     if val is None: return
     if not _VAR.match(var):
-        sys.stderr.write("gluerun: ignoring invalid config env key: %r\n" % var)
+        sys.stderr.write("singular: ignoring invalid config env key: %r\n" % var)
         return
     out.append("export %s=%s" % (var, shlex.quote(str(val))))
-setv("GLUERUN_TARGET_BRANCH", cfg.get("targetBranch"))
-setv("GLUERUN_CONFIG_SCHEMA_VERSION", cfg.get("schemaVersion"))
-setv("GLUERUN_DEFAULT_GATE_CMD", cfg.get("gateCommand"))
-setv("GLUERUN_RUNNER", cfg.get("runner"))
-setv("GLUERUN_AREA_PREFIX", cfg.get("areaPrefix"))
-setv("GLUERUN_PREWARM_CMD", cfg.get("prewarm"))
+setv("SINGULAR_TARGET_BRANCH", cfg.get("targetBranch"))
+setv("SINGULAR_CONFIG_SCHEMA_VERSION", cfg.get("schemaVersion"))
+setv("SINGULAR_DEFAULT_GATE_CMD", cfg.get("gateCommand"))
+setv("SINGULAR_RUNNER", cfg.get("runner"))
+setv("SINGULAR_AREA_PREFIX", cfg.get("areaPrefix"))
+setv("SINGULAR_PREWARM_CMD", cfg.get("prewarm"))
 areas = cfg.get("areas")
 if isinstance(areas, dict):
     lines = []
     for k, v in areas.items():
         if isinstance(v, list): v = ":".join(v)
         lines.append("%s=%s" % (k, v))
-    setv("GLUERUN_AREA_PATHS", "\n".join(lines))
+    setv("SINGULAR_AREA_PATHS", "\n".join(lines))
 pl = cfg.get("proofLayers")
-if isinstance(pl, list): setv("GLUERUN_PROOF_LAYERS", ",".join(pl))
+if isinstance(pl, list): setv("SINGULAR_PROOF_LAYERS", ",".join(pl))
 pg = cfg.get("proofGrandfather")
-if isinstance(pg, list): setv("GLUERUN_PROOF_GRANDFATHER", ",".join(pg))
+if isinstance(pg, list): setv("SINGULAR_PROOF_GRANDFATHER", ",".join(pg))
 mods = cfg.get("modules")
-if isinstance(mods, list): setv("GLUERUN_MODULES", " ".join(mods))
+if isinstance(mods, list): setv("SINGULAR_MODULES", " ".join(mods))
 ssl = cfg.get("singleSliceLayers")
-if isinstance(ssl, list): setv("GLUERUN_SINGLE_SLICE_LAYERS", ",".join(ssl))
+if isinstance(ssl, list): setv("SINGULAR_SINGLE_SLICE_LAYERS", ",".join(ssl))
 wcp = cfg.get("worktreeCopyPaths")
-if isinstance(wcp, list): setv("GLUERUN_WORKTREE_COPY_PATHS_JSON", json.dumps(wcp, separators=(",", ":")))
+if isinstance(wcp, list): setv("SINGULAR_WORKTREE_COPY_PATHS_JSON", json.dumps(wcp, separators=(",", ":")))
 pf = cfg.get("provisionFiles")
-if isinstance(pf, list): setv("GLUERUN_PROVISION_FILES_JSON", json.dumps(pf, separators=(",", ":")))
+if isinstance(pf, list): setv("SINGULAR_PROVISION_FILES_JSON", json.dumps(pf, separators=(",", ":")))
 ea = cfg.get("envAllowlist")
-if isinstance(ea, list): setv("GLUERUN_ENV_ALLOWLIST_JSON", json.dumps(ea, separators=(",", ":")))
+if isinstance(ea, list): setv("SINGULAR_ENV_ALLOWLIST_JSON", json.dumps(ea, separators=(",", ":")))
 capability_profiles = cfg.get("capabilityProfiles")
 if isinstance(capability_profiles, dict):
-    setv("GLUERUN_CAPABILITY_PROFILES_JSON", json.dumps(capability_profiles, separators=(",", ":")))
+    setv("SINGULAR_CAPABILITY_PROFILES_JSON", json.dumps(capability_profiles, separators=(",", ":")))
 role_profiles = cfg.get("roleProfiles")
 if isinstance(role_profiles, dict):
-    setv("GLUERUN_ROLE_PROFILES_JSON", json.dumps(role_profiles, separators=(",", ":")))
+    setv("SINGULAR_ROLE_PROFILES_JSON", json.dumps(role_profiles, separators=(",", ":")))
 capabilities = cfg.get("capabilities")
 if isinstance(capabilities, dict):
-    setv("GLUERUN_CAPABILITIES_JSON", json.dumps(capabilities, separators=(",", ":")))
+    setv("SINGULAR_CAPABILITIES_JSON", json.dumps(capabilities, separators=(",", ":")))
 evidence = cfg.get("evidence")
 if isinstance(evidence, dict):
-    setv("GLUERUN_EVIDENCE_CONFIG_JSON", json.dumps(evidence, separators=(",", ":")))
+    setv("SINGULAR_EVIDENCE_CONFIG_JSON", json.dumps(evidence, separators=(",", ":")))
 bootstrap = cfg.get("bootstrap")
 if isinstance(bootstrap, dict):
-    setv("GLUERUN_BOOTSTRAP_JSON", json.dumps(bootstrap, separators=(",", ":")))
+    setv("SINGULAR_BOOTSTRAP_JSON", json.dumps(bootstrap, separators=(",", ":")))
 resources = cfg.get("resources")
 if isinstance(resources, dict):
-    setv("GLUERUN_DISK_RESERVE_BYTES", resources.get("diskReserveBytes"))
-    setv("GLUERUN_ESTIMATED_WORKTREE_BYTES", resources.get("estimatedWorktreeBytes"))
-    setv("GLUERUN_MAX_CONCURRENT", resources.get("maxConcurrent"))
+    setv("SINGULAR_DISK_RESERVE_BYTES", resources.get("diskReserveBytes"))
+    setv("SINGULAR_ESTIMATED_WORKTREE_BYTES", resources.get("estimatedWorktreeBytes"))
+    setv("SINGULAR_MAX_CONCURRENT", resources.get("maxConcurrent"))
 control_state = cfg.get("controlState")
 if isinstance(control_state, dict):
-    setv("GLUERUN_CONTROL_COMMIT_MIN_INTERVAL_SEC", control_state.get("commitIntervalSeconds"))
+    setv("SINGULAR_CONTROL_COMMIT_MIN_INTERVAL_SEC", control_state.get("commitIntervalSeconds"))
 legacy_compatibility = cfg.get("legacyCompatibility")
 if isinstance(legacy_compatibility, dict) and isinstance(
     legacy_compatibility.get("unboundWaivers"), bool
 ):
     setv(
-        "GLUERUN_LEGACY_UNBOUND_WAIVERS",
+        "SINGULAR_LEGACY_UNBOUND_WAIVERS",
         "1" if legacy_compatibility["unboundWaivers"] else "0",
     )
-setv("GLUERUN_PROMOTER", cfg.get("promoter"))
+setv("SINGULAR_PROMOTER", cfg.get("promoter"))
 ident = cfg.get("identity") or {}
 l0 = ident.get("l0") or {}; l1 = ident.get("l1") or {}
-setv("GLUERUN_GIT_L0_NAME", l0.get("name")); setv("GLUERUN_GIT_L0_EMAIL", l0.get("email"))
-setv("GLUERUN_GIT_L1_NAME", l1.get("name")); setv("GLUERUN_GIT_L1_EMAIL", l1.get("email"))
+setv("SINGULAR_GIT_L0_NAME", l0.get("name")); setv("SINGULAR_GIT_L0_EMAIL", l0.get("email"))
+setv("SINGULAR_GIT_L1_NAME", l1.get("name")); setv("SINGULAR_GIT_L1_EMAIL", l1.get("email"))
 for k, v in (cfg.get("env") or {}).items():
-    if k == "GLUERUN_BASH_BIN":
-        sys.stderr.write("gluerun: ignoring bootstrap-only config env key: GLUERUN_BASH_BIN\n")
+    if k == "SINGULAR_BASH_BIN":
+        sys.stderr.write("singular: ignoring bootstrap-only config env key: SINGULAR_BASH_BIN\n")
         continue
     setv(k, v)
 print("\n".join(out))
 PY
 }
 
-GLUERUN_JSON_CONFIG_FILE="${GLUERUN_JSON_CONFIG_FILE:-$GLUERUN_ROOT/gluerun.config.json}"
-if [[ -f "$GLUERUN_JSON_CONFIG_FILE" ]]; then
-  _gluerun_cfg_env="$(gluerun_json_config_to_env "$GLUERUN_JSON_CONFIG_FILE")" \
-    || { echo "gluerun: failed to parse $GLUERUN_JSON_CONFIG_FILE" >&2; exit 2; }
-  eval "$_gluerun_cfg_env"
-  unset _gluerun_cfg_env
+SINGULAR_JSON_CONFIG_FILE="${SINGULAR_JSON_CONFIG_FILE:-$SINGULAR_ROOT/singular.config.json}"
+if [[ -f "$SINGULAR_JSON_CONFIG_FILE" ]]; then
+  _singular_cfg_env="$(singular_json_config_to_env "$SINGULAR_JSON_CONFIG_FILE")" \
+    || { echo "singular: failed to parse $SINGULAR_JSON_CONFIG_FILE" >&2; exit 2; }
+  eval "$_singular_cfg_env"
+  unset _singular_cfg_env
 fi
-GLUERUN_CONFIG_FILE="${GLUERUN_CONFIG_FILE:-$GLUERUN_ROOT/gluerun.config.sh}"
-if [[ -f "$GLUERUN_CONFIG_FILE" ]]; then
+SINGULAR_CONFIG_FILE="${SINGULAR_CONFIG_FILE:-$SINGULAR_ROOT/singular.config.sh}"
+if [[ -f "$SINGULAR_CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
-  source "$GLUERUN_CONFIG_FILE"
+  source "$SINGULAR_CONFIG_FILE"
 fi
-GLUERUN_LOCAL_CONFIG_FILE="${GLUERUN_LOCAL_CONFIG_FILE:-$GLUERUN_STATE_DIR/config.local.sh}"
-if [[ -f "$GLUERUN_LOCAL_CONFIG_FILE" ]]; then
+SINGULAR_LOCAL_CONFIG_FILE="${SINGULAR_LOCAL_CONFIG_FILE:-$SINGULAR_STATE_DIR/config.local.sh}"
+if [[ -f "$SINGULAR_LOCAL_CONFIG_FILE" ]]; then
   # shellcheck disable=SC1090
-  source "$GLUERUN_LOCAL_CONFIG_FILE"
+  source "$SINGULAR_LOCAL_CONFIG_FILE"
 fi
-if [[ -n "$_gluerun_bootstrap_bash_bin" ]]; then
-  GLUERUN_BASH_BIN="$_gluerun_bootstrap_bash_bin"
-  export GLUERUN_BASH_BIN
+if [[ -n "$_singular_bootstrap_bash_bin" ]]; then
+  SINGULAR_BASH_BIN="$_singular_bootstrap_bash_bin"
+  export SINGULAR_BASH_BIN
 else
-  unset GLUERUN_BASH_BIN 2>/dev/null || true
+  unset SINGULAR_BASH_BIN 2>/dev/null || true
 fi
-unset _gluerun_bootstrap_bash_bin
+unset _singular_bootstrap_bash_bin
 # ------------------------------------------------------------------------------
 
-gluerun_bash_bin() {
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    printf '%s\n' "$GLUERUN_BASH_BIN"
+singular_bash_bin() {
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    printf '%s\n' "$SINGULAR_BASH_BIN"
   else
     command -v bash 2>/dev/null || printf '%s\n' /bin/bash
   fi
@@ -167,15 +167,15 @@ gluerun_bash_bin() {
 # provider_resolver.py is the twin that doctor and the console read, and
 # tests/test-provider-resolver-parity.sh asserts the two agree on path, exit
 # code AND message text. Editing either side is a two-sided edit.
-gluerun_resolve_codex_bin() {
-  local configured="${GLUERUN_CODEX_BIN:-}" resolved=""
+singular_resolve_codex_bin() {
+  local configured="${SINGULAR_CODEX_BIN:-}" resolved=""
   if [[ -n "$configured" ]]; then
     if [[ "$configured" != /* ]]; then
-      echo "GLUERUN_CODEX_BIN must be an absolute path: $configured" >&2
+      echo "SINGULAR_CODEX_BIN must be an absolute path: $configured" >&2
       return 2
     fi
     if [[ ! -x "$configured" ]]; then
-      echo "GLUERUN_CODEX_BIN is not executable: $configured" >&2
+      echo "SINGULAR_CODEX_BIN is not executable: $configured" >&2
       return 127
     fi
     printf '%s\n' "$configured"
@@ -183,7 +183,7 @@ gluerun_resolve_codex_bin() {
   fi
   resolved="$(command -v codex 2>/dev/null || true)"
   if [[ -z "$resolved" ]]; then
-    echo "codex CLI not found on PATH (set GLUERUN_CODEX_BIN)" >&2
+    echo "codex CLI not found on PATH (set SINGULAR_CODEX_BIN)" >&2
     return 127
   fi
   case "$resolved" in
@@ -197,74 +197,74 @@ gluerun_resolve_codex_bin() {
   printf '%s\n' "$resolved"
 }
 
-GLUERUN_LOCK_FILE="$GLUERUN_STATE_DIR/locks/origin.lock.json"
-GLUERUN_EVENTS_FILE="$GLUERUN_STATE_DIR/events.ndjson"
-GLUERUN_TASKS_DIR="${GLUERUN_TASKS_DIR:-$GLUERUN_ORCH_DIR/tasks}"
-GLUERUN_LEASES_DIR="${GLUERUN_LEASES_DIR:-$GLUERUN_STATE_DIR/leases}"
-GLUERUN_INBOX_DIR="${GLUERUN_INBOX_DIR:-$GLUERUN_STATE_DIR/inbox}"
-GLUERUN_RUNS_DIR="${GLUERUN_RUNS_DIR:-$GLUERUN_STATE_DIR/runs}"
-GLUERUN_WORKTREES_DIR="${GLUERUN_WORKTREES_DIR:-$GLUERUN_ROOT/.worktrees}"
-GLUERUN_ORIGIN_STATE_FILE="${GLUERUN_ORIGIN_STATE_FILE:-$GLUERUN_STATE_DIR/origin-state.json}"
-GLUERUN_GIT_LOCK_DIR="${GLUERUN_GIT_LOCK_DIR:-$GLUERUN_STATE_DIR/locks/git-op.lock}"
-GLUERUN_PACKET_SCHEMA="${GLUERUN_PACKET_SCHEMA:-$GLUERUN_SCHEMA_DIR/state-packet.v0.schema.json}"
-GLUERUN_AUDIT_SCHEMA="${GLUERUN_AUDIT_SCHEMA:-$GLUERUN_SCHEMA_DIR/audit-verdict.v0.schema.json}"
-GLUERUN_DECIDER_SCHEMA="${GLUERUN_DECIDER_SCHEMA:-$GLUERUN_SCHEMA_DIR/decider-verdict.v0.schema.json}"
-GLUERUN_GATE_SCHEMA="${GLUERUN_GATE_SCHEMA:-$GLUERUN_SCHEMA_DIR/gate-result.v0.schema.json}"
-GLUERUN_TASKBATCH_SCHEMA="${GLUERUN_TASKBATCH_SCHEMA:-$GLUERUN_SCHEMA_DIR/task-batch.v0.schema.json}"
-GLUERUN_SUPERVISOR_SCHEMA="${GLUERUN_SUPERVISOR_SCHEMA:-$GLUERUN_SCHEMA_DIR/supervisor-report.v0.schema.json}"
-GLUERUN_SECRET_PATTERNS_FILE="${GLUERUN_SECRET_PATTERNS_FILE:-$GLUERUN_ENGINE_DIR/secret-patterns.tsv}"
+SINGULAR_LOCK_FILE="$SINGULAR_STATE_DIR/locks/origin.lock.json"
+SINGULAR_EVENTS_FILE="$SINGULAR_STATE_DIR/events.ndjson"
+SINGULAR_TASKS_DIR="${SINGULAR_TASKS_DIR:-$SINGULAR_ORCH_DIR/tasks}"
+SINGULAR_LEASES_DIR="${SINGULAR_LEASES_DIR:-$SINGULAR_STATE_DIR/leases}"
+SINGULAR_INBOX_DIR="${SINGULAR_INBOX_DIR:-$SINGULAR_STATE_DIR/inbox}"
+SINGULAR_RUNS_DIR="${SINGULAR_RUNS_DIR:-$SINGULAR_STATE_DIR/runs}"
+SINGULAR_WORKTREES_DIR="${SINGULAR_WORKTREES_DIR:-$SINGULAR_ROOT/.worktrees}"
+SINGULAR_ORIGIN_STATE_FILE="${SINGULAR_ORIGIN_STATE_FILE:-$SINGULAR_STATE_DIR/origin-state.json}"
+SINGULAR_GIT_LOCK_DIR="${SINGULAR_GIT_LOCK_DIR:-$SINGULAR_STATE_DIR/locks/git-op.lock}"
+SINGULAR_PACKET_SCHEMA="${SINGULAR_PACKET_SCHEMA:-$SINGULAR_SCHEMA_DIR/state-packet.v0.schema.json}"
+SINGULAR_AUDIT_SCHEMA="${SINGULAR_AUDIT_SCHEMA:-$SINGULAR_SCHEMA_DIR/audit-verdict.v0.schema.json}"
+SINGULAR_DECIDER_SCHEMA="${SINGULAR_DECIDER_SCHEMA:-$SINGULAR_SCHEMA_DIR/decider-verdict.v0.schema.json}"
+SINGULAR_GATE_SCHEMA="${SINGULAR_GATE_SCHEMA:-$SINGULAR_SCHEMA_DIR/gate-result.v0.schema.json}"
+SINGULAR_TASKBATCH_SCHEMA="${SINGULAR_TASKBATCH_SCHEMA:-$SINGULAR_SCHEMA_DIR/task-batch.v0.schema.json}"
+SINGULAR_SUPERVISOR_SCHEMA="${SINGULAR_SUPERVISOR_SCHEMA:-$SINGULAR_SCHEMA_DIR/supervisor-report.v0.schema.json}"
+SINGULAR_SECRET_PATTERNS_FILE="${SINGULAR_SECRET_PATTERNS_FILE:-$SINGULAR_ENGINE_DIR/secret-patterns.tsv}"
 # Post-worker + integrate validation. No universal default — a repo MUST set its
 # gate command (per task `Gate command:` or via config). Empty = no implicit gate.
-GLUERUN_DEFAULT_GATE_CMD="${GLUERUN_DEFAULT_GATE_CMD:-}"
-# Worker source-tree convention: area -> write-scope path. GLUERUN_AREA_PATHS is a
-# newline list of "area=path1[:path2]" entries (set in gluerun.config.sh); unmapped
-# areas fall back to GLUERUN_AREA_PREFIX + area.
-GLUERUN_AREA_PREFIX="${GLUERUN_AREA_PREFIX:-internal/}"
-GLUERUN_AREA_PATHS="${GLUERUN_AREA_PATHS:-}"
+SINGULAR_DEFAULT_GATE_CMD="${SINGULAR_DEFAULT_GATE_CMD:-}"
+# Worker source-tree convention: area -> write-scope path. SINGULAR_AREA_PATHS is a
+# newline list of "area=path1[:path2]" entries (set in singular.config.sh); unmapped
+# areas fall back to SINGULAR_AREA_PREFIX + area.
+SINGULAR_AREA_PREFIX="${SINGULAR_AREA_PREFIX:-internal/}"
+SINGULAR_AREA_PATHS="${SINGULAR_AREA_PATHS:-}"
 # Optional pre-worker prewarm (e.g. dependency fetch). Empty = none.
-GLUERUN_PREWARM_CMD="${GLUERUN_PREWARM_CMD:-}"
+SINGULAR_PREWARM_CMD="${SINGULAR_PREWARM_CMD:-}"
 # Bot git identity for L0/L1 control-state commits (override per project).
-GLUERUN_GIT_L0_NAME="${GLUERUN_GIT_L0_NAME:-gluerun L0}"
-GLUERUN_GIT_L0_EMAIL="${GLUERUN_GIT_L0_EMAIL:-l0@gluerun.local}"
-GLUERUN_GIT_L1_NAME="${GLUERUN_GIT_L1_NAME:-gluerun L1}"
-GLUERUN_GIT_L1_EMAIL="${GLUERUN_GIT_L1_EMAIL:-l1@gluerun.local}"
+SINGULAR_GIT_L0_NAME="${SINGULAR_GIT_L0_NAME:-singular L0}"
+SINGULAR_GIT_L0_EMAIL="${SINGULAR_GIT_L0_EMAIL:-l0@singular.local}"
+SINGULAR_GIT_L1_NAME="${SINGULAR_GIT_L1_NAME:-singular L1}"
+SINGULAR_GIT_L1_EMAIL="${SINGULAR_GIT_L1_EMAIL:-l1@singular.local}"
 # A runner given as a bare filename (e.g. "claude-run.sh") resolves against the
 # engine dir; an absolute/relative path is used as-is.
-if [[ -n "${GLUERUN_RUNNER:-}" && "$GLUERUN_RUNNER" != */* ]]; then
-  GLUERUN_RUNNER="$GLUERUN_ENGINE_DIR/$GLUERUN_RUNNER"
+if [[ -n "${SINGULAR_RUNNER:-}" && "$SINGULAR_RUNNER" != */* ]]; then
+  SINGULAR_RUNNER="$SINGULAR_ENGINE_DIR/$SINGULAR_RUNNER"
 fi
-# A gate promoter given as a bare name resolves to a gluerun-ext module
-# (<engine>/gluerun-ext/<name>.sh); an absolute/relative path is used as-is.
-if [[ -n "${GLUERUN_PROMOTER:-}" && "$GLUERUN_PROMOTER" != */* ]]; then
-  GLUERUN_PROMOTER="$GLUERUN_ENGINE_HOME/gluerun-ext/$GLUERUN_PROMOTER.sh"
+# A gate promoter given as a bare name resolves to a singular-ext module
+# (<engine>/singular-ext/<name>.sh); an absolute/relative path is used as-is.
+if [[ -n "${SINGULAR_PROMOTER:-}" && "$SINGULAR_PROMOTER" != */* ]]; then
+  SINGULAR_PROMOTER="$SINGULAR_ENGINE_HOME/singular-ext/$SINGULAR_PROMOTER.sh"
 fi
 
 # Autonomy controls.
-GLUERUN_MAX_RETRIES="${GLUERUN_MAX_RETRIES:-3}"            # per-task worker retries before the decider escalates
-GLUERUN_AUTO_INTEGRATE="${GLUERUN_AUTO_INTEGRATE:-1}"      # direct reconcile/auto/launchd all integrate accepted work by default
-# Decider fast-path (T-F1): when 1 (default), gluerun_decider_fast_action resolves
+SINGULAR_MAX_RETRIES="${SINGULAR_MAX_RETRIES:-3}"            # per-task worker retries before the decider escalates
+SINGULAR_AUTO_INTEGRATE="${SINGULAR_AUTO_INTEGRATE:-1}"      # direct reconcile/auto/launchd all integrate accepted work by default
+# Decider fast-path (T-F1): when 1 (default), singular_decider_fast_action resolves
 # clear-cut failure classes by policy without paying a model decider round-trip;
 # set 0 to force every failure through decide.sh (the historical behavior).
-GLUERUN_DECIDER_FAST="${GLUERUN_DECIDER_FAST:-1}"
+SINGULAR_DECIDER_FAST="${SINGULAR_DECIDER_FAST:-1}"
 # Infra-failure isolation (T-E6): bounded re-runs of ONLY the failed role when a
 # runner times out / refuses / yields no parseable output (broken infrastructure,
 # not a real worker/audit failure). These NEVER reach the main retry loop or bump
 # the lease retryCount; on exhaustion they surface as worker-infra / audit-infra.
-GLUERUN_WORKER_INFRA_MAX="${GLUERUN_WORKER_INFRA_MAX:-1}"  # extra worker re-runs on an infra failure
-GLUERUN_AUDIT_INFRA_MAX="${GLUERUN_AUDIT_INFRA_MAX:-2}"    # extra auditor re-runs on an infra failure
+SINGULAR_WORKER_INFRA_MAX="${SINGULAR_WORKER_INFRA_MAX:-1}"  # extra worker re-runs on an infra failure
+SINGULAR_AUDIT_INFRA_MAX="${SINGULAR_AUDIT_INFRA_MAX:-2}"    # extra auditor re-runs on an infra failure
 # Context-continuity fix/re-audit prompts (T-E3/T-E4). STRUCTURED=1 renders a
 # structured fix prompt on retries (authoritative findings + scoped evidence);
 # =0 reproduces the legacy fix_hints tail byte-for-byte. SECTION_MAX_CHARS caps
 # each appended section so a runaway ledger/log can't blow the prompt budget.
-GLUERUN_FIX_PROMPT_STRUCTURED="${GLUERUN_FIX_PROMPT_STRUCTURED:-1}"
-GLUERUN_CONTEXT_SECTION_MAX_CHARS="${GLUERUN_CONTEXT_SECTION_MAX_CHARS:-4000}"
-GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE="${GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE:-1}"  # task preflight: require non-empty acceptanceCriteria
-GLUERUN_MAX_HOURS="${GLUERUN_MAX_HOURS:-20}"              # autonomate.sh wall-clock budget
-GLUERUN_MAX_CONSEC_FAILS="${GLUERUN_MAX_CONSEC_FAILS:-5}" # circuit breaker threshold
-GLUERUN_STOP_FILE="${GLUERUN_STOP_FILE:-$GLUERUN_STATE_DIR/STOP}"
-GLUERUN_STATUS_FILE="${GLUERUN_STATUS_FILE:-$GLUERUN_STATE_DIR/STATUS.md}"
-GLUERUN_BREAKER_FILE="${GLUERUN_BREAKER_FILE:-$GLUERUN_STATE_DIR/circuit.json}"
-GLUERUN_PLANNER_BACKOFF_FILE="${GLUERUN_PLANNER_BACKOFF_FILE:-$GLUERUN_STATE_DIR/planner-backoff.json}"
+SINGULAR_FIX_PROMPT_STRUCTURED="${SINGULAR_FIX_PROMPT_STRUCTURED:-1}"
+SINGULAR_CONTEXT_SECTION_MAX_CHARS="${SINGULAR_CONTEXT_SECTION_MAX_CHARS:-4000}"
+SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE="${SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE:-1}"  # task preflight: require non-empty acceptanceCriteria
+SINGULAR_MAX_HOURS="${SINGULAR_MAX_HOURS:-20}"              # autonomate.sh wall-clock budget
+SINGULAR_MAX_CONSEC_FAILS="${SINGULAR_MAX_CONSEC_FAILS:-5}" # circuit breaker threshold
+SINGULAR_STOP_FILE="${SINGULAR_STOP_FILE:-$SINGULAR_STATE_DIR/STOP}"
+SINGULAR_STATUS_FILE="${SINGULAR_STATUS_FILE:-$SINGULAR_STATE_DIR/STATUS.md}"
+SINGULAR_BREAKER_FILE="${SINGULAR_BREAKER_FILE:-$SINGULAR_STATE_DIR/circuit.json}"
+SINGULAR_PLANNER_BACKOFF_FILE="${SINGULAR_PLANNER_BACKOFF_FILE:-$SINGULAR_STATE_DIR/planner-backoff.json}"
 # Provider-pressure concurrency adaptation (OPT-IN: default OFF). A planner
 # backoff answers "should the loop plan right now"; it says nothing about how
 # many workers to run once the window closes. The field run kept re-entering the
@@ -275,99 +275,99 @@ GLUERUN_PLANNER_BACKOFF_FILE="${GLUERUN_PLANNER_BACKOFF_FILE:-$GLUERUN_STATE_DIR
 #
 # With ADAPT=0 nothing observes, nothing is written, and resource-plan output is
 # byte-identical to 0.16.0 — the state file is never created.
-GLUERUN_PROVIDER_PRESSURE_ADAPT="${GLUERUN_PROVIDER_PRESSURE_ADAPT:-0}"
-GLUERUN_PROVIDER_PRESSURE_FILE="${GLUERUN_PROVIDER_PRESSURE_FILE:-$GLUERUN_STATE_DIR/provider-pressure.json}"
+SINGULAR_PROVIDER_PRESSURE_ADAPT="${SINGULAR_PROVIDER_PRESSURE_ADAPT:-0}"
+SINGULAR_PROVIDER_PRESSURE_FILE="${SINGULAR_PROVIDER_PRESSURE_FILE:-$SINGULAR_STATE_DIR/provider-pressure.json}"
 # Distinct in-window evidence events before the multiplicative decrease. One 429
 # is a data point, not pressure; the default of 2 is the smallest value that can
 # still tell a cluster from a single event.
-GLUERUN_PROVIDER_PRESSURE_CLUSTER="${GLUERUN_PROVIDER_PRESSURE_CLUSTER:-2}"
-GLUERUN_PROVIDER_PRESSURE_WINDOW_SEC="${GLUERUN_PROVIDER_PRESSURE_WINDOW_SEC:-900}" # evidence older than this cannot cluster
-GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET="${GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET:-3}" # quiet successful iterations per +1 slot
-GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS="${GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS:-1}"     # pressure never starves runnable work
-GLUERUN_PROVIDER_PRESSURE_MAX_EVENTS="${GLUERUN_PROVIDER_PRESSURE_MAX_EVENTS:-32}"  # per-provider digest ring bound
+SINGULAR_PROVIDER_PRESSURE_CLUSTER="${SINGULAR_PROVIDER_PRESSURE_CLUSTER:-2}"
+SINGULAR_PROVIDER_PRESSURE_WINDOW_SEC="${SINGULAR_PROVIDER_PRESSURE_WINDOW_SEC:-900}" # evidence older than this cannot cluster
+SINGULAR_PROVIDER_PRESSURE_RECOVER_QUIET="${SINGULAR_PROVIDER_PRESSURE_RECOVER_QUIET:-3}" # quiet successful iterations per +1 slot
+SINGULAR_PROVIDER_PRESSURE_MIN_SLOTS="${SINGULAR_PROVIDER_PRESSURE_MIN_SLOTS:-1}"     # pressure never starves runnable work
+SINGULAR_PROVIDER_PRESSURE_MAX_EVENTS="${SINGULAR_PROVIDER_PRESSURE_MAX_EVENTS:-32}"  # per-provider digest ring bound
 # Single source of truth for shipped-adapter -> provider identity. Both the
 # provider-scoped backoff check and the provider-pressure controller resolve
-# identity through gluerun_runner_provider_identity, which reads this map;
+# identity through singular_runner_provider_identity, which reads this map;
 # nothing else may turn a runner path into a provider name.
-GLUERUN_ADAPTER_PROVIDERS_JSON='{"codex-run.sh":"codex","claude-run.sh":"claude","gemini-run.sh":"gemini","opencode-run.sh":"opencode","cursor-run.sh":"cursor","grok-run.sh":"grok"}'
+SINGULAR_ADAPTER_PROVIDERS_JSON='{"codex-run.sh":"codex","claude-run.sh":"claude","gemini-run.sh":"gemini","opencode-run.sh":"opencode","cursor-run.sh":"cursor","grok-run.sh":"grok"}'
 # Supervisor briefing + ask (0.10.0). All INERT by default: the autonomate loop
-# only spawns a periodic briefing when the interval knob is >0, and `gluerun ask`
-# / `gluerun report` are explicit operator verbs. With INTERVAL_MIN=0 (default) a
+# only spawns a periodic briefing when the interval knob is >0, and `singular ask`
+# / `singular report` are explicit operator verbs. With INTERVAL_MIN=0 (default) a
 # reconcile cycle creates ZERO supervisor artifacts (byte-identical to 0.9.0).
-GLUERUN_SUPERVISOR_INTERVAL_MIN="${GLUERUN_SUPERVISOR_INTERVAL_MIN:-0}"    # minutes between auto briefings; 0 = off
-GLUERUN_SUPERVISOR_TIMEOUT_SEC="${GLUERUN_SUPERVISOR_TIMEOUT_SEC:-900}"    # readonly briefing runner wall budget
-GLUERUN_ASK_TIMEOUT_SEC="${GLUERUN_ASK_TIMEOUT_SEC:-600}"                  # readonly ask runner wall budget
+SINGULAR_SUPERVISOR_INTERVAL_MIN="${SINGULAR_SUPERVISOR_INTERVAL_MIN:-0}"    # minutes between auto briefings; 0 = off
+SINGULAR_SUPERVISOR_TIMEOUT_SEC="${SINGULAR_SUPERVISOR_TIMEOUT_SEC:-900}"    # readonly briefing runner wall budget
+SINGULAR_ASK_TIMEOUT_SEC="${SINGULAR_ASK_TIMEOUT_SEC:-600}"                  # readonly ask runner wall budget
 # Detached dispatch (default ON; set to 0 for the legacy batch path). When on,
 # reconcile spawns workers in their own session and returns within seconds;
 # completion is observed by the reaper on later cycles via dispatch records +
-# exit files, so import/integrate/recover/STOP regain their ~GLUERUN_SLEEP cadence
+# exit files, so import/integrate/recover/STOP regain their ~SINGULAR_SLEEP cadence
 # while workers run. Setting 0 restores batch dispatch: reconcile waits for
 # every worker before returning, exactly as the original loop did. Dispatch
 # records live outside ensure_state_dirs on purpose: the dir is created only by
 # the dispatch-record write path so other commands stay dormant.
-GLUERUN_DETACHED_DISPATCH="${GLUERUN_DETACHED_DISPATCH:-1}"
-GLUERUN_DISPATCH_DIR="${GLUERUN_DISPATCH_DIR:-$GLUERUN_STATE_DIR/dispatch}"
-# Spawn long-lived children as SESSION LEADERS (gluerun_setsid_exec). A session
+SINGULAR_DETACHED_DISPATCH="${SINGULAR_DETACHED_DISPATCH:-1}"
+SINGULAR_DISPATCH_DIR="${SINGULAR_DISPATCH_DIR:-$SINGULAR_STATE_DIR/dispatch}"
+# Spawn long-lived children as SESSION LEADERS (singular_setsid_exec). A session
 # leader's pid IS its process-group id, which is the only descendant-containment
 # proof that does not need `ps`: a sandbox that denies process enumeration can
 # still be handed one negative pid. Set 0 to restore the pre-0.17 topology
 # (children share the spawner's group; cleanup falls back to a ps tree walk).
-GLUERUN_SESSION_SPAWN="${GLUERUN_SESSION_SPAWN:-1}"
+SINGULAR_SESSION_SPAWN="${SINGULAR_SESSION_SPAWN:-1}"
 
 # L1 node leases + parallel-area planning.
-GLUERUN_L1_LEASES_DIR="${GLUERUN_L1_LEASES_DIR:-$GLUERUN_STATE_DIR/l1-leases}"
-GLUERUN_L1_LEASE_SCHEMA="${GLUERUN_L1_LEASE_SCHEMA:-$GLUERUN_SCHEMA_DIR/l1-lease.v0.schema.json}"
-GLUERUN_L1_STALE_MINUTES="${GLUERUN_L1_STALE_MINUTES:-60}"
+SINGULAR_L1_LEASES_DIR="${SINGULAR_L1_LEASES_DIR:-$SINGULAR_STATE_DIR/l1-leases}"
+SINGULAR_L1_LEASE_SCHEMA="${SINGULAR_L1_LEASE_SCHEMA:-$SINGULAR_SCHEMA_DIR/l1-lease.v0.schema.json}"
+SINGULAR_L1_STALE_MINUTES="${SINGULAR_L1_STALE_MINUTES:-60}"
 # Live L1 fanout (OPT-IN: default OFF — when unset, the actuation path is
 # byte-identical to single-node planning). When enabled, L0 plans multiple
 # independent DAG nodes concurrently (default 3), then imports their staged task
 # proposals serially under the origin lock. L0 stays the only scheduler/importer.
-GLUERUN_ENABLE_L1_PARALLEL="${GLUERUN_ENABLE_L1_PARALLEL:-0}"   # 1 enables concurrent L1 planners
-GLUERUN_MAX_L1_CONCURRENT="${GLUERUN_MAX_L1_CONCURRENT:-3}"     # default L1 planner concurrency when enabled
-GLUERUN_L1_TASKS_PER_NODE="${GLUERUN_L1_TASKS_PER_NODE:-1}"     # tasks each L1 planner proposes per node
-GLUERUN_L2_SLICE_BUDGET="${GLUERUN_L2_SLICE_BUDGET:-1}"         # independent strict-test-first slices folded per L2 task (1 = today)
-GLUERUN_L2_SLICE_BUDGET_MAX="${GLUERUN_L2_SLICE_BUDGET_MAX:-3}" # hard cap on slice budget (per-task blast-radius guard)
-GLUERUN_MIN_DISK_GB="${GLUERUN_MIN_DISK_GB:-2}"                 # below this free-space floor, fanout blocks entirely
+SINGULAR_ENABLE_L1_PARALLEL="${SINGULAR_ENABLE_L1_PARALLEL:-0}"   # 1 enables concurrent L1 planners
+SINGULAR_MAX_L1_CONCURRENT="${SINGULAR_MAX_L1_CONCURRENT:-3}"     # default L1 planner concurrency when enabled
+SINGULAR_L1_TASKS_PER_NODE="${SINGULAR_L1_TASKS_PER_NODE:-1}"     # tasks each L1 planner proposes per node
+SINGULAR_L2_SLICE_BUDGET="${SINGULAR_L2_SLICE_BUDGET:-1}"         # independent strict-test-first slices folded per L2 task (1 = today)
+SINGULAR_L2_SLICE_BUDGET_MAX="${SINGULAR_L2_SLICE_BUDGET_MAX:-3}" # hard cap on slice budget (per-task blast-radius guard)
+SINGULAR_MIN_DISK_GB="${SINGULAR_MIN_DISK_GB:-2}"                 # below this free-space floor, fanout blocks entirely
 
 # 0.5.0 field-hardening knobs (see CHANGELOG "Migrating from 0.4.0").
 # NOTE: the WAKE and task-id-counter paths are derived at CALL time via
-# gluerun_wake_file / gluerun_task_id_counter_file so fixtures that re-point
-# GLUERUN_STATE_DIR after sourcing lib.sh keep working; export the
+# singular_wake_file / singular_task_id_counter_file so fixtures that re-point
+# SINGULAR_STATE_DIR after sourcing lib.sh keep working; export the
 # corresponding env var to pin a path explicitly.
-GLUERUN_SLEEP_POLL_SEC="${GLUERUN_SLEEP_POLL_SEC:-10}"                     # interruptible-sleep chunk size
+SINGULAR_SLEEP_POLL_SEC="${SINGULAR_SLEEP_POLL_SEC:-10}"                     # interruptible-sleep chunk size
 # Whole-tree liveness: a dispatch is alive if any process in its tree/pgroup
 # survives OR its run dir saw writes within this window. HARD_MINUTES bounds
 # conservatism: past that lease age we report dead regardless.
-GLUERUN_TREE_ACTIVITY_WINDOW_SEC="${GLUERUN_TREE_ACTIVITY_WINDOW_SEC:-120}"
-GLUERUN_STALE_HARD_MINUTES="${GLUERUN_STALE_HARD_MINUTES:-240}"
+SINGULAR_TREE_ACTIVITY_WINDOW_SEC="${SINGULAR_TREE_ACTIVITY_WINDOW_SEC:-120}"
+SINGULAR_STALE_HARD_MINUTES="${SINGULAR_STALE_HARD_MINUTES:-240}"
 # Legacy pmgo.* schema ids in verdicts: "warn" tolerates + rewrites for
 # validation (file untouched); "reject" hard-fails (post-migration hygiene).
-GLUERUN_LEGACY_SCHEMA_MODE="${GLUERUN_LEGACY_SCHEMA_MODE:-warn}"
+SINGULAR_LEGACY_SCHEMA_MODE="${SINGULAR_LEGACY_SCHEMA_MODE:-warn}"
 
-gluerun_timestamp() {
+singular_timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
 }
 
-gluerun_run_id() {
+singular_run_id() {
   date -u +"ORIGIN-%Y%m%dT%H%M%SZ-$$"
 }
 
-gluerun_ensure_state_dirs() {
-  # NOTE: $GLUERUN_L1_LEASES_DIR is intentionally NOT created here. It is created
-  # only by the L1 lease write path (gluerun_l1_lease_write), so ordinary commands
+singular_ensure_state_dirs() {
+  # NOTE: $SINGULAR_L1_LEASES_DIR is intentionally NOT created here. It is created
+  # only by the L1 lease write path (singular_l1_lease_write), so ordinary commands
   # stay fully dormant w.r.t. the (deferred) L1-parallel machinery.
-  mkdir -p "$GLUERUN_STATE_DIR/locks" "$GLUERUN_STATE_DIR/runs" "$GLUERUN_STATE_DIR/inbox"
+  mkdir -p "$SINGULAR_STATE_DIR/locks" "$SINGULAR_STATE_DIR/runs" "$SINGULAR_STATE_DIR/inbox"
 }
 
-gluerun_count_files() {
+singular_count_files() {
   local dir="$1"
   shift || true
   [[ -d "$dir" ]] || { echo 0; return 0; }
   find "$dir" "$@" -type f 2>/dev/null | wc -l | tr -d ' '
 }
 
-gluerun_ensure_gitignore_entries() {
-  local gi="$GLUERUN_ROOT/.gitignore" entry
+singular_ensure_gitignore_entries() {
+  local gi="$SINGULAR_ROOT/.gitignore" entry
   mkdir -p "$(dirname "$gi")"
   touch "$gi"
   for entry in "$@"; do
@@ -376,31 +376,31 @@ gluerun_ensure_gitignore_entries() {
   done
 }
 
-gluerun_ensure_repo_scaffold() {
+singular_ensure_repo_scaffold() {
   mkdir -p \
-    "$GLUERUN_ORCH_DIR/prompts" \
-    "$GLUERUN_ORCH_DIR/tasks" \
-    "$GLUERUN_ORCH_DIR/areas/core" \
-    "$GLUERUN_ORCH_DIR/gates" \
-    "$GLUERUN_ORCH_DIR/packets/imported" \
-    "$GLUERUN_ROOT/schemas/orchestration"
+    "$SINGULAR_ORCH_DIR/prompts" \
+    "$SINGULAR_ORCH_DIR/tasks" \
+    "$SINGULAR_ORCH_DIR/areas/core" \
+    "$SINGULAR_ORCH_DIR/gates" \
+    "$SINGULAR_ORCH_DIR/packets/imported" \
+    "$SINGULAR_ROOT/schemas/orchestration"
 
-  if [[ ! -f "$GLUERUN_ORCH_DIR/decisions.md" ]]; then
-    cat >"$GLUERUN_ORCH_DIR/decisions.md" <<'EOF'
+  if [[ ! -f "$SINGULAR_ORCH_DIR/decisions.md" ]]; then
+    cat >"$SINGULAR_ORCH_DIR/decisions.md" <<'EOF'
 # Decisions
 
 ## Decision Log
 EOF
   fi
-  if [[ ! -f "$GLUERUN_ORCH_DIR/project-state.md" ]]; then
-    cat >"$GLUERUN_ORCH_DIR/project-state.md" <<'EOF'
+  if [[ ! -f "$SINGULAR_ORCH_DIR/project-state.md" ]]; then
+    cat >"$SINGULAR_ORCH_DIR/project-state.md" <<'EOF'
 # Project State
 
-Initial gluerun scaffold. Reconcile snapshots will be maintained below.
+Initial singular scaffold. Reconcile snapshots will be maintained below.
 EOF
   fi
-  if [[ ! -f "$GLUERUN_ORCH_DIR/tasks/TEMPLATE.md" ]]; then
-    cat >"$GLUERUN_ORCH_DIR/tasks/TEMPLATE.md" <<'EOF'
+  if [[ ! -f "$SINGULAR_ORCH_DIR/tasks/TEMPLATE.md" ]]; then
+    cat >"$SINGULAR_ORCH_DIR/tasks/TEMPLATE.md" <<'EOF'
 # TASK-XXXX: <title>
 
 Status: ready
@@ -432,8 +432,8 @@ Forbidden files:
 - The gate command passes.
 EOF
   fi
-  if [[ ! -f "$GLUERUN_ORCH_DIR/planner-contract.md" ]]; then
-    cat >"$GLUERUN_ORCH_DIR/planner-contract.md" <<'EOF'
+  if [[ ! -f "$SINGULAR_ORCH_DIR/planner-contract.md" ]]; then
+    cat >"$SINGULAR_ORCH_DIR/planner-contract.md" <<'EOF'
 # Planner Contract
 
 Create small, canonical tasks that can be validated by their gate command. Keep
@@ -441,17 +441,17 @@ owned files narrow, declare dependencies explicitly, and do not broaden scope
 without a recorded decision.
 EOF
   fi
-  if [[ ! -f "$GLUERUN_ORCH_DIR/areas/core/state.md" ]]; then
-    cat >"$GLUERUN_ORCH_DIR/areas/core/state.md" <<'EOF'
+  if [[ ! -f "$SINGULAR_ORCH_DIR/areas/core/state.md" ]]; then
+    cat >"$SINGULAR_ORCH_DIR/areas/core/state.md" <<'EOF'
 # Core Area State
 
 Status: starter
 EOF
   fi
-  if [[ -d "$GLUERUN_SCHEMA_DIR" ]]; then
+  if [[ -d "$SINGULAR_SCHEMA_DIR" ]]; then
     local schema base tmp repo_schema="" engine_schema=""
-    if [[ -f "$GLUERUN_ROOT/gluerun.config.json" ]]; then
-      repo_schema="$(python3 - "$GLUERUN_ROOT/gluerun.config.json" <<'PY' 2>/dev/null || true
+    if [[ -f "$SINGULAR_ROOT/singular.config.json" ]]; then
+      repo_schema="$(python3 - "$SINGULAR_ROOT/singular.config.json" <<'PY' 2>/dev/null || true
 import json
 import sys
 value = json.load(open(sys.argv[1], encoding="utf-8")).get("schemaVersion")
@@ -459,8 +459,8 @@ print(value if isinstance(value, str) else "")
 PY
 )"
     fi
-    if [[ -f "$GLUERUN_ENGINE_HOME/SCHEMA_VERSION" ]]; then
-      engine_schema="$(tr -d '[:space:]' <"$GLUERUN_ENGINE_HOME/SCHEMA_VERSION")"
+    if [[ -f "$SINGULAR_ENGINE_HOME/SCHEMA_VERSION" ]]; then
+      engine_schema="$(tr -d '[:space:]' <"$SINGULAR_ENGINE_HOME/SCHEMA_VERSION")"
     fi
     # The engine bundle becomes authoritative only after migration has advanced
     # the consumer config to the same schema version. Until then, preserve every
@@ -469,20 +469,20 @@ PY
       while IFS= read -r schema; do
         [[ -n "$schema" ]] || continue
         base="$(basename "$schema")"
-        tmp="$GLUERUN_ROOT/schemas/orchestration/.$base.tmp.$$"
+        tmp="$SINGULAR_ROOT/schemas/orchestration/.$base.tmp.$$"
         cp "$schema" "$tmp"
-        mv "$tmp" "$GLUERUN_ROOT/schemas/orchestration/$base"
-      done < <(find "$GLUERUN_SCHEMA_DIR" -maxdepth 1 -name '*.schema.json' -type f 2>/dev/null | sort)
+        mv "$tmp" "$SINGULAR_ROOT/schemas/orchestration/$base"
+      done < <(find "$SINGULAR_SCHEMA_DIR" -maxdepth 1 -name '*.schema.json' -type f 2>/dev/null | sort)
     fi
   fi
-  gluerun_ensure_gitignore_entries ".gluerun-state/" ".worktrees/" ".gluerun-evidence/" ".gluerun-cache/"
+  singular_ensure_gitignore_entries ".singular-state/" ".worktrees/" ".singular-evidence/" ".singular-cache/"
 }
 
-gluerun_json_escape() {
+singular_json_escape() {
   python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip("\n")))' 
 }
 
-gluerun_json_field() {
+singular_json_field() {
   local file="$1"
   local field="$2"
   python3 - "$file" "$field" <<'PY'
@@ -504,10 +504,10 @@ else:
 PY
 }
 
-gluerun_packet_has_accept_waiver() {
+singular_packet_has_accept_waiver() {
   local packet="$1"
-  gluerun_unbound_waivers_enabled || return 1
-  python3 - "$packet" "$GLUERUN_RUNS_DIR" "$GLUERUN_ORCH_DIR/decisions.md" <<'PY'
+  singular_unbound_waivers_enabled || return 1
+  python3 - "$packet" "$SINGULAR_RUNS_DIR" "$SINGULAR_ORCH_DIR/decisions.md" <<'PY'
 import json
 import os
 import sys
@@ -570,40 +570,40 @@ PY
 # Unbound decider waivers predate exact-artifact human approvals. Schema v2
 # disables them unless the operator deliberately selects the legacy
 # compatibility switch; pre-v2 consumers retain their historical behavior.
-gluerun_unbound_waivers_enabled() {
-  local selected="${GLUERUN_LEGACY_UNBOUND_WAIVERS:-}"
+singular_unbound_waivers_enabled() {
+  local selected="${SINGULAR_LEGACY_UNBOUND_WAIVERS:-}"
   if [[ -n "$selected" ]]; then
     case "${selected,,}" in
       1|true|yes|on) return 0 ;;
       *) return 1 ;;
     esac
   fi
-  [[ "${GLUERUN_CONFIG_SCHEMA_VERSION:-}" != "v2" ]]
+  [[ "${SINGULAR_CONFIG_SCHEMA_VERSION:-}" != "v2" ]]
 }
 
-gluerun_packet_acceptance_mode() {
+singular_packet_acceptance_mode() {
   local packet="$1"
   local audit_record="$2"
   local verdict=""
   if [[ -f "$audit_record" ]]; then
-    verdict="$(gluerun_json_field "$audit_record" verdict 2>/dev/null || true)"
+    verdict="$(singular_json_field "$audit_record" verdict 2>/dev/null || true)"
     if [[ "$verdict" == "accepted" ]]; then
       echo "accepted"
       return 0
     fi
   fi
-  if gluerun_packet_has_accept_waiver "$packet"; then
+  if singular_packet_has_accept_waiver "$packet"; then
     echo "accepted-waiver"
     return 0
   fi
   return 1
 }
 
-gluerun_scope_amendment_path_allowed() {
+singular_scope_amendment_path_allowed() {
   local path="$1"
   [[ -n "$path" ]] || return 1
   case "$path" in
-    .gluerun-cache|.gluerun-cache/*|.gluerun-state|.gluerun-state/*|.gluerun-evidence|.gluerun-evidence/*)
+    .singular-cache|.singular-cache/*|.singular-state|.singular-state/*|.singular-evidence|.singular-evidence/*)
       return 1
       ;;
   esac
@@ -612,27 +612,27 @@ gluerun_scope_amendment_path_allowed() {
 
 # ---- Decider/parking hooks (generic; overridden by enabled modules) ----------
 # Whether a terminal external-resource blocker applies to a failed gate. Generic: never.
-gluerun_gate_red_external_proof_env_blocker() { return 1; }
+singular_gate_red_external_proof_env_blocker() { return 1; }
 # Whether the worker introduced a skipped proof path. Generic: never.
-gluerun_strict_proof_skip_detected() { return 1; }
+singular_strict_proof_skip_detected() { return 1; }
 # Terminal parking rationale for a failure class (non-empty => park). Generic: none.
-gluerun_terminal_blocker_rationale() { printf ''; }
+singular_terminal_blocker_rationale() { printf ''; }
 
 # ---- Decider fast-path (T-F1) -------------------------------------------------
 # Resolve a clear-cut failure class to a recovery action by policy, avoiding a
 # model decider round-trip. Prints exactly ONE action token on stdout, OR prints
 # nothing (empty) meaning "consult the model decider (decide.sh)".
-#   gluerun_decider_fast_action <failure_class> <retry_count> <max_retries> <prev_failure_class>
+#   singular_decider_fast_action <failure_class> <retry_count> <max_retries> <prev_failure_class>
 # retry_count/max_retries are evaluated as the CALLER's budget accounting (the
 # loop's 0-based attempt vs max_retries) so "retries remaining" (left) matches
 # exactly when the existing loop decides to retry-vs-park. Logic, in order:
-#   1. GLUERUN_DECIDER_FAST != 1            -> empty (force the model path).
+#   1. SINGULAR_DECIDER_FAST != 1            -> empty (force the model path).
 #   2. failure_class == prev (repeat)    -> empty (a same-class repeat may be
 #      systemic; escalate to the model for judgment).
 #   3. table on left = max_retries - retry_count (>0 => budget remains).
-gluerun_decider_fast_action() {
+singular_decider_fast_action() {
   local failure_class="$1" retry_count="${2:-0}" max_retries="${3:-0}" prev="${4:-}"
-  [[ "${GLUERUN_DECIDER_FAST:-1}" == "1" ]] || return 0
+  [[ "${SINGULAR_DECIDER_FAST:-1}" == "1" ]] || return 0
   [[ "$retry_count" =~ ^[0-9]+$ ]] || retry_count=0
   [[ "$max_retries" =~ ^[0-9]+$ ]] || max_retries=0
   # A same-class repeat escalates to the model (could be systemic).
@@ -656,7 +656,7 @@ gluerun_decider_fast_action() {
       # decider correctly diagnosed exactly that in the field ("a
       # dependency-provisioning gap in the disposable audit workspace, not a
       # product defect") and had no action in its vocabulary to say it. Both
-      # come back through `gluerun unpark`.
+      # come back through `singular unpark`.
       printf 'escalate-infra' ;;
     audit-needs-fix)
       # Buildable while budget remains; otherwise the model weighs accept-waiver.
@@ -668,7 +668,7 @@ gluerun_decider_fast_action() {
   esac
 }
 
-gluerun_append_event() {
+singular_append_event() {
   local type="$1"
   local message="$2"
   local data
@@ -677,8 +677,8 @@ gluerun_append_event() {
   else
     data="{}"
   fi
-  gluerun_ensure_state_dirs
-  python3 - "$GLUERUN_EVENTS_FILE" "$type" "$message" "$data" <<'PY'
+  singular_ensure_state_dirs
+  python3 - "$SINGULAR_EVENTS_FILE" "$type" "$message" "$data" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -699,22 +699,22 @@ with open(path, "a", encoding="utf-8") as f:
 PY
 }
 
-gluerun_require_target_branch() {
-  if [[ -z "${GLUERUN_TARGET_BRANCH:-}" ]]; then
-    echo "GLUERUN_TARGET_BRANCH is required" >&2
+singular_require_target_branch() {
+  if [[ -z "${SINGULAR_TARGET_BRANCH:-}" ]]; then
+    echo "SINGULAR_TARGET_BRANCH is required" >&2
     return 2
   fi
-  if ! git -C "$GLUERUN_ROOT" rev-parse --verify --quiet "$GLUERUN_TARGET_BRANCH" >/dev/null; then
-    echo "target branch not found: $GLUERUN_TARGET_BRANCH" >&2
+  if ! git -C "$SINGULAR_ROOT" rev-parse --verify --quiet "$SINGULAR_TARGET_BRANCH" >/dev/null; then
+    echo "target branch not found: $SINGULAR_TARGET_BRANCH" >&2
     return 2
   fi
 }
 
-gluerun_current_branch() {
-  git -C "$GLUERUN_ROOT" branch --show-current
+singular_current_branch() {
+  git -C "$SINGULAR_ROOT" branch --show-current
 }
 
-gluerun_pid_alive() {
+singular_pid_alive() {
   local pid="$1"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
@@ -729,12 +729,12 @@ gluerun_pid_alive() {
 #
 # That equality — pgid == pid — is the whole point. It is a containment proof
 # that costs one integer and no process enumeration, which is what
-# gluerun_kill_tree needs in a sandbox that denies `ps`.
+# singular_kill_tree needs in a sandbox that denies `ps`.
 #
-# GLUERUN_SESSION_SPAWN=0 restores the old topology (plain exec, child stays in
+# SINGULAR_SESSION_SPAWN=0 restores the old topology (plain exec, child stays in
 # the spawner's group). Same idiom as engine/reconcile.sh's detached dispatch.
-gluerun_setsid_exec() {
-  if [[ "${GLUERUN_SESSION_SPAWN:-1}" == "0" ]]; then
+singular_setsid_exec() {
+  if [[ "${SINGULAR_SESSION_SPAWN:-1}" == "0" ]]; then
     exec "$@"
   fi
   exec python3 -c 'import os, sys
@@ -756,13 +756,13 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$@"
 # same restricted sandboxes the group kill exists for. Three 50ms attempts
 # absorb the race where the record is written before the child reaches setsid.
 # args: path pid
-gluerun_session_record_write() {
+singular_session_record_write() {
   local path="$1" pid="${2:-}"
   local dir
   dir="$(dirname "$path")"
   mkdir -p "$dir" 2>/dev/null || true
   local spawn=1
-  [[ "${GLUERUN_SESSION_SPAWN:-1}" == "0" ]] && spawn=0
+  [[ "${SINGULAR_SESSION_SPAWN:-1}" == "0" ]] && spawn=0
   python3 - "$path" "$pid" "$spawn" <<'PY'
 import json
 import os
@@ -808,7 +808,7 @@ PY
 }
 
 # Process-group id of a pid, via os.getpgid (no `ps`). Empty when unknowable.
-gluerun_pgid_of() {
+singular_pgid_of() {
   python3 - "${1:-}" <<'PY' 2>/dev/null || true
 import os
 import sys
@@ -823,7 +823,7 @@ PY
 # rc 0 if any process remains in <pgid>. EPERM counts as ALIVE: "I am not
 # allowed to signal it" is not "it is gone", and every caller here is deciding
 # whether cleanup finished.
-gluerun_pgroup_alive() {
+singular_pgroup_alive() {
   local pgid="${1:-}"
   [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || return 1
   python3 - "$pgid" <<'PY' 2>/dev/null
@@ -841,15 +841,15 @@ PY
 }
 
 # Kill a pid and everything it spawned. Args 1-2 are unchanged from 0.16:
-#   gluerun_kill_tree <pid> [grace_sec] [session]
+#   singular_kill_tree <pid> [grace_sec] [session]
 # The optional third argument is the literal word `session`: the caller's
-# assertion that it spawned <pid> through gluerun_setsid_exec and has not
+# assertion that it spawned <pid> through singular_setsid_exec and has not
 # waited on it yet. Shared by the provider runners / decide.sh / gate guards.
 #
 # ALWAYS returns 0 — callers run under `set -euo pipefail` and a cleanup trap
 # must not become the failure. The outcome is reported instead through the
-# global GLUERUN_KILL_TREE_RESULT (verified|degraded), plus
-# GLUERUN_KILL_TREE_REASON / GLUERUN_KILL_TREE_MODE.
+# global SINGULAR_KILL_TREE_RESULT (verified|degraded), plus
+# SINGULAR_KILL_TREE_REASON / SINGULAR_KILL_TREE_MODE.
 #
 # THREE MODES, in decreasing order of proof:
 #   group-proven    os.getpgid(pid) == pid (a session leader), and not our own
@@ -882,11 +882,11 @@ PY
 # EXIT trap that holds its read-only restore guard; 0 is an immediate SIGKILL
 # with no handler. An empty pid is a verified no-op: the runner guards that call
 # this from an EXIT trap may have nothing to kill, and nothing cannot survive.
-gluerun_kill_tree() {
+singular_kill_tree() {
   local pid="${1:-}" grace="${2:-0}" claim="${3:-}"
-  GLUERUN_KILL_TREE_RESULT="verified"
-  GLUERUN_KILL_TREE_REASON=""
-  GLUERUN_KILL_TREE_MODE="none"
+  SINGULAR_KILL_TREE_RESULT="verified"
+  SINGULAR_KILL_TREE_REASON=""
+  SINGULAR_KILL_TREE_MODE="none"
   [[ -n "$pid" ]] || return 0
   local out="" rc=0
   out="$(python3 - "$pid" "$grace" "$claim" <<'PY'
@@ -1071,7 +1071,7 @@ try:
 except SystemExit:
     raise
 except Exception as exc:
-    sys.stderr.write("gluerun_kill_tree: internal error: %s: %s\n"
+    sys.stderr.write("singular_kill_tree: internal error: %s: %s\n"
                      % (type(exc).__name__, exc))
     raise SystemExit(3)
 PY
@@ -1088,11 +1088,11 @@ PY
   local pid_json="$pid"
   [[ "$pid" =~ ^[0-9]+$ ]] || pid_json="\"$pid\""
   [[ -n "$mode" ]] || mode="unknown"
-  GLUERUN_KILL_TREE_MODE="$mode"
+  SINGULAR_KILL_TREE_MODE="$mode"
 
   if (( rc == 0 )) && [[ "$status" == "verified" ]]; then
-    if [[ -n "$note" && -n "${GLUERUN_STATE_DIR:-}" ]]; then
-      gluerun_append_event "kill.enumeration_unavailable" \
+    if [[ -n "$note" && -n "${SINGULAR_STATE_DIR:-}" ]]; then
+      singular_append_event "kill.enumeration_unavailable" \
         "process enumeration unavailable; group kill verified for pid $pid" \
         "{\"pid\":$pid_json,\"mode\":\"$mode\"}" 2>/dev/null || true
     fi
@@ -1100,12 +1100,12 @@ PY
   fi
 
   [[ -n "$reason" && "$reason" != "-" ]] || reason="internal-error"
-  GLUERUN_KILL_TREE_RESULT="degraded"
-  GLUERUN_KILL_TREE_REASON="$reason"
-  printf 'gluerun_kill_tree: UNVERIFIED cleanup for pid %s (%s); descendants may survive\n' \
+  SINGULAR_KILL_TREE_RESULT="degraded"
+  SINGULAR_KILL_TREE_REASON="$reason"
+  printf 'singular_kill_tree: UNVERIFIED cleanup for pid %s (%s); descendants may survive\n' \
     "$pid" "$reason" >&2
-  if [[ -n "${GLUERUN_STATE_DIR:-}" ]]; then
-    gluerun_append_event "kill.unverified" "unverified kill for pid $pid" \
+  if [[ -n "${SINGULAR_STATE_DIR:-}" ]]; then
+    singular_append_event "kill.unverified" "unverified kill for pid $pid" \
       "{\"pid\":$pid_json,\"mode\":\"$mode\",\"reason\":\"$reason\"}" 2>/dev/null || true
   fi
   return 0
@@ -1113,8 +1113,8 @@ PY
 
 # Seconds a timed-out runner gets to run its EXIT trap — which is where the
 # read-only restore guard lives — before the tree is SIGKILLed.
-gluerun_kill_grace_sec() {
-  local grace="${GLUERUN_KILL_GRACE_SEC:-10}"
+singular_kill_grace_sec() {
+  local grace="${SINGULAR_KILL_GRACE_SEC:-10}"
   [[ "$grace" =~ ^[0-9]+$ ]] || grace=10
   printf '%s\n' "$grace"
 }
@@ -1122,13 +1122,13 @@ gluerun_kill_grace_sec() {
 # Same idea for a provider CLI killed mid-stream: it has no restore guard of
 # its own, so it gets a short courtesy TERM to flush and close, not the runner's
 # full trap budget.
-gluerun_provider_kill_grace_sec() {
-  local grace="${GLUERUN_PROVIDER_KILL_GRACE_SEC:-2}"
+singular_provider_kill_grace_sec() {
+  local grace="${SINGULAR_PROVIDER_KILL_GRACE_SEC:-2}"
   [[ "$grace" =~ ^[0-9]+$ ]] || grace=2
   printf '%s\n' "$grace"
 }
 
-# Does this host actually support the containment gluerun_kill_tree depends on?
+# Does this host actually support the containment singular_kill_tree depends on?
 #
 # Prints exactly one line — `ok` or `degraded:<reason>` — and ALWAYS returns 0,
 # so a caller under `set -e` reads the verdict instead of dying on it. The probe
@@ -1143,9 +1143,9 @@ gluerun_provider_kill_grace_sec() {
 # Same test seam as doctor's runtime.process-group-kill — both variables
 # required, unknown states ignored — so a CI job can exercise the refusal path
 # without a sandbox that denies setsid.
-gluerun_process_control_preflight() {
-  if [[ "${GLUERUN_TEST_PROCESS_CONTROL:-0}" == "1" ]]; then
-    case "${GLUERUN_TEST_PROCESS_CONTROL_STATE:-}" in
+singular_process_control_preflight() {
+  if [[ "${SINGULAR_TEST_PROCESS_CONTROL:-0}" == "1" ]]; then
+    case "${SINGULAR_TEST_PROCESS_CONTROL_STATE:-}" in
       ok|no-ps)
         # no-ps degrades enumeration only; the group kill still contains a
         # session-spawned tree, which is what this gate is about.
@@ -1228,22 +1228,22 @@ PY
   return 0
 }
 
-gluerun_acquire_lock() {
+singular_acquire_lock() {
   local run_id="$1"
-  gluerun_ensure_state_dirs
-  if [[ -f "$GLUERUN_LOCK_FILE" ]]; then
+  singular_ensure_state_dirs
+  if [[ -f "$SINGULAR_LOCK_FILE" ]]; then
     local pid
-    pid="$(gluerun_json_field "$GLUERUN_LOCK_FILE" pid 2>/dev/null || true)"
-    if gluerun_pid_alive "$pid"; then
-      echo "active origin lock exists for pid $pid: $GLUERUN_LOCK_FILE" >&2
-      gluerun_append_event "origin.lock_skipped" "active origin lock exists" "{\"pid\":\"$pid\"}"
+    pid="$(singular_json_field "$SINGULAR_LOCK_FILE" pid 2>/dev/null || true)"
+    if singular_pid_alive "$pid"; then
+      echo "active origin lock exists for pid $pid: $SINGULAR_LOCK_FILE" >&2
+      singular_append_event "origin.lock_skipped" "active origin lock exists" "{\"pid\":\"$pid\"}"
       return 75
     fi
-    local stale="$GLUERUN_LOCK_FILE.stale.$(date -u +%Y%m%dT%H%M%SZ)"
-    mv "$GLUERUN_LOCK_FILE" "$stale"
-    gluerun_append_event "origin.lock_stale" "moved stale origin lock" "{\"path\":\"$stale\"}"
+    local stale="$SINGULAR_LOCK_FILE.stale.$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$SINGULAR_LOCK_FILE" "$stale"
+    singular_append_event "origin.lock_stale" "moved stale origin lock" "{\"path\":\"$stale\"}"
   fi
-  python3 - "$GLUERUN_LOCK_FILE" "$run_id" "$$" "${GLUERUN_LOCK_MINUTES:-60}" <<'PY'
+  python3 - "$SINGULAR_LOCK_FILE" "$run_id" "$$" "${SINGULAR_LOCK_MINUTES:-60}" <<'PY'
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -1251,7 +1251,7 @@ from datetime import datetime, timedelta, timezone
 path, run_id, pid, minutes = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 now = datetime.now(timezone.utc).replace(microsecond=0)
 data = {
-    "schema": "gluerun.orchestration.lock.v0",
+    "schema": "singular.orchestration.lock.v0",
     "owner": "origin",
     "runId": run_id,
     "startedAt": now.isoformat().replace("+00:00", "Z"),
@@ -1264,49 +1264,49 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
-gluerun_release_lock() {
+singular_release_lock() {
   local run_id="$1"
-  if [[ ! -f "$GLUERUN_LOCK_FILE" ]]; then
+  if [[ ! -f "$SINGULAR_LOCK_FILE" ]]; then
     return 0
   fi
   local existing
-  existing="$(gluerun_json_field "$GLUERUN_LOCK_FILE" runId 2>/dev/null || true)"
+  existing="$(singular_json_field "$SINGULAR_LOCK_FILE" runId 2>/dev/null || true)"
   if [[ "$existing" == "$run_id" ]]; then
-    rm -f "$GLUERUN_LOCK_FILE"
+    rm -f "$SINGULAR_LOCK_FILE"
   fi
 }
 
-gluerun_git_lock_acquire() {
-  gluerun_ensure_state_dirs
+singular_git_lock_acquire() {
+  singular_ensure_state_dirs
   local waited=0
-  while ! mkdir "$GLUERUN_GIT_LOCK_DIR" 2>/dev/null; do
+  while ! mkdir "$SINGULAR_GIT_LOCK_DIR" 2>/dev/null; do
     sleep 0.1
     waited=$((waited + 1))
     if [[ "$waited" -ge 600 ]]; then
-      echo "timed out waiting for git operation lock: $GLUERUN_GIT_LOCK_DIR" >&2
+      echo "timed out waiting for git operation lock: $SINGULAR_GIT_LOCK_DIR" >&2
       return 75
     fi
   done
-  printf '%s\n' "$$" >"$GLUERUN_GIT_LOCK_DIR/pid"
+  printf '%s\n' "$$" >"$SINGULAR_GIT_LOCK_DIR/pid"
 }
 
-gluerun_git_lock_release() {
-  rm -rf "$GLUERUN_GIT_LOCK_DIR" 2>/dev/null || true
+singular_git_lock_release() {
+  rm -rf "$SINGULAR_GIT_LOCK_DIR" 2>/dev/null || true
 }
 
-gluerun_with_git_lock() {
-  gluerun_git_lock_acquire || return $?
+singular_with_git_lock() {
+  singular_git_lock_acquire || return $?
   set +e
   "$@"
   local ec=$?
   set -e
-  gluerun_git_lock_release
+  singular_git_lock_release
   return "$ec"
 }
 
-gluerun_validate_packet_basic() {
+singular_validate_packet_basic() {
   local packet="$1"
-  local schema="$GLUERUN_PACKET_SCHEMA"
+  local schema="$SINGULAR_PACKET_SCHEMA"
   python3 - "$packet" "$schema" <<'PY'
 import json
 import re
@@ -1327,7 +1327,7 @@ extra = sorted(set(data.keys()) - properties)
 if extra:
     print("unknown fields: " + ", ".join(extra), file=sys.stderr)
     sys.exit(2)
-if data["schema"] != "gluerun.orchestration.state-packet.v0":
+if data["schema"] != "singular.orchestration.state-packet.v0":
     print("unsupported schema: " + str(data["schema"]), file=sys.stderr)
     sys.exit(2)
 for key in ["ownedFiles", "changedFiles", "commands", "tests", "evidence", "blockers"]:
@@ -1411,50 +1411,50 @@ PY
 # Choose the L2 worker runner for a task. Generic: always the default runner.
 # A module may override to route specific tasks to an alternate runner
 # (args: task_file default_runner alt_runner).
-gluerun_select_l2_runner() {
+singular_select_l2_runner() {
   local task_file="$1" default_runner="$2" alt_runner="${3:-}"
   printf '%s\n' "$default_runner"
 }
 
 # Extra worker-prompt contract text for a task. Generic: none. A module may
 # override to append project-specific obligations (args: task_file task_id).
-gluerun_worker_contract_extra() {
+singular_worker_contract_extra() {
   printf ''
 }
 
 # Red-evidence log path for a task's worker prompt. Generic: none (empty), so
 # the prompt keeps its default red log. A module may override to point specific
 # tasks at a project-specific red artifact (args: task_file task_id).
-gluerun_worker_red_log() {
+singular_worker_red_log() {
   printf ''
 }
 
 # Per-task guard for worker/import packets. Generic: accept. A module may
 # override to enforce project-specific durable-proof requirements
 # (args: packet task_file workspace run_dir).
-gluerun_packet_module_guard() {
+singular_packet_module_guard() {
   return 0
 }
 
 
-gluerun_write_run_snapshot() {
+singular_write_run_snapshot() {
   local run_id="$1"
   local snapshot="$2"
-  local run_dir="$GLUERUN_STATE_DIR/runs/$run_id"
+  local run_dir="$SINGULAR_STATE_DIR/runs/$run_id"
   mkdir -p "$run_dir"
   printf "%s\n" "$snapshot" >"$run_dir/reconcile-snapshot.md"
 }
 
-gluerun_update_project_snapshot() {
-  local snapshot_file="$GLUERUN_ORCH_DIR/project-state.md"
+singular_update_project_snapshot() {
+  local snapshot_file="$SINGULAR_ORCH_DIR/project-state.md"
   local snapshot="$1"
   python3 - "$snapshot_file" "$snapshot" <<'PY'
 import sys
 from pathlib import Path
 
 path, snapshot = sys.argv[1], sys.argv[2]
-start = "<!-- gluerun:reconcile-snapshot:start -->"
-end = "<!-- gluerun:reconcile-snapshot:end -->"
+start = "<!-- singular:reconcile-snapshot:start -->"
+end = "<!-- singular:reconcile-snapshot:end -->"
 p = Path(path)
 p.parent.mkdir(parents=True, exist_ok=True)
 if p.exists():
@@ -1474,15 +1474,15 @@ PY
 
 # --- Actuation helpers (L0 scheduling, L1 driving) ---
 
-gluerun_run_dir() {
-  echo "$GLUERUN_RUNS_DIR/$1"
+singular_run_dir() {
+  echo "$SINGULAR_RUNS_DIR/$1"
 }
 
 # Extract a single JSON object from a model's final message and write it back
 # normalized. Handles the common cases where the message is pure JSON, wrapped in
 # ```json fences, or has prose around a JSON object. Exits non-zero if no parseable
-# JSON object is found. Usage: gluerun_extract_json <in> <out>
-gluerun_extract_json() {
+# JSON object is found. Usage: singular_extract_json <in> <out>
+singular_extract_json() {
   local infile="$1" outfile="$2"
   python3 - "$infile" "$outfile" <<'PY'
 import json
@@ -1564,7 +1564,7 @@ with open(outfile, "w", encoding="utf-8") as f:
 PY
 }
 
-gluerun_l1_normalize_worker_packet_schema() {
+singular_l1_normalize_worker_packet_schema() {
   local packet="$1"
   python3 - "$packet" <<'PY'
 import json
@@ -1572,7 +1572,7 @@ import sys
 
 path = sys.argv[1]
 legacy_schema = "schemas/orchestration/state-packet.v0.schema.json"
-schema_const = "gluerun.orchestration.state-packet.v0"
+schema_const = "singular.orchestration.state-packet.v0"
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
 schema = str(data.get("schema", ""))
@@ -1585,34 +1585,34 @@ if schema == legacy_schema or normalized.endswith("/" + legacy_schema):
 PY
 }
 
-gluerun_l1_prepare_worker_packet() {
+singular_l1_prepare_worker_packet() {
   local raw_message="$1" packet="$2" validation_log="$3"
   [[ -n "$validation_log" ]] && mkdir -p "$(dirname "$validation_log")"
   if [[ ! -f "$raw_message" ]]; then
     [[ -n "$validation_log" ]] && echo "missing worker final message: $raw_message" >"$validation_log"
     return 10
   fi
-  if ! gluerun_extract_json "$raw_message" "$packet" 2>"$validation_log"; then
+  if ! singular_extract_json "$raw_message" "$packet" 2>"$validation_log"; then
     return 11
   fi
-  gluerun_l1_normalize_worker_packet_schema "$packet"
-  if ! gluerun_validate_packet_basic "$packet" >"$validation_log" 2>&1; then
+  singular_l1_normalize_worker_packet_schema "$packet"
+  if ! singular_validate_packet_basic "$packet" >"$validation_log" 2>&1; then
     return 12
   fi
   return 0
 }
 
-gluerun_audit_record_path() {
-  echo "$GLUERUN_RUNS_DIR/$1/audit.json"
+singular_audit_record_path() {
+  echo "$SINGULAR_RUNS_DIR/$1/audit.json"
 }
 
-gluerun_worker_run_id() {
+singular_worker_run_id() {
   # Stable-ish per-invocation run id for L1/L2 work.
   date -u +"RUN-%Y%m%dT%H%M%SZ-$$"
 }
 
 # Parse a task markdown file into a normalized JSON object on stdout.
-gluerun_task_json() {
+singular_task_json() {
   local task_file="$1"
   python3 - "$task_file" <<'PY'
 import json
@@ -1736,19 +1736,19 @@ PY
 
 # The DAG node a task belongs to (header `DAG node:` first, planner frontier
 # section as fallback). Empty when the task predates node attribution.
-gluerun_task_node() {
-  gluerun_task_field "$1" dagNode 2>/dev/null || true
+singular_task_node() {
+  singular_task_field "$1" dagNode 2>/dev/null || true
 }
 
 # JSON index of every task attributed to a DAG node, scanning the tasks dir
 # INCLUDING subdirs (tasks/superseded/ etc.). One python pass — a per-file
-# gluerun_task_json fan-out is too slow for promoter/health paths. The parse
-# here is a deliberate minimal subset of gluerun_task_json (header lines,
+# singular_task_json fan-out is too slow for promoter/health paths. The parse
+# here is a deliberate minimal subset of singular_task_json (header lines,
 # owned-files list, frontier-section node fallback); keep the two in sync.
 # Output: [{"taskId","status","ownedFiles":[],"supersededBy":[],"file"}...]
-gluerun_node_task_index_json() {
+singular_node_task_index_json() {
   local node="$1"
-  python3 - "$GLUERUN_TASKS_DIR" "$node" <<'PY'
+  python3 - "$SINGULAR_TASKS_DIR" "$node" <<'PY'
 import json
 import os
 import re
@@ -1830,13 +1830,13 @@ PY
 # covering its owned files or an integrated supersededBy successor), and the
 # gate result is not passed. Planner suppression + integrate-time promotion
 # both key on this predicate.
-gluerun_node_pending_promotion() {
+singular_node_pending_promotion() {
   local node="$1"
   local index gate_status=""
-  index="$(gluerun_node_task_index_json "$node")" || return 1
-  local gate="$GLUERUN_ORCH_DIR/gates/$node.gate-result.json"
+  index="$(singular_node_task_index_json "$node")" || return 1
+  local gate="$SINGULAR_ORCH_DIR/gates/$node.gate-result.json"
   if [[ -f "$gate" ]]; then
-    gate_status="$(gluerun_json_field "$gate" status 2>/dev/null || true)"
+    gate_status="$(singular_json_field "$gate" status 2>/dev/null || true)"
   fi
   python3 - "$gate_status" <<PY
 import json
@@ -1881,11 +1881,11 @@ PY
 }
 
 # Read a single field from a parsed task file (dotted path supported).
-gluerun_task_field() {
+singular_task_field() {
   local task_file="$1"
   local field="$2"
   local json
-  json="$(gluerun_task_json "$task_file")" || return $?
+  json="$(singular_task_json "$task_file")" || return $?
   python3 -c '
 import json, sys
 field, raw = sys.argv[1], sys.argv[2]
@@ -1900,28 +1900,28 @@ print(json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)
 }
 
 # Host-only task preflight (runs BEFORE any run_id/lease/worktree is created).
-# Validates a parsed task JSON (gluerun_task_json output) and prints one
+# Validates a parsed task JSON (singular_task_json output) and prints one
 # human-readable refusal reason per line on stdout; returns non-zero on any
 # failure, zero (and prints nothing) when the task is dispatchable.
 #
-#   gluerun_task_preflight <task_json> [<effective_gate_cmd>] [<effective_target_branch>] [<require_gate 0|1>]
+#   singular_task_preflight <task_json> [<effective_gate_cmd>] [<effective_target_branch>] [<require_gate 0|1>]
 #
 # - effective_gate_cmd / effective_target_branch: pass the post-fallback values
-#   the driver computed (config default gate, GLUERUN_TARGET_BRANCH). When empty,
+#   the driver computed (config default gate, SINGULAR_TARGET_BRANCH). When empty,
 #   the task's own fields are used.
 # - require_gate=0 skips the empty-gate refusal (the historical dry-run
 #   exemption); every other check still applies.
-# - acceptanceCriteria is required when GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE=1
+# - acceptanceCriteria is required when SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE=1
 #   (the default).
 # Owned/forbidden conflicts use the same segment-boundary semantics as
 # scope-check.sh: "a/b" conflicts with "a/b" and "a/b/c", but NOT with "a/bc".
 # Forbidden entries are considered only when path-like (contain "/" and no
 # space), matching the driver's forbidden-prefix filter, so prose entries like
 # "Any file outside the owned scope." are ignored.
-gluerun_task_preflight() {
+singular_task_preflight() {
   local task_json="$1" gate_cmd="${2-}" target_branch="${3-}" require_gate="${4:-1}"
   python3 - "$task_json" "$gate_cmd" "$target_branch" "$require_gate" \
-    "${GLUERUN_PREFLIGHT_REQUIRE_ACCEPTANCE:-1}" <<'PY'
+    "${SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE:-1}" <<'PY'
 import json
 import sys
 
@@ -1976,7 +1976,7 @@ for own in owned:
 
 gate_cmd = gate_arg if gate_arg.strip() else str(task.get("gateCommand", "") or "")
 if require_gate == "1" and not "".join(gate_cmd.split()):
-    reasons.append("no gate command (set 'Gate command:' in the task or gateCommand in gluerun.config.json)")
+    reasons.append("no gate command (set 'Gate command:' in the task or gateCommand in singular.config.json)")
 
 if require_accept == "1":
     accept = [str(x).strip() for x in (task.get("acceptanceCriteria") or []) if str(x).strip()]
@@ -1997,7 +1997,7 @@ PY
 # runner-result.v0 (every invocation) and provider-error.v0 (terminal errors).
 # Quota/backoff code consumes these sidecars exclusively.
 
-gluerun_capability_b64_decode() {
+singular_capability_b64_decode() {
   python3 - "$1" <<'PY'
 import base64
 import sys
@@ -2005,11 +2005,11 @@ sys.stdout.write(base64.b64decode(sys.argv[1]).decode("utf-8"))
 PY
 }
 
-gluerun_capability_optional_warn_once() {
+singular_capability_optional_warn_once() {
   local provider="$1" role="$2" profile="$3" capability="$4" reason="$5"
-  local warning_dir="$GLUERUN_STATE_DIR/warnings/capabilities"
+  local warning_dir="$SINGULAR_STATE_DIR/warnings/capabilities"
   local warning_key marker marker_rc=0
-  warning_key="$(gluerun_sha256_text "$capability")"
+  warning_key="$(singular_sha256_text "$capability")"
   marker="$warning_dir/$warning_key.warned"
   mkdir -p "$warning_dir"
   python3 - "$marker" "$capability" <<'PY' 2>/dev/null || marker_rc=$?
@@ -2031,7 +2031,7 @@ with os.fdopen(fd, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
   [[ "$marker_rc" -eq 1 ]] && return 0
-  echo "gluerun: optional capability unavailable for $profile ($role): $capability ($reason); continuing" >&2
+  echo "singular: optional capability unavailable for $profile ($role): $capability ($reason); continuing" >&2
   local event_json
   event_json="$(python3 - "$provider" "$role" "$profile" "$capability" "$reason" <<'PY'
 import json
@@ -2046,38 +2046,38 @@ print(json.dumps({
 }, separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "capability.optional_unavailable" \
+  singular_append_event "capability.optional_unavailable" \
     "optional capability unavailable; provider run continues" "$event_json" || true
 }
 
 # Resolve roleProfiles over the call-site fallback, validate the selected
 # capability profile, and preflight its required/optional capabilities. Results
 # are returned through these globals:
-#   GLUERUN_RESOLVED_CAPABILITY_PROFILE
-#   GLUERUN_RESOLVED_CAPABILITY_STRICT (yes|no)
-#   GLUERUN_RESOLVED_PROVIDER_ARGS[] (literal argv; never eval'd)
+#   SINGULAR_RESOLVED_CAPABILITY_PROFILE
+#   SINGULAR_RESOLVED_CAPABILITY_STRICT (yes|no)
+#   SINGULAR_RESOLVED_PROVIDER_ARGS[] (literal argv; never eval'd)
 #
 # A consumer with no declared capabilityProfiles remains legacy-compatible:
 # the fallback profile name is recorded, strict isolation is off, and no new
 # capability gate is introduced.
-gluerun_runner_capability_prepare() {
+singular_runner_capability_prepare() {
   local provider="$1" role="$2" fallback_profile="$3" worktree="$4" provider_bin="${5:-}"
   local report rc=0 kind first second decoded
-  local profiles_json="${GLUERUN_CAPABILITY_PROFILES_JSON:-}"
-  local roles_json="${GLUERUN_ROLE_PROFILES_JSON:-}"
-  local registry_json="${GLUERUN_CAPABILITIES_JSON:-}"
-  local schema_version="${GLUERUN_CONFIG_SCHEMA_VERSION:-}"
+  local profiles_json="${SINGULAR_CAPABILITY_PROFILES_JSON:-}"
+  local roles_json="${SINGULAR_ROLE_PROFILES_JSON:-}"
+  local registry_json="${SINGULAR_CAPABILITIES_JSON:-}"
+  local schema_version="${SINGULAR_CONFIG_SCHEMA_VERSION:-}"
   local -a errors=()
 
-  GLUERUN_RESOLVED_CAPABILITY_PROFILE="$fallback_profile"
-  GLUERUN_RESOLVED_CAPABILITY_STRICT="no"
-  GLUERUN_RESOLVED_CAPABILITY_DECLARED="no"
-  GLUERUN_RESOLVED_PROVIDER_ARGS=()
-  GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT=0
+  SINGULAR_RESOLVED_CAPABILITY_PROFILE="$fallback_profile"
+  SINGULAR_RESOLVED_CAPABILITY_STRICT="no"
+  SINGULAR_RESOLVED_CAPABILITY_DECLARED="no"
+  SINGULAR_RESOLVED_PROVIDER_ARGS=()
+  SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT=0
 
   report="$(python3 - "$profiles_json" "$roles_json" "$registry_json" \
     "$schema_version" "$provider" "$role" "$fallback_profile" "$worktree" \
-    "$provider_bin" "$GLUERUN_ENGINE_HOME" "${HOME:-}" <<'PY'
+    "$provider_bin" "$SINGULAR_ENGINE_HOME" "${HOME:-}" <<'PY'
 import base64
 import json
 import os
@@ -2265,7 +2265,7 @@ if strict and provider in {"cursor", "grok"} and not provider_args:
 
 def mcp_names():
     names = set()
-    roots = [pathlib.Path(os.environ.get("GLUERUN_ROOT", worktree_raw)) / ".mcp.json", home / ".claude.json"]
+    roots = [pathlib.Path(os.environ.get("SINGULAR_ROOT", worktree_raw)) / ".mcp.json", home / ".claude.json"]
     for path in roots:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
@@ -2413,25 +2413,25 @@ PY
 
   while IFS=$'\t' read -r kind first second; do
     [[ -n "$kind" ]] || continue
-    first="$(gluerun_capability_b64_decode "$first")"
-    second="$(gluerun_capability_b64_decode "$second")"
+    first="$(singular_capability_b64_decode "$first")"
+    second="$(singular_capability_b64_decode "$second")"
     case "$kind" in
       PROFILE)
-        GLUERUN_RESOLVED_CAPABILITY_PROFILE="$first"
-        GLUERUN_RESOLVED_CAPABILITY_DECLARED="yes"
+        SINGULAR_RESOLVED_CAPABILITY_PROFILE="$first"
+        SINGULAR_RESOLVED_CAPABILITY_DECLARED="yes"
         if [[ "$second" == "strict" ]]; then
-          GLUERUN_RESOLVED_CAPABILITY_STRICT="yes"
+          SINGULAR_RESOLVED_CAPABILITY_STRICT="yes"
         elif [[ "$second" == "legacy" ]]; then
-          GLUERUN_RESOLVED_CAPABILITY_DECLARED="no"
+          SINGULAR_RESOLVED_CAPABILITY_DECLARED="no"
         fi
         ;;
       ARG)
-        GLUERUN_RESOLVED_PROVIDER_ARGS+=("$first")
-        GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT=$((GLUERUN_RESOLVED_PROVIDER_ARGS_COUNT + 1))
+        SINGULAR_RESOLVED_PROVIDER_ARGS+=("$first")
+        SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT=$((SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT + 1))
         ;;
       WARN)
-        gluerun_capability_optional_warn_once \
-          "$provider" "$role" "$GLUERUN_RESOLVED_CAPABILITY_PROFILE" "$first" "$second"
+        singular_capability_optional_warn_once \
+          "$provider" "$role" "$SINGULAR_RESOLVED_CAPABILITY_PROFILE" "$first" "$second"
         ;;
       ERROR)
         errors+=("$first: $second")
@@ -2442,9 +2442,9 @@ PY
   if [[ "$rc" -ne 0 || ${#errors[@]} -gt 0 ]]; then
     local error
     for error in "${errors[@]}"; do
-      echo "gluerun: capability preflight failed for $provider/$role ($GLUERUN_RESOLVED_CAPABILITY_PROFILE): $error" >&2
+      echo "singular: capability preflight failed for $provider/$role ($SINGULAR_RESOLVED_CAPABILITY_PROFILE): $error" >&2
       local event_json
-      event_json="$(python3 - "$provider" "$role" "$GLUERUN_RESOLVED_CAPABILITY_PROFILE" "$error" <<'PY'
+      event_json="$(python3 - "$provider" "$role" "$SINGULAR_RESOLVED_CAPABILITY_PROFILE" "$error" <<'PY'
 import json
 import sys
 provider, role, profile, error = sys.argv[1:5]
@@ -2457,31 +2457,31 @@ print(json.dumps({
 }, separators=(",", ":")))
 PY
 )"
-      gluerun_append_event "capability.preflight_failed" \
+      singular_append_event "capability.preflight_failed" \
         "required capability or strict isolation preflight failed" "$event_json" || true
     done
-    [[ ${#errors[@]} -gt 0 ]] || echo "gluerun: capability profile preflight failed for $provider/$role" >&2
+    [[ ${#errors[@]} -gt 0 ]] || echo "singular: capability profile preflight failed for $provider/$role" >&2
     return 78
   fi
   return 0
 }
 
-gluerun_runner_reject_strict_legacy_extra_args() {
+singular_runner_reject_strict_legacy_extra_args() {
   local provider="$1" variable_name="$2" raw_value="${3:-}"
-  if [[ "$GLUERUN_RESOLVED_CAPABILITY_STRICT" == "yes" && -n "$raw_value" ]]; then
-    echo "gluerun: $variable_name is disabled for strict $provider capability profiles; use bounded profile providerArgs/capabilityArgs" >&2
+  if [[ "$SINGULAR_RESOLVED_CAPABILITY_STRICT" == "yes" && -n "$raw_value" ]]; then
+    echo "singular: $variable_name is disabled for strict $provider capability profiles; use bounded profile providerArgs/capabilityArgs" >&2
     return 78
   fi
   return 0
 }
 
-gluerun_runner_describe_contract() {
+singular_runner_describe_contract() {
   local provider="$1"
   python3 - "$provider" <<'PY'
 import json, sys
 provider = sys.argv[1]
 print(json.dumps({
-    "schema": "gluerun.runner-contract.v1",
+    "schema": "singular.runner-contract.v1",
     "version": 1,
     "provider": provider,
     "arguments": [
@@ -2491,22 +2491,22 @@ print(json.dumps({
         "--role", "--capability-profile", "--result-file",
         "--describe-contract",
     ],
-    "structuredResult": "gluerun.orchestration.runner-result.v0",
-    "structuredProviderError": "gluerun.orchestration.provider-error.v0",
+    "structuredResult": "singular.orchestration.runner-result.v0",
+    "structuredProviderError": "singular.orchestration.provider-error.v0",
 }, separators=(",", ":")))
 PY
 }
 
-gluerun_runner_contract_prepare() {
+singular_runner_contract_prepare() {
   local runner="$1" role="$2" capability_profile="$3" result_file="$4"
   local runner_key probe should_probe="no"
-  GLUERUN_RUNNER_CONTRACT_ARGS=()
+  SINGULAR_RUNNER_CONTRACT_ARGS=()
 
   # Contract probing is bounded and cached for this host process. A legacy
   # custom runner receives the pre-v1 environment variables only; a conforming
   # v1 runner receives the public argv contract on every actual invocation.
-  if ! declare -p GLUERUN_RUNNER_CONTRACT_CACHE >/dev/null 2>&1; then
-    declare -gA GLUERUN_RUNNER_CONTRACT_CACHE=()
+  if ! declare -p SINGULAR_RUNNER_CONTRACT_CACHE >/dev/null 2>&1; then
+    declare -gA SINGULAR_RUNNER_CONTRACT_CACHE=()
   fi
   runner_key="$(python3 - "$runner" <<'PY'
 import hashlib
@@ -2524,13 +2524,13 @@ except OSError:
 print(hashlib.sha256(fingerprint.encode("utf-8")).hexdigest())
 PY
 )"
-  probe="${GLUERUN_RUNNER_CONTRACT_CACHE[$runner_key]:-}"
+  probe="${SINGULAR_RUNNER_CONTRACT_CACHE[$runner_key]:-}"
   if [[ -z "$probe" ]]; then
     # Do not execute an unmarked legacy runner merely to ask its version:
     # historical custom runners may ignore unknown argv and begin real work.
     # Built-ins and normal script/binary v1 implementations advertise the
     # literal option; opaque launchers can opt in explicitly.
-    if [[ "${GLUERUN_RUNNER_CONTRACT_VERSION:-}" == "1" ]] \
+    if [[ "${SINGULAR_RUNNER_CONTRACT_VERSION:-}" == "1" ]] \
       || { [[ -f "$runner" ]] && LC_ALL=C grep -a -q -- '--describe-contract' "$runner" 2>/dev/null; }; then
       should_probe="yes"
     fi
@@ -2560,14 +2560,14 @@ try:
     contract = json.loads(result.stdout) if result.returncode == 0 else {}
     arguments = set(contract.get("arguments", []))
     valid = (
-        contract.get("schema") == "gluerun.runner-contract.v1"
+        contract.get("schema") == "singular.runner-contract.v1"
         and contract.get("version") == 1
         and required.issubset(arguments)
         and "--stage-dir" not in arguments
         and contract.get("structuredResult")
-        == "gluerun.orchestration.runner-result.v0"
+        == "singular.orchestration.runner-result.v0"
         and contract.get("structuredProviderError")
-        == "gluerun.orchestration.provider-error.v0"
+        == "singular.orchestration.provider-error.v0"
     )
 except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
     valid = False
@@ -2577,10 +2577,10 @@ PY
     else
       probe="legacy"
     fi
-    GLUERUN_RUNNER_CONTRACT_CACHE["$runner_key"]="$probe"
+    SINGULAR_RUNNER_CONTRACT_CACHE["$runner_key"]="$probe"
   fi
   if [[ "$probe" == "v1" ]]; then
-    GLUERUN_RUNNER_CONTRACT_ARGS=(
+    SINGULAR_RUNNER_CONTRACT_ARGS=(
       --role "$role"
       --capability-profile "$capability_profile"
       --result-file "$result_file"
@@ -2588,16 +2588,16 @@ PY
   fi
 }
 
-gluerun_runner_default_result_file() {
+singular_runner_default_result_file() {
   local run_id="$1"
-  printf '%s\n' "$GLUERUN_STATE_DIR/runs/$run_id/runner-result.json"
+  printf '%s\n' "$SINGULAR_STATE_DIR/runs/$run_id/runner-result.json"
 }
 
 # Write the contract sidecars atomically. envelope_file must contain the raw
 # provider stdout envelope/JSONL. stderr_file is accepted for providers (Gemini)
 # that place their JSON envelope on stderr, but arbitrary stderr prose is never
 # classified. output_file is recorded as a reference only and is never parsed.
-gluerun_runner_result_write() {
+singular_runner_result_write() {
   local provider="$1" run_id="$2" role="${3:-unknown}" capability_profile="${4:-default}"
   local result_file="$5" exit_code="${6:-1}" envelope_file="${7:-}" stderr_file="${8:-}"
   local output_file="${9:-}"
@@ -2800,7 +2800,7 @@ if terminal is not None:
     canonical = json.dumps(terminal, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     raw_event_bytes = canonical.encode("utf-8")
     provider_error = {
-        "schema": "gluerun.orchestration.provider-error.v0",
+        "schema": "singular.orchestration.provider-error.v0",
         "provider": provider,
         "runId": run_id,
         "role": role,
@@ -2908,7 +2908,7 @@ else:
 now = datetime.datetime.now(datetime.timezone.utc).replace(
     microsecond=0).isoformat().replace("+00:00", "Z")
 result = {
-    "schema": "gluerun.orchestration.runner-result.v0",
+    "schema": "singular.orchestration.runner-result.v0",
     "contractVersion": 1,
     "provider": provider,
     "runId": run_id,
@@ -2986,8 +2986,8 @@ except Exception:
 PY
 )"
   if [[ -n "$provider_error_json" ]]; then
-    gluerun_append_event "provider.error" "provider terminal error normalized" \
-      "{\"runnerResultRef\":$(printf '%s' "$result_file" | gluerun_json_escape),\"providerError\":$provider_error_json}" \
+    singular_append_event "provider.error" "provider terminal error normalized" \
+      "{\"runnerResultRef\":$(printf '%s' "$result_file" | singular_json_escape),\"providerError\":$provider_error_json}" \
       2>/dev/null || true
   fi
 }
@@ -3003,7 +3003,7 @@ PY
 #                       decide which class to arm)
 # The class and the provider-error kind are cross-checked, so a 529 can never
 # satisfy a quota query and a 429 can never satisfy an overload query.
-gluerun_runner_quota_evidence_json() {
+singular_runner_quota_evidence_json() {
   local result_file="$1" expected_class="${2:-quota}"
   [[ -f "$result_file" ]] || return 1
   python3 - "$result_file" "$expected_class" <<'PY'
@@ -3033,7 +3033,7 @@ providers = {"codex", "claude", "gemini", "opencode", "cursor", "grok"}
 optional_result = {"usage", "providerEnvelopeRef", "providerEnvelopeSha256"}
 if not required_result.issubset(result) or not set(result).issubset(required_result | optional_result):
     sys.exit(1)
-if result.get("schema") != "gluerun.orchestration.runner-result.v0":
+if result.get("schema") != "singular.orchestration.runner-result.v0":
     sys.exit(1)
 if result.get("contractVersion") != 1 or result.get("provider") not in providers:
     sys.exit(1)
@@ -3082,7 +3082,7 @@ required_error = {
 optional_error = {"rawEventRef"}
 if not required_error.issubset(error) or not set(error).issubset(required_error | optional_error):
     sys.exit(1)
-if error.get("schema") != "gluerun.orchestration.provider-error.v0":
+if error.get("schema") != "singular.orchestration.provider-error.v0":
     sys.exit(1)
 if error.get("provider") != result.get("provider") or error.get("runId") != result.get("runId"):
     sys.exit(1)
@@ -3123,7 +3123,7 @@ if not valid:
 # separately hash-bound provider-error sidecar. They must agree, or a result
 # that merely CLAIMS quota over a 529 envelope buys the 30-minute backoff.
 # Checking against the declared class (not the queried one) also closes the
-# "any" query, which the cycle scanner and gluerun_limit_marker_scan use.
+# "any" query, which the cycle scanner and singular_limit_marker_scan use.
 if kind not in CLASS_KINDS.get(result_class, set()):
     sys.exit(1)
 digest = error.get("rawEventSha256")
@@ -3158,7 +3158,7 @@ print(json.dumps({
 PY
 }
 
-gluerun_runner_result_failure_class() {
+singular_runner_result_failure_class() {
   local result_file="$1"
   [[ -f "$result_file" ]] || return 1
   python3 - "$result_file" <<'PY'
@@ -3167,7 +3167,7 @@ try:
     data = json.load(open(sys.argv[1], encoding="utf-8"))
 except Exception:
     sys.exit(1)
-if data.get("schema") != "gluerun.orchestration.runner-result.v0":
+if data.get("schema") != "singular.orchestration.runner-result.v0":
     sys.exit(1)
 value = data.get("failureClass")
 if value not in {"none", "quota", "provider-overloaded", "timeout", "provider-exit"}:
@@ -3180,20 +3180,20 @@ print(value)
 PY
 }
 
-gluerun_planner_failure_class() {
+singular_planner_failure_class() {
   local log_file="$1" exit_code="${2:-0}" output_file="${3:-}" result_file="${4:-}"
   local structured=""
-  if [[ -n "$result_file" ]] && gluerun_runner_quota_evidence_json "$result_file" quota >/dev/null 2>&1; then
+  if [[ -n "$result_file" ]] && singular_runner_quota_evidence_json "$result_file" quota >/dev/null 2>&1; then
     echo "quota"
     return 0
   fi
   if [[ -n "$result_file" ]] \
-    && gluerun_runner_quota_evidence_json "$result_file" provider-overloaded >/dev/null 2>&1; then
+    && singular_runner_quota_evidence_json "$result_file" provider-overloaded >/dev/null 2>&1; then
     echo "provider-overloaded"
     return 0
   fi
   if [[ -n "$result_file" ]]; then
-    structured="$(gluerun_runner_result_failure_class "$result_file" 2>/dev/null || true)"
+    structured="$(singular_runner_result_failure_class "$result_file" 2>/dev/null || true)"
   fi
   case "$structured" in
     timeout) echo "timeout"; return 0 ;;
@@ -3212,15 +3212,15 @@ gluerun_planner_failure_class() {
 }
 
 # Canonical shipped-adapter identity. A provider name is printed ONLY when the
-# given runner path resolves to the matching adapter under GLUERUN_ENGINE_DIR.
+# given runner path resolves to the matching adapter under SINGULAR_ENGINE_DIR.
 # Everything else — a custom wrapper, a basename collision such as
 # /tmp/custom/codex-run.sh, an unreadable or dangling path — prints nothing and
 # returns 1, so every caller treats it as "provider unknown" instead of guessing
 # a built-in. This is the only path->provider mapping in the engine.
-gluerun_runner_provider_identity() {
+singular_runner_provider_identity() {
   local runner="${1:-}"
   [[ -n "$runner" ]] || return 1
-  python3 - "$runner" "$GLUERUN_ENGINE_DIR" "$GLUERUN_ADAPTER_PROVIDERS_JSON" <<'PY'
+  python3 - "$runner" "$SINGULAR_ENGINE_DIR" "$SINGULAR_ADAPTER_PROVIDERS_JSON" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3245,23 +3245,23 @@ PY
 
 # The runner the next planner/worker turn will actually use. Mirrors
 # generate-tasks.sh's planner-runner precedence.
-gluerun_selected_runner_path() {
-  printf '%s\n' "${GLUERUN_RUNNER:-${GLUERUN_CODEX_RUNNER:-$GLUERUN_ENGINE_DIR/codex-run.sh}}"
+singular_selected_runner_path() {
+  printf '%s\n' "${SINGULAR_RUNNER:-${SINGULAR_CODEX_RUNNER:-$SINGULAR_ENGINE_DIR/codex-run.sh}}"
 }
 
 # Provider identity of the currently selected runner, or empty + rc 1.
-gluerun_selected_provider_identity() {
-  gluerun_runner_provider_identity "$(gluerun_selected_runner_path)"
+singular_selected_provider_identity() {
+  singular_runner_provider_identity "$(singular_selected_runner_path)"
 }
 
-gluerun_planner_backoff_active_json() {
-  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || return 1
+singular_planner_backoff_active_json() {
+  [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] || return 1
   # Provider identity is trusted only for a canonically resolved shipped
   # adapter; a basename-colliding custom runner remains unknown and therefore
   # keeps the conservative global-backoff behavior.
   local selected_provider
-  selected_provider="$(gluerun_selected_provider_identity 2>/dev/null || true)"
-  python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" "$selected_provider" "$GLUERUN_ADAPTER_PROVIDERS_JSON" <<'PY'
+  selected_provider="$(singular_selected_provider_identity 2>/dev/null || true)"
+  python3 - "$SINGULAR_PLANNER_BACKOFF_FILE" "$selected_provider" "$SINGULAR_ADAPTER_PROVIDERS_JSON" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -3293,7 +3293,7 @@ print(json.dumps(data, separators=(",", ":")))
 PY
 }
 
-gluerun_planner_backoff_set() {
+singular_planner_backoff_set() {
   local failure_class="$1" run_id="${2:-}" node="${3:-}" evidence_ref="${4:-}"
   local quota_evidence=""
   # A path is not evidence. Both provider-window classes require a schema-valid
@@ -3301,7 +3301,7 @@ gluerun_planner_backoff_set() {
   # runner logs intentionally fail this gate and remain ordinary failures.
   if [[ "$failure_class" == "quota" || "$failure_class" == "provider-overloaded" ]]; then
     if [[ -n "$evidence_ref" ]]; then
-      quota_evidence="$(gluerun_runner_quota_evidence_json "$evidence_ref" "$failure_class" 2>/dev/null || true)"
+      quota_evidence="$(singular_runner_quota_evidence_json "$evidence_ref" "$failure_class" 2>/dev/null || true)"
     fi
     if [[ -z "$quota_evidence" ]]; then
       local rejected_json
@@ -3314,7 +3314,7 @@ print(json.dumps({
 }, separators=(",", ":")))
 PY
 )"
-      gluerun_append_event "backoff.rejected_invalid_evidence" \
+      singular_append_event "backoff.rejected_invalid_evidence" \
         "$failure_class backoff refused: structured provider evidence missing or invalid" \
         "$rejected_json" 2>/dev/null || true
       echo "$failure_class backoff refused: structured provider evidence missing or invalid (runId=$run_id node=$node)" >&2
@@ -3324,22 +3324,22 @@ PY
     # evidence is schema-valid and hash-bound to a normalized provider envelope,
     # and every arming caller (planner and the breaker chokepoint alike) funnels
     # through here. Off by default, and never able to fail the backoff itself.
-    gluerun_provider_pressure_observe "$evidence_ref" >/dev/null 2>&1 || true
+    singular_provider_pressure_observe "$evidence_ref" >/dev/null 2>&1 || true
   fi
   local seconds
   # A usage limit is a window measured in tens of minutes; provider overload
   # clears in seconds. Same no-breaker treatment, an order of magnitude apart in
   # how long the loop stands down.
   if [[ "$failure_class" == "quota" ]]; then
-    seconds="${GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS:-1800}"
+    seconds="${SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS:-1800}"
   elif [[ "$failure_class" == "provider-overloaded" ]]; then
-    seconds="${GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS:-180}"
+    seconds="${SINGULAR_PLANNER_OVERLOAD_BACKOFF_SECONDS:-180}"
   else
-    seconds="${GLUERUN_PLANNER_BACKOFF_SECONDS:-900}"
+    seconds="${SINGULAR_PLANNER_BACKOFF_SECONDS:-900}"
   fi
   [[ "$seconds" =~ ^[0-9]+$ && "$seconds" -ge 1 ]] || seconds=900
-  gluerun_ensure_state_dirs
-  python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" "$failure_class" "$seconds" "$run_id" "$node" \
+  singular_ensure_state_dirs
+  python3 - "$SINGULAR_PLANNER_BACKOFF_FILE" "$failure_class" "$seconds" "$run_id" "$node" \
     "$evidence_ref" "$quota_evidence" <<'PY'
 import json
 import sys
@@ -3350,7 +3350,7 @@ now = datetime.now(timezone.utc).replace(microsecond=0)
 until = now + timedelta(seconds=int(seconds_raw))
 evidence = json.loads(evidence_raw) if evidence_raw else {}
 data = {
-    "schema": "gluerun.orchestration.planner-backoff.v0",
+    "schema": "singular.orchestration.planner-backoff.v0",
     "failureClass": failure_class,
     "runId": run_id,
     "node": node,
@@ -3375,54 +3375,54 @@ PY
 # Remove the planner backoff (operator "clear-backoff" primitive). Prints what
 # was cleared; emits backoff.cleared with the prior record. Always exits 0 —
 # clearing an absent backoff is a no-op, not an error.
-gluerun_planner_backoff_clear() {
-  if [[ ! -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]]; then
+singular_planner_backoff_clear() {
+  if [[ ! -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]]; then
     echo "no active backoff"
     return 0
   fi
   local prior
   prior="$(python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1])),separators=(",",":")))' \
-    "$GLUERUN_PLANNER_BACKOFF_FILE" 2>/dev/null || echo '{}')"
-  rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
-  gluerun_append_event "backoff.cleared" "planner backoff cleared by operator" "{\"previous\":$prior}"
+    "$SINGULAR_PLANNER_BACKOFF_FILE" 2>/dev/null || echo '{}')"
+  rm -f "$SINGULAR_PLANNER_BACKOFF_FILE"
+  singular_append_event "backoff.cleared" "planner backoff cleared by operator" "{\"previous\":$prior}"
   echo "backoff cleared (was: $prior)"
 }
 
 # --- provider-pressure controller -------------------------------------------
 #
 # Evidence in, slots out. The ONLY accepted input is a runner result that has
-# already passed gluerun_runner_quota_evidence_json: schema-validated,
+# already passed singular_runner_quota_evidence_json: schema-validated,
 # cross-checked against a hash-bound provider-error sidecar, and carrying a
 # normalized provider/kind/httpStatus. Raw logs, prompt prose, packet text and
 # self-declared failure classes cannot reach this path by construction.
 #
 # Multiplicative decrease on a cluster of DISTINCT evidence; additive increase
 # of one slot per quiet-success interval; hard floor of
-# GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS so pressure can never starve runnable
+# SINGULAR_PROVIDER_PRESSURE_MIN_SLOTS so pressure can never starve runnable
 # work. The cap is only a ceiling — resource-plan.sh still takes the min with
 # configured and disk-affordable slots, so recovery cannot outrun either.
 
-gluerun_provider_pressure_enabled() {
-  [[ "${GLUERUN_PROVIDER_PRESSURE_ADAPT:-0}" == "1" ]]
+singular_provider_pressure_enabled() {
+  [[ "${SINGULAR_PROVIDER_PRESSURE_ADAPT:-0}" == "1" ]]
 }
 
 # The same configured baseline resource-plan.sh starts from, so a decrease
 # halves the real ceiling rather than an invented one.
-gluerun_provider_pressure_configured_slots() {
-  local configured="${GLUERUN_MAX_CONCURRENT:-${GLUERUN_MAX_L1_CONCURRENT:-3}}"
+singular_provider_pressure_configured_slots() {
+  local configured="${SINGULAR_MAX_CONCURRENT:-${SINGULAR_MAX_L1_CONCURRENT:-3}}"
   [[ "$configured" =~ ^[0-9]+$ && "$configured" -ge 1 ]] || configured=3
   printf '%s\n' "$configured"
 }
 
 # mode: observe | success | status. Never called directly; see the three
 # wrappers below, which own the enablement and evidence-validation gates.
-_gluerun_provider_pressure_run() {
+_singular_provider_pressure_run() {
   local mode="$1" provider="${2:-}" evidence="${3:-}"
-  python3 - "$mode" "$GLUERUN_PROVIDER_PRESSURE_FILE" "$provider" "$evidence" \
-    "$GLUERUN_ADAPTER_PROVIDERS_JSON" "$(gluerun_provider_pressure_configured_slots)" \
-    "${GLUERUN_PROVIDER_PRESSURE_CLUSTER:-2}" "${GLUERUN_PROVIDER_PRESSURE_WINDOW_SEC:-900}" \
-    "${GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET:-3}" "${GLUERUN_PROVIDER_PRESSURE_MIN_SLOTS:-1}" \
-    "${GLUERUN_PROVIDER_PRESSURE_MAX_EVENTS:-32}" <<'PY'
+  python3 - "$mode" "$SINGULAR_PROVIDER_PRESSURE_FILE" "$provider" "$evidence" \
+    "$SINGULAR_ADAPTER_PROVIDERS_JSON" "$(singular_provider_pressure_configured_slots)" \
+    "${SINGULAR_PROVIDER_PRESSURE_CLUSTER:-2}" "${SINGULAR_PROVIDER_PRESSURE_WINDOW_SEC:-900}" \
+    "${SINGULAR_PROVIDER_PRESSURE_RECOVER_QUIET:-3}" "${SINGULAR_PROVIDER_PRESSURE_MIN_SLOTS:-1}" \
+    "${SINGULAR_PROVIDER_PRESSURE_MAX_EVENTS:-32}" <<'PY'
 import hashlib
 import json
 import os
@@ -3433,7 +3433,7 @@ from datetime import datetime, timedelta, timezone
 (mode, path, provider_arg, evidence_raw, adapters_raw, configured_raw,
  cluster_raw, window_raw, quiet_raw, min_slots_raw, max_events_raw) = sys.argv[1:12]
 
-SCHEMA = "gluerun.orchestration.provider-pressure.v0"
+SCHEMA = "singular.orchestration.provider-pressure.v0"
 KNOWN = set(json.loads(adapters_raw).values())
 MAX_PROVIDERS = 16
 PRESSURE_KINDS = ("usage-limit", "overloaded")
@@ -3752,26 +3752,26 @@ PY
 # text: the evidence is re-validated here so no caller can inject a pressure
 # event from an unvalidated source. Returns 1 when the file is not valid
 # congestion evidence, which every caller treats as "nothing to record".
-gluerun_provider_pressure_observe() {
+singular_provider_pressure_observe() {
   local result_file="${1:-}"
-  gluerun_provider_pressure_enabled || return 1
+  singular_provider_pressure_enabled || return 1
   [[ -n "$result_file" && -f "$result_file" ]] || return 1
   local evidence
-  evidence="$(gluerun_runner_quota_evidence_json "$result_file" any 2>/dev/null || true)"
+  evidence="$(singular_runner_quota_evidence_json "$result_file" any 2>/dev/null || true)"
   [[ -n "$evidence" ]] || return 1
   local report
-  report="$(_gluerun_provider_pressure_run observe "" "$evidence" 2>/dev/null || true)"
+  report="$(_singular_provider_pressure_run observe "" "$evidence" 2>/dev/null || true)"
   [[ -n "$report" ]] || return 1
   printf '%s\n' "$report"
   case "$report" in
     *'"action":"reduced"'*)
-      gluerun_append_event "provider_pressure.reduced" \
+      singular_append_event "provider_pressure.reduced" \
         "clustered provider congestion evidence reduced the dispatch ceiling" "$report" 2>/dev/null || true
       ;;
     *'"action":"write-failed"'*)
       # Otherwise a permanently unwritable state directory leaves the controller
       # inert with no operator signal at all.
-      gluerun_append_event "provider_pressure.write_failed" \
+      singular_append_event "provider_pressure.write_failed" \
         "provider-pressure state could not be written; the dispatch ceiling is unchanged" "$report" 2>/dev/null || true
       ;;
   esac
@@ -3780,22 +3780,22 @@ gluerun_provider_pressure_observe() {
 
 # One quiet successful iteration for the currently selected provider. A no-op
 # unless that provider actually has a reduced cap.
-gluerun_provider_pressure_success() {
-  gluerun_provider_pressure_enabled || return 1
+singular_provider_pressure_success() {
+  singular_provider_pressure_enabled || return 1
   local provider
-  provider="$(gluerun_selected_provider_identity 2>/dev/null || true)"
+  provider="$(singular_selected_provider_identity 2>/dev/null || true)"
   [[ -n "$provider" ]] || return 1
   local report
-  report="$(_gluerun_provider_pressure_run success "$provider" "" 2>/dev/null || true)"
+  report="$(_singular_provider_pressure_run success "$provider" "" 2>/dev/null || true)"
   [[ -n "$report" ]] || return 1
   printf '%s\n' "$report"
   case "$report" in
     *'"action":"recovered"'*|*'"action":"cleared"'*)
-      gluerun_append_event "provider_pressure.recovered" \
+      singular_append_event "provider_pressure.recovered" \
         "quiet successful interval restored dispatch capacity" "$report" 2>/dev/null || true
       ;;
     *'"action":"write-failed"'*)
-      gluerun_append_event "provider_pressure.write_failed" \
+      singular_append_event "provider_pressure.write_failed" \
         "provider-pressure state could not be written; the dispatch ceiling is unchanged" "$report" 2>/dev/null || true
       ;;
   esac
@@ -3804,30 +3804,30 @@ gluerun_provider_pressure_success() {
 
 # Pressure ceiling for the currently selected provider, for resource-plan.sh and
 # health. Read-only and side-effect free; prints nothing when adaptation is off.
-gluerun_provider_pressure_status_json() {
-  gluerun_provider_pressure_enabled || return 1
+singular_provider_pressure_status_json() {
+  singular_provider_pressure_enabled || return 1
   local provider
-  provider="$(gluerun_selected_provider_identity 2>/dev/null || true)"
-  _gluerun_provider_pressure_run status "$provider" "" 2>/dev/null || return 1
+  provider="$(singular_selected_provider_identity 2>/dev/null || true)"
+  _singular_provider_pressure_run status "$provider" "" 2>/dev/null || return 1
 }
 
 # Compatibility name retained for extensions. A "marker scan" now means strict
 # runner-result/provider-error validation; arbitrary text files never match.
-gluerun_limit_marker_scan() {
+singular_limit_marker_scan() {
   local file="$1"
   # "any": before overload was split out of quota this matched all three kinds,
   # and extensions asking "is there a provider limit window here" still want that.
-  gluerun_runner_quota_evidence_json "$file" any
+  singular_runner_quota_evidence_json "$file" any
 }
 
 # Detect a usage-limit/overload/entitlement window from this cycle's durable,
 # validated runner results. Raw runner logs, prompts, packets, verdicts, command
 # output and repository/test prose are excluded by construction.
-gluerun_cycle_limit_window_evidence_json() {
-  local runs_dir="${GLUERUN_RUNS_DIR:-$GLUERUN_STATE_DIR/runs}"
+singular_cycle_limit_window_evidence_json() {
+  local runs_dir="${SINGULAR_RUNS_DIR:-$SINGULAR_STATE_DIR/runs}"
   [[ -d "$runs_dir" ]] || return 1
   local candidates
-  candidates="$(python3 - "$runs_dir" "${GLUERUN_LIMIT_SCAN_WINDOW_SEC:-900}" <<'PY'
+  candidates="$(python3 - "$runs_dir" "${SINGULAR_LIMIT_SCAN_WINDOW_SEC:-900}" <<'PY'
 import os
 import sys
 import time
@@ -3875,7 +3875,7 @@ PY
   local file hit
   while IFS= read -r file; do
     [[ -n "$file" ]] || continue
-    if hit="$(gluerun_runner_quota_evidence_json "$file" any 2>/dev/null)"; then
+    if hit="$(singular_runner_quota_evidence_json "$file" any 2>/dev/null)"; then
       printf '%s\n' "$hit"
       return 0
     fi
@@ -3884,13 +3884,13 @@ PY
 }
 
 # Thin compat wrapper (0.4.0 name): true iff structured evidence exists.
-gluerun_cycle_limit_window_detected() {
-  gluerun_cycle_limit_window_evidence_json >/dev/null
+singular_cycle_limit_window_detected() {
+  singular_cycle_limit_window_evidence_json >/dev/null
 }
 
-gluerun_blocked_gate_planner_guard_json() {
+singular_blocked_gate_planner_guard_json() {
   local node="$1"
-  local gate="$GLUERUN_ORCH_DIR/gates/$node.gate-result.json"
+  local gate="$SINGULAR_ORCH_DIR/gates/$node.gate-result.json"
   [[ -f "$gate" ]] || return 1
   python3 - "$node" "$gate" <<'PY'
 import json
@@ -3936,19 +3936,19 @@ PY
 # A candidate whose `Supersedes:` header names the existing task bypasses the
 # guard (intentional replacement); bypasses are reported on fd 2 as
 # "SUPERSEDES <candidate> <existing>" for the caller to event.
-gluerun_find_duplicate_task_signature() {
+singular_find_duplicate_task_signature() {
   local candidate="$1" node="${2:-}" mode="${3:-create}"
   # f MUST be local: this helper is called from inside callers' own
-  # while-read-f loops (gluerun_list_ready_tasks) and bash dynamic scoping
+  # while-read-f loops (singular_list_ready_tasks) and bash dynamic scoping
   # would otherwise clobber their loop variable at EOF.
   local candidate_json task_input f
-  candidate_json="$(gluerun_task_json "$candidate")" || return 1
+  candidate_json="$(singular_task_json "$candidate")" || return 1
   task_input="$(mktemp)"
   while IFS= read -r f; do
     [[ -n "$f" && "$f" != "$candidate" ]] || continue
     case "$(basename "$f")" in TEMPLATE.md) continue ;; esac
-    printf '%s\t%s\n' "$f" "$(gluerun_task_json "$f")" >>"$task_input"
-  done < <(find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
+    printf '%s\t%s\n' "$f" "$(singular_task_json "$f")" >>"$task_input"
+  done < <(find "$SINGULAR_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
   python3 - "$node" "$candidate_json" "$task_input" "$mode" <<'PY'
 import json
 import re
@@ -4042,7 +4042,7 @@ PY
   return "$rc"
 }
 
-gluerun_duplicate_candidate_event_json() {
+singular_duplicate_candidate_event_json() {
   local run_id="$1" node="$2" duplicate_json="$3"
   python3 - "$run_id" "$node" "$duplicate_json" <<'PY'
 import json
@@ -4060,9 +4060,9 @@ PY
 # List task files whose Status header equals "ready", sorted by task id, without
 # applying dispatch duplicate policy. A single parser process keeps queue
 # telemetry linear even when a campaign has dozens of ready tasks.
-gluerun_list_status_ready_tasks() {
-  [[ -d "$GLUERUN_TASKS_DIR" ]] || return 0
-  python3 - "$GLUERUN_TASKS_DIR" <<'PY'
+singular_list_status_ready_tasks() {
+  [[ -d "$SINGULAR_TASKS_DIR" ]] || return 0
+  python3 - "$SINGULAR_TASKS_DIR" <<'PY'
 import pathlib
 import sys
 
@@ -4080,15 +4080,15 @@ PY
 }
 
 # List ready task files after applying the legacy duplicate-dispatch policy.
-gluerun_list_ready_tasks() {
+singular_list_ready_tasks() {
   local f
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
-    if [[ "${GLUERUN_SKIP_DUPLICATE_READY_TASKS:-1}" == "1" ]] && gluerun_find_duplicate_task_signature "$f" "" dispatch >/dev/null 2>&1; then
+    if [[ "${SINGULAR_SKIP_DUPLICATE_READY_TASKS:-1}" == "1" ]] && singular_find_duplicate_task_signature "$f" "" dispatch >/dev/null 2>&1; then
       continue
     fi
     echo "$f"
-  done < <(gluerun_list_status_ready_tasks)
+  done < <(singular_list_status_ready_tasks)
 }
 
 # Select a deterministic ready frontier for canonical parallel dispatch.
@@ -4096,25 +4096,25 @@ gluerun_list_ready_tasks() {
 # slot count. Readiness is stricter than Status: ready: dependencies must be
 # integrated, no active lease may exist for the task, and file scopes must not
 # overlap active leases or earlier selected tasks.
-gluerun_select_dispatch_frontier() {
+singular_select_dispatch_frontier() {
   local limit="${1:-1}"
   [[ "$limit" =~ ^[0-9]+$ ]] || limit=1
   [[ "$limit" -gt 0 ]] || return 0
-  [[ -d "$GLUERUN_TASKS_DIR" ]] || return 0
+  [[ -d "$SINGULAR_TASKS_DIR" ]] || return 0
 
   local task_json_lines
   task_json_lines="$(
     while IFS= read -r f; do
       [[ -n "$f" ]] || continue
       [[ "$(basename "$f")" == "TEMPLATE.md" ]] && continue
-      printf '%s\t%s\n' "$f" "$(gluerun_task_json "$f")"
-    done < <(find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
+      printf '%s\t%s\n' "$f" "$(singular_task_json "$f")"
+    done < <(find "$SINGULAR_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | sort)
   )"
 
   local frontier_input
   frontier_input="$(mktemp)"
   printf '%s\n' "$task_json_lines" >"$frontier_input"
-  python3 - "$limit" "$GLUERUN_LEASES_DIR" "$frontier_input" <<'PY'
+  python3 - "$limit" "$SINGULAR_LEASES_DIR" "$frontier_input" <<'PY'
 import json
 import os
 import re
@@ -4203,7 +4203,7 @@ for task in sorted(tasks, key=lambda t: t.get("taskId", "")):
         break
     if task.get("status") != "ready":
         continue
-    if os.environ.get("GLUERUN_SKIP_DUPLICATE_READY_TASKS", "1") == "1":
+    if os.environ.get("SINGULAR_SKIP_DUPLICATE_READY_TASKS", "1") == "1":
         # v2 (0.5.0): only OPEN non-ready twins and integrated twins suppress a
         # ready task. Terminal-but-unfinished statuses (blocked/superseded/
         # failed/cancelled/stale) never do — 0.4.0 blocked here too, so a
@@ -4253,38 +4253,38 @@ PY
   rm -f "$frontier_input"
 }
 
-gluerun_lease_path() {
-  echo "$GLUERUN_LEASES_DIR/$1.json"
+singular_lease_path() {
+  echo "$SINGULAR_LEASES_DIR/$1.json"
 }
 
-gluerun_lease_status() {
+singular_lease_status() {
   local task_id="$1"
   local lease
-  lease="$(gluerun_lease_path "$task_id")"
+  lease="$(singular_lease_path "$task_id")"
   [[ -f "$lease" ]] || return 1
-  gluerun_json_field "$lease" status 2>/dev/null || true
+  singular_json_field "$lease" status 2>/dev/null || true
 }
 
 # Write (create or overwrite) a lease record for a task.
-gluerun_lease_write() {
+singular_lease_write() {
   # args: task_id branch area owner scope status [runId] [worktree] [baseSha] [batchId] [ownedFilesJson] [forbiddenFilesJson]
   local task_id="$1" branch="$2" area="$3" owner="$4" scope="$5" status="$6"
   local run_id="${7:-}" worktree="${8:-}"
   local base_sha="${9:-}" batch_id="${10:-}" owned_json="${11:-}" forbidden_json="${12:-}"
-  mkdir -p "$GLUERUN_LEASES_DIR"
+  mkdir -p "$SINGULAR_LEASES_DIR"
   local lease
-  lease="$(gluerun_lease_path "$task_id")"
+  lease="$(singular_lease_path "$task_id")"
   # Protect accepted/integrated work: a fresh lease write for a DIFFERENT
   # branch over a terminal-good lease is an identity collision (the 0.4.0
   # allocator reused archived ids and the failed pre-lease destroyed the
   # superseded task's lease). Refuse instead of clobbering.
   if [[ -f "$lease" ]]; then
     local prev_status prev_branch
-    prev_status="$(gluerun_json_field "$lease" status 2>/dev/null || true)"
-    prev_branch="$(gluerun_json_field "$lease" branch 2>/dev/null || true)"
+    prev_status="$(singular_json_field "$lease" status 2>/dev/null || true)"
+    prev_branch="$(singular_json_field "$lease" branch 2>/dev/null || true)"
     if [[ ( "$prev_status" == "accepted" || "$prev_status" == "integrated" ) \
       && -n "$prev_branch" && -n "$branch" && "$prev_branch" != "$branch" ]]; then
-      gluerun_append_event "lease.write_refused_protected" \
+      singular_append_event "lease.write_refused_protected" \
         "refused to overwrite $prev_status lease with different branch" \
         "{\"taskId\":\"$task_id\",\"prevBranch\":\"$prev_branch\",\"newBranch\":\"$branch\",\"prevStatus\":\"$prev_status\"}"
       echo "lease write refused: $task_id has $prev_status lease for $prev_branch (incoming: $branch)" >&2
@@ -4300,7 +4300,7 @@ from datetime import datetime, timezone
 
 (path, task_id, branch, area, owner, scope, status, run_id, worktree,
  base_sha, batch_id, owned_raw, forbidden_raw) = sys.argv[1:14]
-max_retries = int(os.environ.get("GLUERUN_MAX_RETRIES", "3"))
+max_retries = int(os.environ.get("SINGULAR_MAX_RETRIES", "3"))
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 created = now
 retry_count = 0
@@ -4355,10 +4355,10 @@ PY
 }
 
 # Update only the status (and updatedAt) of an existing lease.
-gluerun_lease_set_status() {
+singular_lease_set_status() {
   local task_id="$1" status="$2"
   local lease
-  lease="$(gluerun_lease_path "$task_id")"
+  lease="$(singular_lease_path "$task_id")"
   [[ -f "$lease" ]] || return 1
   python3 - "$lease" "$status" <<'PY'
 import json
@@ -4386,10 +4386,10 @@ PY
 # a task unparked at retryCount == maxRetries would park again on its first
 # failure with no attempt left to spend, which looks exactly like the unpark not
 # having worked.
-gluerun_lease_unpark() {
+singular_lease_unpark() {
   local task_id="$1"
   local lease
-  lease="$(gluerun_lease_path "$task_id")"
+  lease="$(singular_lease_path "$task_id")"
   [[ -f "$lease" ]] || return 1
   python3 - "$lease" <<'PY'
 import json
@@ -4412,10 +4412,10 @@ PY
 }
 
 # Increment a lease's retryCount; echo the new count.
-gluerun_lease_bump_retry() {
+singular_lease_bump_retry() {
   local task_id="$1"
   local lease
-  lease="$(gluerun_lease_path "$task_id")"
+  lease="$(singular_lease_path "$task_id")"
   [[ -f "$lease" ]] || { echo 0; return 1; }
   python3 - "$lease" <<'PY'
 import json
@@ -4440,10 +4440,10 @@ PY
 # the worker's owned set mid-drive: the parallel-L1 scheduler derives its
 # scope-overlap guard from lease.ownedFiles, so a widened scope that is not
 # written back would let a concurrent task collide on the newly-owned paths.
-gluerun_lease_update_owned() {
+singular_lease_update_owned() {
   local task_id="$1" owned_json="$2"
   local lease
-  lease="$(gluerun_lease_path "$task_id")"
+  lease="$(singular_lease_path "$task_id")"
   [[ -f "$lease" ]] || return 1
   python3 - "$lease" "$owned_json" <<'PY'
 import json
@@ -4457,7 +4457,7 @@ try:
     if not isinstance(owned, list):
         raise ValueError("ownedFiles must be a JSON array")
 except Exception as e:
-    sys.stderr.write("gluerun_lease_update_owned: %s\n" % e)
+    sys.stderr.write("singular_lease_update_owned: %s\n" % e)
     sys.exit(1)
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
@@ -4471,40 +4471,40 @@ os.replace(tmp, path)
 PY
 }
 
-gluerun_lease_field() {
+singular_lease_field() {
   local task_id="$1" field="$2"
   local lease
-  lease="$(gluerun_lease_path "$task_id")"
+  lease="$(singular_lease_path "$task_id")"
   [[ -f "$lease" ]] || return 1
-  gluerun_json_field "$lease" "$field" 2>/dev/null || true
+  singular_json_field "$lease" "$field" 2>/dev/null || true
 }
 
 # --- Dispatch records (detached dispatch + shadow accounting) ---
-# One record per spawned worker under $GLUERUN_DISPATCH_DIR: <taskId>.json with
+# One record per spawned worker under $SINGULAR_DISPATCH_DIR: <taskId>.json with
 # {taskId, runId, pid, pidStart, startedAt, log, baseSha, batchId, state}.
 # The spawn wrapper drops <taskId>.exit (the driver's exit code) when the worker
-# returns; gluerun_reap_dispatches consumes exit files (or detects dead pids) and
+# returns; singular_reap_dispatches consumes exit files (or detects dead pids) and
 # finalizes records to state=reaped. pidStart (ps lstart) defeats pid reuse.
 
-gluerun_dispatch_record_path() {
-  printf '%s/%s.json' "$GLUERUN_DISPATCH_DIR" "$1"
+singular_dispatch_record_path() {
+  printf '%s/%s.json' "$SINGULAR_DISPATCH_DIR" "$1"
 }
 
-gluerun_dispatch_exit_path() {
-  printf '%s/%s.exit' "$GLUERUN_DISPATCH_DIR" "$1"
+singular_dispatch_exit_path() {
+  printf '%s/%s.exit' "$SINGULAR_DISPATCH_DIR" "$1"
 }
 
-gluerun_dispatch_pid_start() {
+singular_dispatch_pid_start() {
   # Process start time for pid-reuse detection; empty if the pid is gone.
   local pid="$1"
   [[ -n "$pid" ]] || { echo ""; return 0; }
   ps -p "$pid" -o lstart= 2>/dev/null | sed 's/^ *//;s/ *$//' || true
 }
 
-gluerun_dispatch_record_write() {
+singular_dispatch_record_write() {
   # args: task_id run_id pid pid_start log base_sha batch_id
   local task_id="$1" run_id="$2" pid="$3" pid_start="$4" log="$5" base_sha="$6" batch_id="$7"
-  mkdir -p "$GLUERUN_DISPATCH_DIR"
+  mkdir -p "$SINGULAR_DISPATCH_DIR"
   # pgid: recorded for whole-tree liveness checks and (when the dispatch was
   # setsid'd, i.e. pgid == pid) safe orphan process-group cleanup. os.getpgid
   # first: it is a syscall, so the record still carries a real pgid in a sandbox
@@ -4512,12 +4512,12 @@ gluerun_dispatch_record_write() {
   # containment left. `ps` stays as the fallback, never the source of truth.
   local pgid=""
   if [[ -n "$pid" ]]; then
-    pgid="$(gluerun_pgid_of "$pid" | tr -d '[:space:]' || true)"
+    pgid="$(singular_pgid_of "$pid" | tr -d '[:space:]' || true)"
     if [[ -z "$pgid" ]]; then
       pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
     fi
   fi
-  python3 - "$(gluerun_dispatch_record_path "$task_id")" "$task_id" "$run_id" "$pid" "$pid_start" "$log" "$base_sha" "$batch_id" "$pgid" <<'PY'
+  python3 - "$(singular_dispatch_record_path "$task_id")" "$task_id" "$run_id" "$pid" "$pid_start" "$log" "$base_sha" "$batch_id" "$pgid" <<'PY'
 import json
 import os
 import sys
@@ -4544,23 +4544,23 @@ os.replace(tmp, path)
 PY
 }
 
-gluerun_dispatch_exit_write() {
+singular_dispatch_exit_write() {
   # Called by the spawn wrapper after the driver returns. tmp+mv so a reader
   # never sees a partial code.
   local task_id="$1" ec="$2"
-  mkdir -p "$GLUERUN_DISPATCH_DIR"
+  mkdir -p "$SINGULAR_DISPATCH_DIR"
   local exit_file tmp
-  exit_file="$(gluerun_dispatch_exit_path "$task_id")"
+  exit_file="$(singular_dispatch_exit_path "$task_id")"
   tmp="$exit_file.tmp"
   printf '%s\n' "$ec" >"$tmp"
   mv -f "$tmp" "$exit_file"
 }
 
-gluerun_dispatch_record_finalize() {
+singular_dispatch_record_finalize() {
   # args: task_id exit_code outcome  -- marks the record reaped, removes .exit
   local task_id="$1" ec="$2" outcome="$3"
   local record
-  record="$(gluerun_dispatch_record_path "$task_id")"
+  record="$(singular_dispatch_record_path "$task_id")"
   [[ -f "$record" ]] || return 0
   python3 - "$record" "$ec" "$outcome" <<'PY'
 import json
@@ -4581,7 +4581,7 @@ with open(tmp, "w", encoding="utf-8") as f:
     f.write("\n")
 os.replace(tmp, path)
 PY
-  rm -f "$(gluerun_dispatch_exit_path "$task_id")"
+  rm -f "$(singular_dispatch_exit_path "$task_id")"
 }
 
 # Whole-tree dispatch liveness. The 0.4.0 reaper checked only the recorded root
@@ -4592,19 +4592,19 @@ PY
 #   - any live process in the recorded pgid (skipped when it is our own group),
 #   - any live descendant reachable from the root pid,
 #   - any process whose command line carries the run id (survives reparenting),
-#   - any file under the run dir modified within GLUERUN_TREE_ACTIVITY_WINDOW_SEC.
-# Bounded conservatism: if lease_age_min >= GLUERUN_STALE_HARD_MINUTES, report
+#   - any file under the run dir modified within SINGULAR_TREE_ACTIVITY_WINDOW_SEC.
+# Bounded conservatism: if lease_age_min >= SINGULAR_STALE_HARD_MINUTES, report
 # dead regardless (prefer false-alive inside the window, never forever).
 # args: task_id pid pid_start run_id pgid [lease_age_min]
-gluerun_dispatch_tree_alive() {
+singular_dispatch_tree_alive() {
   local task_id="$1" pid="$2" pid_start="$3" run_id="$4" pgid="${5:-0}" lease_age_min="${6:-}"
   if [[ -n "$lease_age_min" && "$lease_age_min" =~ ^[0-9]+$ ]] \
-    && (( lease_age_min >= ${GLUERUN_STALE_HARD_MINUTES:-240} )); then
+    && (( lease_age_min >= ${SINGULAR_STALE_HARD_MINUTES:-240} )); then
     return 1
   fi
-  if gluerun_pid_alive "$pid"; then
+  if singular_pid_alive "$pid"; then
     local now_start
-    now_start="$(gluerun_dispatch_pid_start "$pid")"
+    now_start="$(singular_dispatch_pid_start "$pid")"
     if [[ -z "$pid_start" || "$now_start" == "$pid_start" ]]; then
       return 0
     fi
@@ -4668,8 +4668,8 @@ sys.exit(1)
 PY
   # Recent run-dir writes: an active runner streams logs even when the process
   # topology is unreadable.
-  if [[ -n "$run_id" && -d "$GLUERUN_RUNS_DIR/$run_id" ]]; then
-    if python3 - "$GLUERUN_RUNS_DIR/$run_id" "${GLUERUN_TREE_ACTIVITY_WINDOW_SEC:-120}" <<'PY'
+  if [[ -n "$run_id" && -d "$SINGULAR_RUNS_DIR/$run_id" ]]; then
+    if python3 - "$SINGULAR_RUNS_DIR/$run_id" "${SINGULAR_TREE_ACTIVITY_WINDOW_SEC:-120}" <<'PY'
 import os
 import sys
 import time
@@ -4695,15 +4695,15 @@ PY
 # Kill a dispatch's process GROUP — but only when the recorded pgid proves a
 # setsid leader (pgid == recorded pid), never our own group, never pgid <= 1.
 # Bounds the field leak of orphan Vite/Playwright gate servers surviving their
-# parked workers. GLUERUN_KILL_ORPHAN_PGROUP=0 disables.
-gluerun_kill_dispatch_pgroup() {
+# parked workers. SINGULAR_KILL_ORPHAN_PGROUP=0 disables.
+singular_kill_dispatch_pgroup() {
   local task_id="$1"
-  [[ "${GLUERUN_KILL_ORPHAN_PGROUP:-1}" == "1" ]] || return 1
+  [[ "${SINGULAR_KILL_ORPHAN_PGROUP:-1}" == "1" ]] || return 1
   local record pgid pid
-  record="$(gluerun_dispatch_record_path "$task_id")"
+  record="$(singular_dispatch_record_path "$task_id")"
   [[ -f "$record" ]] || return 1
-  pgid="$(gluerun_json_field "$record" pgid 2>/dev/null || true)"
-  pid="$(gluerun_json_field "$record" pid 2>/dev/null || true)"
+  pgid="$(singular_json_field "$record" pgid 2>/dev/null || true)"
+  pid="$(singular_json_field "$record" pid 2>/dev/null || true)"
   [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 1 ]] || return 1
   [[ "$pgid" == "$pid" ]] || return 1                      # setsid leader proven
   # os.getpgid/os.kill rather than ps/pgrep: the four guards above are what make
@@ -4711,17 +4711,17 @@ gluerun_kill_dispatch_pgroup() {
   # enumeration is denied. An empty own-pgid keeps 0.16's behaviour (the guard
   # compares unequal and the kill proceeds).
   local own_pgid
-  own_pgid="$(gluerun_pgid_of "$$" | tr -d '[:space:]' || true)"
+  own_pgid="$(singular_pgid_of "$$" | tr -d '[:space:]' || true)"
   [[ "$pgid" != "$own_pgid" ]] || return 1
   kill -TERM -- "-$pgid" 2>/dev/null || true
   local waited=0
-  while gluerun_pgroup_alive "$pgid" && (( waited < 5 )); do
+  while singular_pgroup_alive "$pgid" && (( waited < 5 )); do
     sleep 1; waited=$((waited + 1))
   done
-  if gluerun_pgroup_alive "$pgid"; then
+  if singular_pgroup_alive "$pgid"; then
     kill -KILL -- "-$pgid" 2>/dev/null || true
   fi
-  gluerun_append_event "dispatch.pgroup_killed" "dispatch process group terminated" \
+  singular_append_event "dispatch.pgroup_killed" "dispatch process group terminated" \
     "{\"taskId\":\"$task_id\",\"pgid\":$pgid}" 2>/dev/null || true
   return 0
 }
@@ -4736,28 +4736,28 @@ gluerun_kill_dispatch_pgroup() {
 # the breaker to a halt.
 # For every record in state=launched:
 #  - .exit file present -> reaped + classified per the contract
-#  - no .exit -> whole-TREE liveness decides (gluerun_dispatch_tree_alive:
+#  - no .exit -> whole-TREE liveness decides (singular_dispatch_tree_alive:
 #    descendants, pgroup, run-id command lines, recent run-dir writes). The
 #    0.4.0 root-pid-only check declared a dead wrapper with a live auditor
 #    "crashed" and failed the lease under it (accepted work destroyed).
 # args: run_id  (the CURRENT cycle's run id, for event attribution)
-gluerun_reap_dispatches() {
+singular_reap_dispatches() {
   local run_id="$1"
   local reaped_ok=0 reaped_failures=0 reaped_refused=0 reaped_terminal=0 workers_running=0
-  if [[ -d "$GLUERUN_DISPATCH_DIR" ]]; then
+  if [[ -d "$SINGULAR_DISPATCH_DIR" ]]; then
     local record tid state pid pid_start pgid rec_run ec lease_status outcome
-    for record in "$GLUERUN_DISPATCH_DIR"/*.json; do
+    for record in "$SINGULAR_DISPATCH_DIR"/*.json; do
       [[ -f "$record" ]] || continue
-      state="$(gluerun_json_field "$record" state 2>/dev/null || true)"
+      state="$(singular_json_field "$record" state 2>/dev/null || true)"
       [[ "$state" == "launched" ]] || continue
-      tid="$(gluerun_json_field "$record" taskId 2>/dev/null || true)"
+      tid="$(singular_json_field "$record" taskId 2>/dev/null || true)"
       [[ -n "$tid" ]] || continue
-      pid="$(gluerun_json_field "$record" pid 2>/dev/null || true)"
-      pid_start="$(gluerun_json_field "$record" pidStart 2>/dev/null || true)"
-      pgid="$(gluerun_json_field "$record" pgid 2>/dev/null || true)"
-      rec_run="$(gluerun_json_field "$record" runId 2>/dev/null || true)"
-      if [[ -f "$(gluerun_dispatch_exit_path "$tid")" ]]; then
-        ec="$(head -1 "$(gluerun_dispatch_exit_path "$tid")" 2>/dev/null | tr -d '[:space:]')"
+      pid="$(singular_json_field "$record" pid 2>/dev/null || true)"
+      pid_start="$(singular_json_field "$record" pidStart 2>/dev/null || true)"
+      pgid="$(singular_json_field "$record" pgid 2>/dev/null || true)"
+      rec_run="$(singular_json_field "$record" runId 2>/dev/null || true)"
+      if [[ -f "$(singular_dispatch_exit_path "$tid")" ]]; then
+        ec="$(head -1 "$(singular_dispatch_exit_path "$tid")" 2>/dev/null | tr -d '[:space:]')"
         [[ "$ec" =~ ^[0-9]+$ ]] || ec=1
         case "$ec" in
           0) outcome="ok";       reaped_ok=$((reaped_ok + 1)) ;;
@@ -4765,22 +4765,22 @@ gluerun_reap_dispatches() {
           3) outcome="terminal"; reaped_terminal=$((reaped_terminal + 1)) ;;
           *) outcome="failed";   reaped_failures=$((reaped_failures + 1)) ;;
         esac
-        gluerun_dispatch_record_finalize "$tid" "$ec" "$outcome"
-        gluerun_append_event "origin.dispatch_reaped" "dispatch reaped" \
+        singular_dispatch_record_finalize "$tid" "$ec" "$outcome"
+        singular_append_event "origin.dispatch_reaped" "dispatch reaped" \
           "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":$ec,\"outcome\":\"$outcome\"}"
         continue
       fi
-      if gluerun_dispatch_tree_alive "$tid" "$pid" "$pid_start" "$rec_run" "${pgid:-0}"; then
+      if singular_dispatch_tree_alive "$tid" "$pid" "$pid_start" "$rec_run" "${pgid:-0}"; then
         workers_running=$((workers_running + 1))
         continue
       fi
-      lease_status="$(gluerun_lease_status "$tid" 2>/dev/null || true)"
+      lease_status="$(singular_lease_status "$tid" 2>/dev/null || true)"
       case "$lease_status" in
-        planned|running|needs-review) gluerun_lease_set_status "$tid" "failed" 2>/dev/null || true ;;
+        planned|running|needs-review) singular_lease_set_status "$tid" "failed" 2>/dev/null || true ;;
       esac
       reaped_failures=$((reaped_failures + 1))
-      gluerun_dispatch_record_finalize "$tid" "-1" "crashed"
-      gluerun_append_event "origin.dispatch_reaped" "dispatch crashed (tree dead, no exit file)" \
+      singular_dispatch_record_finalize "$tid" "-1" "crashed"
+      singular_append_event "origin.dispatch_reaped" "dispatch crashed (tree dead, no exit file)" \
         "{\"runId\":\"$run_id\",\"taskId\":\"$tid\",\"exitCode\":-1,\"outcome\":\"crashed\",\"leaseStatus\":\"$lease_status\"}"
     done
   fi
@@ -4800,12 +4800,12 @@ gluerun_reap_dispatches() {
 # Map a DAG area to its repo-relative write-scope prefix(es). V1 uses the single
 # convention internal/<area>/, centralized here so V2 can extend it (e.g. to a
 # real per-node ownedFiles manifest) in one place.
-gluerun_l1_area_write_scopes() {
+singular_l1_area_write_scopes() {
   local area="$1"
   [[ -n "$area" ]] || return 0
-  # Consumer-provided area->path map (GLUERUN_AREA_PATHS: newline list of
-  # "area=path1[:path2]"); unmapped areas fall back to GLUERUN_AREA_PREFIX + area.
-  if [[ -n "${GLUERUN_AREA_PATHS:-}" ]]; then
+  # Consumer-provided area->path map (SINGULAR_AREA_PATHS: newline list of
+  # "area=path1[:path2]"); unmapped areas fall back to SINGULAR_AREA_PREFIX + area.
+  if [[ -n "${SINGULAR_AREA_PATHS:-}" ]]; then
     local line key val p
     while IFS= read -r line; do
       [[ -n "$line" ]] || continue
@@ -4819,9 +4819,9 @@ gluerun_l1_area_write_scopes() {
         done
         return 0
       fi
-    done <<< "$GLUERUN_AREA_PATHS"
+    done <<< "$SINGULAR_AREA_PATHS"
   fi
-  echo "${GLUERUN_AREA_PREFIX:-internal/}$area/"
+  echo "${SINGULAR_AREA_PREFIX:-internal/}$area/"
 }
 
 # Validate a JSON string against a JSON-Schema subset (dependency-free; mirrors
@@ -4829,7 +4829,7 @@ gluerun_l1_area_write_scopes() {
 # minLength, pattern, format:date-time, array minItems/items, and object
 # required/properties/additionalProperties. Exits non-zero with a stderr message
 # on the first violation (fail-closed). args: <json-string> <schema-path> [root-label]
-gluerun_json_schema_check() {
+singular_json_schema_check() {
   python3 - "$2" "$1" "${3:-value}" <<'PY'
 import json
 import re
@@ -4905,14 +4905,14 @@ PY
 }
 
 # Load a verdict file as compact JSON, normalizing a legacy "pmgo.orchestration.*"
-# schema id to "gluerun.orchestration.*" for validation purposes only (the file
+# schema id to "singular.orchestration.*" for validation purposes only (the file
 # is never rewritten). Default mode "warn" keeps 0.4.0-era consumers alive with
-# a stderr warning + schema.legacy_id_tolerated event; GLUERUN_LEGACY_SCHEMA_MODE=reject
+# a stderr warning + schema.legacy_id_tolerated event; SINGULAR_LEGACY_SCHEMA_MODE=reject
 # hard-fails with a migration pointer (post-migration hygiene). Prints the
 # (possibly normalized) compact JSON on stdout.
-gluerun_normalize_schema_id() {
+singular_normalize_schema_id() {
   local file="$1" label="${2:-verdict}"
-  python3 - "$file" "${GLUERUN_LEGACY_SCHEMA_MODE:-warn}" "$label" <<'PY'
+  python3 - "$file" "${SINGULAR_LEGACY_SCHEMA_MODE:-warn}" "$label" <<'PY'
 import json
 import sys
 
@@ -4921,11 +4921,11 @@ with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
 schema = str(data.get("schema", ""))
 if schema.startswith("pmgo.orchestration."):
-    new = "gluerun.orchestration." + schema[len("pmgo.orchestration."):]
+    new = "singular.orchestration." + schema[len("pmgo.orchestration."):]
     if mode == "reject":
         print(
             f"{label}: legacy schema id {schema!r} — run migrations/v0-to-v1.sh "
-            "or set GLUERUN_LEGACY_SCHEMA_MODE=warn",
+            "or set SINGULAR_LEGACY_SCHEMA_MODE=warn",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -4937,23 +4937,23 @@ PY
   if [[ $rc -eq 0 ]]; then
     # Emit the tolerance event only when a rewrite actually happened.
     if grep -q '"schema"[[:space:]]*:[[:space:]]*"pmgo\.orchestration\.' "$file" 2>/dev/null; then
-      gluerun_append_event "schema.legacy_id_tolerated" "legacy pmgo schema id tolerated" \
+      singular_append_event "schema.legacy_id_tolerated" "legacy pmgo schema id tolerated" \
         "{\"file\":\"$file\",\"label\":\"$label\"}" 2>/dev/null || true
     fi
   fi
   return $rc
 }
 
-# Central audit-verdict validator (symmetric with gluerun_validate_decider_verdict —
+# Central audit-verdict validator (symmetric with singular_validate_decider_verdict —
 # 0.4.0 validated decider verdicts centrally but audit verdicts nowhere, so a
 # malformed auditor JSON silently poisoned acceptance decisions). Schema-checks
-# against GLUERUN_AUDIT_SCHEMA plus cross-field checks: taskId must match when
+# against SINGULAR_AUDIT_SCHEMA plus cross-field checks: taskId must match when
 # both sides are non-empty; runId mismatch is warn-only (infra retries reuse runs).
-gluerun_validate_audit_verdict() {
+singular_validate_audit_verdict() {
   local verdict="$1" task_id="${2:-}" run_id="${3:-}"
   local data
-  data="$(gluerun_normalize_schema_id "$verdict" "audit verdict")" || return $?
-  gluerun_json_schema_check "$data" "$GLUERUN_AUDIT_SCHEMA" "audit verdict" || return $?
+  data="$(singular_normalize_schema_id "$verdict" "audit verdict")" || return $?
+  singular_json_schema_check "$data" "$SINGULAR_AUDIT_SCHEMA" "audit verdict" || return $?
   python3 - "$verdict" "$task_id" "$run_id" <<'PY'
 import json
 import sys
@@ -4977,11 +4977,11 @@ if run_id and verdict_run and verdict_run != run_id:
 PY
 }
 
-gluerun_validate_decider_verdict() {
+singular_validate_decider_verdict() {
   local verdict="$1" failure_class="$2" task_id="${3:-}"
   local data
-  data="$(gluerun_normalize_schema_id "$verdict" "decider verdict")" || return $?
-  gluerun_json_schema_check "$data" "$GLUERUN_DECIDER_SCHEMA" "decider verdict" || return $?
+  data="$(singular_normalize_schema_id "$verdict" "decider verdict")" || return $?
+  singular_json_schema_check "$data" "$SINGULAR_DECIDER_SCHEMA" "decider verdict" || return $?
   python3 - "$verdict" "$failure_class" "$task_id" <<'PY'
 import json
 import sys
@@ -5007,7 +5007,7 @@ if task_id and verdict_task and verdict_task != task_id:
 PY
 }
 
-gluerun_write_decider_verdict() {
+singular_write_decider_verdict() {
   local out="$1" task_id="$2" failure_class="$3" action="$4" rationale="$5" next_owner="$6"
   mkdir -p "$(dirname "$out")"
   python3 - "$out" "$task_id" "$failure_class" "$action" "$rationale" "$next_owner" <<'PY'
@@ -5017,7 +5017,7 @@ from datetime import datetime, timezone
 
 out, task_id, failure_class, action, rationale, next_owner = sys.argv[1:7]
 data = {
-    "schema": "gluerun.orchestration.decider-verdict.v0",
+    "schema": "singular.orchestration.decider-verdict.v0",
     "failureClass": failure_class,
     "action": action,
     "rationale": rationale,
@@ -5036,7 +5036,7 @@ PY
 # (indent=2 + trailing newline). The JSON is passed as an argument (NOT stdin),
 # since stdin is consumed by the heredoc that carries this script.
 # args: <dest-path> <compact-json>
-gluerun_write_json_pretty() {
+singular_write_json_pretty() {
   python3 - "$1" "$2" <<'PY'
 import json
 import sys
@@ -5056,34 +5056,34 @@ PY
 # The writable-settings menu the supervisor may PROPOSE (never apply). The real
 # whitelist + typed validation lives server-side (_settings_write_spec); this is
 # the human-facing knob list surfaced to the model as guidance / defense-in-depth.
-gluerun_settings_whitelist_keys() {
+singular_settings_whitelist_keys() {
   cat <<'EOF'
-GLUERUN_CODEX_MODEL
-GLUERUN_CODEX_SERVICE_TIER
-GLUERUN_CODEX_PLANNER_REASONING_EFFORT
-GLUERUN_CODEX_L2_REASONING_EFFORT
-GLUERUN_CODEX_AUDITOR_REASONING_EFFORT
-GLUERUN_MAX_CONCURRENT
-GLUERUN_MAX_L1_CONCURRENT
-GLUERUN_ENABLE_L1_PARALLEL
-GLUERUN_L1_TASKS_PER_NODE
-GLUERUN_L2_SLICE_BUDGET
-GLUERUN_L2_SLICE_BUDGET_MAX
-GLUERUN_MAX_RETRIES
-GLUERUN_MAX_CONSEC_FAILS
-GLUERUN_MAX_HOURS
-GLUERUN_MIN_DISK_GB
-GLUERUN_L1_STALE_MINUTES
-GLUERUN_PLANNER_BACKOFF_SECONDS
-GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS
-GLUERUN_PLANNER_OVERLOAD_BACKOFF_SECONDS
-GLUERUN_OVERLOAD_WAIT_BUDGET
-GLUERUN_AUTO_INTEGRATE
-GLUERUN_PUSH
-GLUERUN_GENERATE
-GLUERUN_SLEEP
-GLUERUN_TARGET_BRANCH
-GLUERUN_SUPERVISOR_INTERVAL_MIN
+SINGULAR_CODEX_MODEL
+SINGULAR_CODEX_SERVICE_TIER
+SINGULAR_CODEX_PLANNER_REASONING_EFFORT
+SINGULAR_CODEX_L2_REASONING_EFFORT
+SINGULAR_CODEX_AUDITOR_REASONING_EFFORT
+SINGULAR_MAX_CONCURRENT
+SINGULAR_MAX_L1_CONCURRENT
+SINGULAR_ENABLE_L1_PARALLEL
+SINGULAR_L1_TASKS_PER_NODE
+SINGULAR_L2_SLICE_BUDGET
+SINGULAR_L2_SLICE_BUDGET_MAX
+SINGULAR_MAX_RETRIES
+SINGULAR_MAX_CONSEC_FAILS
+SINGULAR_MAX_HOURS
+SINGULAR_MIN_DISK_GB
+SINGULAR_L1_STALE_MINUTES
+SINGULAR_PLANNER_BACKOFF_SECONDS
+SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS
+SINGULAR_PLANNER_OVERLOAD_BACKOFF_SECONDS
+SINGULAR_OVERLOAD_WAIT_BUDGET
+SINGULAR_AUTO_INTEGRATE
+SINGULAR_PUSH
+SINGULAR_GENERATE
+SINGULAR_SLEEP
+SINGULAR_TARGET_BRANCH
+SINGULAR_SUPERVISOR_INTERVAL_MIN
 EOF
 }
 
@@ -5091,20 +5091,20 @@ EOF
 # Sections (each clamped to 4000 chars, ~24KB ceiling): STATUS.md verbatim,
 # ops health JSON, DAG frontier JSON, gate table JSON, the last 30 events
 # (compact ts/type/message), the config env{} block, and the settings whitelist.
-# Both supervise.sh and ask.sh consume this via gluerun_render_supervisor_prompt.
-gluerun_supervisor_digest() {
+# Both supervise.sh and ask.sh consume this via singular_render_supervisor_prompt.
+singular_supervisor_digest() {
   local out="$1"
-  gluerun_ensure_state_dirs
+  singular_ensure_state_dirs
   local status health frontier gates events cfgenv whitelist
-  status="$(cat "$GLUERUN_STATUS_FILE" 2>/dev/null || true)"; [[ -n "$status" ]] || status="(no STATUS.md written yet)"
-  health="$("$(gluerun_bash_bin)" "$GLUERUN_ENGINE_DIR/ops.sh" health --json 2>/dev/null || true)"; [[ -n "$health" ]] || health="{}"
+  status="$(cat "$SINGULAR_STATUS_FILE" 2>/dev/null || true)"; [[ -n "$status" ]] || status="(no STATUS.md written yet)"
+  health="$("$(singular_bash_bin)" "$SINGULAR_ENGINE_DIR/ops.sh" health --json 2>/dev/null || true)"; [[ -n "$health" ]] || health="{}"
   # An unevaluable DAG must not reach the supervisor as an empty frontier: the
   # model would reason about a graph with no ready work when the real answer is
   # "the graph could not be read".
-  frontier="$(gluerun_dag_next_areas_json || true)"
+  frontier="$(singular_dag_next_areas_json || true)"
   [[ -n "$frontier" ]] || frontier='{"frontierUnavailable":true}'
-  gates="$("$(gluerun_bash_bin)" "$GLUERUN_ENGINE_DIR/ops.sh" gates --json 2>/dev/null || true)"; [[ -n "$gates" ]] || gates="{}"
-  events="$(tail -n 30 "$GLUERUN_EVENTS_FILE" 2>/dev/null | python3 -c '
+  gates="$("$(singular_bash_bin)" "$SINGULAR_ENGINE_DIR/ops.sh" gates --json 2>/dev/null || true)"; [[ -n "$gates" ]] || gates="{}"
+  events="$(tail -n 30 "$SINGULAR_EVENTS_FILE" 2>/dev/null | python3 -c '
 import json, sys
 for line in sys.stdin:
     line = line.strip()
@@ -5117,7 +5117,7 @@ for line in sys.stdin:
         pass
 ' 2>/dev/null || true)"
   [[ -n "$events" ]] || events="(no events yet)"
-  cfgenv="$(python3 - "$GLUERUN_JSON_CONFIG_FILE" 2>/dev/null <<'PY' || true
+  cfgenv="$(python3 - "$SINGULAR_JSON_CONFIG_FILE" 2>/dev/null <<'PY' || true
 import json, sys
 try:
     cfg = json.load(open(sys.argv[1]))
@@ -5129,7 +5129,7 @@ except Exception:
 PY
 )"
   [[ -n "$cfgenv" ]] || cfgenv="(no config env{})"
-  whitelist="$(gluerun_settings_whitelist_keys)"
+  whitelist="$(singular_settings_whitelist_keys)"
   python3 - "$out" "$status" "$health" "$frontier" "$gates" "$events" "$cfgenv" "$whitelist" <<'PY'
 import sys
 out = sys.argv[1]
@@ -5141,8 +5141,8 @@ for key, val in zip(keys, vals):
     s = (val or "").strip("\n")
     if len(s) > CLAMP:
         s = s[:CLAMP] + "\n…(truncated)"
-    parts.append("<<<GLUERUN:%s>>>\n%s\n" % (key, s))
-parts.append("<<<GLUERUN:END>>>\n")
+    parts.append("<<<SINGULAR:%s>>>\n%s\n" % (key, s))
+parts.append("<<<SINGULAR:END>>>\n")
 with open(out, "w", encoding="utf-8") as f:
     f.write("".join(parts))
 PY
@@ -5153,7 +5153,7 @@ PY
 # [EVENTS-TAIL] [CONFIG-ENV] [SETTINGS-WHITELIST], plus [QUESTION] from the
 # (optional) question FILE. The question is read from a file and written into the
 # rendered prompt file ONLY — it never transits a runner argv.
-gluerun_render_supervisor_prompt() {
+singular_render_supervisor_prompt() {
   local tmpl="$1" digest="$2" out="$3" qfile="${4:-}"
   python3 - "$tmpl" "$digest" "$out" "$qfile" <<'PY'
 import sys
@@ -5166,10 +5166,10 @@ buf = []
 with open(digest_path, "r", encoding="utf-8") as f:
     for line in f:
         s = line.rstrip("\n")
-        if s.startswith("<<<GLUERUN:") and s.endswith(">>>"):
+        if s.startswith("<<<SINGULAR:") and s.endswith(">>>"):
             if cur is not None:
                 sections[cur] = "\n".join(buf).strip("\n")
-            key = s[len("<<<GLUERUN:"):-3]
+            key = s[len("<<<SINGULAR:"):-3]
             if key == "END":
                 cur = None
                 break
@@ -5203,13 +5203,13 @@ with open(out_path, "w", encoding="utf-8") as f:
 PY
 }
 
-# Validate an extracted supervisor report against GLUERUN_SUPERVISOR_SCHEMA
+# Validate an extracted supervisor report against SINGULAR_SUPERVISOR_SCHEMA
 # (required schema/stage/narrative, additionalProperties false, string items),
 # then post-check the constraints the shared checker does not cover: risks /
 # nextSteps are <=8 strings and proposedSettings is a string->string map.
 # Returns non-zero (with a stderr reason) on any violation. Symmetric with
-# gluerun_validate_decider_verdict.
-gluerun_validate_supervisor_report() {
+# singular_validate_decider_verdict.
+singular_validate_supervisor_report() {
   local file="$1" data
   data="$(python3 - "$file" <<'PY' 2>/dev/null || true
 import json, sys
@@ -5220,7 +5220,7 @@ except Exception:
 PY
 )"
   [[ -n "$data" ]] || { echo "supervisor report: not parseable JSON" >&2; return 2; }
-  gluerun_json_schema_check "$data" "$GLUERUN_SUPERVISOR_SCHEMA" "supervisor report" || return $?
+  singular_json_schema_check "$data" "$SINGULAR_SUPERVISOR_SCHEMA" "supervisor report" || return $?
   python3 - "$file" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -5241,22 +5241,22 @@ if ps is not None:
 PY
 }
 
-gluerun_l1_lease_path() {
-  echo "$GLUERUN_L1_LEASES_DIR/$1.json"
+singular_l1_lease_path() {
+  echo "$SINGULAR_L1_LEASES_DIR/$1.json"
 }
 
-gluerun_l1_lease_status() {
+singular_l1_lease_status() {
   local node="$1" lease
-  lease="$(gluerun_l1_lease_path "$node")"
+  lease="$(singular_l1_lease_path "$node")"
   [[ -f "$lease" ]] || return 1
-  gluerun_json_field "$lease" status 2>/dev/null || true
+  singular_json_field "$lease" status 2>/dev/null || true
 }
 
-gluerun_l1_lease_field() {
+singular_l1_lease_field() {
   local node="$1" field="$2" lease
-  lease="$(gluerun_l1_lease_path "$node")"
+  lease="$(singular_l1_lease_path "$node")"
   [[ -f "$lease" ]] || return 1
-  gluerun_json_field "$lease" "$field" 2>/dev/null || true
+  singular_json_field "$lease" "$field" 2>/dev/null || true
 }
 
 # Write (create or overwrite) an L1 node lease. The candidate object is built,
@@ -5266,18 +5266,18 @@ gluerun_l1_lease_field() {
 # persisted and the leases dir is not even created. On update, startedAt is
 # preserved and baseSha falls back to the prior value when omitted.
 # args: node area stage layer status runId baseSha targetBranch [scopesJson]
-gluerun_l1_lease_write() {
+singular_l1_lease_write() {
   local node="$1" area="$2" stage="$3" layer="$4" status="$5"
   local run_id="$6" base_sha="$7" target_branch="$8" scopes_json="${9:-}"
   if [[ -z "$scopes_json" ]]; then
-    scopes_json="$(gluerun_l1_area_write_scopes "$area" \
+    scopes_json="$(singular_l1_area_write_scopes "$area" \
       | python3 -c 'import json,sys; print(json.dumps([l for l in sys.stdin.read().split() if l]))')"
   fi
   local lease started=""
-  lease="$(gluerun_l1_lease_path "$node")"
+  lease="$(singular_l1_lease_path "$node")"
   if [[ -f "$lease" ]]; then
-    started="$(gluerun_json_field "$lease" startedAt 2>/dev/null || true)"
-    [[ -n "$base_sha" ]] || base_sha="$(gluerun_json_field "$lease" baseSha 2>/dev/null || true)"
+    started="$(singular_json_field "$lease" startedAt 2>/dev/null || true)"
+    [[ -n "$base_sha" ]] || base_sha="$(singular_json_field "$lease" baseSha 2>/dev/null || true)"
   fi
   local data
   data="$(python3 - "$node" "$area" "$stage" "$layer" "$status" "$run_id" \
@@ -5296,7 +5296,7 @@ try:
 except Exception:
     scopes = []
 data = {
-    "schema": "gluerun.orchestration.l1-lease.v0",
+    "schema": "singular.orchestration.l1-lease.v0",
     "node": node,
     "area": area,
     "stage": stage,
@@ -5312,17 +5312,17 @@ data = {
 print(json.dumps(data, separators=(",", ":")))
 PY
 )" || return $?
-  gluerun_json_schema_check "$data" "$GLUERUN_L1_LEASE_SCHEMA" "l1 lease" || return $?
-  mkdir -p "$GLUERUN_L1_LEASES_DIR"
-  gluerun_write_json_pretty "$lease" "$data"
+  singular_json_schema_check "$data" "$SINGULAR_L1_LEASE_SCHEMA" "l1 lease" || return $?
+  mkdir -p "$SINGULAR_L1_LEASES_DIR"
+  singular_write_json_pretty "$lease" "$data"
 }
 
 # Update only the status (and updatedAt) of an existing L1 lease. The full
 # mutated object is re-validated against the schema; on any violation (e.g. a
 # bogus status) the call fails and the existing lease is left untouched.
-gluerun_l1_lease_set_status() {
+singular_l1_lease_set_status() {
   local node="$1" status="$2" lease
-  lease="$(gluerun_l1_lease_path "$node")"
+  lease="$(singular_l1_lease_path "$node")"
   [[ -f "$lease" ]] || return 1
   local data
   data="$(python3 - "$lease" "$status" <<'PY'
@@ -5337,39 +5337,39 @@ data["updatedAt"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat(
 print(json.dumps(data, separators=(",", ":")))
 PY
 )" || return $?
-  gluerun_json_schema_check "$data" "$GLUERUN_L1_LEASE_SCHEMA" "l1 lease" || return $?
-  gluerun_write_json_pretty "$lease" "$data"
+  singular_json_schema_check "$data" "$SINGULAR_L1_LEASE_SCHEMA" "l1 lease" || return $?
+  singular_write_json_pretty "$lease" "$data"
 }
 
 # Echo active L1 node ids (status in proposed|planning|active), sorted.
-gluerun_l1_list_active() {
+singular_l1_list_active() {
   local lease status node
-  [[ -d "$GLUERUN_L1_LEASES_DIR" ]] || return 0
+  [[ -d "$SINGULAR_L1_LEASES_DIR" ]] || return 0
   while IFS= read -r lease; do
     [[ -n "$lease" ]] || continue
-    status="$(gluerun_json_field "$lease" status 2>/dev/null || true)"
+    status="$(singular_json_field "$lease" status 2>/dev/null || true)"
     case "$status" in
       proposed|planning|active)
-        node="$(gluerun_json_field "$lease" node 2>/dev/null || true)"
+        node="$(singular_json_field "$lease" node 2>/dev/null || true)"
         [[ -n "$node" ]] && echo "$node"
         ;;
     esac
-  done < <(find "$GLUERUN_L1_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
+  done < <(find "$SINGULAR_L1_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
 }
 
 # Report stale active L1 leases (status proposed|planning|active whose updatedAt
-# exceeds GLUERUN_L1_STALE_MINUTES). REPORT ONLY — never auto-clears or reuses a
+# exceeds SINGULAR_L1_STALE_MINUTES). REPORT ONLY — never auto-clears or reuses a
 # lease, so a stale slot is surfaced for a human/decider, never silently
 # reclaimed. Emits "<node> <status> <ageMinutes|unknown>" per stale lease.
-gluerun_l1_list_stale() {
-  local minutes="${GLUERUN_L1_STALE_MINUTES:-60}" lease status node updated
-  [[ -d "$GLUERUN_L1_LEASES_DIR" ]] || return 0
+singular_l1_list_stale() {
+  local minutes="${SINGULAR_L1_STALE_MINUTES:-60}" lease status node updated
+  [[ -d "$SINGULAR_L1_LEASES_DIR" ]] || return 0
   while IFS= read -r lease; do
     [[ -n "$lease" ]] || continue
-    status="$(gluerun_json_field "$lease" status 2>/dev/null || true)"
+    status="$(singular_json_field "$lease" status 2>/dev/null || true)"
     case "$status" in proposed|planning|active) ;; *) continue ;; esac
-    node="$(gluerun_json_field "$lease" node 2>/dev/null || true)"
-    updated="$(gluerun_json_field "$lease" updatedAt 2>/dev/null || true)"
+    node="$(singular_json_field "$lease" node 2>/dev/null || true)"
+    updated="$(singular_json_field "$lease" updatedAt 2>/dev/null || true)"
     python3 - "$node" "$status" "$updated" "$minutes" <<'PY'
 import sys
 from datetime import datetime, timezone
@@ -5386,29 +5386,29 @@ a = age(updated)
 if a is None or a >= minutes:
     print("%s %s %s" % (node, status, "unknown" if a is None else int(a)))
 PY
-  done < <(find "$GLUERUN_L1_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
+  done < <(find "$SINGULAR_L1_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | sort)
 }
 
-# Reclaim stale L1 planning leases (0.5.0). gluerun_l1_list_stale is
+# Reclaim stale L1 planning leases (0.5.0). singular_l1_list_stale is
 # report-only; in the field three orphaned `active` L1 leases from an
 # interrupted planning run excluded their nodes from the frontier for hours
 # with no recovery path short of hand-editing lease JSON. Marks each stale
 # lease failed (frontier selection only excludes proposed|planning|active) and
 # emits recover.l1_lease_reclaimed. Planners are short-lived; the wall-clock
-# threshold (GLUERUN_L1_STALE_MINUTES) is conservative.
-gluerun_l1_reclaim_stale() {
+# threshold (SINGULAR_L1_STALE_MINUTES) is conservative.
+singular_l1_reclaim_stale() {
   local line node status age reclaimed=0
   while IFS=' ' read -r node status age; do
     [[ -n "$node" ]] || continue
-    if ! gluerun_l1_lease_set_status "$node" failed; then
+    if ! singular_l1_lease_set_status "$node" failed; then
       echo "recover: could not reclassify l1 lease $node (see error above)" >&2
       continue
     fi
-    gluerun_append_event "recover.l1_lease_reclaimed" "stale l1 planning lease reclassified failed" \
+    singular_append_event "recover.l1_lease_reclaimed" "stale l1 planning lease reclassified failed" \
       "{\"node\":\"$node\",\"previousStatus\":\"$status\",\"ageMin\":\"$age\"}"
     echo "recover: reclaimed stale l1 lease $node ($status, ${age}m)"
     reclaimed=$((reclaimed + 1))
-  done < <(gluerun_l1_list_stale)
+  done < <(singular_l1_list_stale)
   return 0
 }
 
@@ -5430,13 +5430,13 @@ gluerun_l1_reclaim_stale() {
 # other work. It just may not do it silently. Prints the frontier JSON on
 # success; on failure prints nothing, warns, emits dag.evaluation_failed, and
 # returns non-zero so the caller can distinguish the two.
-gluerun_dag_next_areas_json() {
+singular_dag_next_areas_json() {
   local err_file out rc=0
   err_file="$(mktemp)"
-  # GLUERUN_LIB_DIR, never GLUERUN_ENGINE_DIR: the latter is an overridable knob
+  # SINGULAR_LIB_DIR, never SINGULAR_ENGINE_DIR: the latter is an overridable knob
   # (tests shim it to a directory of selected ctx-*.sh symlinks) and resolving an
   # engine executable through it breaks under that shim.
-  out="$("$GLUERUN_LIB_DIR/dag.sh" next-areas 2>"$err_file")" || rc=$?
+  out="$("$SINGULAR_LIB_DIR/dag.sh" next-areas 2>"$err_file")" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     rm -f "$err_file"
     printf '%s' "$out"
@@ -5447,19 +5447,19 @@ gluerun_dag_next_areas_json() {
   rm -f "$err_file"
   [[ -n "$err" ]] || err="dag.sh next-areas exited $rc without a diagnostic"
   echo "dag: frontier evaluation failed: $err" >&2
-  gluerun_dag_evaluation_failed_event "$err" "$rc"
+  singular_dag_evaluation_failed_event "$err" "$rc"
   return "$rc"
 }
 
 # One event per distinct diagnostic. The frontier is evaluated every cycle, so an
 # unthrottled event would bury events.ndjson under thousands of copies of the
 # same line; keying the marker on the message means a CHANGED error still
-# reports. Mirrors gluerun_capability_optional_warn_once's O_EXCL marker.
-gluerun_dag_evaluation_failed_event() {
+# reports. Mirrors singular_capability_optional_warn_once's O_EXCL marker.
+singular_dag_evaluation_failed_event() {
   local err="$1" exit_code="${2:-2}"
-  local warning_dir="$GLUERUN_STATE_DIR/warnings/dag"
+  local warning_dir="$SINGULAR_STATE_DIR/warnings/dag"
   local key marker
-  key="$(gluerun_sha256_text "$err")"
+  key="$(singular_sha256_text "$err")"
   marker="$warning_dir/$key.warned"
   mkdir -p "$warning_dir" 2>/dev/null || return 0
   python3 - "$marker" <<'PY' 2>/dev/null || return 0
@@ -5480,12 +5480,12 @@ print(json.dumps({"stderr": sys.argv[1], "exitCode": int(sys.argv[2])},
                  separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "dag.evaluation_failed" \
+  singular_append_event "dag.evaluation_failed" \
     "dag frontier could not be evaluated; an empty frontier here is not 'no work'" \
     "$payload" 2>/dev/null || true
 }
 
-gluerun_select_l1_frontier() {
+singular_select_l1_frontier() {
   local limit="${1:-1}"
   [[ "$limit" =~ ^[0-9]+$ ]] || limit=1
   [[ "$limit" -gt 0 ]] || return 0
@@ -5493,10 +5493,10 @@ gluerun_select_l1_frontier() {
   local frontier_json
   # A failure here still yields no nodes -- the loop must not stop -- but it is
   # now reported rather than presented as "no eligible frontier nodes".
-  frontier_json="$(gluerun_dag_next_areas_json)" || return 0
+  frontier_json="$(singular_dag_next_areas_json)" || return 0
 
   # Pre-resolve each candidate area's configured write scopes through the
-  # config-driven map (gluerun_l1_area_write_scopes), so the overlap guard below
+  # config-driven map (singular_l1_area_write_scopes), so the overlap guard below
   # compares the SAME scopes the leases carry — not a hardcoded internal/<area>/.
   local _frontier_areas _area scopes_map_json="{}"
   _frontier_areas="$(printf '%s' "$frontier_json" | python3 -c '
@@ -5515,7 +5515,7 @@ for area in seen:
 ')"
   while IFS= read -r _area; do
     [[ -n "$_area" ]] || continue
-    scopes_map_json="$(gluerun_l1_area_write_scopes "$_area" | python3 -c '
+    scopes_map_json="$(singular_l1_area_write_scopes "$_area" | python3 -c '
 import json, sys
 area, current = sys.argv[1], json.loads(sys.argv[2])
 current[area] = [line.strip() for line in sys.stdin if line.strip()]
@@ -5523,7 +5523,7 @@ print(json.dumps(current, separators=(",", ":")))
 ' "$_area" "$scopes_map_json")"
   done <<< "$_frontier_areas"
 
-  python3 - "$limit" "$GLUERUN_L1_LEASES_DIR" "$frontier_json" "$scopes_map_json" <<'PY'
+  python3 - "$limit" "$SINGULAR_L1_LEASES_DIR" "$frontier_json" "$scopes_map_json" <<'PY'
 import json
 import os
 import sys
@@ -5605,8 +5605,8 @@ for entry in frontier:                       # DAG order preserved
         scope_list = scopes_map.get(str(area))
         if scope_list is None:
             # Area absent from the pre-resolved map: same fallback the config
-            # loader uses (GLUERUN_AREA_PREFIX, default internal/) + area.
-            prefix = os.environ.get("GLUERUN_AREA_PREFIX") or "internal/"
+            # loader uses (SINGULAR_AREA_PREFIX, default internal/) + area.
+            prefix = os.environ.get("SINGULAR_AREA_PREFIX") or "internal/"
             scope_list = ["%s%s/" % (prefix, area)]
         scope = [useful_scope(v) for v in scope_list]
     else:
@@ -5628,8 +5628,8 @@ PY
 # Free space (whole GiB, floored) on the repo's filesystem. df -k is POSIX
 # (1024-blocks) and identical on macOS and Linux; column 4 is Available in KiB.
 # Flooring rounds DOWN free space, the safe direction for a guard.
-gluerun_free_disk_gb() {
-  df -k "$GLUERUN_ROOT" 2>/dev/null | awk 'NR==2 { printf "%d", $4 / 1024 / 1024 }'
+singular_free_disk_gb() {
+  df -k "$SINGULAR_ROOT" 2>/dev/null | awk 'NR==2 { printf "%d", $4 / 1024 / 1024 }'
 }
 
 # Highest TASK-#### number observable across EVERY durable surface: task files
@@ -5639,9 +5639,9 @@ gluerun_free_disk_gb() {
 # active tasks dir at maxdepth 1, so archiving the highest task let the next
 # plan REUSE its id and collide with the preserved worktree/lease/branch
 # (field audit: 4 collisions, 2 breaker halts, 1 destroyed lease).
-gluerun_task_id_scan_max() {
-  python3 - "$GLUERUN_TASKS_DIR" "$GLUERUN_LEASES_DIR" "$GLUERUN_DISPATCH_DIR" \
-    "$GLUERUN_WORKTREES_DIR" "$GLUERUN_ORCH_DIR/packets/imported" "$GLUERUN_ROOT" <<'PY'
+singular_task_id_scan_max() {
+  python3 - "$SINGULAR_TASKS_DIR" "$SINGULAR_LEASES_DIR" "$SINGULAR_DISPATCH_DIR" \
+    "$SINGULAR_WORKTREES_DIR" "$SINGULAR_ORCH_DIR/packets/imported" "$SINGULAR_ROOT" <<'PY'
 import os
 import re
 import subprocess
@@ -5688,20 +5688,20 @@ PY
 }
 
 # Allocate `count` fresh sequential task ids, printed one per line. Monotonic
-# via a durable counter file seeded/self-healed from gluerun_task_id_scan_max on
+# via a durable counter file seeded/self-healed from singular_task_id_scan_max on
 # every allocation (a deleted or stale counter can never regress below observed
 # reality). Serialized by a mkdir lock; gaps from failed planner runs are
 # intentional — monotonicity is the invariant, not density.
-gluerun_task_id_counter_file() {
-  printf '%s' "${GLUERUN_TASK_ID_COUNTER_FILE:-$GLUERUN_STATE_DIR/task-id-counter}"
+singular_task_id_counter_file() {
+  printf '%s' "${SINGULAR_TASK_ID_COUNTER_FILE:-$SINGULAR_STATE_DIR/task-id-counter}"
 }
 
-gluerun_task_id_next() {
+singular_task_id_next() {
   local count="${1:-1}"
   [[ "$count" =~ ^[0-9]+$ && "$count" -ge 1 ]] || count=1
-  gluerun_ensure_state_dirs
+  singular_ensure_state_dirs
   local counter lock
-  counter="$(gluerun_task_id_counter_file)"
+  counter="$(singular_task_id_counter_file)"
   mkdir -p "$(dirname "$counter")" 2>/dev/null || true
   lock="$counter.lock"
   local waited=0
@@ -5720,7 +5720,7 @@ gluerun_task_id_next() {
     stored="$(head -1 "$counter" 2>/dev/null | tr -d '[:space:]')"
     [[ "$stored" =~ ^[0-9]+$ ]] || stored=0
   fi
-  scan="$(gluerun_task_id_scan_max)"
+  scan="$(singular_task_id_scan_max)"
   [[ "$scan" =~ ^[0-9]+$ ]] || scan=0
   seed=$(( stored > scan ? stored : scan ))
   printf '%s\n' "$((seed + count))" >"$counter"
@@ -5732,16 +5732,16 @@ gluerun_task_id_next() {
 }
 
 # Deprecated 0.4.0 alias: the old maxdepth-1 active-dir scan. Kept for any
-# external caller; new code must use gluerun_task_id_next.
-gluerun_max_task_id() {
-  gluerun_task_id_scan_max
+# external caller; new code must use singular_task_id_next.
+singular_max_task_id() {
+  singular_task_id_scan_max
 }
 
 # Rewrite every WHOLE TASK-#### token equal to $2 with $3 in file $1. Token-safe
 # (matches complete TASK-\d{4,} tokens and replaces only exact-id matches), so
 # rewriting TASK-0001 can never corrupt TASK-0010/TASK-00011 the way an unanchored
 # substring `sed s/.../.../g` would. No-op when the ids are equal/empty.
-gluerun_rewrite_task_id_token() {
+singular_rewrite_task_id_token() {
   local file="$1" from="$2" to="$3"
   [[ -n "$from" && -n "$to" && "$from" != "$to" ]] || return 0
   python3 - "$file" "$from" "$to" <<'PY'
@@ -5756,41 +5756,41 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
-# Plan up to GLUERUN_MAX_L1_CONCURRENT independent DAG nodes in parallel, then
+# Plan up to SINGULAR_MAX_L1_CONCURRENT independent DAG nodes in parallel, then
 # import their staged task proposals serially. Concurrent planners write ONLY to
 # their private staging dir + their own lease + a private events file; the L0
 # process (this function) is the only writer of the global tasks dir and global
 # events. STOP and low disk fail closed. One planner failing never aborts or
 # discards another's staged batch.
-gluerun_l1_fanout() {
+singular_l1_fanout() {
   local run_id="$1" base_sha="$2"
-  if gluerun_stop_requested; then
-    gluerun_append_event "origin.fanout_aborted" "STOP sentinel present; no l1 fanout" "{\"runId\":\"$run_id\"}"
+  if singular_stop_requested; then
+    singular_append_event "origin.fanout_aborted" "STOP sentinel present; no l1 fanout" "{\"runId\":\"$run_id\"}"
     return 0
   fi
-  local cap="${GLUERUN_MAX_L1_CONCURRENT:-3}"
+  local cap="${SINGULAR_MAX_L1_CONCURRENT:-3}"
   [[ "$cap" =~ ^[0-9]+$ && "$cap" -ge 1 ]] || cap=1
   local free_gb min_gb
-  free_gb="$(gluerun_free_disk_gb)"; [[ "$free_gb" =~ ^[0-9]+$ ]] || free_gb=0
-  min_gb="${GLUERUN_MIN_DISK_GB:-1}"
+  free_gb="$(singular_free_disk_gb)"; [[ "$free_gb" =~ ^[0-9]+$ ]] || free_gb=0
+  min_gb="${SINGULAR_MIN_DISK_GB:-1}"
   [[ "$min_gb" =~ ^[0-9]+$ ]] || min_gb=1
   if [[ "$free_gb" -lt "$min_gb" ]]; then
-    gluerun_append_event "origin.disk_pressure" "low disk; l1 fanout blocked" \
+    singular_append_event "origin.disk_pressure" "low disk; l1 fanout blocked" \
       "{\"runId\":\"$run_id\",\"freeGb\":$free_gb,\"minGb\":$min_gb}"
-    gluerun_append_event "origin.fanout_aborted" "low disk; no l1 fanout" \
+    singular_append_event "origin.fanout_aborted" "low disk; no l1 fanout" \
       "{\"runId\":\"$run_id\",\"freeGb\":$free_gb,\"minGb\":$min_gb}"
     echo "actuation: l1 fanout blocked by low disk (free=${free_gb}GiB min=${min_gb}GiB)"
     return 0
   fi
   local -a nodes=()
-  mapfile -t nodes < <(gluerun_select_l1_frontier "$cap")
+  mapfile -t nodes < <(singular_select_l1_frontier "$cap")
   # Pending-promotion pre-filter (0.5.0): nodes whose tasks are complete but
   # whose gate is unpublished must not be re-planned (duplicate churn).
-  if [[ "${GLUERUN_SUPPRESS_UNPROMOTED_REPLAN:-1}" == "1" && "${#nodes[@]}" -gt 0 ]]; then
+  if [[ "${SINGULAR_SUPPRESS_UNPROMOTED_REPLAN:-1}" == "1" && "${#nodes[@]}" -gt 0 ]]; then
     local -a plannable=()
     local _n
     for _n in "${nodes[@]}"; do
-      if gluerun_node_pending_promotion "$_n" 2>/dev/null; then
+      if singular_node_pending_promotion "$_n" 2>/dev/null; then
         echo "actuation: l1 fanout: skipped pending-promotion node=$_n"
       else
         plannable+=("$_n")
@@ -5802,10 +5802,10 @@ gluerun_l1_fanout() {
     echo "actuation: l1 fanout: no eligible frontier nodes"
     return 0
   fi
-  local plan_root="$GLUERUN_RUNS_DIR/$run_id/l1-staging"
-  local planner_driver="${GLUERUN_L1_PLAN_NODE:-$(dirname "${BASH_SOURCE[0]}")/l1-plan-node.sh}"
-  local tasks_per_node="${GLUERUN_L1_TASKS_PER_NODE:-1}"
-  gluerun_append_event "origin.l1_fanout" "l1 fanout started" \
+  local plan_root="$SINGULAR_RUNS_DIR/$run_id/l1-staging"
+  local planner_driver="${SINGULAR_L1_PLAN_NODE:-$(dirname "${BASH_SOURCE[0]}")/l1-plan-node.sh}"
+  local tasks_per_node="${SINGULAR_L1_TASKS_PER_NODE:-1}"
+  singular_append_event "origin.l1_fanout" "l1 fanout started" \
     "{\"runId\":\"$run_id\",\"cap\":$cap,\"nodes\":${#nodes[@]},\"freeGb\":$free_gb}"
   echo "actuation: l1 fanout cap=$cap nodes=${#nodes[@]} (${nodes[*]})"
   local -a pids=() pnodes=()
@@ -5825,12 +5825,12 @@ gluerun_l1_fanout() {
 	      import_nodes+=("${pnodes[$i]}")
 	    else
 	      planner_failures=$((planner_failures + 1))
-	      gluerun_append_event "origin.l1_planner_failed" "l1 planner failed (isolated)" \
+	      singular_append_event "origin.l1_planner_failed" "l1 planner failed (isolated)" \
 	        "{\"runId\":\"$run_id\",\"node\":\"${pnodes[$i]}\",\"exitCode\":$ec}"
 	    fi
 	  done
 	  if [[ "${#import_nodes[@]}" -gt 0 ]]; then
-	    import_out="$(gluerun_l1_import_staged "$run_id" "${import_nodes[@]}" 2>&1)" || true
+	    import_out="$(singular_l1_import_staged "$run_id" "${import_nodes[@]}" 2>&1)" || true
 	    printf '%s\n' "$import_out"
 	    parsed_rejections="$(printf '%s\n' "$import_out" | sed -n 's/^l1_import_rejections=//p' | tail -1)"
 	    [[ "$parsed_rejections" =~ ^[0-9]+$ ]] && import_rejections="$parsed_rejections"
@@ -5846,16 +5846,16 @@ gluerun_l1_fanout() {
 # globally monotonic no matter how many planners ran), and the per-node batch is
 # imported all-or-nothing after validating shape (status/area/ownedFiles/
 # dispatchMode). A node's lease is released on success, marked failed otherwise.
-gluerun_l1_import_staged() {
+singular_l1_import_staged() {
 	  local run_id="$1"; shift
 	  local node stage_dir node_area cand
 	  local import_rejections=0
 	  for node in "$@"; do
-    stage_dir="$GLUERUN_RUNS_DIR/$run_id/l1-staging/$node"
+    stage_dir="$SINGULAR_RUNS_DIR/$run_id/l1-staging/$node"
     local -a cands=()
     local candidate_batch_dir=""
     if [[ -d "$stage_dir" ]]; then
-      candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir" 2>/dev/null || true)"
+      candidate_batch_dir="$(singular_task_batch_candidate_dir "$stage_dir" 2>/dev/null || true)"
       if [[ -n "$candidate_batch_dir" ]]; then
         mapfile -t cands < <(find "$candidate_batch_dir" -maxdepth 1 \
           -name '*.candidate.md' -type f 2>/dev/null | sort)
@@ -5864,23 +5864,23 @@ gluerun_l1_import_staged() {
 	    if [[ "${#cands[@]}" -eq 0 ]]; then
 	      if [[ -f "$stage_dir/NO-TASKS" ]]; then
 	        # Valid empty batch (0.5.0): release the node lease, no rejection.
-	        rm -f "$(gluerun_l1_lease_path "$node")" 2>/dev/null || true
-	        gluerun_append_event "origin.l1_no_tasks" "planner returned a valid empty batch; node lease released" "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
+	        rm -f "$(singular_l1_lease_path "$node")" 2>/dev/null || true
+	        singular_append_event "origin.l1_no_tasks" "planner returned a valid empty batch; node lease released" "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
 	        echo "no-tasks:$node"
 	        continue
 	      fi
 	      import_rejections=$((import_rejections + 1))
-	      gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
-	      gluerun_append_event "origin.l1_import_rejected" "no staged candidates" "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
+	      singular_l1_lease_set_status "$node" failed 2>/dev/null || true
+	      singular_append_event "origin.l1_import_rejected" "no staged candidates" "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
 	      continue
     fi
-    node_area="$(gluerun_l1_lease_field "$node" area 2>/dev/null || true)"
+    node_area="$(singular_l1_lease_field "$node" area 2>/dev/null || true)"
 	    if [[ -z "$node_area" ]]; then
       # Fail closed: a missing/unreadable lease means the node was never validly
       # planned (l1-plan-node writes the lease before planning). Import nothing.
 	      import_rejections=$((import_rejections + 1))
-	      gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
-	      gluerun_append_event "origin.l1_import_rejected" "missing or unreadable l1 lease at import" \
+	      singular_l1_lease_set_status "$node" failed 2>/dev/null || true
+	      singular_append_event "origin.l1_import_rejected" "missing or unreadable l1 lease at import" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
       continue
     fi
@@ -5891,15 +5891,15 @@ gluerun_l1_import_staged() {
 	    local duplicate_json="" duplicate_event_json=""
 	    local -a src=() ids=() temps=()
     for cand in "${cands[@]}"; do
-      v_id="$(gluerun_task_field "$cand" taskId 2>/dev/null || echo '')"
-      v_status="$(gluerun_task_field "$cand" status 2>/dev/null || echo '')"
-      v_area="$(gluerun_task_field "$cand" area 2>/dev/null || echo '')"
-      v_owned="$(gluerun_task_field "$cand" ownedFiles 2>/dev/null || echo '[]')"
-      v_mode="$(gluerun_task_field "$cand" dispatchMode 2>/dev/null || echo '')"
+      v_id="$(singular_task_field "$cand" taskId 2>/dev/null || echo '')"
+      v_status="$(singular_task_field "$cand" status 2>/dev/null || echo '')"
+      v_area="$(singular_task_field "$cand" area 2>/dev/null || echo '')"
+      v_owned="$(singular_task_field "$cand" ownedFiles 2>/dev/null || echo '[]')"
+      v_mode="$(singular_task_field "$cand" dispatchMode 2>/dev/null || echo '')"
 	      if [[ -z "$v_id" || "$v_status" != "ready" || "$v_area" != "$node_area" || "$v_owned" == "[]" || "$v_mode" != "canonical" ]]; then
 	        ok=0; break
 	      fi
-	      if duplicate_json="$(gluerun_find_duplicate_task_signature "$cand" "$node" 2>/dev/null)"; then
+	      if duplicate_json="$(singular_find_duplicate_task_signature "$cand" "$node" 2>/dev/null)"; then
 	        ok=2; break
 	      fi
 	      src+=("$cand"); temps+=("$v_id")
@@ -5907,21 +5907,21 @@ gluerun_l1_import_staged() {
 	    if [[ "$ok" -eq 1 ]]; then
 	      while IFS= read -r real; do
 	        [[ -n "$real" ]] && ids+=("$real")
-	      done < <(gluerun_task_id_next "${#src[@]}")
+	      done < <(singular_task_id_next "${#src[@]}")
 	      [[ ${#ids[@]} -eq ${#src[@]} ]] || ok=0
 	    fi
 	    if [[ "$ok" -eq 2 ]]; then
 	      import_rejections=$((import_rejections + 1))
-	      gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
-	      duplicate_event_json="$(gluerun_duplicate_candidate_event_json "$run_id" "$node" "$duplicate_json")"
-	      gluerun_append_event "origin.l1_import_rejected" "duplicate-candidate" "$duplicate_event_json"
+	      singular_l1_lease_set_status "$node" failed 2>/dev/null || true
+	      duplicate_event_json="$(singular_duplicate_candidate_event_json "$run_id" "$node" "$duplicate_json")"
+	      singular_append_event "origin.l1_import_rejected" "duplicate-candidate" "$duplicate_event_json"
 	      echo "duplicate-candidate node=$node existing=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("existingTaskId",""))' "$duplicate_json")"
 	      continue
 	    fi
 	    if [[ "$ok" -ne 1 ]]; then
 	      import_rejections=$((import_rejections + 1))
-	      gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
-      gluerun_append_event "origin.l1_import_rejected" "staged batch failed validation" \
+	      singular_l1_lease_set_status "$node" failed 2>/dev/null || true
+      singular_append_event "origin.l1_import_rejected" "staged batch failed validation" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
       continue
     fi
@@ -5931,15 +5931,15 @@ gluerun_l1_import_staged() {
     local j rid mv_ok=1
     local -a moved=()
     for j in "${!src[@]}"; do
-      gluerun_rewrite_task_id_token "${src[$j]}" "${temps[$j]}" "${ids[$j]}" || { ok=0; break; }
-      if [[ "$(gluerun_task_field "${src[$j]}" taskId 2>/dev/null || echo '')" != "${ids[$j]}" ]]; then
+      singular_rewrite_task_id_token "${src[$j]}" "${temps[$j]}" "${ids[$j]}" || { ok=0; break; }
+      if [[ "$(singular_task_field "${src[$j]}" taskId 2>/dev/null || echo '')" != "${ids[$j]}" ]]; then
         ok=0; break
       fi
     done
 	    if [[ "$ok" -ne 1 ]]; then
 	      import_rejections=$((import_rejections + 1))
-	      gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
-      gluerun_append_event "origin.l1_import_rejected" "id rewrite verification failed" \
+	      singular_l1_lease_set_status "$node" failed 2>/dev/null || true
+      singular_append_event "origin.l1_import_rejected" "id rewrite verification failed" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
       continue
     fi
@@ -5951,12 +5951,12 @@ gluerun_l1_import_staged() {
       # Collision preflight: never overwrite an existing task file. With the
       # monotonic allocator this cannot happen; if it does (foreign file, clock
       # rollback), reject the batch loudly instead of destroying state.
-      if [[ -e "$GLUERUN_TASKS_DIR/${ids[$j]}.md" ]]; then
-        gluerun_append_event "origin.task_id_collision" "refusing to overwrite existing task file" \
+      if [[ -e "$SINGULAR_TASKS_DIR/${ids[$j]}.md" ]]; then
+        singular_append_event "origin.task_id_collision" "refusing to overwrite existing task file" \
           "{\"runId\":\"$run_id\",\"node\":\"$node\",\"taskId\":\"${ids[$j]}\"}"
         mv_ok=0; break
       fi
-      if mv "${src[$j]}" "$GLUERUN_TASKS_DIR/${ids[$j]}.md" 2>/dev/null; then
+      if mv "${src[$j]}" "$SINGULAR_TASKS_DIR/${ids[$j]}.md" 2>/dev/null; then
         moved+=("${ids[$j]}")
       else
         mv_ok=0; break
@@ -5965,19 +5965,19 @@ gluerun_l1_import_staged() {
 	    if [[ "$mv_ok" -ne 1 ]]; then
 	      import_rejections=$((import_rejections + 1))
 	      for rid in "${moved[@]}"; do
-        rm -f "$GLUERUN_TASKS_DIR/$rid.md" 2>/dev/null || true
+        rm -f "$SINGULAR_TASKS_DIR/$rid.md" 2>/dev/null || true
       done
-      gluerun_l1_lease_set_status "$node" failed 2>/dev/null || true
-      gluerun_append_event "origin.l1_import_rejected" "promotion failed; rolled back partial batch" \
+      singular_l1_lease_set_status "$node" failed 2>/dev/null || true
+      singular_append_event "origin.l1_import_rejected" "promotion failed; rolled back partial batch" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
       continue
     fi
     for rid in "${moved[@]}"; do
-      gluerun_append_event "planner.generated" "task imported from l1 plan" \
+      singular_append_event "planner.generated" "task imported from l1 plan" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\",\"taskId\":\"$rid\"}"
       echo "generated:$rid"
     done
-	    gluerun_l1_lease_set_status "$node" released 2>/dev/null || true
+	    singular_l1_lease_set_status "$node" released 2>/dev/null || true
 	  done
 	  echo "l1_import_rejections=$import_rejections"
 	}
@@ -5986,11 +5986,11 @@ gluerun_l1_import_staged() {
 # Everything in this section is ADDITIVE observability: a failure here must
 # never abort a drive. Callers wrap these with `|| <warning event>` guards.
 
-gluerun_sha256_file() {
+singular_sha256_file() {
   python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"
 }
 
-gluerun_sha256_text() {
+singular_sha256_text() {
   python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "$1"
 }
 
@@ -6005,8 +6005,8 @@ gluerun_sha256_text() {
 #
 # Emits nothing and fails when the file is missing: callers treat an empty
 # pattern set as an internal error rather than silently scanning for nothing.
-gluerun_secret_scan_patterns() {
-  local file="${GLUERUN_SECRET_PATTERNS_FILE:-$GLUERUN_ENGINE_DIR/secret-patterns.tsv}"
+singular_secret_scan_patterns() {
+  local file="${SINGULAR_SECRET_PATTERNS_FILE:-$SINGULAR_ENGINE_DIR/secret-patterns.tsv}"
   [[ -f "$file" ]] || {
     echo "secret patterns file not found: $file" >&2
     return 2
@@ -6037,19 +6037,19 @@ gluerun_secret_scan_patterns() {
 # so the old guard let an agent's overwrite of an already-dirty file survive,
 # restored everything else from HEAD (discarding whatever uncommitted work was
 # in it), missed staged mutations entirely, and deleted untracked files that
-# appeared mid-run — which, since read-only runs execute against $GLUERUN_ROOT
+# appeared mid-run — which, since read-only runs execute against $SINGULAR_ROOT
 # for up to 1200s while the rest of the engine keeps writing there, meant it
 # deleted freshly imported task files.
 #
-# GLUERUN_READONLY_GUARD_MODE selects restore (default), report (log what it
+# SINGULAR_READONLY_GUARD_MODE selects restore (default), report (log what it
 # would do and change nothing) or off.
-gluerun_readonly_guard_mode() {
-  printf '%s\n' "${GLUERUN_READONLY_GUARD_MODE:-restore}"
+singular_readonly_guard_mode() {
+  printf '%s\n' "${SINGULAR_READONLY_GUARD_MODE:-restore}"
 }
 
 # Express an absolute engine directory as a worktree-relative prefix, or print
 # nothing when it lives outside the worktree and so cannot collide with it.
-gluerun_readonly_guard_relative() {
+singular_readonly_guard_relative() {
   local worktree="$1" candidate="$2"
   [[ -n "$candidate" ]] || return 0
   python3 - "$worktree" "$candidate" <<'PY' 2>/dev/null || true
@@ -6069,12 +6069,12 @@ PY
 # Snapshot $1 and print the journal directory the restore will need. Prints
 # nothing (and succeeds) when the guard is off or cannot be armed — a guard that
 # fails to start must never take the run down with it.
-gluerun_readonly_guard_capture() {
+singular_readonly_guard_capture() {
   local worktree="$1" label="${2:-run}"
-  [[ "$(gluerun_readonly_guard_mode)" != "off" ]] || return 0
+  [[ "$(singular_readonly_guard_mode)" != "off" ]] || return 0
   [[ -n "$worktree" && -d "$worktree" ]] || return 0
 
-  local base="$GLUERUN_STATE_DIR/readonly-guard"
+  local base="$SINGULAR_STATE_DIR/readonly-guard"
   mkdir -p "$base" 2>/dev/null || return 0
   local journal
   journal="$(mktemp -d "$base/${label}.XXXXXX" 2>/dev/null)" || return 0
@@ -6086,13 +6086,13 @@ gluerun_readonly_guard_capture() {
   local args=(capture --worktree "$worktree" --journal "$journal"
               --label "$label" --owner-pid "$$")
   local dir rel
-  for dir in "$GLUERUN_ORCH_DIR" "$GLUERUN_STATE_DIR" \
-             "$GLUERUN_ROOT/.gluerun-cache" "$GLUERUN_ROOT/.gluerun-evidence"; do
-    rel="$(gluerun_readonly_guard_relative "$worktree" "$dir")"
+  for dir in "$SINGULAR_ORCH_DIR" "$SINGULAR_STATE_DIR" \
+             "$SINGULAR_ROOT/.singular-cache" "$SINGULAR_ROOT/.singular-evidence"; do
+    rel="$(singular_readonly_guard_relative "$worktree" "$dir")"
     [[ -n "$rel" ]] && args+=(--exclude "$rel")
   done
 
-  if ! python3 "$GLUERUN_LIB_DIR/readonly_guard.py" "${args[@]}" \
+  if ! python3 "$SINGULAR_LIB_DIR/readonly_guard.py" "${args[@]}" \
        >"$journal/capture.json" 2>"$journal/capture.err"; then
     echo "readonly guard: capture failed, run is unguarded (see $journal/capture.err)" >&2
     return 0
@@ -6102,15 +6102,15 @@ gluerun_readonly_guard_capture() {
 
 # Put the worktree back. Safe to call with an empty journal argument, and safe to
 # call twice — the second call finds no journal and reports no-journal.
-gluerun_readonly_guard_restore() {
+singular_readonly_guard_restore() {
   local journal="${1:-}"
   [[ -n "$journal" && -d "$journal" ]] || return 0
   local mode result outcome
-  mode="$(gluerun_readonly_guard_mode)"
+  mode="$(singular_readonly_guard_mode)"
   [[ "$mode" != "off" ]] || return 0
   [[ "$mode" == "report" ]] || mode="restore"
 
-  result="$(python3 "$GLUERUN_LIB_DIR/readonly_guard.py" restore \
+  result="$(python3 "$SINGULAR_LIB_DIR/readonly_guard.py" restore \
     --journal "$journal" --mode "$mode" --consume 2>"$journal/restore.err")" || {
     echo "readonly guard: restore failed (see $journal/restore.err)" >&2
     return 0
@@ -6123,7 +6123,7 @@ gluerun_readonly_guard_restore() {
       # tree is a containment failure whether or not the guard undid it, and a
       # degraded guard means the run was effectively unguarded.
       echo "readonly guard: $outcome ($journal)" >&2
-      gluerun_append_event "readonly_guard.$outcome" \
+      singular_append_event "readonly_guard.$outcome" \
         "read-only guard $outcome" "$result" || true
       ;;
   esac
@@ -6133,11 +6133,11 @@ gluerun_readonly_guard_restore() {
 # Finish the restores of runs that were SIGKILLed. Nothing runs inside a killed
 # process, so its journal is still on disk with its owner pid recorded; this is
 # how that tree eventually gets put back.
-gluerun_readonly_guard_sweep() {
-  local base="$GLUERUN_STATE_DIR/readonly-guard"
+singular_readonly_guard_sweep() {
+  local base="$SINGULAR_STATE_DIR/readonly-guard"
   [[ -d "$base" ]] || return 0
-  [[ "$(gluerun_readonly_guard_mode)" != "off" ]] || return 0
-  python3 "$GLUERUN_LIB_DIR/readonly_guard.py" sweep --root "$base" \
+  [[ "$(singular_readonly_guard_mode)" != "off" ]] || return 0
+  python3 "$SINGULAR_LIB_DIR/readonly_guard.py" sweep --root "$base" \
     >/dev/null 2>&1 || true
   return 0
 }
@@ -6156,7 +6156,7 @@ gluerun_readonly_guard_sweep() {
 # or not the model did useful work — parking on that would kill tasks the next
 # attempt would have fixed. The uncommitted diff is what tells those apart, so
 # it is hashed too, along with the gate's structured signals when there are any.
-gluerun_attempt_progress_signature() {
+singular_attempt_progress_signature() {
   local worktree="$1" failure_class="$2" head_sha="$3" gate_report="${4:-}"
   {
     printf '%s\n%s\n' "$failure_class" "$head_sha"
@@ -6197,11 +6197,11 @@ PY
 # what safe_repo_artifact's no-symlink-traversal rule wants.
 #
 # Prints the repo-relative form when the path lies inside the repo, and the
-# input unchanged otherwise: GLUERUN_STATE_DIR may legitimately live outside the
+# input unchanged otherwise: SINGULAR_STATE_DIR may legitimately live outside the
 # repo, and there the strict path is simply unsatisfiable — a configuration
 # fact, not something to paper over with a fabricated ref.
-gluerun_repo_relative_ref() {
-  local path="$1" root="${2:-$GLUERUN_ROOT}"
+singular_repo_relative_ref() {
+  local path="$1" root="${2:-$SINGULAR_ROOT}"
   python3 - "$path" "$root" <<'PY'
 import os
 import sys
@@ -6224,7 +6224,7 @@ else:
 PY
 }
 
-gluerun_tracked_source_snapshot() {
+singular_tracked_source_snapshot() {
   local worktree="$1" output="$2"
   python3 - "$worktree" "$output" <<'PY'
 import json
@@ -6271,7 +6271,7 @@ os.replace(temporary, output)
 PY
 }
 
-gluerun_tracked_source_changes() {
+singular_tracked_source_changes() {
   local before="$1" after="$2"
   python3 - "$before" "$after" <<'PY'
 import json
@@ -6288,7 +6288,7 @@ for path in sorted(set(before) | set(after)):
 PY
 }
 
-gluerun_check_result_write() {
+singular_check_result_write() {
   local output="$1" check_id="$2" status="$3" exit_code="$4" log_ref="${5:-}"
   python3 - "$output" "$check_id" "$status" "$exit_code" "$log_ref" <<'PY'
 import datetime
@@ -6306,7 +6306,7 @@ try:
 except ValueError:
     raise SystemExit(2)
 record = {
-    "schema": "gluerun.orchestration.check-result.v0",
+    "schema": "singular.orchestration.check-result.v0",
     "check": check_id,
     "status": status,
     "exitCode": exit_code,
@@ -6343,7 +6343,7 @@ PY
 # writes a session-meta JSON describing the session it just ran; the host merges
 # its authority fields and decides whether the NEXT run may resume it.
 #
-# session-meta schema (gluerun.orchestration.session-meta.v0):
+# session-meta schema (singular.orchestration.session-meta.v0):
 #   provider, sessionId, model, effort, cwd, exitCode, createdAt   (runner-authored)
 #   role, taskId, runId, runner, promptSha256, headShaAtCreate, lastUsedAttempt
 #                                                                  (host-authored)
@@ -6351,10 +6351,10 @@ PY
 # Runner-side meta writers (called from codex-run.sh / claude-run.sh). They emit
 # ONLY the runner-authored fields; the host adds the rest via _finalize. An empty
 # sessionId is normal (parse miss / no session) and tells the host to go fresh.
-gluerun_session_meta_write_provider() {
+singular_session_meta_write_provider() {
   local path="$1" provider="$2" session_id="$3" model="$4" effort="$5" cwd="$6" exit_code="$7"
   [[ -n "$path" ]] || return 0
-  local created; created="$(gluerun_timestamp 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local created; created="$(singular_timestamp 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
   python3 - "$path" "$provider" "$session_id" "$model" "$effort" "$cwd" "$exit_code" "$created" <<'PY' 2>/dev/null || true
 import json, sys
 path, provider, sid, model, effort, cwd, ec, created = sys.argv[1:9]
@@ -6363,7 +6363,7 @@ try:
 except Exception:
     rc = ec
 doc = {
-    "schema": "gluerun.orchestration.session-meta.v0",
+    "schema": "singular.orchestration.session-meta.v0",
     "provider": provider,
     "sessionId": sid,
     "model": model,
@@ -6377,29 +6377,29 @@ with open(path, "w", encoding="utf-8") as f:
     f.write("\n")
 PY
 }
-gluerun_codex_session_meta_write() {
+singular_codex_session_meta_write() {
   # <path> <session_id> <model> <effort> <cwd> <exit_code>
-  gluerun_session_meta_write_provider "$1" "codex" "$2" "$3" "$4" "$5" "$6"
+  singular_session_meta_write_provider "$1" "codex" "$2" "$3" "$4" "$5" "$6"
 }
-gluerun_claude_session_meta_write() {
+singular_claude_session_meta_write() {
   # <path> <session_id> <model> <effort> <cwd> <exit_code>
-  gluerun_session_meta_write_provider "$1" "claude" "$2" "$3" "$4" "$5" "$6"
+  singular_session_meta_write_provider "$1" "claude" "$2" "$3" "$4" "$5" "$6"
 }
 
-# sha256 of the rendered BASE prompt (reuses gluerun_sha256_file). Missing file ->
+# sha256 of the rendered BASE prompt (reuses singular_sha256_file). Missing file ->
 # empty (the resume decider treats an empty/mismatched sha as a fresh trigger).
-gluerun_prompt_sha() {
+singular_prompt_sha() {
   local prompt_file="$1"
   [[ -n "$prompt_file" && -f "$prompt_file" ]] || { printf '%s' ""; return 0; }
-  gluerun_sha256_file "$prompt_file" 2>/dev/null || printf '%s' ""
+  singular_sha256_file "$prompt_file" 2>/dev/null || printf '%s' ""
 }
 
 # Merge host-authority fields into the runner-written meta. If the runner wrote
 # no meta (resume unsupported / parse miss), create a minimal one with an empty
 # sessionId. NEVER fails the drive.
-#   gluerun_session_meta_finalize <meta_path> <role> <task_id> <run_id> \
+#   singular_session_meta_finalize <meta_path> <role> <task_id> <run_id> \
 #                              <runner_basename> <prompt_sha> <head_sha> <attempt>
-gluerun_session_meta_finalize() {
+singular_session_meta_finalize() {
   local meta_path="$1" role="$2" task_id="$3" run_id="$4" runner="$5" prompt_sha="$6" head_sha="$7" attempt="$8"
   [[ -n "$meta_path" ]] || return 0
   python3 - "$meta_path" "$role" "$task_id" "$run_id" "$runner" "$prompt_sha" "$head_sha" "$attempt" <<'PY' 2>/dev/null || true
@@ -6413,7 +6413,7 @@ try:
         doc = loaded
 except Exception:
     doc = {}
-doc.setdefault("schema", "gluerun.orchestration.session-meta.v0")
+doc.setdefault("schema", "singular.orchestration.session-meta.v0")
 doc.setdefault("provider", "")
 doc.setdefault("sessionId", "")
 doc.setdefault("model", "")
@@ -6441,13 +6441,13 @@ PY
 # line: `resume <sessionId>` or `fresh <reason>`. Gates evaluate in order; the
 # FIRST failure wins and its name is the reason. Per-role meta FILES make
 # cross-role reuse structurally impossible; gate 4 is defense-in-depth.
-#   gluerun_session_resume_decide <meta_path> <role> <task_id> <run_id> \
+#   singular_session_resume_decide <meta_path> <role> <task_id> <run_id> \
 #       <runner_basename> <prompt_sha> <worktree> <lineage_head>
-gluerun_session_resume_decide() {
+singular_session_resume_decide() {
   local meta_path="$1" role="$2" task_id="$3" run_id="$4" runner="$5" prompt_sha="$6" worktree="$7" lineage_head="$8"
 
   # Gate 1: affinity disabled.
-  if [[ "${GLUERUN_SESSION_AFFINITY:-1}" != "1" ]]; then
+  if [[ "${SINGULAR_SESSION_AFFINITY:-1}" != "1" ]]; then
     printf 'fresh disabled\n'; return 0
   fi
   # Gate 2: meta missing/unparseable.
@@ -6507,7 +6507,7 @@ PY
     printf 'fresh prompt-template-changed\n'; return 0
   fi
   # Gate 8: expired.
-  local max_age="${GLUERUN_SESSION_MAX_AGE_SEC:-14400}"
+  local max_age="${SINGULAR_SESSION_MAX_AGE_SEC:-14400}"
   local age_ok
   age_ok="$(python3 - "$m_created" "$max_age" <<'PY' 2>/dev/null || true
 import sys
@@ -6552,7 +6552,7 @@ PY
 # normalized text (backticks stripped, lowercased, whitespace collapsed to
 # single spaces, trimmed) — so re-reports that differ only in formatting map to
 # the same finding.
-gluerun_finding_id() {
+singular_finding_id() {
   python3 -c '
 import hashlib, sys
 text = sys.argv[1].replace("`", "").lower()
@@ -6564,11 +6564,11 @@ print("f-" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:12])
 # Per-attempt artifact archive (T-E1). Copies the attempt's mutable run-dir ROOT
 # artifacts into <run_dir>/attempts/<n>/ (root files are never moved/renamed;
 # the console keeps parsing them at the root) and upserts attempts/index.json.
-#   gluerun_attempt_archive <run_dir> <n> <failure_class> <verdict> <head_sha> <decider_action> <authority>
+#   singular_attempt_archive <run_dir> <n> <failure_class> <verdict> <head_sha> <decider_action> <authority>
 # failure_class empty == accepted attempt (failure.txt records "accepted").
-# Optional caller-provided globals: GLUERUN_ATTEMPT_TASK_ID (else packet.json's
-# taskId), GLUERUN_ATTEMPT_STARTED_AT (else archive time).
-gluerun_attempt_archive() {
+# Optional caller-provided globals: SINGULAR_ATTEMPT_TASK_ID (else packet.json's
+# taskId), SINGULAR_ATTEMPT_STARTED_AT (else archive time).
+singular_attempt_archive() {
   local run_dir="$1" n="$2" failure_class="$3" verdict="$4" head_sha="$5"
   local decider_action="$6" authority="$7"
   local dest="$run_dir/attempts/$n"
@@ -6585,15 +6585,15 @@ gluerun_attempt_archive() {
 
   local run_id task_id started ended
   run_id="$(basename "$run_dir")"
-  ended="$(gluerun_timestamp)"
-  started="${GLUERUN_ATTEMPT_STARTED_AT:-$ended}"
-  task_id="${GLUERUN_ATTEMPT_TASK_ID:-}"
+  ended="$(singular_timestamp)"
+  started="${SINGULAR_ATTEMPT_STARTED_AT:-$ended}"
+  task_id="${SINGULAR_ATTEMPT_TASK_ID:-}"
   if [[ -z "$task_id" && -f "$run_dir/packet.json" ]]; then
-    task_id="$(gluerun_json_field "$run_dir/packet.json" taskId 2>/dev/null || true)"
+    task_id="$(singular_json_field "$run_dir/packet.json" taskId 2>/dev/null || true)"
   fi
   python3 - "$run_dir/attempts/index.json" "$run_id" "$task_id" "$n" "$started" "$ended" \
     "$failure_class" "$verdict" "$head_sha" "$decider_action" "$authority" \
-    "${GLUERUN_ATTEMPT_WORKER_STRATEGY:-}" "${GLUERUN_ATTEMPT_REVIEWER_STRATEGY:-}" <<'PY'
+    "${SINGULAR_ATTEMPT_WORKER_STRATEGY:-}" "${SINGULAR_ATTEMPT_REVIEWER_STRATEGY:-}" <<'PY'
 import json
 import os
 import sys
@@ -6603,7 +6603,7 @@ import sys
  worker_strategy, reviewer_strategy) = sys.argv[1:14]
 n = int(n_raw)
 data = {
-    "schema": "gluerun.orchestration.attempts-index.v0",
+    "schema": "singular.orchestration.attempts-index.v0",
     "runId": run_id,
     "taskId": task_id,
     "attempts": [],
@@ -6645,19 +6645,19 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
 PY
-  gluerun_append_event "l1.attempt_archived" "attempt artifacts archived" \
+  singular_append_event "l1.attempt_archived" "attempt artifacts archived" \
     "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"n\":$n,\"failureClass\":\"$failure_class\",\"verdict\":\"$verdict\"}" \
     2>/dev/null || true
 }
 
 # Implementer context capsule: a compact, hash-stamped summary of what the
 # worker attempt produced, for later-wave session resume / fix prompts.
-#   gluerun_capsule_write_implementer <run_dir> <n> <packet_json_path> <head_sha> <owned_json> <forbidden_json>
+#   singular_capsule_write_implementer <run_dir> <n> <packet_json_path> <head_sha> <owned_json> <forbidden_json>
 # ownedFiles/forbiddenFiles come from the ARGV (the driver's CURRENT post-amend
 # scope), never from the packet. Every list is capped at 20 items. contentHash
 # is sha256 over the canonical JSON (sorted keys, no whitespace) EXCLUDING
 # createdAt/contentHash/packetSha256.
-gluerun_capsule_write_implementer() {
+singular_capsule_write_implementer() {
   local run_dir="$1" n="$2" packet_path="$3" head_sha="$4" owned_json="$5" forbidden_json="$6"
   python3 - "$run_dir" "$n" "$packet_path" "$head_sha" "$owned_json" "$forbidden_json" <<'PY'
 import hashlib
@@ -6693,7 +6693,7 @@ with open(packet_path, "rb") as f:
     packet_sha = hashlib.sha256(f.read()).hexdigest()
 
 capsule = {
-    "schema": "gluerun.orchestration.context-capsule.v0",
+    "schema": "singular.orchestration.context-capsule.v0",
     "role": "implementer",
     "taskId": str(packet.get("taskId", "")),
     "runId": str(packet.get("runId", "")),
@@ -6721,11 +6721,11 @@ PY
 }
 
 # Reviewer context capsule: what the auditor reviewed and concluded.
-#   gluerun_capsule_write_reviewer <run_dir> <n> <audit_json_path> <prior_head> <new_head>
+#   singular_capsule_write_reviewer <run_dir> <n> <audit_json_path> <prior_head> <new_head>
 # diffRange is "" on attempt 1 (empty prior_head). Tolerates junk/partial
 # verdict JSON (auditors emit junk) — missing/odd fields degrade to empty
 # values, never a crash. rationale is capped at 1500 chars.
-gluerun_capsule_write_reviewer() {
+singular_capsule_write_reviewer() {
   local run_dir="$1" n="$2" audit_path="$3" prior_head="$4" new_head="$5"
   python3 - "$run_dir" "$n" "$audit_path" "$prior_head" "$new_head" <<'PY'
 import hashlib
@@ -6777,7 +6777,7 @@ if not task_id or not run_id:
         pass
 
 capsule = {
-    "schema": "gluerun.orchestration.context-capsule.v0",
+    "schema": "singular.orchestration.context-capsule.v0",
     "role": "reviewer",
     "taskId": task_id,
     "runId": run_id,
@@ -6799,7 +6799,7 @@ PY
 }
 
 # Findings ledger: upsert <run_dir>/findings-status.json from one audit verdict.
-#   gluerun_findings_ledger_update <run_dir> <n> <audit_json_path>
+#   singular_findings_ledger_update <run_dir> <n> <audit_json_path>
 # Rules, in order:
 #   1. every findings[]/requiredFixes[] string in the new audit is upserted by
 #      id (lastSeenAttempt bumped); a previously RESOLVED finding that is
@@ -6812,7 +6812,7 @@ PY
 #   4. absence alone never resolves anything.
 # Echoes "open=K resolved=K new=K" on stdout; the caller emits the
 # findings.ledger_updated event from those counts.
-gluerun_findings_ledger_update() {
+singular_findings_ledger_update() {
   local run_dir="$1" n="$2" audit_path="$3"
   python3 - "$run_dir" "$n" "$audit_path" <<'PY'
 import hashlib
@@ -6907,7 +6907,7 @@ if str(audit.get("verdict", "")) == "accepted":
 
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 out = {
-    "schema": "gluerun.orchestration.findings-ledger.v0",
+    "schema": "singular.orchestration.findings-ledger.v0",
     "taskId": task_id,
     "runId": run_id,
     "findings": findings,
@@ -6927,10 +6927,10 @@ PY
 # summary) into <out_path>. Findings come ONLY from open ledger entries; if the
 # ledger is missing/empty AND failure_class starts with "audit-", the legacy
 # attempt_ctx tail is folded into the Evidence section as a fallback.
-#   gluerun_render_fix_prompt <out> <base_prompt> <run_dir> <n> <failure_class> \
+#   singular_render_fix_prompt <out> <base_prompt> <run_dir> <n> <failure_class> \
 #     <attempt_ctx_file> <owned_json> <forbidden_json>
 # Returns nonzero on any rendering error (caller falls back to legacy fix_hints).
-gluerun_render_fix_prompt() {
+singular_render_fix_prompt() {
   local out_path="$1" base_prompt="$2" run_dir="$3" n="$4" failure_class="$5"
   local attempt_ctx="$6" owned_json="$7" forbidden_json="$8"
   local gate_log="$run_dir/gate-check.log"
@@ -6939,7 +6939,7 @@ gluerun_render_fix_prompt() {
   local ledger="$run_dir/findings-status.json"
   python3 - "$out_path" "$base_prompt" "$ledger" "$capsule" "$n" "$failure_class" \
     "$attempt_ctx" "$gate_log" "$scope_log" "$owned_json" "$forbidden_json" \
-    "$GLUERUN_CONTEXT_SECTION_MAX_CHARS" <<'PY'
+    "$SINGULAR_CONTEXT_SECTION_MAX_CHARS" <<'PY'
 import json
 import os
 import sys
@@ -7093,10 +7093,10 @@ PY
 # per-id verification targets + a findingsStatus output-contract addition) into
 # <out_path>. n==1, missing reviewer capsule, or empty prior_head -> plain copy
 # (byte-identical to the base audit prompt).
-#   gluerun_render_reaudit_prompt <out> <base_audit_prompt> <run_dir> <n> \
+#   singular_render_reaudit_prompt <out> <base_audit_prompt> <run_dir> <n> \
 #     <prior_head> <new_head> <worktree>
 # Returns nonzero on rendering error (caller falls back to the base audit prompt).
-gluerun_render_reaudit_prompt() {
+singular_render_reaudit_prompt() {
   local out_path="$1" base_prompt="$2" run_dir="$3" n="$4" prior_head="$5"
   local new_head="$6" worktree="$7"
   local capsule="$run_dir/reviewer-capsule.json"
@@ -7120,7 +7120,7 @@ gluerun_render_reaudit_prompt() {
     rm -f "$diff_artifact" 2>/dev/null || true
   fi
 
-  GLUERUN_REAUDIT_STAT="$stat_out" \
+  SINGULAR_REAUDIT_STAT="$stat_out" \
   python3 - "$out_path" "$base_prompt" "$ledger" "$n" "$prior_head" "$new_head" \
     "$ancestry_ok" "$diff_ref" <<'PY'
 import json
@@ -7157,7 +7157,7 @@ else:
     parts.append("(no ledger findings recorded)")
 
 if ancestry_ok == "yes":
-    stat = os.environ.get("GLUERUN_REAUDIT_STAT", "")[:2048]
+    stat = os.environ.get("SINGULAR_REAUDIT_STAT", "")[:2048]
     parts.append(f"### Fix diff since your last audit ({prior_head}..{new_head})")
     parts.append(stat)
     parts.append(
@@ -7193,68 +7193,68 @@ PY
 
 # --- Kill switch + circuit breaker ---
 
-gluerun_stop_requested() {
-  [[ -f "$GLUERUN_STOP_FILE" ]]
+singular_stop_requested() {
+  [[ -f "$SINGULAR_STOP_FILE" ]]
 }
 
-gluerun_wake_file() {
-  printf '%s' "${GLUERUN_WAKE_FILE:-$GLUERUN_STATE_DIR/WAKE}"
+singular_wake_file() {
+  printf '%s' "${SINGULAR_WAKE_FILE:-$SINGULAR_STATE_DIR/WAKE}"
 }
 
-# Interruptible nap: sleeps `total` seconds in GLUERUN_SLEEP_POLL_SEC chunks,
+# Interruptible nap: sleeps `total` seconds in SINGULAR_SLEEP_POLL_SEC chunks,
 # checking control files between chunks so a nap never outlives operator intent.
 # Returns: 0 = slept the full duration; 1 = woken early (WAKE file consumed, or
 # — with watch_backoff=1 — the planner backoff was cleared/expired); 2 = STOP.
 # Never signal/kill sleep children to wake the loop: touch the WAKE file
-# (gluerun wake) instead.
-gluerun_interruptible_sleep() {
+# (singular wake) instead.
+singular_interruptible_sleep() {
   local total="$1" watch_backoff="${2:-0}"
   [[ "$total" =~ ^[0-9]+$ ]] || total=0
-  local poll="${GLUERUN_SLEEP_POLL_SEC:-10}"
+  local poll="${SINGULAR_SLEEP_POLL_SEC:-10}"
   [[ "$poll" =~ ^[0-9]+$ && "$poll" -ge 1 ]] || poll=10
   local wake slept=0 chunk
-  wake="$(gluerun_wake_file)"
+  wake="$(singular_wake_file)"
   while (( slept < total )); do
     chunk=$(( total - slept < poll ? total - slept : poll ))
     sleep "$chunk"
     slept=$((slept + chunk))
-    if gluerun_stop_requested; then
+    if singular_stop_requested; then
       return 2
     fi
     if [[ -f "$wake" ]]; then
       rm -f "$wake" 2>/dev/null || true
       return 1
     fi
-    if [[ "$watch_backoff" == "1" ]] && ! gluerun_planner_backoff_active_json >/dev/null 2>&1; then
+    if [[ "$watch_backoff" == "1" ]] && ! singular_planner_backoff_active_json >/dev/null 2>&1; then
       return 1
     fi
   done
   return 0
 }
 
-gluerun_request_wake() {
-  gluerun_ensure_state_dirs
+singular_request_wake() {
+  singular_ensure_state_dirs
   local wake
-  wake="$(gluerun_wake_file)"
+  wake="$(singular_wake_file)"
   : >"$wake"
-  gluerun_append_event "autonomate.wake_requested" "operator requested wake" "{}"
+  singular_append_event "autonomate.wake_requested" "operator requested wake" "{}"
   echo "wake requested ($wake)"
 }
 
-gluerun_breaker_count() {
-  [[ -f "$GLUERUN_BREAKER_FILE" ]] || { echo 0; return 0; }
-  gluerun_json_field "$GLUERUN_BREAKER_FILE" consecFails 2>/dev/null || echo 0
+singular_breaker_count() {
+  [[ -f "$SINGULAR_BREAKER_FILE" ]] || { echo 0; return 0; }
+  singular_json_field "$SINGULAR_BREAKER_FILE" consecFails 2>/dev/null || echo 0
 }
 
-gluerun_breaker_reset() {
-  gluerun_ensure_state_dirs
-  printf '{"consecFails":0,"updatedAt":"%s"}\n' "$(gluerun_timestamp)" >"$GLUERUN_BREAKER_FILE"
+singular_breaker_reset() {
+  singular_ensure_state_dirs
+  printf '{"consecFails":0,"updatedAt":"%s"}\n' "$(singular_timestamp)" >"$SINGULAR_BREAKER_FILE"
 }
 
 # Increment the consecutive-failure counter; echo the new value.
-gluerun_breaker_trip() {
-  gluerun_ensure_state_dirs
-  python3 - "$GLUERUN_BREAKER_FILE" <<'PY'
+singular_breaker_trip() {
+  singular_ensure_state_dirs
+  python3 - "$SINGULAR_BREAKER_FILE" <<'PY'
 import json
 import os
 import sys
@@ -7276,26 +7276,26 @@ PY
 }
 
 # Write a human-readable STATUS report (the thing the user reads after ~20h).
-gluerun_write_status() {
+singular_write_status() {
   # args: iteration note
   local iteration="${1:-0}" note="${2:-}"
-  gluerun_ensure_state_dirs
+  singular_ensure_state_dirs
   local branch head ready active imported integrated decisions parked breaker stop
-  branch="$(gluerun_current_branch 2>/dev/null || echo '?')"
-  head="$(git -C "$GLUERUN_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
-  ready="$(gluerun_list_status_ready_tasks 2>/dev/null | wc -l | tr -d ' ')"
-  active="$(gluerun_active_lease_count 2>/dev/null || echo 0)"
-  imported="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
-  integrated="$(grep -c '"integration.integrated"' "$GLUERUN_EVENTS_FILE" 2>/dev/null || echo 0)"
-  parked="$(grep -c '"escalate-parked"\|"decider.parked"' "$GLUERUN_EVENTS_FILE" 2>/dev/null || echo 0)"
-  breaker="$(gluerun_breaker_count)"
-  stop="no"; gluerun_stop_requested && stop="yes"
+  branch="$(singular_current_branch 2>/dev/null || echo '?')"
+  head="$(git -C "$SINGULAR_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  ready="$(singular_list_status_ready_tasks 2>/dev/null | wc -l | tr -d ' ')"
+  active="$(singular_active_lease_count 2>/dev/null || echo 0)"
+  imported="$(singular_count_files "$SINGULAR_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
+  integrated="$(grep -c '"integration.integrated"' "$SINGULAR_EVENTS_FILE" 2>/dev/null || echo 0)"
+  parked="$(grep -c '"escalate-parked"\|"decider.parked"' "$SINGULAR_EVENTS_FILE" 2>/dev/null || echo 0)"
+  breaker="$(singular_breaker_count)"
+  stop="no"; singular_stop_requested && stop="yes"
   {
-    echo "# gluerun Autonomous Status"
+    echo "# singular Autonomous Status"
     echo ""
-    echo "Updated: $(gluerun_timestamp)"
+    echo "Updated: $(singular_timestamp)"
     echo "Generated by: reconcile iteration $iteration (pid $$) — snapshot as of the"
-    echo "last cycle; may be stale while the loop idles. Live view: \`gluerun health\`."
+    echo "last cycle; may be stale while the loop idles. Live view: \`singular health\`."
     echo "Iteration: $iteration"
     echo "Note: ${note:-(running)}"
     echo "STOP requested: $stop"
@@ -7306,11 +7306,11 @@ gluerun_write_status() {
     echo "- imported packets: $imported"
     echo "- integrations (lifetime): $integrated"
     echo "- parked escalations (lifetime): $parked"
-    echo "- circuit-breaker consecutive failures: $breaker / ${GLUERUN_MAX_CONSEC_FAILS}"
+    echo "- circuit-breaker consecutive failures: $breaker / ${SINGULAR_MAX_CONSEC_FAILS}"
     echo ""
     echo "## Recent decisions"
     echo ""
-    grep '"decision.recorded"\|"decider.' "$GLUERUN_EVENTS_FILE" 2>/dev/null | tail -10 \
+    grep '"decision.recorded"\|"decider.' "$SINGULAR_EVENTS_FILE" 2>/dev/null | tail -10 \
       | python3 -c 'import json,sys
 for l in sys.stdin:
     try:
@@ -7320,17 +7320,17 @@ for l in sys.stdin:
     echo ""
     echo "## Recent events"
     echo ""
-    tail -15 "$GLUERUN_EVENTS_FILE" 2>/dev/null | python3 -c 'import json,sys
+    tail -15 "$SINGULAR_EVENTS_FILE" 2>/dev/null | python3 -c 'import json,sys
 for l in sys.stdin:
     try:
         e=json.loads(l); print("- %s  %s  %s" % (e.get("ts",""), e.get("type",""), e.get("message","")))
     except Exception: pass' || true
-  } >"$GLUERUN_STATUS_FILE"
+  } >"$SINGULAR_STATUS_FILE"
 }
 
 # Set the Status: header of a task markdown file in place.
 # Read the `Status:` header of a task file, lowercased. Empty when absent.
-gluerun_task_status() {
+singular_task_status() {
   local task_file="$1"
   [[ -f "$task_file" ]] || return 1
   python3 - "$task_file" <<'PY'
@@ -7344,7 +7344,7 @@ with open(sys.argv[1], encoding="utf-8", errors="replace") as stream:
 PY
 }
 
-gluerun_task_set_status() {
+singular_task_set_status() {
   local task_file="$1" status="$2"
   python3 - "$task_file" "$status" <<'PY'
 import os
@@ -7373,9 +7373,9 @@ PY
 }
 
 # Count leases whose status is an active/in-flight value.
-gluerun_active_lease_count() {
-  [[ -d "$GLUERUN_LEASES_DIR" ]] || { echo 0; return 0; }
-  python3 - "$GLUERUN_LEASES_DIR" <<'PY'
+singular_active_lease_count() {
+  [[ -d "$SINGULAR_LEASES_DIR" ]] || { echo 0; return 0; }
+  python3 - "$SINGULAR_LEASES_DIR" <<'PY'
 import json
 import os
 import sys
@@ -7406,23 +7406,23 @@ PY
 }
 
 # Count git worktrees other than the primary repo worktree.
-gluerun_extra_worktree_count() {
-  git -C "$GLUERUN_ROOT" worktree list --porcelain \
-    | awk -v root="$GLUERUN_ROOT" '/^worktree / {p=substr($0,10); if (p != root) c++} END {print c+0}'
+singular_extra_worktree_count() {
+  git -C "$SINGULAR_ROOT" worktree list --porcelain \
+    | awk -v root="$SINGULAR_ROOT" '/^worktree / {p=substr($0,10); if (p != root) c++} END {print c+0}'
 }
 
 # True (0) if a worktree path is registered with git.
-gluerun_worktree_registered() {
+singular_worktree_registered() {
   local path="$1"
-  git -C "$GLUERUN_ROOT" worktree list --porcelain \
+  git -C "$SINGULAR_ROOT" worktree list --porcelain \
     | awk -v p="$path" '/^worktree / {if (substr($0,10) == p) found=1} END {exit found?0:1}'
 }
 
-gluerun_worktree_provision() {
+singular_worktree_provision() {
   local worktree="$1" run_dir="${2:-}"
-  local specs="${GLUERUN_PROVISION_FILES_JSON:-[]}"
-  local allow="${GLUERUN_ENV_ALLOWLIST_JSON:-[]}"
-  python3 - "$GLUERUN_ROOT" "$worktree" "$run_dir" "$specs" "$allow" <<'PY'
+  local specs="${SINGULAR_PROVISION_FILES_JSON:-[]}"
+  local allow="${SINGULAR_ENV_ALLOWLIST_JSON:-[]}"
+  python3 - "$SINGULAR_ROOT" "$worktree" "$run_dir" "$specs" "$allow" <<'PY'
 import json
 import os
 import pathlib
@@ -7518,7 +7518,7 @@ if allowlist:
             if not name_re.match(pattern):
                 fail(f"envAllowlist[{idx}] has invalid env name: {pattern!r}")
             exact.add(pattern)
-    env_rel = ".gluerun-state/worktree-env.sh"
+    env_rel = ".singular-state/worktree-env.sh"
     if not git_ignored(worktree, env_rel):
         fail(f"worktree env file target is not gitignored: {env_rel}")
     env_path = worktree / env_rel
@@ -7529,7 +7529,7 @@ if allowlist:
             if name_re.match(name):
                 names.append(name)
     with open(env_path, "w", encoding="utf-8") as f:
-        f.write("# generated by gluerun; sourced only for worktree prewarm/gate phases\n")
+        f.write("# generated by singular; sourced only for worktree prewarm/gate phases\n")
         for name in names:
             f.write(f"export {name}={shlex.quote(os.environ[name])}\n")
     env_written = str(env_path)
@@ -7541,14 +7541,14 @@ if run_dir:
         f.write("\n")
 print(json.dumps({"copied": copied, "envFile": env_written}, separators=(",", ":")))
 PY
-  local env_file="$worktree/.gluerun-state/worktree-env.sh"
+  local env_file="$worktree/.singular-state/worktree-env.sh"
   if [[ -f "$env_file" ]]; then
-    export GLUERUN_WORKTREE_ENV_FILE="$env_file"
+    export SINGULAR_WORKTREE_ENV_FILE="$env_file"
   fi
 }
 
-gluerun_worktree_env_configured() {
-  [[ -n "${GLUERUN_ENV_ALLOWLIST_JSON:-}" && "${GLUERUN_ENV_ALLOWLIST_JSON:-[]}" != "[]" ]]
+singular_worktree_env_configured() {
+  [[ -n "${SINGULAR_ENV_ALLOWLIST_JSON:-}" && "${SINGULAR_ENV_ALLOWLIST_JSON:-[]}" != "[]" ]]
 }
 
 # Dependency trees to copy into a fresh worktree, as a JSON array of clean
@@ -7556,8 +7556,8 @@ gluerun_worktree_env_configured() {
 # the config REPLACED, so a monorepo that declared a nested path
 # (["apps/web/node_modules"]) silently stopped copying the root one and got a
 # worktree that was worse than the one it was trying to fix.
-gluerun_worktree_copy_paths_json() {
-  local configured="${GLUERUN_WORKTREE_COPY_PATHS_JSON:-${GLUERUN_AUDIT_VERIFY_COPY_PATHS_JSON:-[]}}"
+singular_worktree_copy_paths_json() {
+  local configured="${SINGULAR_WORKTREE_COPY_PATHS_JSON:-${SINGULAR_AUDIT_VERIFY_COPY_PATHS_JSON:-[]}}"
   python3 - "$configured" <<'PY'
 import json
 import pathlib
@@ -7588,10 +7588,10 @@ PY
 # rather than skipped in silence — "I did not copy what you asked for" is
 # precisely the information missing when an audit worktree fails a gate the
 # worker passed.
-gluerun_worktree_copy_paths() {
+singular_worktree_copy_paths() {
   local source_worktree="$1" target_worktree="$2"
   local paths_json relative source_path target_path copy_ok rc=0
-  paths_json="$(gluerun_worktree_copy_paths_json)" || {
+  paths_json="$(singular_worktree_copy_paths_json)" || {
     echo "worktree copy paths are not a clean relative-path array" >&2
     return 2
   }
@@ -7606,7 +7606,7 @@ gluerun_worktree_copy_paths() {
       # none; anything the operator asked for by name is not.
       if [[ "$relative" != "node_modules" ]]; then
         echo "worktree copy: declared path is absent in the source worktree: $relative" >&2
-        gluerun_append_event "worktree.copy_path_absent" \
+        singular_append_event "worktree.copy_path_absent" \
           "declared worktree copy path is absent in the source worktree" \
           "{\"path\":\"$relative\",\"source\":\"$source_worktree\"}" || true
       fi
@@ -7630,7 +7630,7 @@ gluerun_worktree_copy_paths() {
     fi
     if [[ "$copy_ok" != "yes" ]]; then
       echo "worktree copy: failed to copy $relative" >&2
-      GLUERUN_WORKTREE_PREPARE_DETAIL="dependency-copy-failed:$relative"
+      SINGULAR_WORKTREE_PREPARE_DETAIL="dependency-copy-failed:$relative"
       rc=1
     fi
   done
@@ -7648,66 +7648,66 @@ gluerun_worktree_copy_paths() {
 #   $1 worktree, $2 run_dir (may be empty), $3 source worktree for dependency
 #   copies (empty to skip), $4 log file.
 #
-# Sets GLUERUN_WORKTREE_PREPARE_STAGE to the stage that failed, and
-# GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED when bootstrap failed under
-# GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FATAL=no. Callers pass extra environment
-# for the bootstrap/prewarm children in the GLUERUN_WORKTREE_PREPARE_ENV array.
-gluerun_worktree_prepare() {
+# Sets SINGULAR_WORKTREE_PREPARE_STAGE to the stage that failed, and
+# SINGULAR_WORKTREE_PREPARE_BOOTSTRAP_FAILED when bootstrap failed under
+# SINGULAR_WORKTREE_PREPARE_BOOTSTRAP_FATAL=no. Callers pass extra environment
+# for the bootstrap/prewarm children in the SINGULAR_WORKTREE_PREPARE_ENV array.
+singular_worktree_prepare() {
   local worktree="$1" run_dir="${2:-}" source_worktree="${3:-}" log="${4:-/dev/null}"
-  local bootstrap_fatal="${GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FATAL:-yes}"
-  GLUERUN_WORKTREE_PREPARE_STAGE=""
-  GLUERUN_WORKTREE_PREPARE_DETAIL=""
-  GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED="no"
+  local bootstrap_fatal="${SINGULAR_WORKTREE_PREPARE_BOOTSTRAP_FATAL:-yes}"
+  SINGULAR_WORKTREE_PREPARE_STAGE=""
+  SINGULAR_WORKTREE_PREPARE_DETAIL=""
+  SINGULAR_WORKTREE_PREPARE_BOOTSTRAP_FAILED="no"
   local -a child_env=()
-  if [[ "$(declare -p GLUERUN_WORKTREE_PREPARE_ENV 2>/dev/null)" == "declare -a"* ]]; then
-    child_env=("${GLUERUN_WORKTREE_PREPARE_ENV[@]}")
+  if [[ "$(declare -p SINGULAR_WORKTREE_PREPARE_ENV 2>/dev/null)" == "declare -a"* ]]; then
+    child_env=("${SINGULAR_WORKTREE_PREPARE_ENV[@]}")
   fi
 
-  GLUERUN_WORKTREE_PREPARE_STAGE="provision"
-  gluerun_worktree_provision "$worktree" "$run_dir" >>"$log" 2>&1 || return 1
+  SINGULAR_WORKTREE_PREPARE_STAGE="provision"
+  singular_worktree_provision "$worktree" "$run_dir" >>"$log" 2>&1 || return 1
 
   if [[ -n "$source_worktree" ]]; then
-    GLUERUN_WORKTREE_PREPARE_STAGE="copy-paths"
-    gluerun_worktree_copy_paths "$source_worktree" "$worktree" >>"$log" 2>&1 || return 1
+    SINGULAR_WORKTREE_PREPARE_STAGE="copy-paths"
+    singular_worktree_copy_paths "$source_worktree" "$worktree" >>"$log" 2>&1 || return 1
   fi
 
-  GLUERUN_WORKTREE_PREPARE_STAGE="bootstrap"
+  SINGULAR_WORKTREE_PREPARE_STAGE="bootstrap"
   local bootstrap_rc=0
   if [[ "${#child_env[@]}" -gt 0 ]]; then
-    env "${child_env[@]}" "$GLUERUN_LIB_DIR/bootstrap-worktree.sh" \
+    env "${child_env[@]}" "$SINGULAR_LIB_DIR/bootstrap-worktree.sh" \
       --worktree "$worktree" >>"$log" 2>&1 || bootstrap_rc=$?
   else
-    "$GLUERUN_LIB_DIR/bootstrap-worktree.sh" --worktree "$worktree" \
+    "$SINGULAR_LIB_DIR/bootstrap-worktree.sh" --worktree "$worktree" \
       >>"$log" 2>&1 || bootstrap_rc=$?
   fi
   if [[ "$bootstrap_rc" -ne 0 ]]; then
-    GLUERUN_WORKTREE_PREPARE_BOOTSTRAP_FAILED="yes"
+    SINGULAR_WORKTREE_PREPARE_BOOTSTRAP_FAILED="yes"
     [[ "$bootstrap_fatal" == "no" ]] || return 1
   fi
 
   # Legacy optional prewarm, non-fatal wherever it runs — but it now runs
   # EVERYWHERE, which is the point of this function.
-  GLUERUN_WORKTREE_PREPARE_STAGE="prewarm"
-  if [[ -n "${GLUERUN_PREWARM_CMD:-}" ]]; then
+  SINGULAR_WORKTREE_PREPARE_STAGE="prewarm"
+  if [[ -n "${SINGULAR_PREWARM_CMD:-}" ]]; then
     if [[ "${#child_env[@]}" -gt 0 ]]; then
-      env "${child_env[@]}" "$(gluerun_bash_bin)" -c \
-        "cd $(printf '%q' "$worktree") && $GLUERUN_PREWARM_CMD" >>"$log" 2>&1 \
+      env "${child_env[@]}" "$(singular_bash_bin)" -c \
+        "cd $(printf '%q' "$worktree") && $SINGULAR_PREWARM_CMD" >>"$log" 2>&1 \
         || echo "  warning: prewarm command failed (exit $?); continuing" >&2
     else
-      gluerun_run_in_worktree_env "$worktree" "$(gluerun_bash_bin)" -c \
-        "$GLUERUN_PREWARM_CMD" >>"$log" 2>&1 \
+      singular_run_in_worktree_env "$worktree" "$(singular_bash_bin)" -c \
+        "$SINGULAR_PREWARM_CMD" >>"$log" 2>&1 \
         || echo "  warning: prewarm command failed (exit $?); continuing" >&2
     fi
   fi
 
-  GLUERUN_WORKTREE_PREPARE_STAGE=""
+  SINGULAR_WORKTREE_PREPARE_STAGE=""
   return 0
 }
 
-gluerun_run_in_worktree_env() {
+singular_run_in_worktree_env() {
   local worktree="$1"
   shift
-  if gluerun_worktree_env_configured && [[ -n "${GLUERUN_WORKTREE_ENV_FILE:-}" && -f "$GLUERUN_WORKTREE_ENV_FILE" ]]; then
+  if singular_worktree_env_configured && [[ -n "${SINGULAR_WORKTREE_ENV_FILE:-}" && -f "$SINGULAR_WORKTREE_ENV_FILE" ]]; then
     (
       cd "$worktree"
       env -i \
@@ -7715,19 +7715,19 @@ gluerun_run_in_worktree_env() {
         PATH="${PATH:-/usr/bin:/bin}" \
         TMPDIR="${TMPDIR:-/tmp}" \
         SHELL="${SHELL:-/bin/sh}" \
-        GLUERUN_ROOT="$GLUERUN_ROOT" \
-        GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" \
-        GLUERUN_ENGINE_HOME="$GLUERUN_ENGINE_HOME" \
-        GLUERUN_WORKTREE_ENV_FILE="$GLUERUN_WORKTREE_ENV_FILE" \
-        "$(gluerun_bash_bin)" -c 'set -a; . "$GLUERUN_WORKTREE_ENV_FILE"; set +a; exec "$@"' bash "$@"
+        SINGULAR_ROOT="$SINGULAR_ROOT" \
+        SINGULAR_STATE_DIR="$SINGULAR_STATE_DIR" \
+        SINGULAR_ENGINE_HOME="$SINGULAR_ENGINE_HOME" \
+        SINGULAR_WORKTREE_ENV_FILE="$SINGULAR_WORKTREE_ENV_FILE" \
+        "$(singular_bash_bin)" -c 'set -a; . "$SINGULAR_WORKTREE_ENV_FILE"; set +a; exec "$@"' bash "$@"
     )
   else
-    ( cd "$worktree" && GLUERUN_ROOT="$GLUERUN_ROOT" GLUERUN_STATE_DIR="$GLUERUN_STATE_DIR" "$@" )
+    ( cd "$worktree" && SINGULAR_ROOT="$SINGULAR_ROOT" SINGULAR_STATE_DIR="$SINGULAR_STATE_DIR" "$@" )
   fi
 }
 
 # Append a recovery event with the fields required by operating-model section 13.
-gluerun_record_recovery() {
+singular_record_recovery() {
   # args: failure taskId branch strategy authority expectedEvidence nextOwner
   local failure="$1" task_id="$2" branch="$3" strategy="$4"
   local authority="${5:-origin}" expected="${6:-}" next_owner="${7:-origin}"
@@ -7739,29 +7739,29 @@ keys = ["failure", "taskId", "branch", "strategy", "authority", "expectedEvidenc
 print(json.dumps(dict(zip(keys, sys.argv[1:8])), separators=(",", ":")))
 PY
 )"
-  gluerun_append_event "recovery.action" "recovery action recorded" "$data"
+  singular_append_event "recovery.action" "recovery action recorded" "$data"
 }
 
-# Write a machine-readable origin snapshot to .gluerun-state/origin-state.json.
-gluerun_write_origin_state() {
+# Write a machine-readable origin snapshot to .singular-state/origin-state.json.
+singular_write_origin_state() {
   local run_id="$1"
-  gluerun_ensure_state_dirs
+  singular_ensure_state_dirs
   local branch head target inbox imported active worktrees
-  branch="$(gluerun_current_branch)"
-  head="$(git -C "$GLUERUN_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-  target="${GLUERUN_TARGET_BRANCH:-}"
-  inbox="$(gluerun_count_files "$GLUERUN_INBOX_DIR" -maxdepth 1 -name '*.json')"
-  imported="$(gluerun_count_files "$GLUERUN_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
-  active="$(gluerun_active_lease_count)"
-  worktrees="$(gluerun_extra_worktree_count)"
+  branch="$(singular_current_branch)"
+  head="$(git -C "$SINGULAR_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+  target="${SINGULAR_TARGET_BRANCH:-}"
+  inbox="$(singular_count_files "$SINGULAR_INBOX_DIR" -maxdepth 1 -name '*.json')"
+  imported="$(singular_count_files "$SINGULAR_ORCH_DIR/packets/imported" -name '*.json' -not -name '*.audit.json')"
+  active="$(singular_active_lease_count)"
+  worktrees="$(singular_extra_worktree_count)"
 
   local ready_json leases_json
   # Snapshot telemetry should not pay the legacy O(ready × tasks) duplicate
   # signature scan. The dispatch frontier performs the authoritative duplicate,
   # dependency, lease, and scope checks before launching any worker.
-  ready_json="$(gluerun_list_status_ready_tasks | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
-  if [[ -d "$GLUERUN_LEASES_DIR" ]]; then
-    leases_json="$(find "$GLUERUN_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
+  ready_json="$(singular_list_status_ready_tasks | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
+  if [[ -d "$SINGULAR_LEASES_DIR" ]]; then
+    leases_json="$(find "$SINGULAR_LEASES_DIR" -maxdepth 1 -name '*.json' -type f 2>/dev/null | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
   else
     leases_json="[]"
   fi
@@ -7769,10 +7769,10 @@ gluerun_write_origin_state() {
   # 0.5.0 (additive): gates{passed,total}, completedNodes, per-status
   # taskCounts, and writer provenance — 0.4.0 emitted none of these, so every
   # console/summary field reading them was null by construction.
-  python3 - "$GLUERUN_ORIGIN_STATE_FILE" "$run_id" "$branch" "$head" "$target" \
+  python3 - "$SINGULAR_ORIGIN_STATE_FILE" "$run_id" "$branch" "$head" "$target" \
     "$inbox" "$imported" "$active" "$worktrees" "$ready_json" "$leases_json" \
-    "$GLUERUN_ORCH_DIR/gates" "$GLUERUN_TASKS_DIR" "${GLUERUN_DAG_FILE:-$GLUERUN_ORCH_DIR/dag.v0.json}" \
-    "$$" "${GLUERUN_ORIGIN_STATE_ENTRY:-reconcile}" <<'PY'
+    "$SINGULAR_ORCH_DIR/gates" "$SINGULAR_TASKS_DIR" "${SINGULAR_DAG_FILE:-$SINGULAR_ORCH_DIR/dag.v0.json}" \
+    "$$" "${SINGULAR_ORIGIN_STATE_ENTRY:-reconcile}" <<'PY'
 import json
 import os
 import re
@@ -7820,7 +7820,7 @@ if os.path.isdir(tasks_dir):
             task_counts[status] = task_counts.get(status, 0) + 1
 
 data = {
-    "schema": "gluerun.orchestration.origin-state.v0",
+    "schema": "singular.orchestration.origin-state.v0",
     "runId": run_id,
     "generatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     "generatedByPid": int(writer_pid),
@@ -7844,27 +7844,27 @@ PY
 }
 
 # ---- Project modules (extensions) -------------------------------------------
-# Load optional modules listed in GLUERUN_MODULES (space-separated names or paths),
+# Load optional modules listed in SINGULAR_MODULES (space-separated names or paths),
 # AFTER all generic engine functions are defined so a module's overrides win.
-# A bare name resolves to <engine>/gluerun-ext/<name>.sh then <repo>/gluerun-ext/<name>.sh.
+# A bare name resolves to <engine>/singular-ext/<name>.sh then <repo>/singular-ext/<name>.sh.
 # The generic engine sets no modules; a project opts in via config `modules`.
-if [[ -n "${GLUERUN_MODULES:-}" ]]; then
-  for _gluerun_mod in $GLUERUN_MODULES; do
-    if [[ -f "$_gluerun_mod" ]]; then
+if [[ -n "${SINGULAR_MODULES:-}" ]]; then
+  for _singular_mod in $SINGULAR_MODULES; do
+    if [[ -f "$_singular_mod" ]]; then
       # shellcheck disable=SC1090
-      source "$_gluerun_mod"
-    elif [[ -f "$GLUERUN_ENGINE_HOME/gluerun-ext/${_gluerun_mod}.sh" ]]; then
+      source "$_singular_mod"
+    elif [[ -f "$SINGULAR_ENGINE_HOME/singular-ext/${_singular_mod}.sh" ]]; then
       # shellcheck disable=SC1090
-      source "$GLUERUN_ENGINE_HOME/gluerun-ext/${_gluerun_mod}.sh"
-    elif [[ -f "$GLUERUN_ROOT/gluerun-ext/${_gluerun_mod}.sh" ]]; then
+      source "$SINGULAR_ENGINE_HOME/singular-ext/${_singular_mod}.sh"
+    elif [[ -f "$SINGULAR_ROOT/singular-ext/${_singular_mod}.sh" ]]; then
       # shellcheck disable=SC1090
-      source "$GLUERUN_ROOT/gluerun-ext/${_gluerun_mod}.sh"
+      source "$SINGULAR_ROOT/singular-ext/${_singular_mod}.sh"
     else
-      echo "gluerun: module not found: $_gluerun_mod" >&2
+      echo "singular: module not found: $_singular_mod" >&2
       exit 2
     fi
   done
-  unset _gluerun_mod
+  unset _singular_mod
 fi
 
 # ---- Context-evolution loader (structural hook) -----------------------------
@@ -7874,10 +7874,10 @@ fi
 # context logic as new engine/ctx-*.sh files, never by editing lib.sh again. A
 # ctx file that fails to source is FATAL (fail closed) — never silently skipped.
 # With zero ctx-*.sh present the loop is a no-op (byte-identical prior behavior).
-for _gluerun_ctx in "$GLUERUN_ENGINE_DIR"/ctx-*.sh; do
-  [[ -e "$_gluerun_ctx" ]] || continue
+for _singular_ctx in "$SINGULAR_ENGINE_DIR"/ctx-*.sh; do
+  [[ -e "$_singular_ctx" ]] || continue
   # shellcheck disable=SC1090
-  source "$_gluerun_ctx" \
-    || { echo "gluerun: failed to source context file: $_gluerun_ctx" >&2; exit 2; }
+  source "$_singular_ctx" \
+    || { echo "singular: failed to source context file: $_singular_ctx" >&2; exit 2; }
 done
-unset _gluerun_ctx
+unset _singular_ctx

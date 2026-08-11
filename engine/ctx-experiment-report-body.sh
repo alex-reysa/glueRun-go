@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ctx-experiment-report-body.sh — read-only PRESENTATION CAPSTONE for the
 # `experiment-run` executable DAG node (layer evaluation). Two corpus renderers
-# are already integrated — gluerun_ctx_experiment_pipeline_md (TASK-0087: the
+# are already integrated — singular_ctx_experiment_pipeline_md (TASK-0087: the
 # per-arm escape/cost/bias, strategy, and attempts tables) and
-# gluerun_ctx_experiment_render_result_md (TASK-0098: the treatment-effect delta
+# singular_ctx_experiment_render_result_md (TASK-0098: the treatment-effect delta
 # and arm-integrity audit tables) — but to author experiment-report.md the
 # operator must invoke BOTH separately and hand-order/concatenate their output.
 # This brick composes them into ONE ordered report-body markdown the operator
@@ -18,7 +18,7 @@
 # functions only; NO existing engine path invokes them, so with this file
 # present-but-uncalled the engine is byte-identical to prior behavior (OFF-parity
 # intrinsic, mirroring the sibling engine/ctx-experiment-*.sh idiom). It does NOT
-# edit the sibling ctx-experiment-*.sh renderers, cli/gluerun, or any other
+# edit the sibling ctx-experiment-*.sh renderers, cli/singular, or any other
 # pre-existing file.
 #
 # STRICTLY STDOUT-ONLY / READ-ONLY: it reads the corpus ONLY THROUGH the two
@@ -38,13 +38,13 @@
 # fail-safe).
 #
 # Two chained slices (all here):
-#   1. gluerun_ctx_experiment_report_body_compose <pipeline_md> <result_md>
+#   1. singular_ctx_experiment_report_body_compose <pipeline_md> <result_md>
 #      — assemble the two rendered fragments under stable section headers in a
 #        fixed order (per-arm metrics first, then treatment-effect + arm-integrity),
 #        preserving each fragment's content verbatim.
-#   2. gluerun_ctx_experiment_report_body_md [runs_dir] [events_file] [metrics_file]
-#      — obtain both fragments by delegating to gluerun_ctx_experiment_pipeline_md
-#        and gluerun_ctx_experiment_render_result_md over the SAME resolved corpus
+#   2. singular_ctx_experiment_report_body_md [runs_dir] [events_file] [metrics_file]
+#      — obtain both fragments by delegating to singular_ctx_experiment_pipeline_md
+#        and singular_ctx_experiment_render_result_md over the SAME resolved corpus
 #        args, compose them via the helper, and emit the complete body to stdout.
 
 # --- Slice 1: section-composition helper -------------------------------------
@@ -52,7 +52,7 @@
 # fixed order: the per-arm metrics fragment first, then the treatment-effect /
 # arm-integrity fragment. Each fragment's content is preserved VERBATIM (only
 # ordered and concatenated); nothing is recomputed or reformatted.
-gluerun_ctx_experiment_report_body_compose() {
+singular_ctx_experiment_report_body_compose() {
   local pipeline_md="${1-}"
   local result_md="${2-}"
 
@@ -71,17 +71,17 @@ gluerun_ctx_experiment_report_body_compose() {
 # performs its own resolution / env-default fallback), compose them via the
 # helper, and emit the complete report body to stdout. Deterministic; fail-safe /
 # always exit 0.
-gluerun_ctx_experiment_report_body_md() {
+singular_ctx_experiment_report_body_md() {
   local runs_dir="${1-}"
   local events_file="${2-}"
   local metrics_file="${3-}"
   local pipeline_md result_md
 
   # The per-arm metrics fragment (escape/cost/bias, strategy, attempts tables).
-  pipeline_md="$(gluerun_ctx_experiment_pipeline_md "$runs_dir" "$events_file" "$metrics_file")"
+  pipeline_md="$(singular_ctx_experiment_pipeline_md "$runs_dir" "$events_file" "$metrics_file")"
   # The treatment-effect delta + arm-integrity audit fragment.
-  result_md="$(gluerun_ctx_experiment_render_result_md "$runs_dir" "$events_file" "$metrics_file")"
+  result_md="$(singular_ctx_experiment_render_result_md "$runs_dir" "$events_file" "$metrics_file")"
 
-  gluerun_ctx_experiment_report_body_compose "$pipeline_md" "$result_md"
+  singular_ctx_experiment_report_body_compose "$pipeline_md" "$result_md"
   return 0
 }

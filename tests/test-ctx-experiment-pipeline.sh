@@ -2,15 +2,15 @@
 # End-to-end requiredCompletion guard for the composed experiment PIPELINE entry
 # engine/ctx-experiment-pipeline.sh. This brick ships NO metric of its own: it is
 # the single explicit-corpus operator entry that threads raw runs/events/metrics
-# through gluerun_ctx_experiment_summary_json to build the raw-metrics bundle and
-# renders it through gluerun_ctx_experiment_render_md (fed the in-memory bundle,
+# through singular_ctx_experiment_summary_json to build the raw-metrics bundle and
+# renders it through singular_ctx_experiment_render_md (fed the in-memory bundle,
 # no file written) to the full report-metrics markdown tables.
 #
 # The five per-family bricks are each unit-tested in isolation, but NO existing
 # test walks a live runs/events corpus through the WHOLE pipeline to the rendered
 # report tables. This guard closes that gap: it constructs a synthetic BOTH-ARM
 # corpus exercising every metric family and drives
-# gluerun_ctx_experiment_pipeline_md over it, asserting the whole walk at once.
+# singular_ctx_experiment_pipeline_md over it, asserting the whole walk at once.
 #
 # Guarantees pinned BEHAVIORALLY over the corpus (no absence greps, planner rule 9):
 #   - whole walk: from raw ctx.arm_assigned / ctx.paired_audit / ctx.critic_recheck
@@ -19,8 +19,8 @@
 #     attempts-to-accept, findings-per-attempt, bias, and resume/rehydrate
 #     hit-rate + gate-refusal reason-mix values for arms A and B.
 #   - loss-preserving delegation: the emitted markdown is byte-identical to feeding
-#     the SAME corpus through gluerun_ctx_experiment_summary_json and
-#     gluerun_ctx_experiment_render_md directly (no recomputation).
+#     the SAME corpus through singular_ctx_experiment_summary_json and
+#     singular_ctx_experiment_render_md directly (no recomputation).
 #   - deterministic: byte-identical across repeated runs on the same corpus.
 #   - evidence invariance / advocate-skeptic line: a context-aware
 #     ctx.critic_recheck disposition of "addressed" NEVER removes a fresh
@@ -72,8 +72,8 @@ source "$SIB_SUMMARY"  || fail "sourcing $SIB_SUMMARY failed"
 source "$SIB_RENDER"   || fail "sourcing $SIB_RENDER failed"
 # shellcheck disable=SC1090
 source "$TOOL" || fail "sourcing $TOOL failed"
-[[ "$(type -t gluerun_ctx_experiment_pipeline_md)" == "function" ]] \
-  || fail "gluerun_ctx_experiment_pipeline_md is not defined by $TOOL"
+[[ "$(type -t singular_ctx_experiment_pipeline_md)" == "function" ]] \
+  || fail "singular_ctx_experiment_pipeline_md is not defined by $TOOL"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -163,17 +163,17 @@ d_before="$(file_hash "$SIB_RENDER")"
 report_before="$(report_state)"
 
 # --- Drive the whole pipeline over the explicit corpus ------------------------
-# Signature: gluerun_ctx_experiment_pipeline_md [runs_dir] [events_file] [metrics_file]
-md="$(gluerun_ctx_experiment_pipeline_md "$runs" "$events" "$metrics")" \
+# Signature: singular_ctx_experiment_pipeline_md [runs_dir] [events_file] [metrics_file]
+md="$(singular_ctx_experiment_pipeline_md "$runs" "$events" "$metrics")" \
   || fail "pipeline exited non-zero on a valid corpus"
 [[ -n "$md" ]] || fail "pipeline produced empty output on a valid corpus"
 printf '%s\n' "$md" > "$tmp/pipeline.md"
 
 # --- Loss-preserving delegation: byte-identical to summary_json | render_md ----
-direct_bundle="$(gluerun_ctx_experiment_summary_json "$runs" "$events" "$metrics")" \
+direct_bundle="$(singular_ctx_experiment_summary_json "$runs" "$events" "$metrics")" \
   || fail "summary composer exited non-zero on the corpus"
 printf '%s' "$direct_bundle" > "$tmp/bundle.json"
-direct_md="$(printf '%s' "$direct_bundle" | gluerun_ctx_experiment_render_md -)" \
+direct_md="$(printf '%s' "$direct_bundle" | singular_ctx_experiment_render_md -)" \
   || fail "direct render of the delegated bundle exited non-zero"
 [[ "$md" == "$direct_md" ]] \
   || fail "pipeline markdown differs from summary_json | render_md (delegation lost data)"
@@ -237,7 +237,7 @@ print("whole-walk-ok")
 PY
 
 # --- Determinism: identical corpus -> byte-identical output -------------------
-md2="$(gluerun_ctx_experiment_pipeline_md "$runs" "$events" "$metrics")"
+md2="$(singular_ctx_experiment_pipeline_md "$runs" "$events" "$metrics")"
 [[ "$md" == "$md2" ]] || fail "pipeline not deterministic across identical runs"
 
 # --- Evidence invariance / advocate-skeptic line ------------------------------
@@ -248,7 +248,7 @@ md2="$(gluerun_ctx_experiment_pipeline_md "$runs" "$events" "$metrics")"
 # invariance is not vacuous).
 alt_events="$tmp/events-no-addressed.ndjson"
 write_events "$alt_events" 0
-alt_md="$(gluerun_ctx_experiment_pipeline_md "$runs" "$alt_events" "$metrics")" \
+alt_md="$(singular_ctx_experiment_pipeline_md "$runs" "$alt_events" "$metrics")" \
   || fail "pipeline exited non-zero on the invariance-variant corpus"
 printf '%s\n' "$alt_md" > "$tmp/pipeline-alt.md"
 
@@ -264,7 +264,7 @@ bias_row() { grep -F '| Directional disagreements |' "$1"; }
 empty_runs="$tmp/empty-runs"
 empty_events="$tmp/empty-events.ndjson"
 : > "$empty_events"
-zero_md="$(gluerun_ctx_experiment_pipeline_md "$empty_runs" "$empty_events" "$tmp/no-metrics.json")" \
+zero_md="$(singular_ctx_experiment_pipeline_md "$empty_runs" "$empty_events" "$tmp/no-metrics.json")" \
   || fail "pipeline exited non-zero on an empty corpus (should fail safe)"
 [[ -n "$zero_md" ]] || fail "empty corpus rendered empty output (not well-formed)"
 for needle in \

@@ -7,9 +7,9 @@ source "$SCRIPT_DIR/lib.sh"
 run_id="${1:-RUN-$(date -u +%Y%m%dT%H%M%SZ)}"
 shift || true
 
-task_id="${GLUERUN_GATE_TASK_ID:-TASK-0000}"
-phase="${GLUERUN_GATE_PHASE:-other}"
-workspace_kind="${GLUERUN_GATE_WORKSPACE_KIND:-worker}"
+task_id="${SINGULAR_GATE_TASK_ID:-TASK-0000}"
+phase="${SINGULAR_GATE_PHASE:-other}"
+workspace_kind="${SINGULAR_GATE_WORKSPACE_KIND:-worker}"
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
     --task-id) task_id="${2:-}"; shift 2 ;;
@@ -24,7 +24,7 @@ if [[ $# -eq 0 ]]; then
   set -- make check
 fi
 
-run_dir="$GLUERUN_STATE_DIR/runs/$run_id"
+run_dir="$SINGULAR_STATE_DIR/runs/$run_id"
 mkdir -p "$run_dir"
 log="$run_dir/gate-check.log"
 observation="$run_dir/gate-observation.json"
@@ -40,12 +40,12 @@ status_before="$run_dir/gate-status-before.txt"
 status_after="$run_dir/gate-status-after.txt"
 integrity_status="verified"
 changed_paths=()
-if ! gluerun_tracked_source_snapshot "$PWD" "$source_before" >"$run_dir/gate-source-snapshot.err" 2>&1; then
+if ! singular_tracked_source_snapshot "$PWD" "$source_before" >"$run_dir/gate-source-snapshot.err" 2>&1; then
   integrity_status="violation"
   changed_paths+=("source-integrity-snapshot-failed")
 fi
 git -C "$PWD" status --porcelain=v1 --untracked-files=all 2>/dev/null \
-  | sed -E '\#^.. (\.gluerun-state|\.gluerun-cache|\.gluerun-evidence)(/|$)#d' \
+  | sed -E '\#^.. (\.singular-state|\.singular-cache|\.singular-evidence)(/|$)#d' \
   >"$status_before" || true
 
 # Wall-clock bound on the consumer's gate. There was none: no timeout, no
@@ -57,24 +57,24 @@ git -C "$PWD" status --porcelain=v1 --untracked-files=all 2>/dev/null \
 # Exit 124 matches `timeout`, and gate_report.py already maps 124/137/143 to
 # `gate-command-timeout` infrastructure, so a timed-out gate is inconclusive
 # rather than a product failure the model gets asked to fix.
-# Set GLUERUN_GATE_TIMEOUT_SEC=0 to disable.
-gate_timeout="${GLUERUN_GATE_TIMEOUT_SEC:-3600}"
+# Set SINGULAR_GATE_TIMEOUT_SEC=0 to disable.
+gate_timeout="${SINGULAR_GATE_TIMEOUT_SEC:-3600}"
 [[ "$gate_timeout" =~ ^[0-9]+$ ]] || gate_timeout=3600
 
 # The gate as a SESSION LEADER. A gate is an arbitrary, uncooperative tree — a
 # shell wrapping a test runner wrapping workers — so containment cannot depend
 # on `ps`: where enumeration is denied the old walk found no children and killed
-# only the top shell (PMGO-004). gluerun_setsid_exec is the LAST command here,
+# only the top shell (PMGO-004). singular_setsid_exec is the LAST command here,
 # so $! below is the leader itself (pid == pgid) and one negative pid reaches
 # everything. The gate keeps its argv form; it is never re-parsed by a shell.
-gluerun_gate_spawn() {
-  export GLUERUN_GATE_REPORT_FILE="$observation"
-  gluerun_setsid_exec "$@"
+singular_gate_spawn() {
+  export SINGULAR_GATE_REPORT_FILE="$observation"
+  singular_setsid_exec "$@"
 }
 
 set +e
 if [[ "$gate_timeout" -gt 0 ]]; then
-  gluerun_gate_spawn "$@" >"$log" 2>&1 &
+  singular_gate_spawn "$@" >"$log" 2>&1 &
   gate_pid=$!
   gate_deadline=$((SECONDS + gate_timeout)); gate_timed_out="no"
   while kill -0 "$gate_pid" 2>/dev/null; do
@@ -83,8 +83,8 @@ if [[ "$gate_timeout" -gt 0 ]]; then
       # The whole tree: a gate is usually a shell wrapping a test runner
       # wrapping workers, and killing only the shell leaves all of it running.
       # `session` is the spawner's assertion that $gate_pid came from
-      # gluerun_setsid_exec above and has not been waited on yet.
-      gluerun_kill_tree "$gate_pid" "$(gluerun_kill_grace_sec)" session
+      # singular_setsid_exec above and has not been waited on yet.
+      singular_kill_tree "$gate_pid" "$(singular_kill_grace_sec)" session
       wait "$gate_pid" 2>/dev/null
       exit_code=124
       break
@@ -99,21 +99,21 @@ if [[ "$gate_timeout" -gt 0 ]]; then
     printf '\ngate-check: TIMED OUT after %ss\n' "$gate_timeout" >>"$log"
   fi
 else
-  GLUERUN_GATE_REPORT_FILE="$observation" "$@" >"$log" 2>&1
+  SINGULAR_GATE_REPORT_FILE="$observation" "$@" >"$log" 2>&1
   exit_code=$?
 fi
 set -e
 finished_ms="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
 if [[ "$integrity_status" == "verified" ]]; then
-  if ! gluerun_tracked_source_snapshot "$PWD" "$source_after" >>"$run_dir/gate-source-snapshot.err" 2>&1; then
+  if ! singular_tracked_source_snapshot "$PWD" "$source_after" >>"$run_dir/gate-source-snapshot.err" 2>&1; then
     integrity_status="violation"
     changed_paths+=("source-integrity-snapshot-failed")
   else
     mapfile -t metadata_changed_paths < <(
-      gluerun_tracked_source_changes "$source_before" "$source_after"
+      singular_tracked_source_changes "$source_before" "$source_after"
     )
     git -C "$PWD" status --porcelain=v1 --untracked-files=all 2>/dev/null \
-      | sed -E '\#^.. (\.gluerun-state|\.gluerun-cache|\.gluerun-evidence)(/|$)#d' \
+      | sed -E '\#^.. (\.singular-state|\.singular-cache|\.singular-evidence)(/|$)#d' \
       >"$status_after" || true
     mapfile -t final_changed_paths < <(
       python3 - "$status_before" "$status_after" <<'PY'
@@ -136,10 +136,10 @@ fi
 
 # The REF is the citation dag.sh validates (repo-relative, or the strict path is
 # unreachable); the PATH is what gets opened and hashed and must stay absolute,
-# because gate-check.sh runs with $PWD set to a worktree while GLUERUN_ROOT and
-# GLUERUN_STATE_DIR still point at the main repo. Relativize against
-# GLUERUN_ROOT for the same reason — never against $PWD.
-log_ref="$(gluerun_repo_relative_ref "$log")"
+# because gate-check.sh runs with $PWD set to a worktree while SINGULAR_ROOT and
+# SINGULAR_STATE_DIR still point at the main repo. Relativize against
+# SINGULAR_ROOT for the same reason — never against $PWD.
+log_ref="$(singular_repo_relative_ref "$log")"
 normalize_args=(
   --task-id "$task_id"
   --run-id "$run_id"
@@ -171,7 +171,7 @@ done
 #
 # Nothing in the engine told a consumer to emit that document — not the README,
 # not the scaffold, whose suggested gate is `npm test && npm run build`. So a
-# fresh `gluerun init` produced a repo where every task parks on a passing gate.
+# fresh `singular init` produced a repo where every task parks on a passing gate.
 # The requirement was invisible and total.
 #
 # It also bought nothing. On a green gate there are no failures to classify; on
@@ -181,12 +181,12 @@ done
 # No --require-observation is passed at all: gate_report.py already refuses a
 # baseline whose observation is missing, with a message naming the baseline —
 # strictly better than the generic one this flag would raise first.
-if [[ -n "${GLUERUN_GATE_BASELINE_FILE:-}" ]]; then
+if [[ -n "${SINGULAR_GATE_BASELINE_FILE:-}" ]]; then
   # baselineRef lands in the report and dag.sh validates it with the same
   # regular_repo_file() call as logRef, so fixing logRef alone would just move
   # the rejection one line down.
-  normalize_args+=(--baseline "$GLUERUN_GATE_BASELINE_FILE"
-                   --baseline-ref "$(gluerun_repo_relative_ref "$GLUERUN_GATE_BASELINE_FILE")")
+  normalize_args+=(--baseline "$SINGULAR_GATE_BASELINE_FILE"
+                   --baseline-ref "$(singular_repo_relative_ref "$SINGULAR_GATE_BASELINE_FILE")")
 fi
 
 outcome=""
@@ -220,7 +220,7 @@ if [[ "$normalize_rc" -ne 0 || ! -f "$report" ]]; then
   outcome="inconclusive-infrastructure"
 fi
 cp "$report" "$summary"
-outcome="$(gluerun_json_field "$report" outcome 2>/dev/null || echo inconclusive-infrastructure)"
+outcome="$(singular_json_field "$report" outcome 2>/dev/null || echo inconclusive-infrastructure)"
 resolved_expected="$(
   python3 - "$report" <<'PY' 2>/dev/null || echo 0
 import json
@@ -233,7 +233,7 @@ PY
 )"
 if [[ "$resolved_expected" =~ ^[1-9][0-9]*$ ]]; then
   echo "warning: $resolved_expected acknowledged gate baseline failure(s) are now resolved; refresh the baseline" >&2
-  gluerun_append_event "gate.baseline_stale" \
+  singular_append_event "gate.baseline_stale" \
     "resolved expected failures make the acknowledged baseline stale" \
     "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"resolvedExpectedFailures\":$resolved_expected,\"reportRef\":\"$report\"}" \
     || true
@@ -245,7 +245,7 @@ case "$outcome" in
   *) result_code="$exit_code"; [[ "$result_code" -ne 0 ]] || result_code=1 ;;
 esac
 
-gluerun_append_event "gate_check.completed" "gate check completed" \
+singular_append_event "gate_check.completed" "gate check completed" \
   "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"exitCode\":$exit_code,\"resultCode\":$result_code,\"outcome\":\"$outcome\",\"logRef\":\"$log\",\"reportRef\":\"$report\"}"
 echo "gate check exit_code=$exit_code outcome=$outcome log=$log report=$report"
 exit "$result_code"

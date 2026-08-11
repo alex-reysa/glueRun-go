@@ -6,7 +6,7 @@
 # is byte-identical to prior behavior (mirroring engine/ctx-plan-critic-context.sh).
 #
 # Asserts:
-#   (a) gluerun_plan_revise_prompt <node> <critique_record> <stage_dir> <out_file>
+#   (a) singular_plan_revise_prompt <node> <critique_record> <stage_dir> <out_file>
 #       [template_file] writes ONE composed prompt whose three headed sections are,
 #       in stable order: the base planner TEMPLATE body verbatim; a structured
 #       findings section rendering EVERY findings[] entry with its exact
@@ -18,7 +18,7 @@
 #       each degrade to a marked-empty section (never crash, never fabricate).
 #   (e) usage -> empty <out_file> returns non-zero and writes nothing.
 #   (f) present-but-uncalled -> no existing engine path invokes the new function.
-# The events log is pinned to an isolated GLUERUN_EVENTS_FILE and temp dirs so the
+# The events log is pinned to an isolated SINGULAR_EVENTS_FILE and temp dirs so the
 # suite never mutates real run state.
 set -uo pipefail
 
@@ -33,10 +33,10 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/state"
 
-export GLUERUN_ROOT="$tmp"
-export GLUERUN_STATE_DIR="$tmp/state"
-export GLUERUN_EVENTS_FILE="$tmp/events.ndjson"
-: > "$GLUERUN_EVENTS_FILE"
+export SINGULAR_ROOT="$tmp"
+export SINGULAR_STATE_DIR="$tmp/state"
+export SINGULAR_EVENTS_FILE="$tmp/events.ndjson"
+: > "$SINGULAR_EVENTS_FILE"
 
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
@@ -45,8 +45,8 @@ source "$LIB" || fail "sourcing lib.sh failed"
 [[ -f "$CTX" ]] || fail "engine not present yet: $CTX"
 # shellcheck disable=SC1090
 source "$CTX" || fail "sourcing $CTX failed"
-[[ "$(type -t gluerun_plan_revise_prompt)" == "function" ]] \
-  || fail "gluerun_plan_revise_prompt not defined by $CTX"
+[[ "$(type -t singular_plan_revise_prompt)" == "function" ]] \
+  || fail "singular_plan_revise_prompt not defined by $CTX"
 
 # --- Seed inputs -------------------------------------------------------------
 tpl="$tmp/l1-planner.md"
@@ -63,7 +63,7 @@ printf 'NOT-A-CANDIDATE do not include\n' > "$stage_dir/scratch.md"
 rec="$tmp/critique.json"
 cat > "$rec" <<'JSON'
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "plan-revision-loop",
   "runId": "RUN-TEST",
   "batchTaskIds": ["TASK-0007", "TASK-0008"],
@@ -91,7 +91,7 @@ JSON
 # ---------------------------------------------------------------------------
 # (e) usage: empty out_file -> non-zero.
 # ---------------------------------------------------------------------------
-if gluerun_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "" "$tpl"; then
+if singular_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "" "$tpl"; then
   fail "empty out_file must return non-zero (usage)"
 fi
 
@@ -99,7 +99,7 @@ fi
 # (a) compose: template verbatim + id-sorted findings + sorted candidates.
 # ---------------------------------------------------------------------------
 out="$tmp/revise-prompt.md"
-gluerun_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "$out" "$tpl" \
+singular_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "$out" "$tpl" \
   || fail "assembler crashed"
 [[ -f "$out" ]] || fail "assembler did not write the composed output file"
 
@@ -142,7 +142,7 @@ tpl_line="$(grep -n 'UNIQUE-TEMPLATE-MARKER-77' "$out" | head -1 | cut -d: -f1)"
 # (c) determinism: re-running over the same inputs is byte-stable.
 # ---------------------------------------------------------------------------
 out2="$tmp/revise-prompt-2.md"
-gluerun_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "$out2" "$tpl" \
+singular_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "$out2" "$tpl" \
   || fail "assembler crashed on second run"
 cmp -s "$out" "$out2" || fail "composed prompt is not byte-stable across runs"
 
@@ -151,19 +151,19 @@ cmp -s "$out" "$out2" || fail "composed prompt is not byte-stable across runs"
 # ---------------------------------------------------------------------------
 before_hash="$(cat "$tpl" "$rec" "$stage_dir/TASK-0007.candidate.md" \
   "$stage_dir/TASK-0008.candidate.md" | cksum)"
-gluerun_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "$tmp/p3.md" "$tpl" \
+singular_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "$tmp/p3.md" "$tpl" \
   || fail "assembler crashed on purity run"
 after_hash="$(cat "$tpl" "$rec" "$stage_dir/TASK-0007.candidate.md" \
   "$stage_dir/TASK-0008.candidate.md" | cksum)"
 [[ "$before_hash" == "$after_hash" ]] || fail "assembler mutated its inputs"
-[[ ! -s "$GLUERUN_EVENTS_FILE" ]] || fail "assembler appended events (must be read-only)"
+[[ ! -s "$SINGULAR_EVENTS_FILE" ]] || fail "assembler appended events (must be read-only)"
 
 # ---------------------------------------------------------------------------
 # (d) fail-safe: missing template -> marked-empty template section, findings and
 # candidates still present. Never crash, never fabricate.
 # ---------------------------------------------------------------------------
 out_notpl="$tmp/no-template.md"
-gluerun_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "$out_notpl" \
+singular_plan_revise_prompt "plan-revision-loop" "$rec" "$stage_dir" "$out_notpl" \
   "$tmp/does-not-exist.md" || fail "missing template must not crash"
 grep -qi 'no planner template' "$out_notpl" \
   || fail "missing template must degrade to a marked-empty section"
@@ -174,7 +174,7 @@ grep -q 'f-0000aaaabbbb' "$out_notpl" \
 bad="$tmp/bad.json"
 printf 'this is { not valid json\n' > "$bad"
 out_bad="$tmp/bad-rec.md"
-gluerun_plan_revise_prompt "plan-revision-loop" "$bad" "$stage_dir" "$out_bad" "$tpl" \
+singular_plan_revise_prompt "plan-revision-loop" "$bad" "$stage_dir" "$out_bad" "$tpl" \
   || fail "unparseable record must not crash"
 grep -qi 'no parseable findings' "$out_bad" \
   || fail "unparseable record must degrade to a marked-empty findings section"
@@ -185,7 +185,7 @@ grep -qi '## .*[Ff]indings' "$out_bad" \
 empty_dir="$tmp/empty-stage"
 mkdir -p "$empty_dir"
 out_nocand="$tmp/no-cand.md"
-gluerun_plan_revise_prompt "plan-revision-loop" "$rec" "$empty_dir" "$out_nocand" "$tpl" \
+singular_plan_revise_prompt "plan-revision-loop" "$rec" "$empty_dir" "$out_nocand" "$tpl" \
   || fail "empty candidate dir must not crash"
 grep -qi 'no prior candidates' "$out_nocand" \
   || fail "empty candidate dir must degrade to a marked-empty section"
@@ -193,7 +193,7 @@ grep -qi 'no prior candidates' "$out_nocand" \
 # ---------------------------------------------------------------------------
 # (f) present-but-uncalled: no existing engine path invokes the new function.
 # ---------------------------------------------------------------------------
-callers="$(grep -rl 'gluerun_plan_revise_prompt' \
+callers="$(grep -rl 'singular_plan_revise_prompt' \
   "$ENGINE_HOME/engine" 2>/dev/null | grep -v '/ctx-plan-revise-prompt.sh$' || true)"
 : # temporal assertion neutralized (planner-contract rule 9: later slices may legitimately call this)
 

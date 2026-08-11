@@ -60,7 +60,7 @@ defaults = {
 }
 hard_max = dict(defaults)
 try:
-    configured = json.loads(os.environ.get("GLUERUN_EVIDENCE_CONFIG_JSON", "{}"))
+    configured = json.loads(os.environ.get("SINGULAR_EVIDENCE_CONFIG_JSON", "{}"))
 except json.JSONDecodeError:
     configured = {}
 if not isinstance(configured, dict):
@@ -331,7 +331,7 @@ def structured_check(check, result_name):
     status = record.get("status")
     exit_code = record.get("exitCode")
     if (
-        record.get("schema") != "gluerun.orchestration.check-result.v0"
+        record.get("schema") != "singular.orchestration.check-result.v0"
         or record.get("check") != check
         or status not in {"passed", "failed", "not-run", "inconclusive"}
         or not isinstance(exit_code, int)
@@ -364,7 +364,7 @@ if gate_record_path is not None:
         "ref": artifact_ref(gate_record_path),
         "sha256": sha_file(gate_record_path),
     }
-    gate_valid = gate.get("schema") == "gluerun.orchestration.gate-report.v0"
+    gate_valid = gate.get("schema") == "singular.orchestration.gate-report.v0"
     gate_command = gate.get("command")
     gate_valid = gate_valid and isinstance(gate_command, str) and bool(gate_command)
     gate_valid = gate_valid and gate.get("commandSha256") == sha_bytes(
@@ -402,7 +402,7 @@ if gate_record_path is not None:
             gate_check["status"] = "inconclusive"
 
 manifest = {
-    "schema": "gluerun.orchestration.evidence-manifest.v0",
+    "schema": "singular.orchestration.evidence-manifest.v0",
     "taskId": task_id,
     "runId": run_dir.name,
     "headSha": resolved_head,

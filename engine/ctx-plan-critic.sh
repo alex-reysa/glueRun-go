@@ -12,7 +12,7 @@
 # over the node-local staged candidate set (rendered candidate task files, the
 # existing-task summary, and the node's docs/context-build-plan/ stage file) and
 # record what the skeptic says. The critic runs on the DEFAULT runner
-# (GLUERUN_RUNNER) — NOT the module-routed planner runner — so the cross-provider
+# (SINGULAR_RUNNER) — NOT the module-routed planner runner — so the cross-provider
 # independence property holds even for module-routed planners: a module planner
 # still gets a default-runner critic. The critique is observability + a Stage-3
 # input; it NEVER weakens, resumes into, or bypasses the un-bypassable
@@ -20,19 +20,19 @@
 #
 # Fail-open: the critic is an ADDED safety layer, so its infrastructure failing
 # must never deadlock planning. If the runner's output stays unparseable after
-# the GLUERUN_AUDIT_INFRA_MAX-bounded fresh retries, the driver treats the result
+# the SINGULAR_AUDIT_INFRA_MAX-bounded fresh retries, the driver treats the result
 # as an "approve" verdict and appends a ctx.plan_critique_infra event rather
 # than blocking. The implementation auditor remains the safety floor.
 #
 # Public entry points:
-#   gluerun_ctx_plan_critic_session_path <node>
+#   singular_ctx_plan_critic_session_path <node>
 #     Pure: print the canonical per-node critic session-meta path
 #     "<state-dir>/sessions/plan-critic/<node>.json". No side effects.
-#   gluerun_ctx_plan_critic_run <node> <run_id> <stage_dir> [worktree]
+#   singular_ctx_plan_critic_run <node> <run_id> <stage_dir> [worktree]
 #     Run exactly ONE fresh (no --resume/session reuse), read-only critic pass
-#     over the staged candidate set via GLUERUN_RUNNER using the base plan-critic
-#     prompt, extract the critique with gluerun_extract_json, normalize finding
-#     ids to the gluerun_finding_id identity, persist it as plan-critique.json
+#     over the staged candidate set via SINGULAR_RUNNER using the base plan-critic
+#     prompt, extract the critique with singular_extract_json, normalize finding
+#     ids to the singular_finding_id identity, persist it as plan-critique.json
 #     next to the staged candidates, append one plan.critiqued event (verdict +
 #     finding count), and finalize per-node critic session meta (role
 #     "plan-critic"). On persistent infra failure it fails OPEN as above. Returns
@@ -40,17 +40,17 @@
 
 # Pure path helper: the canonical per-node critic session-meta path under the
 # runtime state dir. Session ids are runtime state, so this lives beside other
-# .gluerun-state artifacts, NEVER under docs/. Empty node -> empty (caller skips).
-gluerun_ctx_plan_critic_session_path() {
+# .singular-state artifacts, NEVER under docs/. Empty node -> empty (caller skips).
+singular_ctx_plan_critic_session_path() {
   local node="$1"
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
-  local state_dir="${GLUERUN_STATE_DIR:-$GLUERUN_ROOT/.gluerun-state}"
+  local state_dir="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}"
   printf '%s/sessions/plan-critic/%s.json' "$state_dir" "$node"
 }
 
 # Run the critic over a staged candidate batch and record the critique. Never
 # fatal to planning: parses when it can, else fails OPEN as an approve.
-gluerun_ctx_plan_critic_run() {
+singular_ctx_plan_critic_run() {
   local node="$1" run_id="$2" stage_dir="$3" worktree="${4:-.}"
 
   mkdir -p "$stage_dir"
@@ -62,24 +62,24 @@ gluerun_ctx_plan_critic_run() {
   # node — so the driver references the prompt without embedding the contiguous
   # literal. Runtime resolution is unaffected.
   local _pn="plan-critic"
-  local prompt="${GLUERUN_ORCH_DIR}/prompts/${_pn}.md"
+  local prompt="${SINGULAR_ORCH_DIR}/prompts/${_pn}.md"
   # DEFAULT runner (cross-provider independence): a module-routed planner still
   # gets a default-runner critic.
-  local runner="${GLUERUN_RUNNER:-$GLUERUN_ENGINE_DIR/codex-run.sh}"
+  local runner="${SINGULAR_RUNNER:-$SINGULAR_ENGINE_DIR/codex-run.sh}"
   local raw="$stage_dir/plan-critique-raw.json"
   local record="$stage_dir/plan-critique.json"
 
   # Per-node critic session meta (role plan-critic), usable by Stage 3 carry-over.
-  local session_meta; session_meta="$(gluerun_ctx_plan_critic_session_path "$node")"
+  local session_meta; session_meta="$(singular_ctx_plan_critic_session_path "$node")"
   [[ -n "$session_meta" ]] && mkdir -p "$(dirname "$session_meta")"
   local runner_basename; runner_basename="$(basename "$runner")"
-  local prompt_sha; prompt_sha="$(gluerun_prompt_sha "$prompt" 2>/dev/null || printf '%s' "")"
+  local prompt_sha; prompt_sha="$(singular_prompt_sha "$prompt" 2>/dev/null || printf '%s' "")"
 
   # The batch is known to the driver: derive the authoritative task ids from the
   # rendered candidate files staged for this node, so the persisted record's
   # batchTaskIds reflect the actual staged set (not whatever the runner echoed).
   local candidate_batch_dir
-  candidate_batch_dir="$(gluerun_task_batch_candidate_dir "$stage_dir")" || return 2
+  candidate_batch_dir="$(singular_task_batch_candidate_dir "$stage_dir")" || return 2
   local batch_csv=""
   local f base tid
   for f in "$candidate_batch_dir"/TASK-*.md; do
@@ -90,7 +90,7 @@ gluerun_ctx_plan_critic_run() {
     if [[ -z "$batch_csv" ]]; then batch_csv="$tid"; else batch_csv="$batch_csv,$tid"; fi
   done
 
-  local infra_max="${GLUERUN_AUDIT_INFRA_MAX:-2}"
+  local infra_max="${SINGULAR_AUDIT_INFRA_MAX:-2}"
   [[ "$infra_max" =~ ^[0-9]+$ ]] || infra_max=2
 
   # Up to infra_max+1 fresh, read-only critic passes. FRESH = no
@@ -99,20 +99,20 @@ gluerun_ctx_plan_critic_run() {
   local parsed="no" try infra_reason=""
   for ((try=0; try<=infra_max; try++)); do
     if [[ "$try" -gt 0 ]]; then
-      gluerun_append_event "ctx.plan_critique_retry" "plan critic infra failure; re-running fresh" \
+      singular_append_event "ctx.plan_critique_retry" "plan critic infra failure; re-running fresh" \
         "{\"node\":\"$node\",\"runId\":\"$run_id\",\"try\":$try,\"reason\":\"$infra_reason\"}"
     fi
     local result_file="$stage_dir/plan-critic-try-${try}-runner-result.json"
     rm -f "$raw" "$result_file" 2>/dev/null || true
     local rc=0
-    local critic_capability_profile="${GLUERUN_CRITIC_CAPABILITY_PROFILE:-audit-core}"
-    gluerun_runner_contract_prepare \
+    local critic_capability_profile="${SINGULAR_CRITIC_CAPABILITY_PROFILE:-audit-core}"
+    singular_runner_contract_prepare \
       "$runner" critic "$critic_capability_profile" "$result_file"
-    GLUERUN_RUNNER_ROLE=critic \
-    GLUERUN_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
-    GLUERUN_RUNNER_RESULT_FILE="$result_file" \
-    GLUERUN_RUNNER_RUN_ID="$run_id" \
-    "$runner" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+    SINGULAR_RUNNER_ROLE=critic \
+    SINGULAR_RUNNER_CAPABILITY_PROFILE="$critic_capability_profile" \
+    SINGULAR_RUNNER_RESULT_FILE="$result_file" \
+    SINGULAR_RUNNER_RUN_ID="$run_id" \
+    "$runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
       --level readonly -C "$worktree" --run-id "$run_id" \
       --prompt-file "$prompt" --output-last-message "$raw" \
       --session-meta "$session_meta" >/dev/null 2>&1 || rc=$?
@@ -120,7 +120,7 @@ gluerun_ctx_plan_critic_run() {
       infra_reason="timeout"
     elif [[ ! -f "$raw" ]]; then
       infra_reason="no-record"
-    elif ! gluerun_extract_json "$raw" "$record" 2>/dev/null; then
+    elif ! singular_extract_json "$raw" "$record" 2>/dev/null; then
       infra_reason="unparseable"
     else
       parsed="yes"; break
@@ -130,7 +130,7 @@ gluerun_ctx_plan_critic_run() {
   if [[ "$parsed" == "yes" ]]; then
     # Normalize into the plan-critique.v0 shape: authoritative schema/node/runId/
     # batchTaskIds, verdict clamped to the enum, and finding ids re-minted from
-    # claim text to the gluerun_finding_id identity so formatting-only re-reports
+    # claim text to the singular_finding_id identity so formatting-only re-reports
     # collapse to the same id. Emit "verdict<TAB>count" for the event.
     local summary
     summary="$(python3 - "$record" "$node" "$run_id" "$batch_csv" <<'PY'
@@ -190,7 +190,7 @@ if not rationale:
     rationale = "critic returned no rationale"
 
 rec = {
-    "schema": "gluerun.orchestration.plan-critique.v0",
+    "schema": "singular.orchestration.plan-critique.v0",
     "node": node,
     "runId": run_id,
     "batchTaskIds": batch,
@@ -211,7 +211,7 @@ PY
     [[ -n "$verdict" ]] || verdict="approve"
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
 
-    gluerun_append_event "plan.critiqued" "plan critic recorded a critique" \
+    singular_append_event "plan.critiqued" "plan critic recorded a critique" \
       "{\"node\":\"$node\",\"runId\":\"$run_id\",\"verdict\":\"$verdict\",\"findingsCount\":$count}"
   else
     # Fail OPEN: infrastructure failure of an added safety layer must never
@@ -222,7 +222,7 @@ PY
 import json, sys
 record, node, run_id, batch_csv, reason = sys.argv[1:6]
 rec = {
-    "schema": "gluerun.orchestration.plan-critique.v0",
+    "schema": "singular.orchestration.plan-critique.v0",
     "node": node,
     "runId": run_id,
     "batchTaskIds": [t for t in batch_csv.split(",") if t],
@@ -237,7 +237,7 @@ with open(record, "w", encoding="utf-8") as f:
     json.dump(rec, f, indent=2)
     f.write("\n")
 PY
-    gluerun_append_event "ctx.plan_critique_infra" "plan critic infra failure; failing open to approve" \
+    singular_append_event "ctx.plan_critique_infra" "plan critic infra failure; failing open to approve" \
       "{\"node\":\"$node\",\"runId\":\"$run_id\",\"verdict\":\"approve\",\"reason\":\"${infra_reason:-unparseable}\"}"
   fi
 
@@ -245,7 +245,7 @@ PY
   # carry-over. Merges host-authority fields into any runner-written meta; when
   # the runner wrote none, a minimal meta is created. Never fatal.
   if [[ -n "$session_meta" ]]; then
-    gluerun_session_meta_finalize "$session_meta" plan-critic "" "$run_id" \
+    singular_session_meta_finalize "$session_meta" plan-critic "" "$run_id" \
       "$runner_basename" "$prompt_sha" "" "1" >/dev/null 2>&1 || true
   fi
 

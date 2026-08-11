@@ -6,13 +6,13 @@
 # engine/CLI/driver path, so with it sourced the engine stays byte-identical to
 # prior behavior. The `rehydrate` strategy is already a reserved alphabet slot in
 # the integrated engine/ctx-route.sh; the routing wire-in (routing `rehydrate`
-# on a refused resume behind GLUERUN_REHYDRATE=1, recording the manifest into the
+# on a refused resume behind SINGULAR_REHYDRATE=1, recording the manifest into the
 # strategy event) and the l1-drive.sh injection hook are SEPARATE later slices and
-# are OUT OF SCOPE here. GLUERUN_REHYDRATE gates that future wire-in, not this
+# are OUT OF SCOPE here. SINGULAR_REHYDRATE gates that future wire-in, not this
 # pure assembler.
 #
-#   gluerun_ctx_rehydrate_packet   <id>=<path> [<id>=<path> ...]
-#   gluerun_ctx_rehydrate_manifest <id>=<path> [<id>=<path> ...]
+#   singular_ctx_rehydrate_packet   <id>=<path> [<id>=<path> ...]
+#   singular_ctx_rehydrate_manifest <id>=<path> [<id>=<path> ...]
 #
 # Both assemble a deterministic, section-capped, quarantine-aware view over a
 # fixed set of durable artifact sources, each tagged with a source-class id
@@ -21,7 +21,7 @@
 #
 #   - `..._packet`  prints the rehydration packet on stdout: one labeled section
 #     per surviving source, `=== <id> ===` header then the artifact's text body,
-#     each body truncated to at most GLUERUN_CONTEXT_SECTION_MAX_CHARS (default
+#     each body truncated to at most SINGULAR_CONTEXT_SECTION_MAX_CHARS (default
 #     4000, honoring the engine/lib.sh knob) with a stable truncation marker.
 #   - `..._manifest` prints a deterministic JSON manifest on stdout: the INCLUDED
 #     source ids together with the sha256 of each artifact's bytes ("which
@@ -34,7 +34,7 @@
 # enumeration order.
 #
 # Quarantine-aware: each candidate is filtered through the integrated
-# gluerun_ctx_artifact_exclude, so a `*.quarantined` source, or any source with a
+# singular_ctx_artifact_exclude, so a `*.quarantined` source, or any source with a
 # `.quarantined` sibling on disk, never reaches the packet or the manifest.
 #
 # Pure and READ-ONLY: it reads artifact paths and hashes their contents but never
@@ -43,19 +43,19 @@
 # independence-required step nor records any source as `authoritative` evidence
 # (rehydrated sessions remain tainted, pinned in engine/ctx-route.sh).
 
-# gluerun_ctx_rehydrate_packet <id>=<path> ...
-gluerun_ctx_rehydrate_packet() {
-  _gluerun_ctx_rehydrate_emit packet "$@"
+# singular_ctx_rehydrate_packet <id>=<path> ...
+singular_ctx_rehydrate_packet() {
+  _singular_ctx_rehydrate_emit packet "$@"
 }
 
-# gluerun_ctx_rehydrate_manifest <id>=<path> ...
-gluerun_ctx_rehydrate_manifest() {
-  _gluerun_ctx_rehydrate_emit manifest "$@"
+# singular_ctx_rehydrate_manifest <id>=<path> ...
+singular_ctx_rehydrate_manifest() {
+  _singular_ctx_rehydrate_emit manifest "$@"
 }
 
 # Internal: collect surviving <id>\t<path> specs (quarantine-filtered) and hand
 # them to the pure Python renderer for ordering, capping, hashing, and emission.
-_gluerun_ctx_rehydrate_emit() {
+_singular_ctx_rehydrate_emit() {
   local mode="$1"; shift
   local spec id path survivor specs=""
   for spec in "$@"; do
@@ -66,11 +66,11 @@ _gluerun_ctx_rehydrate_emit() {
     # Compose the integrated quarantine filter: a quarantined candidate (a
     # *.quarantined path or an original with a .quarantined sibling) yields no
     # survivor and is silently excluded from the packet and the manifest.
-    survivor="$(gluerun_ctx_artifact_exclude "$path")"
+    survivor="$(singular_ctx_artifact_exclude "$path")"
     [[ -n "$survivor" ]] || continue
     specs+="$id"$'\t'"$path"$'\n'
   done
-  _gluerun_ctx_rehydrate_py "$mode" "${GLUERUN_CONTEXT_SECTION_MAX_CHARS:-4000}" "$specs"
+  _singular_ctx_rehydrate_py "$mode" "${SINGULAR_CONTEXT_SECTION_MAX_CHARS:-4000}" "$specs"
 }
 
 # Internal: the pure Python renderer. Takes mode, section cap, and the newline-
@@ -78,7 +78,7 @@ _gluerun_ctx_rehydrate_emit() {
 # Reads each artifact READ-ONLY, orders by the fixed source-class rank, and emits
 # either the labeled packet or the JSON manifest. No I/O beyond reading artifacts
 # and writing stdout; no side effects.
-_gluerun_ctx_rehydrate_py() {
+_singular_ctx_rehydrate_py() {
   python3 - "$1" "$2" "$3" <<'PY'
 import hashlib
 import json
@@ -133,7 +133,7 @@ sources.sort(key=lambda s: (RANK.get(s[0], len(RANK)), s[0], s[1]))
 
 if mode == "manifest":
     obj = {
-        "schema": "gluerun.orchestration.ctx-rehydrate-manifest.v0",
+        "schema": "singular.orchestration.ctx-rehydrate-manifest.v0",
         "sources": [
             {"id": sid, "sha256": hashlib.sha256(data).hexdigest()}
             for sid, _path, data in sources

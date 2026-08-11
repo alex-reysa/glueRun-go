@@ -25,8 +25,8 @@ mkdir -p "$repo"
 git -C "$tmp" init -q repo
 git -C "$repo" config user.email test@example.com
 git -C "$repo" config user.name test
-printf '{"schemaVersion":"v2","targetBranch":"main"}\n' >"$repo/gluerun.config.json"
-printf '.gluerun-state/\n' >"$repo/.gitignore"
+printf '{"schemaVersion":"v2","targetBranch":"main"}\n' >"$repo/singular.config.json"
+printf '.singular-state/\n' >"$repo/.gitignore"
 mkdir -p "$repo/docs/orchestration/gates"
 git -C "$repo" add -A
 git -C "$repo" commit -qm init
@@ -34,7 +34,7 @@ git -C "$repo" commit -qm init
 write_dag() {
   cat >"$repo/docs/orchestration/dag.v0.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     {"id": "loc-00-contract", "stage": "loc", "area": "loc", "layer": "contract",
      "kind": "build", "dependsOn": [], "requiredCompletion": "done"}
@@ -48,7 +48,7 @@ JSON
 write_broken_gate() {
   cat >"$repo/docs/orchestration/gates/loc-00-contract.gate-result.json" <<'JSON'
 {
-  "schema": "gluerun.orchestration.gate-result.v1",
+  "schema": "singular.orchestration.gate-result.v1",
   "node": "loc-00-contract",
   "status": "passed",
   "authoritative": true,
@@ -67,10 +67,10 @@ JSON
 write_dag
 write_broken_gate
 
-export GLUERUN_ROOT="$repo"
-export GLUERUN_ENGINE_HOME="$ROOT"
-export GLUERUN_STATE_DIR="$repo/.gluerun-state"
-export GLUERUN_TARGET_BRANCH=main
+export SINGULAR_ROOT="$repo"
+export SINGULAR_ENGINE_HOME="$ROOT"
+export SINGULAR_STATE_DIR="$repo/.singular-state"
+export SINGULAR_TARGET_BRANCH=main
 
 # --- 1. dag.sh itself still produces the diagnostic --------------------------
 raw=""
@@ -83,7 +83,7 @@ pass "dag.sh reports the offending gate precisely"
 # --- 2. the helper surfaces it instead of swallowing it ----------------------
 out=""
 rc=0
-out="$(bash -c 'source "$1"; gluerun_dag_next_areas_json' _ "$ROOT/engine/lib.sh" 2>"$tmp/helper.err")" || rc=$?
+out="$(bash -c 'source "$1"; singular_dag_next_areas_json' _ "$ROOT/engine/lib.sh" 2>"$tmp/helper.err")" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "the helper must report failure, not an empty frontier"
 [[ -z "$out" ]] || fail "the helper must print no frontier on failure, got: $out"
 helper_err="$(cat "$tmp/helper.err")"
@@ -92,12 +92,12 @@ contains "$helper_err" "safe repository-relative path" "helper carries the dag.s
 pass "the frontier helper surfaces the diagnostic rather than discarding it"
 
 # --- 3. the event is emitted, and throttled ----------------------------------
-events="$repo/.gluerun-state/events.ndjson"
+events="$repo/.singular-state/events.ndjson"
 [[ -f "$events" ]] || fail "no event log was written"
 count_events() { grep -c '"type":"dag.evaluation_failed"' "$events" 2>/dev/null || true; }
 [[ "$(count_events)" -ge 1 ]] || fail "dag.evaluation_failed was not emitted"
-bash -c 'source "$1"; gluerun_dag_next_areas_json' _ "$ROOT/engine/lib.sh" >/dev/null 2>&1 || true
-bash -c 'source "$1"; gluerun_dag_next_areas_json' _ "$ROOT/engine/lib.sh" >/dev/null 2>&1 || true
+bash -c 'source "$1"; singular_dag_next_areas_json' _ "$ROOT/engine/lib.sh" >/dev/null 2>&1 || true
+bash -c 'source "$1"; singular_dag_next_areas_json' _ "$ROOT/engine/lib.sh" >/dev/null 2>&1 || true
 [[ "$(count_events)" -eq 1 ]] \
   || fail "the event must be throttled; the frontier is evaluated every cycle (got $(count_events))"
 pass "dag.evaluation_failed is emitted once per distinct diagnostic"
@@ -112,7 +112,7 @@ data["evidence"][0]["ref"] = "/private/tmp/somewhere-else/gate-report.json"
 data["gateReportRef"] = "/private/tmp/somewhere-else/gate-report.json"
 json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
 PY
-bash -c 'source "$1"; gluerun_dag_next_areas_json' _ "$ROOT/engine/lib.sh" >/dev/null 2>&1 || true
+bash -c 'source "$1"; singular_dag_next_areas_json' _ "$ROOT/engine/lib.sh" >/dev/null 2>&1 || true
 [[ "$(count_events)" -eq 2 ]] \
   || fail "a changed diagnostic must re-emit (got $(count_events))"
 pass "a changed diagnostic re-emits rather than being suppressed forever"
@@ -129,10 +129,10 @@ assert doc["frontier"].get("evaluable") is False, doc["frontier"]
 assert any("could not be evaluated" in a for a in doc["attention"]), doc["attention"]
 assert doc["ok"] is False, "an unevaluable DAG is not a healthy repo"
 PY
-pass "gluerun health separates 'unevaluable' from 'no ready work'"
+pass "singular health separates 'unevaluable' from 'no ready work'"
 
 # --- 5. doctor fails with the diagnostic, not a skip -------------------------
-doctor_json="$(GLUERUN_ENGINE_HOME="$ROOT" python3 "$ROOT/engine/doctor.py" \
+doctor_json="$(SINGULAR_ENGINE_HOME="$ROOT" python3 "$ROOT/engine/doctor.py" \
   --engine-home "$ROOT" --repo-root "$repo" --bash "$(command -v bash)" \
   --bash-version "$BASH_VERSION" --json 2>/dev/null || true)"
 python3 - "$doctor_json" <<'PY' || fail "doctor does not report the unevaluable DAG"
@@ -152,7 +152,7 @@ rm -f "$repo/docs/orchestration/gates/loc-00-contract.gate-result.json"
 rm -f "$events"
 ok_out=""
 ok_rc=0
-ok_out="$(bash -c 'source "$1"; gluerun_dag_next_areas_json' _ "$ROOT/engine/lib.sh" 2>"$tmp/ok.err")" || ok_rc=$?
+ok_out="$(bash -c 'source "$1"; singular_dag_next_areas_json' _ "$ROOT/engine/lib.sh" 2>"$tmp/ok.err")" || ok_rc=$?
 [[ "$ok_rc" -eq 0 ]] || fail "a valid DAG must evaluate cleanly (exit $ok_rc)"
 [[ -s "$tmp/ok.err" ]] && fail "a valid DAG must warn about nothing: $(cat "$tmp/ok.err")"
 python3 - "$ok_out" <<'PY' || fail "a valid DAG did not yield a frontier"

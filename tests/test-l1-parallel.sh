@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Regression tests for the live (opt-in) L1 parallel fanout: gluerun_l1_fanout +
-# gluerun_l1_import_staged, generate-tasks.sh staged mode, and l1-plan-node.sh.
+# Regression tests for the live (opt-in) L1 parallel fanout: singular_l1_fanout +
+# singular_l1_import_staged, generate-tasks.sh staged mode, and l1-plan-node.sh.
 # Pure bash + fixtures; NO real codex (planners are stubbed). Verifies that L0
 # stays the only serial importer/id-allocator and that STOP/disk/failure/
 # validation all fail closed.
@@ -15,11 +15,11 @@ fi
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
-# Hermetic guard: this checkout may itself be docked as a gluerun consumer
-# (gluerun.config.json at the repo root). Source lib.sh against a pristine
+# Hermetic guard: this checkout may itself be docked as a singular consumer
+# (singular.config.json at the repo root). Source lib.sh against a pristine
 # empty root so no consumer config (runner, areaPrefix, env{}) leaks into
-# test sandboxes; each test exports its own GLUERUN_ROOT afterwards.
-export GLUERUN_ROOT="$(mktemp -d)"
+# test sandboxes; each test exports its own SINGULAR_ROOT afterwards.
+export SINGULAR_ROOT="$(mktemp -d)"
 
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
@@ -35,7 +35,7 @@ make_repo() {
     "$root/docs/orchestration/prompts" \
     "$root/docs/orchestration/tasks" \
     "$root/schemas/orchestration" \
-    "$root/.gluerun-state"
+    "$root/.singular-state"
   git -C "$root" init -q
   git -C "$root" checkout -q -b target
   cp "$ENGINE_HOME/templates/prompts/l1-planner.md" "$root/docs/orchestration/prompts/l1-planner.md"
@@ -47,7 +47,7 @@ make_repo() {
   # S0.storage_substrate_base (storage); D1.storage_proof is NOT ready.
   cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.dag.v0",
+  "schema": "singular.orchestration.dag.v0",
   "nodes": [
     { "id": "D0.contract", "stage": "D0", "area": "kernel", "layer": "contract", "kind": "contract", "dependsOn": [], "requiredCompletion": "contract_complete" },
     { "id": "D1.contract", "stage": "D1", "area": "artifact", "layer": "contract", "kind": "contract", "dependsOn": ["D0.contract"], "requiredCompletion": "contract_complete" },
@@ -58,7 +58,7 @@ make_repo() {
 EOF
   cat >"$root/docs/orchestration/gates/D0.contract.gate-result.json" <<'EOF'
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "D0.contract",
   "status": "passed",
   "authoritative": true,
@@ -76,38 +76,38 @@ with_fixture() {
   local tmp
   tmp="$(mktemp -d)"
   make_repo "$tmp/repo"
-  export GLUERUN_ROOT="$tmp/repo"
-  export GLUERUN_ORCH_DIR="$GLUERUN_ROOT/docs/orchestration"
-  export GLUERUN_TASKS_DIR="$GLUERUN_ORCH_DIR/tasks"
-  export GLUERUN_STATE_DIR="$GLUERUN_ROOT/.gluerun-state"
-	  export GLUERUN_RUNS_DIR="$GLUERUN_STATE_DIR/runs"
-	  export GLUERUN_INBOX_DIR="$GLUERUN_STATE_DIR/inbox"
-	  export GLUERUN_LEASES_DIR="$GLUERUN_STATE_DIR/leases"
-	  export GLUERUN_EVENTS_FILE="$GLUERUN_STATE_DIR/events.ndjson"
-	  export GLUERUN_PLANNER_BACKOFF_FILE="$GLUERUN_STATE_DIR/planner-backoff.json"
-	  export GLUERUN_PROVIDER_PRESSURE_FILE="$GLUERUN_STATE_DIR/provider-pressure.json"
-	  export GLUERUN_BREAKER_FILE="$GLUERUN_STATE_DIR/circuit.json"
-	  export GLUERUN_STATUS_FILE="$GLUERUN_STATE_DIR/STATUS.md"
+  export SINGULAR_ROOT="$tmp/repo"
+  export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
+  export SINGULAR_TASKS_DIR="$SINGULAR_ORCH_DIR/tasks"
+  export SINGULAR_STATE_DIR="$SINGULAR_ROOT/.singular-state"
+	  export SINGULAR_RUNS_DIR="$SINGULAR_STATE_DIR/runs"
+	  export SINGULAR_INBOX_DIR="$SINGULAR_STATE_DIR/inbox"
+	  export SINGULAR_LEASES_DIR="$SINGULAR_STATE_DIR/leases"
+	  export SINGULAR_EVENTS_FILE="$SINGULAR_STATE_DIR/events.ndjson"
+	  export SINGULAR_PLANNER_BACKOFF_FILE="$SINGULAR_STATE_DIR/planner-backoff.json"
+	  export SINGULAR_PROVIDER_PRESSURE_FILE="$SINGULAR_STATE_DIR/provider-pressure.json"
+	  export SINGULAR_BREAKER_FILE="$SINGULAR_STATE_DIR/circuit.json"
+	  export SINGULAR_STATUS_FILE="$SINGULAR_STATE_DIR/STATUS.md"
   # Re-point STOP at the fixture: lib.sh was sourced once (with the real repo),
-  # so GLUERUN_STOP_FILE would otherwise still reference the real STOP sentinel and
+  # so SINGULAR_STOP_FILE would otherwise still reference the real STOP sentinel and
   # the in-process fanout would (read-only) see it and abort.
-  export GLUERUN_STOP_FILE="$GLUERUN_STATE_DIR/STOP"
-  export GLUERUN_TARGET_BRANCH="target"
-  export GLUERUN_L1_LEASES_DIR="$GLUERUN_STATE_DIR/l1-leases"
-  export GLUERUN_L1_LEASE_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/l1-lease.v0.schema.json"
-  export GLUERUN_GATE_SCHEMA="$GLUERUN_ROOT/schemas/orchestration/gate-result.v0.schema.json"
-  export GLUERUN_REAL_SCRIPT_DIR="$SCRIPT_DIR"
+  export SINGULAR_STOP_FILE="$SINGULAR_STATE_DIR/STOP"
+  export SINGULAR_TARGET_BRANCH="target"
+  export SINGULAR_L1_LEASES_DIR="$SINGULAR_STATE_DIR/l1-leases"
+  export SINGULAR_L1_LEASE_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/l1-lease.v0.schema.json"
+  export SINGULAR_GATE_SCHEMA="$SINGULAR_ROOT/schemas/orchestration/gate-result.v0.schema.json"
+  export SINGULAR_REAL_SCRIPT_DIR="$SCRIPT_DIR"
   # Reset all tunables to a clean baseline each test (the test shell is shared).
-  export GLUERUN_MAX_L1_CONCURRENT=2
-  export GLUERUN_L1_TASKS_PER_NODE=1
-  export GLUERUN_MIN_DISK_GB=0
-	  unset GLUERUN_TEST_FAIL_NODE GLUERUN_TEST_BADAREA_NODE GLUERUN_L1_PLAN_NODE GLUERUN_CODEX_RUNNER GLUERUN_L1_PLANNER GLUERUN_ENABLE_L1_PARALLEL GLUERUN_AUTO_INTEGRATE GLUERUN_PUSH GLUERUN_AUTO_PROMOTE_GATES GLUERUN_MAX_CONSEC_FAILS 2>/dev/null || true
-	  unset GLUERUN_PROVIDER_PRESSURE_ADAPT GLUERUN_PROVIDER_PRESSURE_CLUSTER GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET GLUERUN_RUNNER GLUERUN_MAX_CONCURRENT 2>/dev/null || true
+  export SINGULAR_MAX_L1_CONCURRENT=2
+  export SINGULAR_L1_TASKS_PER_NODE=1
+  export SINGULAR_MIN_DISK_GB=0
+	  unset SINGULAR_TEST_FAIL_NODE SINGULAR_TEST_BADAREA_NODE SINGULAR_L1_PLAN_NODE SINGULAR_CODEX_RUNNER SINGULAR_L1_PLANNER SINGULAR_ENABLE_L1_PARALLEL SINGULAR_AUTO_INTEGRATE SINGULAR_PUSH SINGULAR_AUTO_PROMOTE_GATES SINGULAR_MAX_CONSEC_FAILS 2>/dev/null || true
+	  unset SINGULAR_PROVIDER_PRESSURE_ADAPT SINGULAR_PROVIDER_PRESSURE_CLUSTER SINGULAR_PROVIDER_PRESSURE_RECOVER_QUIET SINGULAR_RUNNER SINGULAR_MAX_CONCURRENT 2>/dev/null || true
 	}
 
 make_structured_quota_evidence() {
   local run_id="${1:-RUN-quota}" provider="${2:-codex}" status="${3:-429}"
-  local dir="$GLUERUN_RUNS_DIR/$run_id"
+  local dir="$SINGULAR_RUNS_DIR/$run_id"
   mkdir -p "$dir"
   case "$provider:$status" in
     claude:403)
@@ -124,45 +124,45 @@ make_structured_quota_evidence() {
         "$status" >"$dir/provider-envelope.json"
       ;;
   esac
-  gluerun_runner_result_write "$provider" "$run_id" planner planner-core \
+  singular_runner_result_write "$provider" "$run_id" planner planner-core \
     "$dir/runner-result.json" 1 "$dir/provider-envelope.json" "" ""
   printf '%s\n' "$dir/runner-result.json"
 }
 
 # A drop-in l1-plan-node stub: creates the node's active lease (real area) and
-# stages one candidate. Honors GLUERUN_TEST_FAIL_NODE (exit 1, lease failed) and
-# GLUERUN_TEST_BADAREA_NODE (stage a candidate with the wrong area).
+# stages one candidate. Honors SINGULAR_TEST_FAIL_NODE (exit 1, lease failed) and
+# SINGULAR_TEST_BADAREA_NODE (stage a candidate with the wrong area).
 make_plan_stub() {
   cat >"$1" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-source "$GLUERUN_REAL_SCRIPT_DIR/lib.sh"
+source "$SINGULAR_REAL_SCRIPT_DIR/lib.sh"
 node=""; run_id=""; stage_dir=""; base_sha=""; count=1
 while [[ $# -gt 0 ]]; do case "$1" in
   --node) node="$2"; shift 2;; --run-id) run_id="$2"; shift 2;;
   --stage-dir) stage_dir="$2"; shift 2;; --base-sha) base_sha="$2"; shift 2;;
   --count) count="$2"; shift 2;; *) shift;; esac; done
-export GLUERUN_EVENTS_FILE="$stage_dir/planner-events.ndjson"
+export SINGULAR_EVENTS_FILE="$stage_dir/planner-events.ndjson"
 mkdir -p "$stage_dir"
-fields="$("$GLUERUN_REAL_SCRIPT_DIR/dag.sh" node-fields "$node")" || { echo "plan-failed:$node"; exit 1; }
+fields="$("$SINGULAR_REAL_SCRIPT_DIR/dag.sh" node-fields "$node")" || { echo "plan-failed:$node"; exit 1; }
 area="$(printf '%s\n' "$fields" | sed -n 's/^area=//p' | tail -1)"
 stage="$(printf '%s\n' "$fields" | sed -n 's/^stage=//p' | tail -1)"
 layer="$(printf '%s\n' "$fields" | sed -n 's/^layer=//p' | tail -1)"
-[[ -n "$base_sha" ]] || base_sha="$(git -C "$GLUERUN_ROOT" rev-parse "$GLUERUN_TARGET_BRANCH")"
-gluerun_l1_lease_write "$node" "$area" "$stage" "$layer" active "$run_id" "$base_sha" "$GLUERUN_TARGET_BRANCH"
-if [[ "${GLUERUN_TEST_FAIL_NODE:-}" == "$node" ]]; then
-  gluerun_l1_lease_set_status "$node" failed || true
+[[ -n "$base_sha" ]] || base_sha="$(git -C "$SINGULAR_ROOT" rev-parse "$SINGULAR_TARGET_BRANCH")"
+singular_l1_lease_write "$node" "$area" "$stage" "$layer" active "$run_id" "$base_sha" "$SINGULAR_TARGET_BRANCH"
+if [[ "${SINGULAR_TEST_FAIL_NODE:-}" == "$node" ]]; then
+  singular_l1_lease_set_status "$node" failed || true
   echo "plan-failed:$node"; exit 1
 fi
 emit_area="$area"
-[[ "${GLUERUN_TEST_BADAREA_NODE:-}" == "$node" ]] && emit_area="wrong-area"
+[[ "${SINGULAR_TEST_BADAREA_NODE:-}" == "$node" ]] && emit_area="wrong-area"
 safe="${node//[^A-Za-z0-9]/_}"
 cat >"$stage_dir/TASK-0001.candidate.md" <<EOF
 # TASK-0001: Staged fixture $node
 
 Status: ready
 Area: $emit_area
-Target branch: \`$GLUERUN_TARGET_BRANCH\`
+Target branch: \`$SINGULAR_TARGET_BRANCH\`
 Worker branch: \`agent/$emit_area/TASK-0001-staged-$safe\`
 Test policy: \`strict_test_first\`
 Gate command: \`true\`
@@ -254,7 +254,7 @@ area="$(sed -n 's/^- area: `\(.*\)`$/\1/p' "$prompt" | tail -1)"
 [[ -n "$area" ]] || area="artifact"
 cat >"$out" <<EOF
 {
-  "schema": "gluerun.orchestration.task-batch.v0",
+  "schema": "singular.orchestration.task-batch.v0",
   "tasks": [
     {
       "taskId": "TASK-0313",
@@ -272,12 +272,12 @@ make_codex_quota_stub() {
 #!/usr/bin/env bash
 set -euo pipefail
 echo "You've hit your usage limit. Try again at 11:21 AM." >&2
-source "$GLUERUN_REAL_SCRIPT_DIR/lib.sh"
-envelope="$(dirname "$GLUERUN_RUNNER_RESULT_FILE")/planner-provider-envelope.json"
+source "$SINGULAR_REAL_SCRIPT_DIR/lib.sh"
+envelope="$(dirname "$SINGULAR_RUNNER_RESULT_FILE")/planner-provider-envelope.json"
 printf '%s\n' '{"type":"turn.failed","error":{"status":429,"code":"rate_limit_exceeded","message":"request rejected"}}' >"$envelope"
-gluerun_runner_result_write codex "${GLUERUN_RUNNER_RUN_ID:-RUN-stub}" \
-  "${GLUERUN_RUNNER_ROLE:-planner}" "${GLUERUN_RUNNER_CAPABILITY_PROFILE:-planner-core}" \
-  "$GLUERUN_RUNNER_RESULT_FILE" 1 "$envelope" "" ""
+singular_runner_result_write codex "${SINGULAR_RUNNER_RUN_ID:-RUN-stub}" \
+  "${SINGULAR_RUNNER_ROLE:-planner}" "${SINGULAR_RUNNER_CAPABILITY_PROFILE:-planner-core}" \
+  "$SINGULAR_RUNNER_RESULT_FILE" 1 "$envelope" "" ""
 exit 1
 STUB
 	  chmod +x "$1"
@@ -296,7 +296,7 @@ STUB
 
 	write_signature_task() {
 	  local task_id="$1" status="$2" area="$3" title="$4" objective="$5" owned="$6"
-	  cat >"$GLUERUN_TASKS_DIR/$task_id.md" <<EOF
+	  cat >"$SINGULAR_TASKS_DIR/$task_id.md" <<EOF
 # $task_id: $title
 
 Status: $status
@@ -326,9 +326,9 @@ EOF
 
 write_blocked_gate() {
   local node="$1" source_path="$2" missing_task="$3"
-  cat >"$GLUERUN_ORCH_DIR/gates/$node.gate-result.json" <<EOF
+  cat >"$SINGULAR_ORCH_DIR/gates/$node.gate-result.json" <<EOF
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$node",
   "status": "blocked",
   "authoritative": true,
@@ -353,16 +353,16 @@ write_blocked_gate() {
 EOF
 }
 
-task_count() { find "$GLUERUN_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | wc -l | tr -d ' '; }
+task_count() { find "$SINGULAR_TASKS_DIR" -maxdepth 1 -name 'TASK-*.md' -type f 2>/dev/null | wc -l | tr -d ' '; }
 
 # --- generate-tasks.sh staged mode (real planner, codex stub) ---
 
 test_generate_tasks_staged_writes_only_to_stage_dir() {
   with_fixture
-  local stub="$GLUERUN_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
-  local sdir="$GLUERUN_STATE_DIR/stage-S0"
+  local stub="$SINGULAR_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
+  local sdir="$SINGULAR_STATE_DIR/stage-S0"
   local out
-  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --stage-dir "$sdir" --count 1 2>&1)"
+  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --stage-dir "$sdir" --count 1 2>&1)"
   assert_contains "$out" "staged:TASK-0001" "staged mode reports staged: with the node-local temp id"
   [[ -f "$sdir/TASK-0001.candidate.md" ]] || fail "staged candidate must be written to the stage dir"
   assert_eq "$(task_count)" "0" "staged mode must NOT write the global tasks dir"
@@ -370,25 +370,25 @@ test_generate_tasks_staged_writes_only_to_stage_dir() {
 
 test_generate_tasks_staged_batch_rewrites_planner_id_to_temp_id() {
   with_fixture
-  local stub="$GLUERUN_ROOT/codex-batch-stub.sh"; make_codex_batch_mismatched_id_stub "$stub"
-  local sdir="$GLUERUN_STATE_DIR/stage-S0"
+  local stub="$SINGULAR_ROOT/codex-batch-stub.sh"; make_codex_batch_mismatched_id_stub "$stub"
+  local sdir="$SINGULAR_STATE_DIR/stage-S0"
   local out
-  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --stage-dir "$sdir" --count 1 2>&1)"
+  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --stage-dir "$sdir" --count 1 2>&1)"
   assert_contains "$out" "staged:TASK-0001" "staged batch mode reports the rewritten node-local temp id"
   [[ -f "$sdir/TASK-0001.candidate.md" ]] || fail "staged batch candidate must be written using the expected temp id"
-  assert_eq "$(gluerun_task_field "$sdir/TASK-0001.candidate.md" taskId 2>/dev/null || echo '')" "TASK-0001" "staged batch candidate taskId is rewritten"
+  assert_eq "$(singular_task_field "$sdir/TASK-0001.candidate.md" taskId 2>/dev/null || echo '')" "TASK-0001" "staged batch candidate taskId is rewritten"
   assert_not_contains "$(cat "$sdir/TASK-0001.candidate.md")" "TASK-0313" "staged batch candidate must not retain the planner's global-looking id"
   assert_eq "$(task_count)" "0" "staged batch rewrite must NOT write the global tasks dir"
 }
 
 test_generate_tasks_prompt_directs_slice_folding() {
   with_fixture
-  export GLUERUN_L2_SLICE_BUDGET=3
-  export GLUERUN_L2_SLICE_BUDGET_MAX=3
-  local sdir="$GLUERUN_STATE_DIR/stage-S0" out prompt
+  export SINGULAR_L2_SLICE_BUDGET=3
+  export SINGULAR_L2_SLICE_BUDGET_MAX=3
+  local sdir="$SINGULAR_STATE_DIR/stage-S0" out prompt
   out="$("$SCRIPT_DIR/generate-tasks.sh" --dry-run --node S0.storage_substrate_base --stage-dir "$sdir" --count 3 2>&1)"
   assert_contains "$out" "slice_budget=3" "dry-run reports effective slice budget"
-  prompt="$(find "$GLUERUN_RUNS_DIR" -name planner-prompt.md -type f | sort | tail -1)"
+  prompt="$(find "$SINGULAR_RUNS_DIR" -name planner-prompt.md -type f | sort | tail -1)"
   [[ -f "$prompt" ]] || fail "dry-run must assemble a planner prompt"
   local body
   body="$(cat "$prompt")"
@@ -400,87 +400,87 @@ test_generate_tasks_prompt_directs_slice_folding() {
 
 test_generate_tasks_backcompat_unchanged() {
   with_fixture
-  local stub="$GLUERUN_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
+  local stub="$SINGULAR_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
   local out
-  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --count 1 2>&1)"
+  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --count 1 2>&1)"
   assert_contains "$out" "generated:TASK-0001" "non-staged mode still writes a real task id"
-	  [[ -f "$GLUERUN_TASKS_DIR/TASK-0001.md" ]] || fail "non-staged mode must write the global tasks dir (back-compat)"
+	  [[ -f "$SINGULAR_TASKS_DIR/TASK-0001.md" ]] || fail "non-staged mode must write the global tasks dir (back-compat)"
 	}
 
 	test_generate_tasks_logs_quota_failure_and_sets_backoff() {
 	  with_fixture
-	  local stub="$GLUERUN_ROOT/codex-quota-stub.sh"; make_codex_quota_stub "$stub"
-	  local sdir="$GLUERUN_STATE_DIR/stage-S0" out rc=0
-	  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --stage-dir "$sdir" --count 1 2>&1)" || rc=$?
+	  local stub="$SINGULAR_ROOT/codex-quota-stub.sh"; make_codex_quota_stub "$stub"
+	  local sdir="$SINGULAR_STATE_DIR/stage-S0" out rc=0
+	  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --stage-dir "$sdir" --count 1 2>&1)" || rc=$?
 	  [[ "$rc" -ne 0 ]] || fail "quota planner failure must exit non-zero"
 	  assert_contains "$out" "planner-failed" "quota failure reports planner-failed"
 	  local log
-	  log="$(find "$GLUERUN_RUNS_DIR" -name planner-codex.log -type f | sort | tail -1)"
+	  log="$(find "$SINGULAR_RUNS_DIR" -name planner-codex.log -type f | sort | tail -1)"
 	  [[ -f "$log" ]] || fail "planner codex log must be preserved"
 	  assert_contains "$(cat "$log")" "usage limit" "planner codex log contains quota text"
-	  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" '"failureClass":"quota"' "planner.failed event classifies quota"
-	  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "quota failure must set planner backoff state"
+	  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"failureClass":"quota"' "planner.failed event classifies quota"
+	  [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] || fail "quota failure must set planner backoff state"
 	}
 
 	test_generate_tasks_honors_active_planner_backoff_without_calling_codex() {
 	  with_fixture
-	  mkdir -p "$(dirname "$GLUERUN_PLANNER_BACKOFF_FILE")"
-	  python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" <<'PY'
+	  mkdir -p "$(dirname "$SINGULAR_PLANNER_BACKOFF_FILE")"
+	  python3 - "$SINGULAR_PLANNER_BACKOFF_FILE" <<'PY'
 import json, sys
 with open(sys.argv[1], "w", encoding="utf-8") as f:
-    json.dump({"schema":"gluerun.orchestration.planner-backoff.v0","until":"2999-01-01T00:00:00Z","failureClass":"quota"}, f)
+    json.dump({"schema":"singular.orchestration.planner-backoff.v0","until":"2999-01-01T00:00:00Z","failureClass":"quota"}, f)
     f.write("\n")
 PY
-	  local marker="$GLUERUN_STATE_DIR/codex-called.txt" stub="$GLUERUN_ROOT/codex-marker-stub.sh"
+	  local marker="$SINGULAR_STATE_DIR/codex-called.txt" stub="$SINGULAR_ROOT/codex-marker-stub.sh"
 	  make_codex_marker_stub "$stub" "$marker"
-	  local sdir="$GLUERUN_STATE_DIR/stage-S0" out rc=0
-	  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --stage-dir "$sdir" --count 1 2>&1)" || rc=$?
+	  local sdir="$SINGULAR_STATE_DIR/stage-S0" out rc=0
+	  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node S0.storage_substrate_base --stage-dir "$sdir" --count 1 2>&1)" || rc=$?
 	  [[ "$rc" -ne 0 ]] || fail "planner backoff should return non-zero to count as no progress"
 	  assert_contains "$out" "planner-backoff" "active backoff is reported"
 	  [[ ! -f "$marker" ]] || fail "codex runner must not be called while planner backoff is active"
-	  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" "planner.backoff_active" "backoff emits an event"
+	  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" "planner.backoff_active" "backoff emits an event"
 	  assert_eq "$(task_count)" "0" "backoff must not create tasks"
 	}
 
 test_reconcile_defers_serial_planning_during_active_backoff() {
   with_fixture
-  GLUERUN_PLANNER_BACKOFF_SECONDS=120 gluerun_planner_backoff_set codex-exit RUN-b D1.contract /dev/null
-  local marker="$GLUERUN_STATE_DIR/serial-planner-called" stub="$GLUERUN_ROOT/serial-planner.sh"
+  SINGULAR_PLANNER_BACKOFF_SECONDS=120 singular_planner_backoff_set codex-exit RUN-b D1.contract /dev/null
+  local marker="$SINGULAR_STATE_DIR/serial-planner-called" stub="$SINGULAR_ROOT/serial-planner.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
-touch "$GLUERUN_STATE_DIR/serial-planner-called"
+touch "$SINGULAR_STATE_DIR/serial-planner-called"
 exit 99
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_ENABLE_L1_PARALLEL=0 GLUERUN_CODEX_RUNNER="$stub" \
-    GLUERUN_AUTO_PROMOTE_GATES=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_PUSH=0 \
+  out="$(SINGULAR_ENABLE_L1_PARALLEL=0 SINGULAR_CODEX_RUNNER="$stub" \
+    SINGULAR_AUTO_PROMOTE_GATES=0 SINGULAR_AUTO_INTEGRATE=0 SINGULAR_PUSH=0 \
     "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
   assert_contains "$out" "planner_backoff_active_this_run=1" "serial reconcile reports deferred backoff"
   assert_contains "$out" "planner_failures_this_run=0" "serial backoff deferral is neutral"
   [[ ! -f "$marker" ]] || fail "serial planner ran during active backoff"
-  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" "origin.planner_deferred_backoff" \
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" "origin.planner_deferred_backoff" \
     "serial backoff deferral emits telemetry"
 }
 
 test_reconcile_defers_parallel_planning_before_leases() {
   with_fixture
-  GLUERUN_PLANNER_BACKOFF_SECONDS=120 gluerun_planner_backoff_set timeout RUN-b D1.contract /dev/null
-  local marker="$GLUERUN_STATE_DIR/parallel-planner-called" stub="$GLUERUN_ROOT/parallel-planner.sh"
+  SINGULAR_PLANNER_BACKOFF_SECONDS=120 singular_planner_backoff_set timeout RUN-b D1.contract /dev/null
+  local marker="$SINGULAR_STATE_DIR/parallel-planner-called" stub="$SINGULAR_ROOT/parallel-planner.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
-touch "$GLUERUN_STATE_DIR/parallel-planner-called"
+touch "$SINGULAR_STATE_DIR/parallel-planner-called"
 exit 99
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_ENABLE_L1_PARALLEL=1 GLUERUN_L1_PLAN_NODE="$stub" \
-    GLUERUN_AUTO_PROMOTE_GATES=0 GLUERUN_AUTO_INTEGRATE=0 GLUERUN_PUSH=0 \
+  out="$(SINGULAR_ENABLE_L1_PARALLEL=1 SINGULAR_L1_PLAN_NODE="$stub" \
+    SINGULAR_AUTO_PROMOTE_GATES=0 SINGULAR_AUTO_INTEGRATE=0 SINGULAR_PUSH=0 \
     "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
   assert_contains "$out" "planner_backoff_active_this_run=1" "parallel reconcile reports deferred backoff"
   assert_contains "$out" "planner_failures_this_run=0" "parallel backoff deferral is neutral"
   [[ ! -f "$marker" ]] || fail "parallel planner ran during active backoff"
-  if [[ -d "$GLUERUN_L1_LEASES_DIR" ]] && find "$GLUERUN_L1_LEASES_DIR" -type f | grep -q .; then
+  if [[ -d "$SINGULAR_L1_LEASES_DIR" ]] && find "$SINGULAR_L1_LEASES_DIR" -type f | grep -q .; then
     fail "parallel backoff deferral created an L1 lease"
   fi
 }
@@ -488,15 +488,15 @@ STUB
 test_generate_tasks_honors_blocked_gate_without_calling_codex() {
   with_fixture
   write_blocked_gate D1.contract internal/artifact TASK-0099
-  local marker="$GLUERUN_STATE_DIR/codex-called.txt" stub="$GLUERUN_ROOT/codex-marker-stub.sh"
+  local marker="$SINGULAR_STATE_DIR/codex-called.txt" stub="$SINGULAR_ROOT/codex-marker-stub.sh"
   make_codex_marker_stub "$stub" "$marker"
-  local sdir="$GLUERUN_STATE_DIR/stage-D1" out rc=0
-  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node D1.contract --stage-dir "$sdir" --count 1 2>&1)" || rc=$?
+  local sdir="$SINGULAR_STATE_DIR/stage-D1" out rc=0
+  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node D1.contract --stage-dir "$sdir" --count 1 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "blocked gate should return non-zero to count as no progress"
   assert_contains "$out" "planner-failed" "blocked gate is reported before planner invocation"
   assert_contains "$out" "node has authoritative blocked gate: D1.contract" "blocked-gate planner failure names the gated node"
   [[ ! -f "$marker" ]] || fail "codex runner must not be called for a blocked closeout gate"
-  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" "planner.failed" "blocked gate emits a planner.failed event"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" "planner.failed" "blocked gate emits a planner.failed event"
   assert_eq "$(task_count)" "0" "blocked gate must not create tasks"
 }
 
@@ -504,13 +504,13 @@ test_generate_tasks_honors_blocked_gate_without_calling_codex() {
 
 test_fanout_full_chain_two_nodes_unique_ids() {
   with_fixture
-  local stub="$GLUERUN_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
+  local stub="$SINGULAR_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
   local out plan_root artifact_prompt storage_prompt
-  out="$(GLUERUN_CODEX_RUNNER="$stub" gluerun_l1_fanout RUN-chain "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_CODEX_RUNNER="$stub" singular_l1_fanout RUN-chain "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "2" "fanout imports both planned nodes"
-  [[ -f "$GLUERUN_TASKS_DIR/TASK-0001.md" && -f "$GLUERUN_TASKS_DIR/TASK-0002.md" ]] \
+  [[ -f "$SINGULAR_TASKS_DIR/TASK-0001.md" && -f "$SINGULAR_TASKS_DIR/TASK-0002.md" ]] \
     || fail "two staged batches must import as distinct sequential real ids"
-  plan_root="$GLUERUN_RUNS_DIR/RUN-chain/l1-staging"
+  plan_root="$SINGULAR_RUNS_DIR/RUN-chain/l1-staging"
   artifact_prompt="$plan_root/D1.contract/planner-prompt.md"
   storage_prompt="$plan_root/S0.storage_substrate_base/planner-prompt.md"
   [[ -f "$artifact_prompt" && -f "$storage_prompt" ]] \
@@ -519,10 +519,10 @@ test_fanout_full_chain_two_nodes_unique_ids() {
   assert_contains "$(cat "$storage_prompt")" '- area: `storage`' "storage node keeps its own planner prompt"
   [[ -f "$plan_root/D1.contract/planner-out.md" && -f "$plan_root/S0.storage_substrate_base/planner-out.md" ]] \
     || fail "concurrent planners must persist provider output in their node-private staging directories"
-  [[ ! -e "$GLUERUN_RUNS_DIR/RUN-chain/planner-prompt.md" && ! -e "$GLUERUN_RUNS_DIR/RUN-chain/planner-out.md" ]] \
+  [[ ! -e "$SINGULAR_RUNS_DIR/RUN-chain/planner-prompt.md" && ! -e "$SINGULAR_RUNS_DIR/RUN-chain/planner-out.md" ]] \
     || fail "parallel planners must not fall back to shared parent-run artifacts"
-  assert_eq "$(gluerun_l1_lease_status D1.contract)" "released" "planned node lease is released after import"
-  assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "released" "planned node lease is released after import"
+  assert_eq "$(singular_l1_lease_status D1.contract)" "released" "planned node lease is released after import"
+  assert_eq "$(singular_l1_lease_status S0.storage_substrate_base)" "released" "planned node lease is released after import"
 }
 
 # Concurrent planners must be individually visible. run-status.sh keys its path
@@ -532,10 +532,10 @@ test_fanout_full_chain_two_nodes_unique_ids() {
 # to distrust the counter. Each planner now derives its own id.
 test_fanout_planners_write_distinct_run_status_records() {
   with_fixture
-  local stub="$GLUERUN_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
-  GLUERUN_CODEX_RUNNER="$stub" gluerun_l1_fanout RUN-chain \
-    "$(git -C "$GLUERUN_ROOT" rev-parse target)" >/dev/null 2>&1
-  python3 - "$GLUERUN_RUNS_DIR" <<'PY' || fail "concurrent planners did not get distinct run-status records"
+  local stub="$SINGULAR_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
+  SINGULAR_CODEX_RUNNER="$stub" singular_l1_fanout RUN-chain \
+    "$(git -C "$SINGULAR_ROOT" rev-parse target)" >/dev/null 2>&1
+  python3 - "$SINGULAR_RUNS_DIR" <<'PY' || fail "concurrent planners did not get distinct run-status records"
 import json
 import os
 import sys
@@ -594,78 +594,78 @@ PY
 
 test_fanout_default_cap_two() {
   with_fixture
-  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
   local out
-  out="$(GLUERUN_L1_PLAN_NODE="$stub" gluerun_l1_fanout RUN-cap "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_L1_PLAN_NODE="$stub" singular_l1_fanout RUN-cap "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "2" "default cap plans two independent nodes"
   assert_eq "$(task_count)" "2" "two tasks imported"
 }
 
 test_fanout_unique_ids_from_same_temp_id() {
   with_fixture
-  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
-  GLUERUN_L1_PLAN_NODE="$stub" gluerun_l1_fanout RUN-ids "$(git -C "$GLUERUN_ROOT" rev-parse target)" >/dev/null 2>&1
+  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+  SINGULAR_L1_PLAN_NODE="$stub" singular_l1_fanout RUN-ids "$(git -C "$SINGULAR_ROOT" rev-parse target)" >/dev/null 2>&1
   # Both stubs stage the SAME temp id TASK-0001; the serial importer must assign
   # distinct sequential real ids (this is the race the design eliminates).
-  [[ -f "$GLUERUN_TASKS_DIR/TASK-0001.md" && -f "$GLUERUN_TASKS_DIR/TASK-0002.md" ]] \
+  [[ -f "$SINGULAR_TASKS_DIR/TASK-0001.md" && -f "$SINGULAR_TASKS_DIR/TASK-0002.md" ]] \
     || fail "same temp ids must import as TASK-0001 and TASK-0002"
   assert_eq "$(task_count)" "2" "exactly two distinct tasks"
 }
 
 test_fanout_cap_override_one() {
   with_fixture
-  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
   local out
-  out="$(GLUERUN_MAX_L1_CONCURRENT=1 GLUERUN_L1_PLAN_NODE="$stub" gluerun_l1_fanout RUN-1 "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_MAX_L1_CONCURRENT=1 SINGULAR_L1_PLAN_NODE="$stub" singular_l1_fanout RUN-1 "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "1" "cap=1 plans exactly one node"
   assert_eq "$(task_count)" "1" "cap=1 imports one task"
   # DAG order: D1.contract precedes S0; only the first is leased.
-  [[ -f "$(gluerun_l1_lease_path D1.contract)" ]] || fail "cap=1 should lease the first DAG-order node"
-  [[ ! -f "$(gluerun_l1_lease_path S0.storage_substrate_base)" ]] || fail "cap=1 must not lease the second node"
+  [[ -f "$(singular_l1_lease_path D1.contract)" ]] || fail "cap=1 should lease the first DAG-order node"
+  [[ ! -f "$(singular_l1_lease_path S0.storage_substrate_base)" ]] || fail "cap=1 must not lease the second node"
 }
 
 test_fanout_excludes_authoritative_blocked_gate() {
   with_fixture
   write_blocked_gate D1.contract internal/artifact TASK-0099
-  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
   local out
-  out="$(GLUERUN_L1_PLAN_NODE="$stub" gluerun_l1_fanout RUN-blocked "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_L1_PLAN_NODE="$stub" singular_l1_fanout RUN-blocked "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "1" "fanout plans only the unblocked ready node"
   assert_eq "$(task_count)" "1" "fanout imports only one task"
-  [[ ! -f "$(gluerun_l1_lease_path D1.contract)" ]] || fail "fanout must not lease an authoritative blocked node"
-  [[ -f "$(gluerun_l1_lease_path S0.storage_substrate_base)" ]] || fail "fanout should lease the unblocked ready node"
-  assert_contains "$(cat "$GLUERUN_TASKS_DIR/TASK-0001.md")" "S0.storage_substrate_base" "imported task comes from the unblocked node"
+  [[ ! -f "$(singular_l1_lease_path D1.contract)" ]] || fail "fanout must not lease an authoritative blocked node"
+  [[ -f "$(singular_l1_lease_path S0.storage_substrate_base)" ]] || fail "fanout should lease the unblocked ready node"
+  assert_contains "$(cat "$SINGULAR_TASKS_DIR/TASK-0001.md")" "S0.storage_substrate_base" "imported task comes from the unblocked node"
 }
 
 		test_fanout_one_failure_isolated() {
   with_fixture
-  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
   local out
-  out="$(GLUERUN_TEST_FAIL_NODE=S0.storage_substrate_base GLUERUN_L1_PLAN_NODE="$stub" \
-        gluerun_l1_fanout RUN-fail "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_TEST_FAIL_NODE=S0.storage_substrate_base SINGULAR_L1_PLAN_NODE="$stub" \
+        singular_l1_fanout RUN-fail "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "1" "a failed planner does not discard the other's batch"
   assert_eq "$(task_count)" "1" "the successful node still imports"
-  assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "failed" "the failed node's lease is marked failed"
-	  assert_eq "$(gluerun_l1_lease_status D1.contract)" "released" "the successful node's lease is released"
+  assert_eq "$(singular_l1_lease_status S0.storage_substrate_base)" "failed" "the failed node's lease is marked failed"
+	  assert_eq "$(singular_l1_lease_status D1.contract)" "released" "the successful node's lease is released"
 	}
 
 	test_fanout_reports_planner_failures_for_breaker_accounting() {
 	  with_fixture
-	  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+	  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
 	  local out
-	  out="$(GLUERUN_TEST_FAIL_NODE=S0.storage_substrate_base GLUERUN_L1_PLAN_NODE="$stub" \
-	        gluerun_l1_fanout RUN-fail-count "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+	  out="$(SINGULAR_TEST_FAIL_NODE=S0.storage_substrate_base SINGULAR_L1_PLAN_NODE="$stub" \
+	        singular_l1_fanout RUN-fail-count "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
 	  assert_contains "$out" "l1_planner_failures=1" "fanout reports planner failure count"
 	  assert_contains "$out" "l1_import_rejections=0" "fanout reports import rejection count"
 	}
 
 	test_autonomate_counts_planner_failures_against_breaker() {
 	  with_fixture
-	  local stub="$GLUERUN_ROOT/reconcile-planner-fail-stub.sh"
+	  local stub="$SINGULAR_ROOT/reconcile-planner-fail-stub.sh"
 	  cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-echo "glueRun-go origin reconcile (actuate)"
+echo "singular origin reconcile (actuate)"
 echo "dispatched_this_run=0"
 echo "failed_dispatches=0"
 echo "integrated_this_run=0"
@@ -675,10 +675,10 @@ echo "l1_import_rejections_this_run=0"
 STUB
 	  chmod +x "$stub"
 	  local out
-	  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+	  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
 	  assert_contains "$out" "planner_failures_this_run=1" "autonomate sees planner failure count from reconcile"
 	  assert_contains "$out" "breaker -> 1" "autonomate trips breaker on no-progress planner failure"
-	  assert_eq "$(gluerun_breaker_count)" "1" "planner failure increments the circuit breaker"
+	  assert_eq "$(singular_breaker_count)" "1" "planner failure increments the circuit breaker"
 	}
 
 # A reconcile stub that fails the test if autonomate ever calls it (used to prove
@@ -699,23 +699,23 @@ test_autonomate_sleeps_through_quota_window_without_breaker() {
   with_fixture
   local evidence
   evidence="$(make_structured_quota_evidence RUN-q)"
-  GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS=120 \
-    gluerun_planner_backoff_set quota RUN-q D1.contract "$evidence"
-  local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
+  SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS=120 \
+    singular_planner_backoff_set quota RUN-q D1.contract "$evidence"
+  local stub="$SINGULAR_ROOT/reconcile-should-not-run.sh"
   write_reconcile_should_not_run_stub "$stub"
   local out
-  out="$(GLUERUN_QUOTA_SLEEP_CAP=1 GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_QUOTA_SLEEP_CAP=1 SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "quota window open" "autonomate detects the open quota window"
   assert_not_contains "$out" "RECONCILE_WAS_CALLED" "autonomate does NOT run reconcile during a quota window"
-  assert_eq "$(gluerun_breaker_count)" "0" "sleeping through a quota window does not trip the breaker"
+  assert_eq "$(singular_breaker_count)" "0" "sleeping through a quota window does not trip the breaker"
 }
 
 # Non-quota backoffs still permit reconcile, but a repeated planner refusal is
 # neutral while the backoff remains valid.
 test_autonomate_nonquota_backoff_neutralizes_repeated_planner_failure() {
   with_fixture
-  GLUERUN_PLANNER_BACKOFF_SECONDS=120 gluerun_planner_backoff_set timeout RUN-t D1.contract /dev/null
-  local stub="$GLUERUN_ROOT/reconcile-planner-fail.sh"
+  SINGULAR_PLANNER_BACKOFF_SECONDS=120 singular_planner_backoff_set timeout RUN-t D1.contract /dev/null
+  local stub="$SINGULAR_ROOT/reconcile-planner-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -727,16 +727,16 @@ echo "l1_import_rejections_this_run=0"
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_not_contains "$out" "quota window open" "non-quota backoff is not treated as a quota window"
   assert_contains "$out" "planner refusal neutral" "active non-quota backoff is explicitly neutral"
-  assert_eq "$(gluerun_breaker_count)" "0" "repeated planner refusal under active backoff does not count"
+  assert_eq "$(singular_breaker_count)" "0" "repeated planner refusal under active backoff does not count"
 }
 
 test_autonomate_nonquota_backoff_still_counts_unrelated_failure() {
   with_fixture
-  GLUERUN_PLANNER_BACKOFF_SECONDS=120 gluerun_planner_backoff_set codex-exit RUN-t D1.contract /dev/null
-  local stub="$GLUERUN_ROOT/reconcile-dispatch-fail.sh"
+  SINGULAR_PLANNER_BACKOFF_SECONDS=120 singular_planner_backoff_set codex-exit RUN-t D1.contract /dev/null
+  local stub="$SINGULAR_ROOT/reconcile-dispatch-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -749,21 +749,21 @@ echo "l1_import_rejections_this_run=0"
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "planner refusal neutral" "planner component is neutralized"
   assert_contains "$out" "breaker -> 1" "unrelated dispatch failure still trips breaker"
-  assert_eq "$(gluerun_breaker_count)" "1" "unrelated failure counts during planner backoff"
+  assert_eq "$(singular_breaker_count)" "1" "unrelated failure counts during planner backoff"
 }
 
 # An EXPIRED quota backoff must fail open: the predicate ignores it, so the loop
 # proceeds to a normal cycle instead of sleeping forever.
 test_autonomate_expired_quota_backoff_falls_through() {
   with_fixture
-  python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" <<'PY'
+  python3 - "$SINGULAR_PLANNER_BACKOFF_FILE" <<'PY'
 import json, sys
-json.dump({"schema": "gluerun.orchestration.planner-backoff.v0", "failureClass": "quota", "until": "2000-01-01T00:00:00Z"}, open(sys.argv[1], "w"))
+json.dump({"schema": "singular.orchestration.planner-backoff.v0", "failureClass": "quota", "until": "2000-01-01T00:00:00Z"}, open(sys.argv[1], "w"))
 PY
-  local stub="$GLUERUN_ROOT/reconcile-marker.sh"
+  local stub="$SINGULAR_ROOT/reconcile-marker.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "RECONCILE_RAN"
@@ -776,7 +776,7 @@ echo "l1_import_rejections_this_run=0"
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_not_contains "$out" "quota window open" "expired quota backoff is ignored"
   assert_contains "$out" "RECONCILE_RAN" "loop proceeds to reconcile when the backoff has expired"
 }
@@ -787,14 +787,14 @@ test_autonomate_quota_wait_budget_sets_stop() {
   with_fixture
   local evidence
   evidence="$(make_structured_quota_evidence RUN-q)"
-  GLUERUN_PLANNER_QUOTA_BACKOFF_SECONDS=120 \
-    gluerun_planner_backoff_set quota RUN-q D1.contract "$evidence"
-  local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
+  SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS=120 \
+    singular_planner_backoff_set quota RUN-q D1.contract "$evidence"
+  local stub="$SINGULAR_ROOT/reconcile-should-not-run.sh"
   write_reconcile_should_not_run_stub "$stub"
   local out
-  out="$(GLUERUN_QUOTA_WAIT_BUDGET=0 GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_QUOTA_WAIT_BUDGET=0 SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "quota wait budget exhausted" "budget exhaustion is reported"
-  [[ -f "$GLUERUN_STOP_FILE" ]] || fail "budget exhaustion should set the STOP sentinel"
+  [[ -f "$SINGULAR_STOP_FILE" ]] || fail "budget exhaustion should set the STOP sentinel"
   assert_not_contains "$out" "RECONCILE_WAS_CALLED" "budget-exhaustion path does not run reconcile"
 }
 
@@ -806,10 +806,10 @@ test_autonomate_sleeps_through_overload_window_without_breaker() {
   with_fixture
   local evidence
   evidence="$(make_structured_quota_evidence RUN-o claude 529)"
-  gluerun_planner_backoff_set provider-overloaded RUN-o D1.contract "$evidence" \
+  singular_planner_backoff_set provider-overloaded RUN-o D1.contract "$evidence" \
     || fail "overload evidence did not arm a provider-overloaded backoff"
   local window
-  window="$(python3 - "$GLUERUN_PLANNER_BACKOFF_FILE" <<'PY'
+  window="$(python3 - "$SINGULAR_PLANNER_BACKOFF_FILE" <<'PY'
 import json, sys
 from datetime import datetime
 d = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -819,7 +819,7 @@ print(int((until - started).total_seconds()))
 PY
 )"
   assert_eq "$window" "180" "an overload window is the short backoff, not the 1800s quota window"
-  local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
+  local stub="$SINGULAR_ROOT/reconcile-should-not-run.sh"
   write_reconcile_should_not_run_stub "$stub"
   local out
   # The loop must be running the SAME provider the window belongs to. A backoff
@@ -827,11 +827,11 @@ PY
   # loop; leaving the runner at its codex default here would silently test
   # provider scoping instead of overload-window handling. In the field the
   # evidence always comes from the selected runner, which is what this pins.
-  out="$(GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" GLUERUN_QUOTA_SLEEP_CAP=1 \
-    GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RUNNER="$SCRIPT_DIR/claude-run.sh" SINGULAR_QUOTA_SLEEP_CAP=1 \
+    SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "provider overload window open" "autonomate detects the open overload window"
   assert_not_contains "$out" "quota window open" "an overload window is not reported as a quota window"
-  assert_eq "$(gluerun_breaker_count)" "0" "sleeping through an overload window does not trip the breaker"
+  assert_eq "$(singular_breaker_count)" "0" "sleeping through an overload window does not trip the breaker"
 }
 
 # The overload wait budget is separate: exhausting it must not depend on, or
@@ -840,22 +840,22 @@ test_autonomate_overload_wait_budget_is_separate_from_quota() {
   with_fixture
   local evidence
   evidence="$(make_structured_quota_evidence RUN-o claude 529)"
-  gluerun_planner_backoff_set provider-overloaded RUN-o D1.contract "$evidence"
-  local stub="$GLUERUN_ROOT/reconcile-should-not-run.sh"
+  singular_planner_backoff_set provider-overloaded RUN-o D1.contract "$evidence"
+  local stub="$SINGULAR_ROOT/reconcile-should-not-run.sh"
   write_reconcile_should_not_run_stub "$stub"
   local out
   # As above: the loop runs the provider whose window this is, so the wait
   # budgets are what is under test rather than provider scoping.
   # A zero QUOTA budget must not stop an OVERLOAD wait.
-  out="$(GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" GLUERUN_QUOTA_WAIT_BUDGET=0 \
-    GLUERUN_QUOTA_SLEEP_CAP=1 \
-    GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RUNNER="$SCRIPT_DIR/claude-run.sh" SINGULAR_QUOTA_WAIT_BUDGET=0 \
+    SINGULAR_QUOTA_SLEEP_CAP=1 \
+    SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_not_contains "$out" "wait budget exhausted" "the quota budget does not govern an overload wait"
-  [[ ! -f "$GLUERUN_STOP_FILE" ]] || fail "an exhausted quota budget must not STOP an overload wait"
-  out="$(GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" GLUERUN_OVERLOAD_WAIT_BUDGET=0 \
-    GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  [[ ! -f "$SINGULAR_STOP_FILE" ]] || fail "an exhausted quota budget must not STOP an overload wait"
+  out="$(SINGULAR_RUNNER="$SCRIPT_DIR/claude-run.sh" SINGULAR_OVERLOAD_WAIT_BUDGET=0 \
+    SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "provider overload wait budget exhausted" "the overload budget governs an overload wait"
-  [[ -f "$GLUERUN_STOP_FILE" ]] || fail "overload budget exhaustion should set the STOP sentinel"
+  [[ -f "$SINGULAR_STOP_FILE" ]] || fail "overload budget exhaustion should set the STOP sentinel"
 }
 
 # --- C2: limit/403 sleep-through at the breaker chokepoint -----------------------
@@ -864,7 +864,7 @@ test_autonomate_overload_wait_budget_is_separate_from_quota() {
 test_cycle_limit_window_detected_finds_marker() {
   with_fixture
   make_structured_quota_evidence RUN-limit claude 529 >/dev/null
-  gluerun_cycle_limit_window_detected \
+  singular_cycle_limit_window_detected \
     || fail "a recent structured usage-limit/overload result must be detected"
 }
 
@@ -872,14 +872,14 @@ test_cycle_limit_window_detected_finds_marker() {
 # audit verdicts and prompt files echo repo prose (the 0.4.0 false-backoff bug).
 test_cycle_limit_window_ignores_model_authored_artifacts() {
   with_fixture
-  mkdir -p "$GLUERUN_RUNS_DIR/RUN-artifacts"
-  cat >"$GLUERUN_RUNS_DIR/RUN-artifacts/audit.json" <<'EOF'
+  mkdir -p "$SINGULAR_RUNS_DIR/RUN-artifacts"
+  cat >"$SINGULAR_RUNS_DIR/RUN-artifacts/audit.json" <<'EOF'
 {"rationale":"the quota banner shows: rate limit exceeded"}
 EOF
-  cat >"$GLUERUN_RUNS_DIR/RUN-artifacts/l2-prompt.md" <<'EOF'
+  cat >"$SINGULAR_RUNS_DIR/RUN-artifacts/l2-prompt.md" <<'EOF'
 Implement the quota exceeded banner per api_error_status fixtures.
 EOF
-  if gluerun_cycle_limit_window_detected; then
+  if singular_cycle_limit_window_detected; then
     fail "audit.json/prompt .md content must never arm a limit window"
   fi
 }
@@ -889,7 +889,7 @@ EOF
 test_cycle_limit_window_detected_finds_403_org_disabled() {
   with_fixture
   make_structured_quota_evidence RUN-403 claude 403 >/dev/null
-  gluerun_cycle_limit_window_detected \
+  singular_cycle_limit_window_detected \
     || fail "a structured 403 org-disabled-subscription result must be detected"
 }
 
@@ -897,12 +897,12 @@ test_cycle_limit_window_detected_finds_403_org_disabled() {
 # (fail-closed: the breaker still trips on real failures).
 test_cycle_limit_window_detected_ignores_plain_failure() {
   with_fixture
-  mkdir -p "$GLUERUN_RUNS_DIR/RUN-real"
-  cat >"$GLUERUN_RUNS_DIR/RUN-real/worker.log" <<'EOF'
+  mkdir -p "$SINGULAR_RUNS_DIR/RUN-real"
+  cat >"$SINGULAR_RUNS_DIR/RUN-real/worker.log" <<'EOF'
 compile error: undefined: Foo
 exit status 2
 EOF
-  if gluerun_cycle_limit_window_detected; then fail "a plain code failure with no limit markers must NOT be detected as a limit window"; fi
+  if singular_cycle_limit_window_detected; then fail "a plain code failure with no limit markers must NOT be detected as a limit window"; fi
 }
 
 # A stale (out-of-window) limit marker is ignored so an old window cannot mask a
@@ -911,8 +911,8 @@ test_cycle_limit_window_detected_ignores_stale_marker() {
   with_fixture
   local result
   result="$(make_structured_quota_evidence RUN-old)"
-  touch -t 200001010000 "$result" "$GLUERUN_RUNS_DIR/RUN-old"
-  if GLUERUN_LIMIT_SCAN_WINDOW_SEC=900 gluerun_cycle_limit_window_detected; then fail "a stale out-of-window limit marker must NOT be detected"; fi
+  touch -t 200001010000 "$result" "$SINGULAR_RUNS_DIR/RUN-old"
+  if SINGULAR_LIMIT_SCAN_WINDOW_SEC=900 singular_cycle_limit_window_detected; then fail "a stale out-of-window limit marker must NOT be detected"; fi
 }
 
 # Chokepoint behavior: a no-progress cycle with structured provider evidence
@@ -920,7 +920,7 @@ test_cycle_limit_window_detected_ignores_stale_marker() {
 test_autonomate_limit_induced_failure_arms_backoff_not_breaker() {
   with_fixture
   make_structured_quota_evidence RUN-cycle >/dev/null
-  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  local stub="$SINGULAR_ROOT/reconcile-limit-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -932,13 +932,13 @@ echo "l1_import_rejections_this_run=0"
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "structured provider limit evidence" "a limit-induced cycle is recognized at the chokepoint"
   assert_not_contains "$out" "breaker -> 1" "a limit window does NOT trip the breaker"
-  assert_eq "$(gluerun_breaker_count)" "0" "a limit window leaves the breaker at zero"
-  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "a limit window arms a quota backoff for the next iteration to sleep through"
-  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' "the armed backoff is a quota window"
-  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" 'runner-result.json' "the armed backoff carries result evidence"
+  assert_eq "$(singular_breaker_count)" "0" "a limit window leaves the breaker at zero"
+  [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] || fail "a limit window arms a quota backoff for the next iteration to sleep through"
+  assert_contains "$(cat "$SINGULAR_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' "the armed backoff is a quota window"
+  assert_contains "$(cat "$SINGULAR_PLANNER_BACKOFF_FILE")" 'runner-result.json' "the armed backoff carries result evidence"
 }
 
 # The chokepoint used to hardcode "quota" when re-arming from cycle evidence, so
@@ -947,7 +947,7 @@ STUB
 test_autonomate_chokepoint_arms_the_class_the_evidence_names() {
   with_fixture
   make_structured_quota_evidence RUN-cycle claude 529 >/dev/null
-  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  local stub="$SINGULAR_ROOT/reconcile-limit-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -962,14 +962,14 @@ STUB
   # Run the provider the evidence names: breaker immunity is now conditional on
   # the armed window actually being honourable, so a codex loop here would be
   # testing the cross-provider guard below instead of class selection.
-  out="$(GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" GLUERUN_RECONCILE_SCRIPT="$stub" \
+  out="$(SINGULAR_RUNNER="$SCRIPT_DIR/claude-run.sh" SINGULAR_RECONCILE_SCRIPT="$stub" \
     "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "structured provider limit evidence" "an overload-induced cycle is recognized at the chokepoint"
-  assert_eq "$(gluerun_breaker_count)" "0" "an overload window leaves the breaker at zero"
-  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "the chokepoint arms a backoff from overload evidence"
-  assert_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "provider-overloaded"' \
+  assert_eq "$(singular_breaker_count)" "0" "an overload window leaves the breaker at zero"
+  [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] || fail "the chokepoint arms a backoff from overload evidence"
+  assert_contains "$(cat "$SINGULAR_PLANNER_BACKOFF_FILE")" '"failureClass": "provider-overloaded"' \
     "overload evidence arms a provider-overloaded backoff, not quota"
-  assert_not_contains "$(cat "$GLUERUN_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' \
+  assert_not_contains "$(cat "$SINGULAR_PLANNER_BACKOFF_FILE")" '"failureClass": "quota"' \
     "the chokepoint no longer hardcodes quota"
 }
 
@@ -979,7 +979,7 @@ STUB
 test_autonomate_import_rejections_never_arm_backoff() {
   with_fixture
   make_structured_quota_evidence RUN-rej >/dev/null
-  local stub="$GLUERUN_ROOT/reconcile-reject-fail.sh"
+  local stub="$SINGULAR_ROOT/reconcile-reject-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -991,9 +991,9 @@ echo "l1_import_rejections_this_run=1"
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "breaker -> 1" "rejections-only failures trip the breaker"
-  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] && fail "import rejections must never arm a quota backoff"
+  [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] && fail "import rejections must never arm a quota backoff"
   true
 }
 
@@ -1001,11 +1001,11 @@ STUB
 # this cycle's run logs) STILL trips the breaker.
 test_autonomate_real_failure_still_trips_with_detection_active() {
   with_fixture
-  mkdir -p "$GLUERUN_RUNS_DIR/RUN-real"
-  cat >"$GLUERUN_RUNS_DIR/RUN-real/worker.log" <<'EOF'
+  mkdir -p "$SINGULAR_RUNS_DIR/RUN-real"
+  cat >"$SINGULAR_RUNS_DIR/RUN-real/worker.log" <<'EOF'
 compile error: undefined: Foo
 EOF
-  local stub="$GLUERUN_ROOT/reconcile-real-fail.sh"
+  local stub="$SINGULAR_ROOT/reconcile-real-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -1017,9 +1017,9 @@ echo "l1_import_rejections_this_run=0"
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "breaker -> 1" "a real failure with no limit markers still trips the breaker"
-  assert_eq "$(gluerun_breaker_count)" "1" "a real failure increments the breaker even with C2 detection active"
+  assert_eq "$(singular_breaker_count)" "1" "a real failure increments the breaker even with C2 detection active"
   assert_not_contains "$out" "LIMIT/403-induced" "a real failure is not misclassified as a limit window"
 }
 
@@ -1031,7 +1031,7 @@ STUB
 test_autonomate_unhonourable_window_still_trips_the_breaker() {
   with_fixture
   make_structured_quota_evidence RUN-crossprov claude 529 >/dev/null
-  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  local stub="$SINGULAR_ROOT/reconcile-limit-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -1044,15 +1044,15 @@ STUB
   chmod +x "$stub"
   local out
   # Loop runs the codex default; the only evidence is a claude 529.
-  out="$(GLUERUN_QUOTA_SLEEP_CAP=1 GLUERUN_RECONCILE_SCRIPT="$stub" \
+  out="$(SINGULAR_QUOTA_SLEEP_CAP=1 SINGULAR_RECONCILE_SCRIPT="$stub" \
     "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_not_contains "$out" "window open" "a cross-provider window cannot make the loop sleep"
   assert_contains "$out" "breaker -> 1" "an unhonourable window must not buy breaker immunity"
-  assert_eq "$(gluerun_breaker_count)" "1" "the breaker tripped on the cross-provider window"
+  assert_eq "$(singular_breaker_count)" "1" "the breaker tripped on the cross-provider window"
   # The evidence is still preserved: reverting the runner reactivates it.
-  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] \
+  [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] \
     || fail "the backoff record must still be written for the provider it belongs to"
-  GLUERUN_RUNNER="$SCRIPT_DIR/claude-run.sh" gluerun_planner_backoff_active_json >/dev/null \
+  SINGULAR_RUNNER="$SCRIPT_DIR/claude-run.sh" singular_planner_backoff_active_json >/dev/null \
     || fail "the preserved record must be honourable by the provider it names"
 }
 
@@ -1061,7 +1061,7 @@ STUB
 test_autonomate_honourable_window_still_suppresses_the_breaker() {
   with_fixture
   make_structured_quota_evidence RUN-sameprov codex 429 >/dev/null
-  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  local stub="$SINGULAR_ROOT/reconcile-limit-fail.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -1073,9 +1073,9 @@ echo "l1_import_rejections_this_run=0"
 STUB
   chmod +x "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "NO breaker increment" "a honourable window still suppresses the breaker"
-  assert_eq "$(gluerun_breaker_count)" "0" "a honourable window leaves the breaker at zero"
+  assert_eq "$(singular_breaker_count)" "0" "a honourable window leaves the breaker at zero"
 }
 
 # --- provider-pressure adaptation at the loop level ------------------------------
@@ -1099,7 +1099,7 @@ STUB
 }
 
 pressure_cap_for() {
-  python3 - "$GLUERUN_PROVIDER_PRESSURE_FILE" "$1" <<'PY'
+  python3 - "$SINGULAR_PROVIDER_PRESSURE_FILE" "$1" <<'PY'
 import json, sys
 try:
     doc = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -1115,13 +1115,13 @@ PY
 test_autonomate_provider_pressure_inert_by_default() {
   with_fixture
   make_structured_quota_evidence RUN-cycle >/dev/null
-  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  local stub="$SINGULAR_ROOT/reconcile-limit-fail.sh"
   write_limit_fail_stub "$stub"
   local out
-  out="$(GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
+  out="$(SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once 2>&1 || true)"
   assert_contains "$out" "structured provider limit evidence" "the chokepoint still recognizes the window"
-  [[ -f "$GLUERUN_PLANNER_BACKOFF_FILE" ]] || fail "the default loop still arms a backoff"
-  [[ -e "$GLUERUN_PROVIDER_PRESSURE_FILE" ]] \
+  [[ -f "$SINGULAR_PLANNER_BACKOFF_FILE" ]] || fail "the default loop still arms a backoff"
+  [[ -e "$SINGULAR_PROVIDER_PRESSURE_FILE" ]] \
     && fail "adaptation is off by default and must create no pressure state"
   true
 }
@@ -1131,26 +1131,26 @@ test_autonomate_provider_pressure_inert_by_default() {
 # expiring -- otherwise the loop would (correctly) sleep instead of cycling.
 test_autonomate_clustered_windows_reduce_dispatch_ceiling() {
   with_fixture
-  export GLUERUN_PROVIDER_PRESSURE_ADAPT=1
-  export GLUERUN_PROVIDER_PRESSURE_CLUSTER=2
-  export GLUERUN_MAX_CONCURRENT=4
-  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  export SINGULAR_PROVIDER_PRESSURE_ADAPT=1
+  export SINGULAR_PROVIDER_PRESSURE_CLUSTER=2
+  export SINGULAR_MAX_CONCURRENT=4
+  local stub="$SINGULAR_ROOT/reconcile-limit-fail.sh"
   write_limit_fail_stub "$stub"
 
   make_structured_quota_evidence RUN-window-1 >/dev/null
-  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
   assert_eq "$(pressure_cap_for codex)" "null" "one window must not reduce the ceiling"
 
   # Window expired; the next cycle meets a fresh, distinct 429.
-  rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
-  rm -rf "$GLUERUN_RUNS_DIR/RUN-window-1"
+  rm -f "$SINGULAR_PLANNER_BACKOFF_FILE"
+  rm -rf "$SINGULAR_RUNS_DIR/RUN-window-1"
   make_structured_quota_evidence RUN-window-2 >/dev/null
-  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
   assert_eq "$(pressure_cap_for codex)" "2" "a clustered second window halves the ceiling"
-  assert_eq "$(gluerun_breaker_count)" "0" "adapting concurrency does not trip the breaker"
+  assert_eq "$(singular_breaker_count)" "0" "adapting concurrency does not trip the breaker"
 
   local plan
-  plan="$(GLUERUN_MAX_CONCURRENT=4 "$SCRIPT_DIR/resource-plan.sh" --configured-slots 4 \
+  plan="$(SINGULAR_MAX_CONCURRENT=4 "$SCRIPT_DIR/resource-plan.sh" --configured-slots 4 \
     --reserve-bytes 0 --estimated-worktree-bytes 1 --free-bytes 1000000 --json)"
   assert_contains "$plan" '"effectiveSlots":2' "the reduced ceiling reaches the dispatch plan"
   assert_contains "$plan" '"reason":"provider-pressure-limited"' "the plan names provider pressure"
@@ -1159,20 +1159,20 @@ test_autonomate_clustered_windows_reduce_dispatch_ceiling() {
 # A progressing cycle is a quiet success; enough of them hand a slot back.
 test_autonomate_quiet_progress_restores_capacity() {
   with_fixture
-  export GLUERUN_PROVIDER_PRESSURE_ADAPT=1
-  export GLUERUN_PROVIDER_PRESSURE_RECOVER_QUIET=1
-  export GLUERUN_MAX_CONCURRENT=4
-  python3 - "$GLUERUN_PROVIDER_PRESSURE_FILE" <<'PY'
+  export SINGULAR_PROVIDER_PRESSURE_ADAPT=1
+  export SINGULAR_PROVIDER_PRESSURE_RECOVER_QUIET=1
+  export SINGULAR_MAX_CONCURRENT=4
+  python3 - "$SINGULAR_PROVIDER_PRESSURE_FILE" <<'PY'
 import json, sys
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
     json.dump({
-        "schema": "gluerun.orchestration.provider-pressure.v0",
+        "schema": "singular.orchestration.provider-pressure.v0",
         "updatedAt": "2026-01-01T00:00:00Z",
         "providers": {"codex": {"cap": 1, "events": [], "quietSuccesses": 0,
                                 "lastReducedAt": None, "lastRecoveredAt": None}},
     }, handle)
 PY
-  local stub="$GLUERUN_ROOT/reconcile-progress.sh"
+  local stub="$SINGULAR_ROOT/reconcile-progress.sh"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 echo "dispatched_this_run=0"
@@ -1183,13 +1183,13 @@ echo "planner_failures_this_run=0"
 echo "l1_import_rejections_this_run=0"
 STUB
   chmod +x "$stub"
-  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
   assert_eq "$(pressure_cap_for codex)" "2" "a quiet successful iteration restores exactly one slot"
-  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
   assert_eq "$(pressure_cap_for codex)" "3" "recovery continues one slot at a time"
-  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
   assert_eq "$(pressure_cap_for codex)" "null" "reaching the configured ceiling clears the cap"
-  GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+  SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
   assert_eq "$(pressure_cap_for codex)" "null" "recovery never climbs past the configured ceiling"
 }
 
@@ -1197,34 +1197,34 @@ STUB
 # still leave that slot, or runnable work could never drain.
 test_autonomate_pressure_never_starves_runnable_work() {
   with_fixture
-  export GLUERUN_PROVIDER_PRESSURE_ADAPT=1
-  export GLUERUN_PROVIDER_PRESSURE_CLUSTER=1
-  export GLUERUN_MAX_CONCURRENT=1
-  local stub="$GLUERUN_ROOT/reconcile-limit-fail.sh"
+  export SINGULAR_PROVIDER_PRESSURE_ADAPT=1
+  export SINGULAR_PROVIDER_PRESSURE_CLUSTER=1
+  export SINGULAR_MAX_CONCURRENT=1
+  local stub="$SINGULAR_ROOT/reconcile-limit-fail.sh"
   write_limit_fail_stub "$stub"
   local i
   for i in 1 2 3; do
-    rm -f "$GLUERUN_PLANNER_BACKOFF_FILE"
-    rm -rf "$GLUERUN_RUNS_DIR/RUN-floor-$((i - 1))"
+    rm -f "$SINGULAR_PLANNER_BACKOFF_FILE"
+    rm -rf "$SINGULAR_RUNS_DIR/RUN-floor-$((i - 1))"
     make_structured_quota_evidence "RUN-floor-$i" >/dev/null
-    GLUERUN_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
+    SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" --once >/dev/null 2>&1 || true
   done
   assert_eq "$(pressure_cap_for codex)" "1" "sustained pressure never drives the ceiling below one slot"
   local plan
-  plan="$(GLUERUN_MAX_CONCURRENT=1 "$SCRIPT_DIR/resource-plan.sh" --configured-slots 1 \
+  plan="$(SINGULAR_MAX_CONCURRENT=1 "$SCRIPT_DIR/resource-plan.sh" --configured-slots 1 \
     --reserve-bytes 0 --estimated-worktree-bytes 1 --free-bytes 1000000 --json)"
   assert_contains "$plan" '"effectiveSlots":1' "the plan keeps one slot for runnable work"
 }
 
 test_fanout_invalid_staged_imports_nothing_for_that_node() {
   with_fixture
-  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
   local out
-  out="$(GLUERUN_TEST_BADAREA_NODE=D1.contract GLUERUN_L1_PLAN_NODE="$stub" \
-        gluerun_l1_fanout RUN-bad "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_TEST_BADAREA_NODE=D1.contract SINGULAR_L1_PLAN_NODE="$stub" \
+        singular_l1_fanout RUN-bad "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "1" "only the valid node imports"
-  assert_eq "$(gluerun_l1_lease_status D1.contract)" "failed" "an invalid staged batch marks the node failed"
-  [[ ! -f "$GLUERUN_TASKS_DIR/TASK-0001.md" ]] && true  # one valid task imported as some id
+  assert_eq "$(singular_l1_lease_status D1.contract)" "failed" "an invalid staged batch marks the node failed"
+  [[ ! -f "$SINGULAR_TASKS_DIR/TASK-0001.md" ]] && true  # one valid task imported as some id
   assert_eq "$(task_count)" "1" "the invalid batch imports nothing"
 }
 
@@ -1236,9 +1236,9 @@ test_frontier_scope_guard_excludes_conflict_via_configured_area_map() {
   # overlaps frontier area "artifact" ONLY under the configured map
   # (artifact=src/shared/). The old hardcoded internal/artifact/ scope would
   # never conflict with src/shared/, so this proves the guard reads the map.
-  gluerun_l1_lease_write D0.contract kernel D0 contract active RUN-scope abc1234 target '["src/shared/"]'
+  singular_l1_lease_write D0.contract kernel D0 contract active RUN-scope abc1234 target '["src/shared/"]'
   local out
-  out="$(GLUERUN_AREA_PATHS=$'artifact=src/shared/\nstorage=src/storage/' gluerun_select_l1_frontier 2)"
+  out="$(SINGULAR_AREA_PATHS=$'artifact=src/shared/\nstorage=src/storage/' singular_select_l1_frontier 2)"
   assert_not_contains "$out" "D1.contract" "configured-scope overlap with an active lease excludes the node"
   assert_contains "$out" "S0.storage_substrate_base" "non-overlapping mapped area is still selected"
 }
@@ -1248,52 +1248,52 @@ test_frontier_scope_guard_batch_overlap_via_configured_area_map() {
   # Both frontier areas map onto the SAME configured scope -> only the first
   # DAG-order node may be selected within one batch.
   local out
-  out="$(GLUERUN_AREA_PATHS=$'artifact=src/shared/\nstorage=src/shared/' gluerun_select_l1_frontier 2)"
+  out="$(SINGULAR_AREA_PATHS=$'artifact=src/shared/\nstorage=src/shared/' singular_select_l1_frontier 2)"
   assert_contains "$out" "D1.contract" "first DAG-order node is selected"
   assert_not_contains "$out" "S0.storage_substrate_base" "second node sharing the configured scope is excluded from the batch"
 }
 
 test_frontier_scope_guard_honors_area_prefix() {
   with_fixture
-  # areaPrefix variant: with GLUERUN_AREA_PREFIX=src/, area artifact's scope is
+  # areaPrefix variant: with SINGULAR_AREA_PREFIX=src/, area artifact's scope is
   # src/artifact/ -> conflicts with an active lease scoped to src/artifact/.
-  gluerun_l1_lease_write D0.contract kernel D0 contract active RUN-prefix abc1234 target '["src/artifact/"]'
+  singular_l1_lease_write D0.contract kernel D0 contract active RUN-prefix abc1234 target '["src/artifact/"]'
   local out
-  out="$(GLUERUN_AREA_PREFIX=src/ gluerun_select_l1_frontier 2)"
+  out="$(SINGULAR_AREA_PREFIX=src/ singular_select_l1_frontier 2)"
   assert_not_contains "$out" "D1.contract" "areaPrefix-derived scope overlap excludes the node"
   assert_contains "$out" "S0.storage_substrate_base" "non-overlapping areaPrefix-derived scope is still selected"
 }
 
 test_fanout_stop_blocks() {
   with_fixture
-  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
-  touch "$GLUERUN_STATE_DIR/STOP"
+  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+  touch "$SINGULAR_STATE_DIR/STOP"
   local out
-  out="$(GLUERUN_L1_PLAN_NODE="$stub" gluerun_l1_fanout RUN-stop "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_L1_PLAN_NODE="$stub" singular_l1_fanout RUN-stop "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(task_count)" "0" "STOP must prevent any import"
-  [[ -z "$(find "$GLUERUN_L1_LEASES_DIR" -name '*.json' 2>/dev/null)" ]] || fail "STOP must create no L1 leases"
-  assert_contains "$(cat "$GLUERUN_EVENTS_FILE" 2>/dev/null || true)" "origin.fanout_aborted" "STOP fanout emits an abort event"
+  [[ -z "$(find "$SINGULAR_L1_LEASES_DIR" -name '*.json' 2>/dev/null)" ]] || fail "STOP must create no L1 leases"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE" 2>/dev/null || true)" "origin.fanout_aborted" "STOP fanout emits an abort event"
 }
 
 test_fanout_disk_blocks() {
   with_fixture
-  local stub="$GLUERUN_ROOT/plan-stub.sh"; make_plan_stub "$stub"
+  local stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$stub"
   local out
-  out="$(GLUERUN_MIN_DISK_GB=99999999 GLUERUN_L1_PLAN_NODE="$stub" \
-        gluerun_l1_fanout RUN-disk "$(git -C "$GLUERUN_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_MIN_DISK_GB=99999999 SINGULAR_L1_PLAN_NODE="$stub" \
+        singular_l1_fanout RUN-disk "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "0" "low disk blocks all fanout imports"
   assert_eq "$(task_count)" "0" "low disk must not create global tasks"
-  [[ -z "$(find "$GLUERUN_L1_LEASES_DIR" -name '*.json' 2>/dev/null)" ]] || fail "low disk must create no L1 leases"
-  [[ ! -d "$GLUERUN_RUNS_DIR/RUN-disk/l1-staging" ]] || fail "low disk must create no L1 staging"
-  assert_contains "$(cat "$GLUERUN_EVENTS_FILE" 2>/dev/null || true)" "origin.disk_pressure" "low disk emits a disk_pressure event"
-  assert_contains "$(cat "$GLUERUN_EVENTS_FILE" 2>/dev/null || true)" "origin.fanout_aborted" "low disk emits a fanout_aborted event"
+  [[ -z "$(find "$SINGULAR_L1_LEASES_DIR" -name '*.json' 2>/dev/null)" ]] || fail "low disk must create no L1 leases"
+  [[ ! -d "$SINGULAR_RUNS_DIR/RUN-disk/l1-staging" ]] || fail "low disk must create no L1 staging"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE" 2>/dev/null || true)" "origin.disk_pressure" "low disk emits a disk_pressure event"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE" 2>/dev/null || true)" "origin.fanout_aborted" "low disk emits a fanout_aborted event"
 }
 
 test_rewrite_task_id_token_is_token_safe() {
   with_fixture
-  local f="$GLUERUN_STATE_DIR/rewrite.md"
+  local f="$SINGULAR_STATE_DIR/rewrite.md"
   printf '%s\n' '# TASK-0001: x' 'dep TASK-0010 and TASK-00011 and TASK-0001 again' > "$f"
-  gluerun_rewrite_task_id_token "$f" TASK-0001 TASK-0003
+  singular_rewrite_task_id_token "$f" TASK-0001 TASK-0003
   local out; out="$(cat "$f")"
   assert_contains "$out" "TASK-0003" "the exact id token is rewritten"
   assert_not_contains "$out" "TASK-0001 " "no bare TASK-0001 token remains"
@@ -1303,24 +1303,24 @@ test_rewrite_task_id_token_is_token_safe() {
 
 test_import_fails_closed_on_missing_lease() {
   with_fixture
-  local sdir="$GLUERUN_RUNS_DIR/RUN-nolease/l1-staging/S0.storage_substrate_base"
+  local sdir="$SINGULAR_RUNS_DIR/RUN-nolease/l1-staging/S0.storage_substrate_base"
   mkdir -p "$sdir"
   printf '%s\n' '# TASK-0001: x' '' 'Status: ready' 'Area: storage' 'Dispatch mode: canonical' '' '## Scope' '' 'Owned files:' '' '- `internal/storage/x.go`' > "$sdir/TASK-0001.candidate.md"
   # No lease written for the node.
-  gluerun_l1_import_staged RUN-nolease S0.storage_substrate_base >/dev/null 2>&1 || true
+  singular_l1_import_staged RUN-nolease S0.storage_substrate_base >/dev/null 2>&1 || true
   assert_eq "$(task_count)" "0" "import must fail closed (import nothing) when the lease is missing"
 }
 
 	test_import_rejects_candidate_without_taskid() {
   with_fixture
-  gluerun_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-x abc1234 target
-  local sdir="$GLUERUN_RUNS_DIR/RUN-noid/l1-staging/S0.storage_substrate_base"
+  singular_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-x abc1234 target
+  local sdir="$SINGULAR_RUNS_DIR/RUN-noid/l1-staging/S0.storage_substrate_base"
   mkdir -p "$sdir"
   # Valid shape but NO "# TASK-...:" header -> taskId is empty.
   printf '%s\n' '# Missing id header' '' 'Status: ready' 'Area: storage' 'Dispatch mode: canonical' '' '## Scope' '' 'Owned files:' '' '- `internal/storage/x.go`' > "$sdir/TASK-0001.candidate.md"
-  gluerun_l1_import_staged RUN-noid S0.storage_substrate_base >/dev/null 2>&1 || true
+  singular_l1_import_staged RUN-noid S0.storage_substrate_base >/dev/null 2>&1 || true
   assert_eq "$(task_count)" "0" "a candidate without a taskId must be rejected"
-	  assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "failed" "the node lease is marked failed"
+	  assert_eq "$(singular_l1_lease_status S0.storage_substrate_base)" "failed" "the node lease is marked failed"
 	}
 
 	test_import_rejects_duplicate_candidate_matching_open_task_signature() {
@@ -1329,18 +1329,18 @@ test_import_fails_closed_on_missing_lease() {
 	  # reject a candidate at import.
 	  write_signature_task TASK-0099 running storage "Staged fixture S0.storage_substrate_base" \
 	    "Original running objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
-	  gluerun_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-dup abc1234 target
-	  local sdir="$GLUERUN_RUNS_DIR/RUN-dup/l1-staging/S0.storage_substrate_base"
+	  singular_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-dup abc1234 target
+	  local sdir="$SINGULAR_RUNS_DIR/RUN-dup/l1-staging/S0.storage_substrate_base"
 	  mkdir -p "$sdir"
 	  write_signature_task TASK-0001 ready storage "Staged fixture S0.storage_substrate_base" \
 	    "Regenerated objective with different wording but the same owned file set." "internal/storage/staged_S0_storage_substrate_base.go"
-	  mv "$GLUERUN_TASKS_DIR/TASK-0001.md" "$sdir/TASK-0001.candidate.md"
+	  mv "$SINGULAR_TASKS_DIR/TASK-0001.md" "$sdir/TASK-0001.candidate.md"
 	  local out
-	  out="$(gluerun_l1_import_staged RUN-dup S0.storage_substrate_base 2>&1 || true)"
+	  out="$(singular_l1_import_staged RUN-dup S0.storage_substrate_base 2>&1 || true)"
 	  assert_not_contains "$out" "generated:" "duplicate candidate must not import"
 	  assert_eq "$(task_count)" "1" "duplicate rejection preserves the existing task only"
-	  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" "duplicate-candidate" "duplicate rejection emits reason"
-	  assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "failed" "duplicate candidate marks node lease failed"
+	  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" "duplicate-candidate" "duplicate rejection emits reason"
+	  assert_eq "$(singular_l1_lease_status S0.storage_substrate_base)" "failed" "duplicate candidate marks node lease failed"
 	}
 
 	# The 0.4.0 deadlock regression: a BLOCKED predecessor with the same owned
@@ -1350,33 +1350,33 @@ test_import_fails_closed_on_missing_lease() {
 	  with_fixture
 	  write_signature_task TASK-0099 blocked storage "Staged fixture S0.storage_substrate_base" \
 	    "Original blocked objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
-	  gluerun_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-succ abc1234 target
-	  local sdir="$GLUERUN_RUNS_DIR/RUN-succ/l1-staging/S0.storage_substrate_base"
+	  singular_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-succ abc1234 target
+	  local sdir="$SINGULAR_RUNS_DIR/RUN-succ/l1-staging/S0.storage_substrate_base"
 	  mkdir -p "$sdir"
 	  write_signature_task TASK-0001 ready storage "Staged fixture S0.storage_substrate_base" \
 	    "Successor objective with the same owned file set." "internal/storage/staged_S0_storage_substrate_base.go"
-	  mv "$GLUERUN_TASKS_DIR/TASK-0001.md" "$sdir/TASK-0001.candidate.md"
+	  mv "$SINGULAR_TASKS_DIR/TASK-0001.md" "$sdir/TASK-0001.candidate.md"
 	  local out
-	  out="$(gluerun_l1_import_staged RUN-succ S0.storage_substrate_base 2>&1 || true)"
+	  out="$(singular_l1_import_staged RUN-succ S0.storage_substrate_base 2>&1 || true)"
 	  assert_contains "$out" "generated:" "successor of a blocked task must import"
 	}
 
 test_import_reads_atomic_candidate_generation() {
   with_fixture
-  gluerun_l1_lease_write S0.storage_substrate_base storage S0 \
+  singular_l1_lease_write S0.storage_substrate_base storage S0 \
     storage_substrate_base active RUN-pointer abc1234 target
-  local sdir="$GLUERUN_RUNS_DIR/RUN-pointer/l1-staging/S0.storage_substrate_base"
+  local sdir="$SINGULAR_RUNS_DIR/RUN-pointer/l1-staging/S0.storage_substrate_base"
   local replacement="$sdir/.replacement"
   mkdir -p "$sdir" "$replacement"
   write_signature_task TASK-0001 ready storage \
     "Atomic staged fixture S0.storage_substrate_base" \
     "Import the atomically selected candidate generation." \
     "internal/storage/atomic_staged.go"
-  mv "$GLUERUN_TASKS_DIR/TASK-0001.md" "$sdir/TASK-0001.candidate.md"
+  mv "$SINGULAR_TASKS_DIR/TASK-0001.md" "$sdir/TASK-0001.candidate.md"
   cp "$sdir/TASK-0001.candidate.md" "$replacement/"
   printf '\nGeneration publication marker.\n' \
     >>"$replacement/TASK-0001.candidate.md"
-  gluerun_task_batch_replace_stage "$replacement" "$sdir" \
+  singular_task_batch_replace_stage "$replacement" "$sdir" \
     || fail "candidate generation publication failed"
   [[ -f "$sdir/.candidate-current.json" ]] \
     || fail "candidate generation pointer was not published"
@@ -1385,7 +1385,7 @@ test_import_reads_atomic_candidate_generation() {
   # and consume the immutable generation selected by the pointer.
   printf 'invalid legacy candidate\n' >"$sdir/TASK-0001.candidate.md"
   local out
-  out="$(gluerun_l1_import_staged RUN-pointer S0.storage_substrate_base 2>&1 || true)"
+  out="$(singular_l1_import_staged RUN-pointer S0.storage_substrate_base 2>&1 || true)"
   assert_contains "$out" "generated:" \
     "L0 import must consume the authoritative candidate generation"
   assert_eq "$(task_count)" "1" \
@@ -1399,13 +1399,13 @@ test_import_reads_atomic_candidate_generation() {
 	  # legitimate and declares `Supersedes:`); dispatch-time dedup still
 	  # suppresses undeclared ready twins of integrated work.
 	  write_signature_task TASK-0098 running artifact "Stub task" "Stub." "internal/artifact/stub.go"
-	  local stub="$GLUERUN_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
+	  local stub="$SINGULAR_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
 	  local out rc=0
-	  out="$(GLUERUN_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node D1.contract --count 1 2>&1)" || rc=$?
+	  out="$(SINGULAR_CODEX_RUNNER="$stub" "$SCRIPT_DIR/generate-tasks.sh" --node D1.contract --count 1 2>&1)" || rc=$?
 	  [[ "$rc" -ne 0 ]] || fail "direct duplicate generation must exit non-zero"
 	  assert_contains "$out" "duplicate-candidate" "direct duplicate rejection is reported"
 	  assert_eq "$(task_count)" "1" "direct duplicate rejection must not write a new global task"
-	  assert_contains "$(cat "$GLUERUN_EVENTS_FILE")" "duplicate-candidate" "direct duplicate rejection emits event"
+	  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" "duplicate-candidate" "direct duplicate rejection emits event"
 	}
 
 test_ready_listing_skips_duplicate_ready_task_by_owned_files() {
@@ -1416,34 +1416,34 @@ test_ready_listing_skips_duplicate_ready_task_by_owned_files() {
     "Original running objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
   write_signature_task TASK-0099 ready storage "Staged fixture S0.storage_substrate_base" \
     "Regenerated objective with different wording but the same owned file set." "internal/storage/staged_S0_storage_substrate_base.go"
-  assert_eq "$(gluerun_list_ready_tasks | wc -l | tr -d ' ')" "0" "duplicate ready task must not be returned for dispatch"
-  assert_eq "$(gluerun_select_dispatch_frontier 1 | wc -l | tr -d ' ')" "0" "duplicate ready task must not be selected for dispatch"
+  assert_eq "$(singular_list_ready_tasks | wc -l | tr -d ' ')" "0" "duplicate ready task must not be returned for dispatch"
+  assert_eq "$(singular_select_dispatch_frontier 1 | wc -l | tr -d ' ')" "0" "duplicate ready task must not be selected for dispatch"
   # Successor-of-blocked is dispatchable:
   write_signature_task TASK-0098 blocked storage "Staged fixture S0.storage_substrate_base" \
     "Original blocked objective for S0.storage_substrate_base." "internal/storage/staged_S0_storage_substrate_base.go"
-  assert_eq "$(gluerun_list_ready_tasks | wc -l | tr -d ' ')" "1" "successor of a blocked twin is dispatchable"
+  assert_eq "$(singular_list_ready_tasks | wc -l | tr -d ' ')" "1" "successor of a blocked twin is dispatchable"
 }
 
 test_active_lease_count_uses_single_json_pass() {
   with_fixture
-  mkdir -p "$GLUERUN_LEASES_DIR"
-  printf '%s\n' '{"status":"running"}' >"$GLUERUN_LEASES_DIR/TASK-0001.json"
-  printf '%s\n' '{"status":"planned"}' >"$GLUERUN_LEASES_DIR/TASK-0002.json"
-  printf '%s\n' '{"status":"needs-review"}' >"$GLUERUN_LEASES_DIR/TASK-0003.json"
-  printf '%s\n' '{"status":"succeeded"}' >"$GLUERUN_LEASES_DIR/TASK-0004.json"
-  printf '%s\n' '{not-json' >"$GLUERUN_LEASES_DIR/TASK-0005.json"
+  mkdir -p "$SINGULAR_LEASES_DIR"
+  printf '%s\n' '{"status":"running"}' >"$SINGULAR_LEASES_DIR/TASK-0001.json"
+  printf '%s\n' '{"status":"planned"}' >"$SINGULAR_LEASES_DIR/TASK-0002.json"
+  printf '%s\n' '{"status":"needs-review"}' >"$SINGULAR_LEASES_DIR/TASK-0003.json"
+  printf '%s\n' '{"status":"succeeded"}' >"$SINGULAR_LEASES_DIR/TASK-0004.json"
+  printf '%s\n' '{not-json' >"$SINGULAR_LEASES_DIR/TASK-0005.json"
   local out
   out="$(
-    gluerun_json_field() { fail "gluerun_active_lease_count must not call gluerun_json_field once per lease"; }
-    gluerun_active_lease_count
+    singular_json_field() { fail "singular_active_lease_count must not call singular_json_field once per lease"; }
+    singular_active_lease_count
   )"
   assert_eq "$out" "3" "active lease count includes only in-flight statuses"
 }
 
 test_import_rolls_back_partial_promotion_on_mv_failure() {
   with_fixture
-  gluerun_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-x abc1234 target
-  local sdir="$GLUERUN_RUNS_DIR/RUN-mv/l1-staging/S0.storage_substrate_base" k
+  singular_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-x abc1234 target
+  local sdir="$SINGULAR_RUNS_DIR/RUN-mv/l1-staging/S0.storage_substrate_base" k
   mkdir -p "$sdir"
   for k in 1 2; do
     printf '%s\n' "# TASK-000$k: c$k" '' 'Status: ready' 'Area: storage' 'Dispatch mode: canonical' 'Depends on: []' '' '## Scope' '' 'Owned files:' '' "- \`internal/storage/c$k.go\`" > "$sdir/TASK-000$k.candidate.md"
@@ -1451,10 +1451,10 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
   # Override mv to fail on the SECOND call -> first candidate promotes, second fails.
   _mv_calls=0
   mv() { _mv_calls=$((_mv_calls + 1)); [[ "$_mv_calls" -ge 2 ]] && return 1; command mv "$@"; }
-  gluerun_l1_import_staged RUN-mv S0.storage_substrate_base >/dev/null 2>&1 || true
+  singular_l1_import_staged RUN-mv S0.storage_substrate_base >/dev/null 2>&1 || true
   unset -f mv
   assert_eq "$(task_count)" "0" "a failed mv mid-batch rolls back so nothing is promoted (all-or-nothing)"
-  assert_eq "$(gluerun_l1_lease_status S0.storage_substrate_base)" "failed" "the node lease is marked failed on promotion failure"
+  assert_eq "$(singular_l1_lease_status S0.storage_substrate_base)" "failed" "the node lease is marked failed on promotion failure"
 }
 
 	test_rewrite_task_id_token_is_token_safe

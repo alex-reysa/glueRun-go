@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0071",
   "runId": "RUN-20260712T130208Z-66652",
   "branch": "agent/graph/TASK-0071-context-graph-contract-schema",

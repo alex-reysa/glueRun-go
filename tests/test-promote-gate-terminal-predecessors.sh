@@ -40,14 +40,14 @@ write_task() {
 # Slice the real task_integrated/task_satisfied definitions out of the
 # promoter (it executes main logic on source, so we can't source it whole).
 fns="$tmp/promoter-fns.sh"
-awk '/^task_integrated\(\) \{/,/^\}$/' "$ENGINE_HOME/gluerun-ext/promote-gate.sh" >"$fns"
-awk '/^task_satisfied\(\) \{/,/^\}$/' "$ENGINE_HOME/gluerun-ext/promote-gate.sh" >>"$fns"
+awk '/^task_integrated\(\) \{/,/^\}$/' "$ENGINE_HOME/singular-ext/promote-gate.sh" >"$fns"
+awk '/^task_satisfied\(\) \{/,/^\}$/' "$ENGINE_HOME/singular-ext/promote-gate.sh" >>"$fns"
 grep -q "task_satisfied()" "$fns" || fail "could not extract task_satisfied from the promoter"
 
 check() {
   # args: task_id -> rc of task_satisfied
-  GLUERUN_ROOT="$tmp" GLUERUN_STATE_DIR="$tmp/state" GLUERUN_TASKS_DIR="$tmp/tasks" \
-  GLUERUN_ENGINE_HOME="$ENGINE_HOME" \
+  SINGULAR_ROOT="$tmp" SINGULAR_STATE_DIR="$tmp/state" SINGULAR_TASKS_DIR="$tmp/tasks" \
+  SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
   bash -c "source '$ENGINE_HOME/engine/lib.sh'; source '$fns'; task_satisfied '$1'"
 }
 
@@ -68,7 +68,7 @@ check TASK-0004 || fail "blocked task with integrated owned-files cover is satis
 check TASK-0006 && fail "blocked orphan must NOT be satisfied"
 
 # Strict mode restores integrated-only.
-GLUERUN_PROMOTE_TOLERATE_TERMINAL=0 check TASK-0001 2>/dev/null \
+SINGULAR_PROMOTE_TOLERATE_TERMINAL=0 check TASK-0001 2>/dev/null \
   && fail "tolerance off must refuse superseded predecessors"
 
 echo "PASS: test-promote-gate-terminal-predecessors"

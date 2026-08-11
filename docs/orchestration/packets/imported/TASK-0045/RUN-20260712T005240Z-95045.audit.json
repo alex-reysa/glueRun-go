@@ -1,5 +1,5 @@
 {
-  "schema": "gluerun.orchestration.audit-verdict.v0",
+  "schema": "singular.orchestration.audit-verdict.v0",
   "taskId": "TASK-0045",
   "runId": "RUN-20260712T005240Z-95045",
   "branch": "agent/routing/TASK-0045-route-resume-gates",
@@ -14,7 +14,7 @@
     "worker-evidence/red.log \u2014 both tests FAIL with 'engine not present yet' guard (test line 44), exit 1 (genuine test-first ordering)",
     "worker-evidence/green.log \u2014 both gate suites pass, exit 0",
     "worker-evidence/regression.log and gate-check.log \u2014 both gate suites + engine-clean pass, exit 0",
-    "tests/test-engine-clean.sh \u2014 abstraction guard bans specific project identifiers (glueRun-go, storage_proof, etc.), not the generic GLUERUN_SESSION_* env knobs; passes",
+    "tests/test-engine-clean.sh \u2014 abstraction guard bans specific project identifiers (singular, storage_proof, etc.), not the generic SINGULAR_SESSION_* env knobs; passes",
     "engine/lib.sh lines 3851-3857 \u2014 pre-existing ctx-*.sh auto-loader; NOT modified by this commit"
   ],
   "commandsRun": [
@@ -24,7 +24,7 @@
     "cat packet.json gate-check.json; ls worker-evidence/; cat red.log green.log regression.log gate-check.log",
     "cat schemas/orchestration/audit-verdict.v0.schema.json",
     "bash tests/test-ctx-route-window.sh && bash tests/test-ctx-route-diff.sh && bash tests/test-engine-clean.sh  (independent re-run; COMBINED EXIT 0)",
-    "grep -rn 'gluerun_ctx_route_window_gate|gluerun_ctx_route_diff_gate' --include=*.sh . (call-site / OFF-parity check)",
+    "grep -rn 'singular_ctx_route_window_gate|singular_ctx_route_diff_gate' --include=*.sh . (call-site / OFF-parity check)",
     "grep -n 'ctx-' engine/lib.sh (loader confirmation)"
   ],
   "findings": [

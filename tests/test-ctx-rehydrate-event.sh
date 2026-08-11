@@ -3,24 +3,24 @@
 # (stage S5-routing, layer engine_runtime): the pure, read-only strategy-event
 # payload builder `engine/ctx-rehydrate-event.sh`.
 #
-#   gluerun_ctx_rehydrate_event_data \
+#   singular_ctx_rehydrate_event_data \
 #     <role> <task-id> <run-id> <attempt> <reason> <run_dir> [extra-id=path ...]
 #
 # Prints a single compact JSON object suitable as the third (`data`) argument to
-# `gluerun_append_event "context.strategy_selected"`, extending the existing
+# `singular_append_event "context.strategy_selected"`, extending the existing
 # resume/fresh payload shape additively:
 #   {"taskId":…,"runId":…,"role":…,"attempt":<n>,"strategy":"rehydrate",
 #    "reason":"<reason>","manifest":<manifest-json>}
 # where `attempt` is numeric, the rest strings, and `manifest` is a NESTED JSON
 # object (not a stringified blob) — the deterministic output of
-# gluerun_ctx_rehydrate_manifest over gluerun_ctx_rehydrate_sources <run_dir>.
+# singular_ctx_rehydrate_manifest over singular_ctx_rehydrate_sources <run_dir>.
 #   - Quarantine-aware transitively (the assembler composes the exclude filter).
 #   - Deterministic: identical run_dir bytes -> byte-identical event data.
 #   - Robust to an empty source set: manifest.sources = [] and still valid JSON.
 #   - Pure / read-only: writes/renames/deletes nothing, appends no events, and
 #     never exits non-zero on well-formed input; the packet BODY is never
 #     embedded (only the manifest of ids + hashes). Confers no independence:
-#     `rehydrate` stays tainted per gluerun_ctx_route_strategy_tainted.
+#     `rehydrate` stays tainted per singular_ctx_route_strategy_tainted.
 set -uo pipefail
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,7 +30,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export GLUERUN_ROOT="$tmp"
+export SINGULAR_ROOT="$tmp"
 
 run_dir="$tmp/run-state/RUN-REHYDRATE-EVENT"
 mkdir -p "$run_dir"
@@ -43,19 +43,19 @@ printf '{"findings":[]}\n'     >"$run_dir/findings-status.json"
 event_data() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_event_data "$@"
+    singular_ctx_rehydrate_event_data "$@"
   ' _ "$@"
 }
 manifest() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_manifest "$@"
+    singular_ctx_rehydrate_manifest "$@"
   ' _ "$@"
 }
 sources() {
   bash -c '
     source "'"$LIB"'"
-    gluerun_ctx_rehydrate_sources "$@"
+    singular_ctx_rehydrate_sources "$@"
   ' _ "$@"
 }
 
@@ -86,7 +86,7 @@ check_field 'o["attempt"]'                 '2'
 check_field 'type(o["attempt"]).__name__'  'int'
 # manifest is a nested object, not a stringified blob
 check_field 'type(o["manifest"]).__name__' 'dict'
-check_field 'o["manifest"]["schema"]' 'gluerun.orchestration.ctx-rehydrate-manifest.v0'
+check_field 'o["manifest"]["schema"]' 'singular.orchestration.ctx-rehydrate-manifest.v0'
 
 # --- Case 2: manifest fidelity ---------------------------------------------
 # The embedded manifest exactly equals the manifest assembled from the resolver
@@ -136,11 +136,11 @@ after_hash="$(find "$run_dir" -type f -print0 | sort -z | xargs -0 shasum | shas
 [[ "$before_hash" == "$after_hash" ]] || fail "case6: builder mutated the source tree (not read-only)"
 
 # appends NO events itself
-[[ ! -e "$tmp/.gluerun-state/events.ndjson" ]] \
+[[ ! -e "$tmp/.singular-state/events.ndjson" ]] \
   || fail "case6: builder appended events (should PRODUCE data only)"
 
 # grants no independence: rehydrate strategy stays tainted
-tainted="$(bash -c 'source "'"$LIB"'"; gluerun_ctx_route_strategy_tainted rehydrate')" \
+tainted="$(bash -c 'source "'"$LIB"'"; singular_ctx_route_strategy_tainted rehydrate')" \
   || fail "case6: taint query exited non-zero"
 [[ "$tainted" == "1" ]] || fail "case6: rehydrate strategy no longer tainted (got [$tainted])"
 

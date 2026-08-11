@@ -1,10 +1,10 @@
 # Operator-local overrides + secrets (gitignored). Copy to
-# .gluerun-state/config.local.sh in your repo. Highest precedence — wins over
-# gluerun.config.json and gluerun.config.sh. Never commit secrets.
+# .singular-state/config.local.sh in your repo. Highest precedence — wins over
+# singular.config.json and singular.config.sh. Never commit secrets.
 #
 # Example:
 # export ANTHROPIC_API_KEY="sk-..."
-# export GLUERUN_CLAUDE_L2_MODEL="claude-sonnet-4-6"
-# export GLUERUN_CLAUDE_PLANNER_MODEL="claude-opus-4-8"
-# export GLUERUN_MAX_CONCURRENT=2
-# export GLUERUN_PUSH=0
+# export SINGULAR_CLAUDE_L2_MODEL="claude-sonnet-4-6"
+# export SINGULAR_CLAUDE_PLANNER_MODEL="claude-opus-4-8"
+# export SINGULAR_MAX_CONCURRENT=2
+# export SINGULAR_PUSH=0

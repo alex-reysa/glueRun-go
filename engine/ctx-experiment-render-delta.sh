@@ -3,9 +3,9 @@
 # `experiment-run` executable DAG node (layer evaluation). TASK-0085
 # engine/ctx-experiment-render.sh renders the summary bundle's per-arm ABSOLUTE
 # tables (escape/cost/bias, strategy, attempts), but the treatment-vs-control
-# DELTA (TASK-0089 gluerun_ctx_experiment_delta_json — the actual experiment
+# DELTA (TASK-0089 singular_ctx_experiment_delta_json — the actual experiment
 # finding) and the arm-integrity AUDIT (TASK-0097
-# gluerun_ctx_experiment_armaudit_json — whether each arm actually ran its
+# singular_ctx_experiment_armaudit_json — whether each arm actually ran its
 # intended knob-state) are rendered as markdown NOWHERE. This brick renders BOTH,
 # completing the report presentation.
 #
@@ -20,7 +20,7 @@
 # present-but-uncalled the engine is byte-identical to prior behavior (OFF-parity
 # intrinsic, mirroring the sibling engine/ctx-experiment-*.sh idiom). It does NOT
 # edit engine/ctx-experiment-render.sh, the sibling ctx-experiment-*.sh files,
-# cli/gluerun, or any other pre-existing file.
+# cli/singular, or any other pre-existing file.
 #
 # STRICTLY STDOUT-ONLY / READ-ONLY: it creates, moves, or mutates NOTHING — no run
 # artifact, index, event, lease, or task file, and never writes
@@ -37,24 +37,24 @@
 # exit, never an error or partial output.
 #
 # Three chained slices (all here):
-#   1. gluerun_ctx_experiment_render_delta_table [delta_artifact_json]
+#   1. singular_ctx_experiment_render_delta_table [delta_artifact_json]
 #      — from the delta artifact, render a deterministic treatment-effect table:
 #        each headline metric's a, b, B-minus-A delta and neutral direction.
-#   2. gluerun_ctx_experiment_render_armaudit_table [audit_artifact_json]
+#   2. singular_ctx_experiment_render_armaudit_table [audit_artifact_json]
 #      — from the audit artifact, render a per-arm integrity table: recorded,
 #        unrecorded, consistent, inconsistent counts plus the flagged runIds.
-#   3. gluerun_ctx_experiment_render_result_md [runs_dir] [events_file] [metrics_file]
+#   3. singular_ctx_experiment_render_result_md [runs_dir] [events_file] [metrics_file]
 #      — obtain both artifacts by delegating to their json composers and render
 #        both sections in a stable order to stdout as ONE markdown fragment.
 
 # --- Slice 1: treatment-effect table renderer --------------------------------
-# Reads the delta artifact (gluerun.orchestration.ctx-experiment-delta.v0) passed
+# Reads the delta artifact (singular.orchestration.ctx-experiment-delta.v0) passed
 # as the first argument, and renders each metric's a / b / delta / direction into
 # a deterministic sorted-key markdown table. Values are formatted verbatim with
 # the shared numeric convention. A missing / empty deltas map renders the table
 # skeleton (header + separator) only.
-gluerun_ctx_experiment_render_delta_table() {
-  GLUERUN_RENDER_DELTA="${1-}" python3 - <<'PY' || true
+singular_ctx_experiment_render_delta_table() {
+  SINGULAR_RENDER_DELTA="${1-}" python3 - <<'PY' || true
 import json, os, sys
 
 def fmt(x):
@@ -72,7 +72,7 @@ def load(s):
     except Exception:
         return {}
 
-art = load(os.environ.get("GLUERUN_RENDER_DELTA", ""))
+art = load(os.environ.get("SINGULAR_RENDER_DELTA", ""))
 if not isinstance(art, dict):
     art = {}
 deltas = art.get("deltas")
@@ -98,14 +98,14 @@ PY
 }
 
 # --- Slice 2: arm-integrity table renderer -----------------------------------
-# Reads the audit artifact (gluerun.orchestration.ctx-experiment-armaudit.v0)
+# Reads the audit artifact (singular.orchestration.ctx-experiment-armaudit.v0)
 # passed as the first argument, and renders per arm the recorded / unrecorded /
 # consistent / inconsistent counts plus the flagged inconsistent runIds into a
 # deterministic markdown table. Arms render in the stable A-before-B order; the
 # flagged runIds are the inconsistentRuns' runIds joined verbatim. A missing /
 # empty arms map renders the table skeleton (header + separator) only.
-gluerun_ctx_experiment_render_armaudit_table() {
-  GLUERUN_RENDER_ARMAUDIT="${1-}" python3 - <<'PY' || true
+singular_ctx_experiment_render_armaudit_table() {
+  SINGULAR_RENDER_ARMAUDIT="${1-}" python3 - <<'PY' || true
 import json, os, sys
 
 def fmt(x):
@@ -123,7 +123,7 @@ def load(s):
     except Exception:
         return {}
 
-art = load(os.environ.get("GLUERUN_RENDER_ARMAUDIT", ""))
+art = load(os.environ.get("SINGULAR_RENDER_ARMAUDIT", ""))
 if not isinstance(art, dict):
     art = {}
 arms = art.get("arms")
@@ -159,7 +159,7 @@ PY
 # the delta composer takes runs_dir/events_file/metrics_file; the armaudit
 # composer takes runs_dir/events_file), then render both sections in a stable
 # order to stdout as ONE markdown fragment. Fail-safe / always exit 0.
-gluerun_ctx_experiment_render_result_md() {
+singular_ctx_experiment_render_result_md() {
   local runs_dir="${1-}"
   local events_file="${2-}"
   local metrics_file="${3-}"
@@ -167,12 +167,12 @@ gluerun_ctx_experiment_render_result_md() {
 
   # Each composer is itself fail-safe and emits a zeroed artifact when its inputs
   # are missing; an empty arg falls back to the composer's own env defaults.
-  delta="$(gluerun_ctx_experiment_delta_json "$runs_dir" "$events_file" "$metrics_file")"
-  audit="$(gluerun_ctx_experiment_armaudit_json "$runs_dir" "$events_file")"
+  delta="$(singular_ctx_experiment_delta_json "$runs_dir" "$events_file" "$metrics_file")"
+  audit="$(singular_ctx_experiment_armaudit_json "$runs_dir" "$events_file")"
 
   printf '## Experiment result\n\n'
-  gluerun_ctx_experiment_render_delta_table "$delta"
+  singular_ctx_experiment_render_delta_table "$delta"
   printf '\n'
-  gluerun_ctx_experiment_render_armaudit_table "$audit"
+  singular_ctx_experiment_render_armaudit_table "$audit"
   return 0
 }

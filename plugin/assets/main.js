@@ -1,4 +1,4 @@
-// glueRun console — module entry point. Boots the app shell, then wires the Plan,
+// singular console — module entry point. Boots the app shell, then wires the Plan,
 // Consoles, and Agents surfaces (each on top of app.js's exported seams) and the
 // hash router. main.js is the ONLY module that imports app.js AND the surface
 // modules AND the router, so the composition lives here and no static import cycle

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-capability-runtime.XXXXXX")"
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/singular-capability-runtime.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -28,7 +28,7 @@ printf '# Local test skill\n' >"$repo/.agents/skills/local-test/SKILL.md"
 printf '{"mcpServers":{"configured-but-isolated":{"command":"true"}}}\n' \
   >"$repo/.mcp.json"
 
-python3 - "$repo/gluerun.config.json" "$branch" "$tmp/provider-args-canary" <<'PY'
+python3 - "$repo/singular.config.json" "$branch" "$tmp/provider-args-canary" <<'PY'
 import json
 import sys
 
@@ -186,24 +186,24 @@ run_provider() {
   local runner_provider="$provider"
   [[ "$provider" == "cursor-agent" ]] && runner_provider="cursor"
   env \
-    -u GLUERUN_CAPABILITY_PROFILES_JSON \
-    -u GLUERUN_ROLE_PROFILES_JSON \
-    -u GLUERUN_CAPABILITIES_JSON \
-    -u GLUERUN_CONFIG_SCHEMA_VERSION \
+    -u SINGULAR_CAPABILITY_PROFILES_JSON \
+    -u SINGULAR_ROLE_PROFILES_JSON \
+    -u SINGULAR_CAPABILITIES_JSON \
+    -u SINGULAR_CONFIG_SCHEMA_VERSION \
     PATH="$fake_bin:$PATH" \
     FAKE_ARGS_DIR="$args_dir" \
     FAKE_INVOCATION_ID="$invocation" \
-    GLUERUN_ROOT="$root" \
-    GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_JSON_CONFIG_FILE="$root/gluerun.config.json" \
-    GLUERUN_TARGET_BRANCH="$target" \
-    GLUERUN_CODEX_BIN="$fake_bin/codex" \
-    GLUERUN_CODEX_TIMEOUT_SEC=0 \
-    GLUERUN_CLAUDE_TIMEOUT_SEC=0 \
-    GLUERUN_GEMINI_TIMEOUT_SEC=0 \
-    GLUERUN_OPENCODE_TIMEOUT_SEC=0 \
-    GLUERUN_CURSOR_TIMEOUT_SEC=0 \
-    GLUERUN_GROK_TIMEOUT_SEC=0 \
+    SINGULAR_ROOT="$root" \
+    SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_JSON_CONFIG_FILE="$root/singular.config.json" \
+    SINGULAR_TARGET_BRANCH="$target" \
+    SINGULAR_CODEX_BIN="$fake_bin/codex" \
+    SINGULAR_CODEX_TIMEOUT_SEC=0 \
+    SINGULAR_CLAUDE_TIMEOUT_SEC=0 \
+    SINGULAR_GEMINI_TIMEOUT_SEC=0 \
+    SINGULAR_OPENCODE_TIMEOUT_SEC=0 \
+    SINGULAR_CURSOR_TIMEOUT_SEC=0 \
+    SINGULAR_GROK_TIMEOUT_SEC=0 \
     bash "$ROOT/engine/$runner_provider-run.sh" \
       -C "$root" \
       --level l2 \
@@ -235,7 +235,7 @@ assert argv[index + 1] == sys.argv[3], argv
 PY
 }
 
-# Keep the policy table broad enough to cover every provider boundary Gluerun
+# Keep the policy table broad enough to cover every provider boundary Singular
 # owns, while leaving Cursor/Grok's explicit isolation argv path available.
 python3 - "$ROOT/engine" <<'PY' \
   || fail "strict provider argument denylist policy"
@@ -310,10 +310,10 @@ warning_count="$(
 [[ "$warning_count" -eq 2 ]] || fail "optional warnings emitted $warning_count times"
 event_count="$(
   grep -c '"type":"capability.optional_unavailable"' \
-    "$repo/.gluerun-state/events.ndjson" || true
+    "$repo/.singular-state/events.ndjson" || true
 )"
 [[ "$event_count" -eq 2 ]] || fail "optional events emitted $event_count times"
-python3 - "$repo/.gluerun-state/events.ndjson" <<'PY' \
+python3 - "$repo/.singular-state/events.ndjson" <<'PY' \
   || fail "optional capability warning/event deduplication is not per capability"
 import json
 import sys
@@ -382,14 +382,14 @@ pass "strict required skills need argv bound to the exact capability"
 # Plant the exact artifacts a hard-killed strict run used to leave behind. The
 # strict MCP config was created with a template ending in ".json", but BSD/macOS
 # mktemp only substitutes TRAILING X's, so it produced a file named literally
-# "gluerun-claude-empty-mcp.XXXXXX.json". That works once — the EXIT trap
+# "singular-claude-empty-mcp.XXXXXX.json". That works once — the EXIT trap
 # removes it — but a killed run (stopped suite, OOM, reboot) leaves the literal
 # name behind and every later strict claude run dies with "mkstemp failed: File
 # exists". A leaked temp file turned into a permanent provider outage that no
 # test noticed, because nothing ever ran with one present.
 claude_mcp_leaks=(
-  "${TMPDIR:-/tmp}/gluerun-claude-empty-mcp.XXXXXX.json"
-  "${TMPDIR:-/tmp}/gluerun-claude-mcp.XXXXXX"
+  "${TMPDIR:-/tmp}/singular-claude-empty-mcp.XXXXXX.json"
+  "${TMPDIR:-/tmp}/singular-claude-mcp.XXXXXX"
 )
 : >"${claude_mcp_leaks[0]}"
 : >"${claude_mcp_leaks[1]}"
@@ -411,14 +411,14 @@ pass "built-in strict profiles add provider-native isolation argv"
 # strict profiles reject it before provider launch.
 rm -f "$args_dir/claude-legacy-extra.json"
 legacy_extra_rc=0
-GLUERUN_CLAUDE_EXTRA_ARGS="--allowedTools Bash" \
+SINGULAR_CLAUDE_EXTRA_ARGS="--allowedTools Bash" \
   run_provider claude planner claude-legacy-extra \
     "$tmp/claude-legacy-extra.err" || legacy_extra_rc=$?
 [[ "$legacy_extra_rc" -eq 78 ]] \
   || fail "strict legacy extra argv returned $legacy_extra_rc"
 [[ ! -e "$args_dir/claude-legacy-extra.json" ]] \
   || fail "strict provider launched with legacy free-form extra argv"
-grep -q 'GLUERUN_CLAUDE_EXTRA_ARGS is disabled' "$tmp/claude-legacy-extra.err" \
+grep -q 'SINGULAR_CLAUDE_EXTRA_ARGS is disabled' "$tmp/claude-legacy-extra.err" \
   || fail "strict legacy extra argv omitted stable remediation"
 pass "strict profiles reject legacy free-form provider argv"
 

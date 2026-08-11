@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Covers the graph-projector `rebuild` entry point in engine/ctx-graph-rebuild.sh
 # — the composition keystone that turns the integrated mapper library into an
-# actual `gluerun graph rebuild`. Two chained slices:
-#   gluerun_graph_partition <nodesOut> <edgesOut>   (stdin mixed node+edge stream)
+# actual `singular graph rebuild`. Two chained slices:
+#   singular_graph_partition <nodesOut> <edgesOut>   (stdin mixed node+edge stream)
 #       -> routes every `kind` node line to <nodesOut> and every `kind` edge line
 #          to <edgesOut>, losslessly and deterministically (no line dropped,
 #          duplicated, or mutated). Bridges the mappers' mixed stdout to the
-#          separate node/edge inputs gluerun_graph_write_corpus expects.
-#   gluerun_graph_rebuild <stateDir> [graphDir]
+#          separate node/edge inputs singular_graph_write_corpus expects.
+#   singular_graph_rebuild <stateDir> [graphDir]
 #       -> walks the durable sources under <stateDir> in sorted order, invokes
 #          every integrated mapper over its source set, partitions the collected
-#          stream with slice 1, and calls gluerun_graph_write_corpus <graphDir>
+#          stream with slice 1, and calls singular_graph_write_corpus <graphDir>
 #          to write the canonical nodes.jsonl + edges.jsonl. <graphDir> defaults
-#          to ${GLUERUN_CTX_GRAPH_DIR:-.gluerun-state/graph}.
+#          to ${SINGULAR_CTX_GRAPH_DIR:-.singular-state/graph}.
 #
 # Asserts: partition is lossless/verbatim; the rebuilt corpus over a fixture
 # exercising all integrated mappers carries every node+edge family (attempt +
@@ -21,8 +21,8 @@
 # SHIPPED schema; the authoritative/claim split is preserved (commit + gate-result
 # authoritative, every other node claim); determinism + loss-free rebuild (repeat
 # run and delete-then-rebuild both reproduce a byte-identical corpus, independent
-# of source-file ordering because gluerun_graph_write_corpus dedups+sorts by id);
-# graphDir defaults to ${GLUERUN_CTX_GRAPH_DIR}; and OFF-parity/no-writes —
+# of source-file ordering because singular_graph_write_corpus dedups+sorts by id);
+# graphDir defaults to ${SINGULAR_CTX_GRAPH_DIR}; and OFF-parity/no-writes —
 # sourcing the file invokes nothing and rebuild writes only under <graphDir>,
 # leaving <stateDir> byte-identical.
 set -uo pipefail
@@ -54,7 +54,7 @@ trap 'rm -rf "$work_root" "$snap_dir" "$VALIDATOR"' EXIT
 
 # --- OFF-parity / no-writes on source: sourcing invokes nothing, writes nothing.
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$snap_dir" \
     && source "$GRAPH" && source "$PROJECT" && source "$PLANS" \
@@ -75,7 +75,7 @@ source "$RECORDS" || fail "sourcing $RECORDS failed"
 source "$CORPUS"  || fail "sourcing $CORPUS failed"
 # shellcheck disable=SC1090
 source "$REBUILD" || fail "sourcing $REBUILD failed"
-for fn in gluerun_graph_partition gluerun_graph_rebuild; do
+for fn in singular_graph_partition singular_graph_rebuild; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $REBUILD"
 done
 
@@ -176,8 +176,8 @@ JSONL
 
 p_nodes="$work_root/part-nodes.jsonl"
 p_edges="$work_root/part-edges.jsonl"
-gluerun_graph_partition "$p_nodes" "$p_edges" < "$mixed" \
-  || fail "gluerun_graph_partition failed"
+singular_graph_partition "$p_nodes" "$p_edges" < "$mixed" \
+  || fail "singular_graph_partition failed"
 
 # Every kind-node line went to nodes, every kind-edge line to edges; none lost.
 [[ "$(count_type "$p_nodes" kind node)" == "3" ]] || fail "partition: expected 3 node lines in nodesOut"
@@ -193,7 +193,7 @@ grep -qxF '{"kind":"node","id":"n-aaa","type":"task"}' "$p_nodes" || fail "parti
 grep -qxF '{"kind":"edge","id":"e-222","type":"verifies"}' "$p_edges" || fail "partition mutated an edge line"
 # Deterministic: repeat routing is byte-identical.
 p_nodes_b="$work_root/part-nodes-b.jsonl"; p_edges_b="$work_root/part-edges-b.jsonl"
-gluerun_graph_partition "$p_nodes_b" "$p_edges_b" < "$mixed" || fail "partition (repeat) failed"
+singular_graph_partition "$p_nodes_b" "$p_edges_b" < "$mixed" || fail "partition (repeat) failed"
 diff -q "$p_nodes" "$p_nodes_b" >/dev/null || fail "partition nodes output not deterministic"
 diff -q "$p_edges" "$p_edges_b" >/dev/null || fail "partition edges output not deterministic"
 
@@ -210,7 +210,7 @@ mkdir -p "$STATE/runs/$RUN_A/attempts" "$STATE/runs/$RUN_B" \
 # attempts index -> attempt nodes + implements edges
 cat > "$STATE/runs/$RUN_A/attempts/index.json" <<JSON
 {
-  "schema": "gluerun.orchestration.attempts-index.v0",
+  "schema": "singular.orchestration.attempts-index.v0",
   "runId": "$RUN_A",
   "taskId": "$NODE",
   "attempts": [
@@ -223,7 +223,7 @@ JSON
 # paired-audit -> audit node (claim)
 cat > "$STATE/runs/$RUN_A/paired-audit.json" <<JSON
 {
-  "schema": "gluerun.orchestration.paired-audit.v0",
+  "schema": "singular.orchestration.paired-audit.v0",
   "runId": "$RUN_A",
   "taskId": "$NODE",
   "sampled": true,
@@ -239,7 +239,7 @@ JSON
 # plan-critique -> critique node + finding nodes
 cat > "$STATE/runs/$RUN_A/plan-critique.json" <<JSON
 {
-  "schema": "gluerun.orchestration.plan-critique.v0",
+  "schema": "singular.orchestration.plan-critique.v0",
   "node": "$NODE",
   "runId": "$RUN_A",
   "batchTaskIds": ["TASK-0078"],
@@ -256,7 +256,7 @@ JSON
 # gate-result (passed) -> gate-result node (authoritative) + verifies edge
 cat > "$STATE/docs/orchestration/gates/$NODE.gate-result.json" <<JSON
 {
-  "schema": "gluerun.orchestration.gate-result.v0",
+  "schema": "singular.orchestration.gate-result.v0",
   "node": "$NODE",
   "status": "passed",
   "authoritative": true,
@@ -289,7 +289,7 @@ GRAPHDIR="$work_root/graph"
 
 # Snapshot the stateDir to prove rebuild reads only (writes NOTHING under it).
 state_before="$(cd "$STATE" && find . | LC_ALL=C sort)"
-gluerun_graph_rebuild "$STATE" "$GRAPHDIR" || fail "gluerun_graph_rebuild failed"
+singular_graph_rebuild "$STATE" "$GRAPHDIR" || fail "singular_graph_rebuild failed"
 state_after="$(cd "$STATE" && find . | LC_ALL=C sort)"
 [[ "$state_before" == "$state_after" ]] || fail "rebuild wrote under <stateDir> (must write only under <graphDir>)"
 
@@ -332,22 +332,22 @@ print("ok" if ok else "bad")
 # --- Determinism: repeated rebuild is byte-identical --------------------------
 NODES_SNAP="$work_root/nodes-run1.jsonl"; EDGES_SNAP="$work_root/edges-run1.jsonl"
 cp "$NODES" "$NODES_SNAP"; cp "$EDGES" "$EDGES_SNAP"
-gluerun_graph_rebuild "$STATE" "$GRAPHDIR" || fail "second gluerun_graph_rebuild failed"
+singular_graph_rebuild "$STATE" "$GRAPHDIR" || fail "second singular_graph_rebuild failed"
 diff -q "$NODES_SNAP" "$NODES" >/dev/null || fail "nodes.jsonl not byte-identical on repeat rebuild"
 diff -q "$EDGES_SNAP" "$EDGES" >/dev/null || fail "edges.jsonl not byte-identical on repeat rebuild"
 
 # --- Loss-free: delete graphDir then rebuild reproduces the byte-identical corpus.
 rm -rf "$GRAPHDIR"
-gluerun_graph_rebuild "$STATE" "$GRAPHDIR" || fail "rebuild after delete failed"
+singular_graph_rebuild "$STATE" "$GRAPHDIR" || fail "rebuild after delete failed"
 diff -q "$NODES_SNAP" "$NODES" >/dev/null || fail "nodes.jsonl not reproduced loss-free after delete"
 diff -q "$EDGES_SNAP" "$EDGES" >/dev/null || fail "edges.jsonl not reproduced loss-free after delete"
 
-# --- graphDir default resolves to ${GLUERUN_CTX_GRAPH_DIR} --------------------
+# --- graphDir default resolves to ${SINGULAR_CTX_GRAPH_DIR} --------------------
 DEFDIR="$work_root/defgraph"
-( export GLUERUN_CTX_GRAPH_DIR="$DEFDIR"; gluerun_graph_rebuild "$STATE" ) \
+( export SINGULAR_CTX_GRAPH_DIR="$DEFDIR"; singular_graph_rebuild "$STATE" ) \
   || fail "rebuild with default graphDir failed"
 [[ -f "$DEFDIR/nodes.jsonl" && -f "$DEFDIR/edges.jsonl" ]] \
-  || fail "rebuild did not honor GLUERUN_CTX_GRAPH_DIR default for graphDir"
+  || fail "rebuild did not honor SINGULAR_CTX_GRAPH_DIR default for graphDir"
 diff -q "$NODES_SNAP" "$DEFDIR/nodes.jsonl" >/dev/null \
   || fail "default-graphDir corpus differs from explicit-graphDir corpus (not source-order independent)"
 

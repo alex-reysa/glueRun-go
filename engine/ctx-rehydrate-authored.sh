@@ -9,12 +9,12 @@
 #
 # This is the FIRST slice of the explicitly-OPTIONAL authored-knowledge
 # deliverable. It parses a FIXTURE authored-knowledge manifest JSON and selects
-# the injectable entries; it does NOT yet wire into gluerun.config.json or the
-# packet assembler (those are later slices). GLUERUN_CTX_MANIFEST (default 0)
+# the injectable entries; it does NOT yet wire into singular.config.json or the
+# packet assembler (those are later slices). SINGULAR_CTX_MANIFEST (default 0)
 # gates that future wire-in, NOT this pure leaf. The JSON contract is the whole
 # interface: it takes NO dependency on any singular-brain runtime.
 #
-#   gluerun_ctx_rehydrate_authored_select <manifest-json-path>
+#   singular_ctx_rehydrate_authored_select <manifest-json-path>
 #
 # Reads a machine-readable authored-knowledge manifest of the form
 #   { "entries": [ { "id", <"body"|"path">, "load-when":[...], "freshness",
@@ -30,7 +30,7 @@
 #   - An entry flagged `description_unverified` is NEVER emitted as current: it is
 #     skipped, so it can never be treated as current or authoritative.
 #   - A path-backed entry is filtered through the integrated
-#     gluerun_ctx_artifact_exclude, so a quarantined path (a `*.quarantined` path,
+#     singular_ctx_artifact_exclude, so a quarantined path (a `*.quarantined` path,
 #     or an original whose `.quarantined` sibling exists on disk) never survives.
 #     A single quarantine authority is thereby preserved.
 #   - Output is deterministic: entries are emitted in a fixed id-sorted order, so
@@ -45,8 +45,8 @@
 # appends no events; and never exits non-zero on well-formed input. A malformed
 # or absent manifest yields an empty selection (fail-soft).
 
-# gluerun_ctx_rehydrate_authored_select <manifest-json-path>
-gluerun_ctx_rehydrate_authored_select() {
+# singular_ctx_rehydrate_authored_select <manifest-json-path>
+singular_ctx_rehydrate_authored_select() {
   local manifest="${1-}"
   # Absent / unreadable manifest -> empty selection, non-fatal (fail-soft).
   [[ -n "$manifest" && -f "$manifest" ]] || return 0
@@ -54,23 +54,23 @@ gluerun_ctx_rehydrate_authored_select() {
   # Pass 1: extract the path-backed entries' candidate paths (one per line, in
   # original manifest order). A malformed manifest yields no paths.
   local paths survivors=""
-  paths="$(_gluerun_ctx_authored_paths "$manifest")" || return 0
+  paths="$(_singular_ctx_authored_paths "$manifest")" || return 0
 
   # Compose the integrated quarantine authority: a quarantined candidate never
   # survives, so its authored-knowledge entry is dropped from the selection.
   if [[ -n "$paths" ]]; then
-    survivors="$(printf '%s\n' "$paths" | gluerun_ctx_artifact_exclude)"
+    survivors="$(printf '%s\n' "$paths" | singular_ctx_artifact_exclude)"
   fi
 
   # Pass 2: emit the deterministic, id-sorted authored-knowledge selection,
   # skipping description_unverified entries and quarantined path entries (a path
   # not among the survivors).
-  _gluerun_ctx_authored_emit "$manifest" "$survivors"
+  _singular_ctx_authored_emit "$manifest" "$survivors"
 }
 
 # Internal: print the path of every path-backed entry (one per line, original
 # order). Read-only; empty and exit 0 on malformed/absent manifest.
-_gluerun_ctx_authored_paths() {
+_singular_ctx_authored_paths() {
   python3 - "$1" <<'PY'
 import json
 import sys
@@ -98,7 +98,7 @@ PY
 # delimited set of quarantine-surviving paths. Reads the manifest READ-ONLY,
 # applies the authored-knowledge class rules, and emits one JSON object per
 # selected entry in a fixed id-sorted order. No side effects.
-_gluerun_ctx_authored_emit() {
+_singular_ctx_authored_emit() {
   python3 - "$1" "$2" <<'PY'
 import json
 import sys
@@ -143,7 +143,7 @@ for idx, entry in enumerate(entries):
     }
     if isinstance(path, str) and path:
         # Quarantined path-backed entries were filtered out by the integrated
-        # gluerun_ctx_artifact_exclude; a path not among survivors is dropped.
+        # singular_ctx_artifact_exclude; a path not among survivors is dropped.
         if path not in survivors:
             continue
         rec["source"] = "path"

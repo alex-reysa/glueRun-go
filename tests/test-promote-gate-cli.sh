@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# P1 (0.5.0): `gluerun promote-gate` honors the repo config `promoter` key
+# P1 (0.5.0): `singular promote-gate` honors the repo config `promoter` key
 # (routed through engine/promote-gate.sh, which sources lib.sh); explicit env
-# GLUERUN_PROMOTER beats config; a missing promoter dies with actionable text.
+# SINGULAR_PROMOTER beats config; a missing promoter dies with actionable text.
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -14,7 +14,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 root="$tmp/repo"
-mkdir -p "$root/.gluerun-state" "$root/promoters" "$root/docs/orchestration/tasks"
+mkdir -p "$root/.singular-state" "$root/promoters" "$root/docs/orchestration/tasks"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
 git -C "$root" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
@@ -30,7 +30,7 @@ echo "ENV-PROMOTER argv:$*"
 SH
 chmod +x "$root/promoters/env-promoter.sh"
 
-cat >"$root/gluerun.config.json" <<EOF
+cat >"$root/singular.config.json" <<EOF
 {
   "schemaVersion": "v2",
   "targetBranch": "target",
@@ -40,8 +40,8 @@ cat >"$root/gluerun.config.json" <<EOF
 EOF
 
 run_wrapper() {
-  env GLUERUN_ROOT="$root" GLUERUN_STATE_DIR="$root/.gluerun-state" \
-    GLUERUN_ENGINE_HOME="$ENGINE_HOME" GLUERUN_TARGET_BRANCH=target "$@" \
+  env SINGULAR_ROOT="$root" SINGULAR_STATE_DIR="$root/.singular-state" \
+    SINGULAR_ENGINE_HOME="$ENGINE_HOME" SINGULAR_TARGET_BRANCH=target "$@" \
     bash "$ENGINE_HOME/engine/promote-gate.sh" some-node 2>&1
 }
 
@@ -49,19 +49,19 @@ run_wrapper() {
 out="$(run_wrapper env)"
 assert_contains "$out" "CONFIG-PROMOTER argv:some-node" "config promoter invoked"
 
-# 2. Explicit env GLUERUN_PROMOTER beats config.
-out="$(run_wrapper env GLUERUN_PROMOTER="$root/promoters/env-promoter.sh")"
+# 2. Explicit env SINGULAR_PROMOTER beats config.
+out="$(run_wrapper env SINGULAR_PROMOTER="$root/promoters/env-promoter.sh")"
 assert_contains "$out" "ENV-PROMOTER argv:some-node" "env promoter wins over config"
 
 # 3. Missing promoter dies with actionable guidance.
 rc=0
-out="$(run_wrapper env GLUERUN_PROMOTER="$root/promoters/nope.sh")" || rc=$?
+out="$(run_wrapper env SINGULAR_PROMOTER="$root/promoters/nope.sh")" || rc=$?
 [[ "$rc" -eq 2 ]] || fail "missing promoter should exit 2 (rc=$rc)"
-assert_contains "$out" 'Set "promoter" in gluerun.config.json' "actionable error"
+assert_contains "$out" 'Set "promoter" in singular.config.json' "actionable error"
 
 # 4. Through the CLI dispatch table.
-out="$(cd "$root" && env GLUERUN_ENGINE_HOME="$ENGINE_HOME" GLUERUN_TARGET_BRANCH=target \
-  bash "$ENGINE_HOME/cli/gluerun" promote-gate some-node 2>&1)"
+out="$(cd "$root" && env SINGULAR_ENGINE_HOME="$ENGINE_HOME" SINGULAR_TARGET_BRANCH=target \
+  bash "$ENGINE_HOME/cli/singular" promote-gate some-node 2>&1)"
 assert_contains "$out" "CONFIG-PROMOTER argv:some-node" "CLI promote-gate honors config"
 
 echo "PASS: test-promote-gate-cli"

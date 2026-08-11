@@ -5,22 +5,22 @@
 # event-log envelopes {type,message,ts,data}, and a paired-audit record) into
 # projected context-graph.v0 JSONL node lines by composing the integrated
 # identity convention + emitters (engine/ctx-graph.sh, engine/ctx-graph-project.sh):
-#   gluerun_graph_project_task          <taskFilePath>           -> one task node (claim)
-#   gluerun_graph_project_commits       <eventsPath>             -> commit nodes (authoritative)
-#   gluerun_graph_project_paired_audits <pairedAuditRecordPath>  -> one audit node (claim)
+#   singular_graph_project_task          <taskFilePath>           -> one task node (claim)
+#   singular_graph_project_commits       <eventsPath>             -> commit nodes (authoritative)
+#   singular_graph_project_paired_audits <pairedAuditRecordPath>  -> one audit node (claim)
 #
 # Asserts: a task markdown yields exactly one claim `task` node whose id equals
 # node_id(identity('task', taskId)) — the same id the integrated `implements`
 # edge targets — so that dangling edge target is now minted; each `l1.committed`
 # event yields exactly one `commit` node keyed by data.headSha with evidenceClass
 # authoritative (a git commit is a host-verified fact), and two events sharing a
-# headSha collapse to one node under gluerun_graph_canonicalize; the paired-audit
+# headSha collapse to one node under singular_graph_canonicalize; the paired-audit
 # record yields exactly one claim `audit` node keyed identity('audit', runId)
 # carrying attributes for verdict/findingsCount/disagreement (never authoritative,
 # even though it is a verdict); every emitted line validates against the SHIPPED
 # schema; evidence invariance (fail-closed — no model path mints authoritative;
 # commit is authoritative only because it is host-verified); determinism/
-# idempotence (re-running emits byte-identical lines, so gluerun_graph_canonicalize
+# idempotence (re-running emits byte-identical lines, so singular_graph_canonicalize
 # collapses to the same canonical set); no edges; and OFF-parity/no-writes —
 # sourcing the file invokes nothing and the mappers touch NO filesystem.
 set -uo pipefail
@@ -42,14 +42,14 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ -f "$RECORDS" ]] || fail "impl not present yet: $RECORDS (strict-test-first RED)"
 
 # OFF-parity / no-writes: sourcing the file must invoke nothing and write no
-# file. Snapshot an empty cwd around the source; confirm GLUERUN_CTX_GRAPH is
+# file. Snapshot an empty cwd around the source; confirm SINGULAR_CTX_GRAPH is
 # not required (default OFF).
 snap_dir="$(mktemp -d)"
 VALIDATOR="$(mktemp)"
 work_root="$(mktemp -d)"
 trap 'rm -rf "$snap_dir" "$VALIDATOR" "$work_root"' EXIT
 before="$(cd "$snap_dir" && find . | LC_ALL=C sort)"
-unset GLUERUN_CTX_GRAPH 2>/dev/null || true
+unset SINGULAR_CTX_GRAPH 2>/dev/null || true
 # shellcheck disable=SC1090
 ( cd "$snap_dir" && source "$GRAPH" && source "$PROJECT" && source "$RECORDS" ) \
   || fail "sourcing $RECORDS failed"
@@ -64,8 +64,8 @@ source "$PROJECT" || fail "sourcing $PROJECT failed"
 source "$CORPUS"  || fail "sourcing $CORPUS failed"
 # shellcheck disable=SC1090
 source "$RECORDS" || fail "sourcing $RECORDS failed"
-for fn in gluerun_graph_project_task gluerun_graph_project_commits \
-          gluerun_graph_project_paired_audits; do
+for fn in singular_graph_project_task singular_graph_project_commits \
+          singular_graph_project_paired_audits; do
   [[ "$(type -t "$fn")" == "function" ]] || fail "$fn is not defined by $RECORDS"
 done
 
@@ -171,7 +171,7 @@ cat > "$task_md" <<MD
 Objective: project the task node so the integrated implements edge stops dangling.
 MD
 
-task_out="$(gluerun_graph_project_task "$task_md")" || fail "project_task failed"
+task_out="$(singular_graph_project_task "$task_md")" || fail "project_task failed"
 [[ -n "$task_out" ]] || fail "project_task produced no output"
 printf '%s\n' "$task_out" | validates || fail "the task line failed schema validation:
 $task_out"
@@ -182,11 +182,11 @@ $task_out"
 # claim (a task file is model-authored).
 [[ "$(count_where "$task_out" evidenceClass claim)" == "1" ]] || fail "task node must be claim"
 # Id agreement: the node id is exactly the one the integrated implements edge targets.
-task_node="$(gluerun_graph_node_id "$(gluerun_graph_identity task "$NODE")")"
+task_node="$(singular_graph_node_id "$(singular_graph_identity task "$NODE")")"
 [[ "$(printf '%s' "$task_out" | jq_field id)" == "$task_node" ]] \
   || fail "task node id != node_id(identity('task', taskId))"
 # Idempotence.
-task_out_b="$(gluerun_graph_project_task "$task_md")" || fail "second project_task failed"
+task_out_b="$(singular_graph_project_task "$task_md")" || fail "second project_task failed"
 [[ "$task_out" == "$task_out_b" ]] || fail "project_task is not idempotent"
 
 # --- Slice 2: commit mapper --------------------------------------------------
@@ -197,7 +197,7 @@ cat > "$ev_commits" <<JSON
 {"ts":"2026-07-12T11:05:00Z","type":"plan.revised","message":"noise","data":{"node":"$NODE","runId":"$RUN_B"}}
 JSON
 
-cm_out="$(gluerun_graph_project_commits "$ev_commits")" || fail "project_commits failed"
+cm_out="$(singular_graph_project_commits "$ev_commits")" || fail "project_commits failed"
 [[ -n "$cm_out" ]] || fail "project_commits produced no output"
 printf '%s\n' "$cm_out" | validates || fail "a commit line failed schema validation:
 $cm_out"
@@ -209,8 +209,8 @@ $cm_out"
 [[ "$(count_where "$cm_out" evidenceClass authoritative)" == "2" ]] \
   || fail "commit nodes must be authoritative"
 # Keyed by data.headSha: node id == node_id(identity('commit', headSha)).
-commitA="$(gluerun_graph_node_id "$(gluerun_graph_identity commit "$SHA_A")")"
-commitB="$(gluerun_graph_node_id "$(gluerun_graph_identity commit "$SHA_B")")"
+commitA="$(singular_graph_node_id "$(singular_graph_identity commit "$SHA_A")")"
+commitB="$(singular_graph_node_id "$(singular_graph_identity commit "$SHA_B")")"
 [[ "$commitA" != "$commitB" ]] || fail "distinct headSha produced identical commit node id"
 printf '%s\n' "$cm_out" | grep -qF "\"id\":\"$commitA\"" \
   || fail "commit node id != node_id(identity('commit', headSha)) for SHA_A"
@@ -222,20 +222,20 @@ cat > "$ev_dupe" <<JSON
 {"ts":"2026-07-12T10:00:00Z","type":"l1.committed","message":"m","data":{"node":"$NODE","runId":"$RUN_A","headSha":"$SHA_A"}}
 {"ts":"2026-07-12T12:00:00Z","type":"l1.committed","message":"m","data":{"node":"$NODE","runId":"$RUN_B","headSha":"$SHA_A"}}
 JSON
-dupe_out="$(gluerun_graph_project_commits "$ev_dupe")" || fail "project_commits (dupe) failed"
+dupe_out="$(singular_graph_project_commits "$ev_dupe")" || fail "project_commits (dupe) failed"
 [[ "$(count_where "$dupe_out" kind node)" == "2" ]] || fail "expected 2 raw commit lines pre-canonicalize"
-canon_dupe="$(printf '%s\n' "$dupe_out" | gluerun_graph_canonicalize)"
+canon_dupe="$(printf '%s\n' "$dupe_out" | singular_graph_canonicalize)"
 [[ "$(count_where "$canon_dupe" kind node)" == "1" ]] \
   || fail "two events sharing a headSha must collapse to one node under canonicalize"
 # Idempotence.
-cm_out_b="$(gluerun_graph_project_commits "$ev_commits")" || fail "second project_commits failed"
+cm_out_b="$(singular_graph_project_commits "$ev_commits")" || fail "second project_commits failed"
 [[ "$cm_out" == "$cm_out_b" ]] || fail "project_commits is not idempotent"
 
 # --- Slice 3: paired-audit mapper --------------------------------------------
 audit="$work_root/paired-audit.json"
 cat > "$audit" <<JSON
 {
-  "schema": "gluerun.orchestration.paired-audit.v0",
+  "schema": "singular.orchestration.paired-audit.v0",
   "runId": "$RUN_A",
   "taskId": "$NODE",
   "sampled": true,
@@ -248,7 +248,7 @@ cat > "$audit" <<JSON
 }
 JSON
 
-au_out="$(gluerun_graph_project_paired_audits "$audit")" || fail "project_paired_audits failed"
+au_out="$(singular_graph_project_paired_audits "$audit")" || fail "project_paired_audits failed"
 [[ -n "$au_out" ]] || fail "project_paired_audits produced no output"
 printf '%s\n' "$au_out" | validates || fail "the audit line failed schema validation:
 $au_out"
@@ -262,7 +262,7 @@ $au_out"
 [[ "$(count_where "$au_out" evidenceClass authoritative)" == "0" ]] \
   || fail "audit verdict must not mint an authoritative node"
 # Keyed identity('audit', runId).
-audit_node="$(gluerun_graph_node_id "$(gluerun_graph_identity audit "$RUN_A")")"
+audit_node="$(singular_graph_node_id "$(singular_graph_identity audit "$RUN_A")")"
 [[ "$(printf '%s' "$au_out" | jq_field id)" == "$audit_node" ]] \
   || fail "audit node id != node_id(identity('audit', runId))"
 # attributes project verdict/findingsCount/disagreement.
@@ -274,7 +274,7 @@ au_attr="$(printf '%s' "$au_out" | python3 -c 'import json,sys;print(json.dumps(
 [[ "$(printf '%s' "$au_attr" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("disagreement",""))')" == "True" ]] \
   || fail "audit node must project attributes.disagreement"
 # Idempotence.
-au_out_b="$(gluerun_graph_project_paired_audits "$audit")" || fail "second project_paired_audits failed"
+au_out_b="$(singular_graph_project_paired_audits "$audit")" || fail "second project_paired_audits failed"
 [[ "$au_out" == "$au_out_b" ]] || fail "project_paired_audits is not idempotent"
 
 # --- Evidence invariance (fail-closed) ---------------------------------------
@@ -286,17 +286,17 @@ au_out_b="$(gluerun_graph_project_paired_audits "$audit")" || fail "second proje
   || fail "audit mapper minted an authoritative node (evidence invariance breach)"
 
 # --- Determinism through the canonicalizer: same set collapses identically ----
-canon_a="$(printf '%s\n' "$cm_out" | gluerun_graph_canonicalize)"
-canon_b="$(printf '%s\n' "$cm_out_b" | gluerun_graph_canonicalize)"
+canon_a="$(printf '%s\n' "$cm_out" | singular_graph_canonicalize)"
+canon_b="$(printf '%s\n' "$cm_out_b" | singular_graph_canonicalize)"
 [[ "$canon_a" == "$canon_b" ]] || fail "canonicalize over repeated projection is not stable"
 
 # --- No-writes: mappers print JSONL and touch NO filesystem -------------------
 w="$work_root/nowrite"; mkdir -p "$w"
 w_before="$(cd "$w" && find . | LC_ALL=C sort)"
 ( cd "$w" \
-  && gluerun_graph_project_task "$task_md" >/dev/null \
-  && gluerun_graph_project_commits "$ev_commits" >/dev/null \
-  && gluerun_graph_project_paired_audits "$audit" >/dev/null )
+  && singular_graph_project_task "$task_md" >/dev/null \
+  && singular_graph_project_commits "$ev_commits" >/dev/null \
+  && singular_graph_project_paired_audits "$audit" >/dev/null )
 w_after="$(cd "$w" && find . | LC_ALL=C sort)"
 [[ "$w_before" == "$w_after" ]] || fail "a mapper wrote filesystem artifacts (must be pure stdout)"
 

@@ -5,7 +5,7 @@
 # engine/ctx-assumptions.sh, this file defines a PURE helper and is
 # present-but-uncalled by every existing engine/CLI/driver path, so with it sourced
 # the engine stays byte-identical to prior behavior (notably under
-# GLUERUN_CTX_PACKET=0, which no path here consults).
+# SINGULAR_CTX_PACKET=0, which no path here consults).
 #
 # The seed (engine/ctx-assumptions.sh) emits a per-run ledger whose assumptions carry
 # stable positional ids A1..An. This slice advances that ledger from an attempt's
@@ -18,14 +18,14 @@
 # evidence-invariance rule requires.
 #
 # This is later composed by the wire-in slices (fix/audit prompt injection behind
-# GLUERUN_CTX_PACKET, per-attempt carry, capsule recording). This slice does NOT
+# SINGULAR_CTX_PACKET, per-attempt carry, capsule recording). This slice does NOT
 # touch driver files, inject into any prompt, add per-attempt carry, or add the flag.
 
-# gluerun_ctx_assumptions_transition <ledger-json> <findings-json>
+# singular_ctx_assumptions_transition <ledger-json> <findings-json>
 #
 # A PURE ledger->ledger transform. Reads BOTH JSON arguments (no file I/O, no events,
 # does NOT read capsules) and prints the updated ledger JSON on stdout:
-#   {"schema":"gluerun.orchestration.ctx-assumptions.v0",
+#   {"schema":"singular.orchestration.ctx-assumptions.v0",
 #    "assumptions":[{"id":"A1","status":..,"claim":..,"basis":..}, ...],
 #    "claims":[{"assumptionId":..,"status":..,"source":"model"}, ...]}
 #
@@ -41,14 +41,14 @@
 #     stay in id order (A1, A2, ...). `claims` is derived purely from the findings, so
 #     feeding a transition output back in with the same findings is a fixed point.
 #   - `claims` is an additive field, so a transition output is still a valid
-#     gluerun.orchestration.ctx-assumptions.v0 ledger for existing consumers.
-gluerun_ctx_assumptions_transition() {
-  gluerun_ctx_assumptions_transition_py "$1" "$2"
+#     singular.orchestration.ctx-assumptions.v0 ledger for existing consumers.
+singular_ctx_assumptions_transition() {
+  singular_ctx_assumptions_transition_py "$1" "$2"
 }
 
 # Internal: the pure Python transform. Reads ledger + findings JSON on argv and prints
 # the updated ledger. No I/O beyond stdout; no side effects.
-gluerun_ctx_assumptions_transition_py() {
+singular_ctx_assumptions_transition_py() {
   python3 - "$1" "$2" <<'PY'
 import json, sys
 
@@ -110,7 +110,7 @@ def _order_key(entry):
 entries.sort(key=_order_key)
 
 obj = {
-    "schema": "gluerun.orchestration.ctx-assumptions.v0",
+    "schema": "singular.orchestration.ctx-assumptions.v0",
     "assumptions": entries,
     "claims": claims,
 }

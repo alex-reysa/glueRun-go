@@ -2,9 +2,9 @@
 set -euo pipefail
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
-  if [[ -n "${GLUERUN_BASH_BIN:-}" ]]; then
-    [[ "$GLUERUN_BASH_BIN" == /* && -x "$GLUERUN_BASH_BIN" ]] || { echo "invalid GLUERUN_BASH_BIN: $GLUERUN_BASH_BIN" >&2; exit 2; }
-    exec "$GLUERUN_BASH_BIN" "$0" "$@"
+  if [[ -n "${SINGULAR_BASH_BIN:-}" ]]; then
+    [[ "$SINGULAR_BASH_BIN" == /* && -x "$SINGULAR_BASH_BIN" ]] || { echo "invalid SINGULAR_BASH_BIN: $SINGULAR_BASH_BIN" >&2; exit 2; }
+    exec "$SINGULAR_BASH_BIN" "$0" "$@"
   fi
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
   echo "decide.sh requires bash >= 4" >&2; exit 1
@@ -21,16 +21,16 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-# Decider runner. Defaults to the codex runner; set GLUERUN_RUNNER to a drop-in
+# Decider runner. Defaults to the codex runner; set SINGULAR_RUNNER to a drop-in
 # (e.g. claude-run.sh) to dispatch a different CLI under the same contract.
-GLUERUN_RUNNER_BIN="${GLUERUN_RUNNER:-$SCRIPT_DIR/codex-run.sh}"
+SINGULAR_RUNNER_BIN="${SINGULAR_RUNNER:-$SCRIPT_DIR/codex-run.sh}"
 
 task_id=""
 failure_class=""
 branch=""
 run_id=""
 context_file=""
-worktree="$GLUERUN_ROOT"
+worktree="$SINGULAR_ROOT"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,17 +45,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$failure_class" ]] || { echo "decide.sh: --failure-class required" >&2; exit 2; }
-[[ -n "$run_id" ]] || run_id="$(gluerun_worker_run_id)"
-[[ -d "$worktree" ]] || worktree="$GLUERUN_ROOT"
-gluerun_ensure_state_dirs
-run_dir="$(gluerun_run_dir "$run_id")"
+[[ -n "$run_id" ]] || run_id="$(singular_worker_run_id)"
+[[ -d "$worktree" ]] || worktree="$SINGULAR_ROOT"
+singular_ensure_state_dirs
+run_dir="$(singular_run_dir "$run_id")"
 mkdir -p "$run_dir"
 
 decider_status_activity="Decision failed for $failure_class"
 decider_status_next_action="Inspect the decider evidence"
 decider_status_outcome="decision-failed"
 
-gluerun_decider_status_write() {
+singular_decider_status_write() {
   local activity="$1" next_action="$2" process_type="${3:-decider}" process_pid="${4:-$$}"
   "$SCRIPT_DIR/run-status.sh" write \
     --run-id "$run_id" --task-id "${task_id:-}" --phase deciding --state active \
@@ -63,7 +63,7 @@ gluerun_decider_status_write() {
     --process-type "$process_type" --pid "$process_pid" >/dev/null 2>&1 || true
 }
 
-gluerun_decider_status_on_exit() {
+singular_decider_status_on_exit() {
   local rc=$?
   local state="failed"
   trap - EXIT
@@ -76,17 +76,17 @@ gluerun_decider_status_on_exit() {
   exit "$rc"
 }
 
-gluerun_decider_status_write \
+singular_decider_status_write \
   "Preparing decision for ${task_id:-unscoped} ($failure_class)" \
   "Run the configured decider"
-trap gluerun_decider_status_on_exit EXIT
+trap singular_decider_status_on_exit EXIT
 
-retry_count="$(gluerun_lease_field "$task_id" retryCount 2>/dev/null || echo 0)"
-max_retries="$(gluerun_lease_field "$task_id" maxRetries 2>/dev/null || echo "$GLUERUN_MAX_RETRIES")"
+retry_count="$(singular_lease_field "$task_id" retryCount 2>/dev/null || echo 0)"
+max_retries="$(singular_lease_field "$task_id" maxRetries 2>/dev/null || echo "$SINGULAR_MAX_RETRIES")"
 [[ -n "$retry_count" ]] || retry_count=0
-[[ -n "$max_retries" ]] || max_retries="$GLUERUN_MAX_RETRIES"
+[[ -n "$max_retries" ]] || max_retries="$SINGULAR_MAX_RETRIES"
 [[ "$retry_count" =~ ^[0-9]+$ ]] || retry_count=0
-[[ "$max_retries" =~ ^[0-9]+$ ]] || max_retries="$GLUERUN_MAX_RETRIES"
+[[ "$max_retries" =~ ^[0-9]+$ ]] || max_retries="$SINGULAR_MAX_RETRIES"
 [[ "$max_retries" =~ ^[0-9]+$ ]] || max_retries=0
 
 context_body="(none provided)"
@@ -96,7 +96,7 @@ fi
 
 # Assemble the decider prompt.
 prompt_file="$run_dir/decider-prompt-$failure_class.md"
-python3 - "$GLUERUN_ORCH_DIR/prompts/decider.md" "$prompt_file" \
+python3 - "$SINGULAR_ORCH_DIR/prompts/decider.md" "$prompt_file" \
   "$task_id" "$failure_class" "$branch" "$run_id" "$retry_count" "$max_retries" "$context_body" <<'PY'
 import sys
 tmpl_path, out_path, task_id, fc, branch, run_id, rc, mr, ctx = sys.argv[1:10]
@@ -130,7 +130,7 @@ invalid_verdict="$run_dir/decision-$failure_class.invalid.json"
 action="escalate-parked"
 rationale="decider unavailable; parked by fallback"
 timed_out="no"
-decider_timeout_sec="${GLUERUN_DECIDER_TIMEOUT_SEC:-1200}"
+decider_timeout_sec="${SINGULAR_DECIDER_TIMEOUT_SEC:-1200}"
 if ! [[ "$decider_timeout_sec" =~ ^[0-9]+$ && "$decider_timeout_sec" -gt 0 ]]; then
   decider_timeout_sec=1200
 fi
@@ -138,14 +138,14 @@ fi
 # Was a local recursive-pgrep walk that sent SIGTERM and nothing else, so a
 # process that ignored or was slow to handle TERM survived the decider timeout
 # indefinitely — and recursive pgrep loses children that reparent mid-walk.
-# gluerun_kill_tree snapshots the tree first and escalates to SIGKILL after the
+# singular_kill_tree snapshots the tree first and escalates to SIGKILL after the
 # grace period, which is also what gives the runner's EXIT trap (and with it the
-# read-only restore guard) a chance to run against $GLUERUN_ROOT.
-gluerun_decider_kill_tree() {
-  gluerun_kill_tree "$1" "$(gluerun_kill_grace_sec)"
+# read-only restore guard) a chance to run against $SINGULAR_ROOT.
+singular_decider_kill_tree() {
+  singular_kill_tree "$1" "$(singular_kill_grace_sec)"
 }
 
-gluerun_decider_timeout_action() {
+singular_decider_timeout_action() {
   if [[ "$failure_class" == "audit-needs-fix" && "$retry_count" -lt "$max_retries" ]]; then
     action="retry"
     rationale="readonly decider timed out after ${decider_timeout_sec}s; audit-needs-fix is buildable and retry budget remains (${retry_count}/${max_retries})"
@@ -174,9 +174,9 @@ decider_log="$run_dir/decider-codex.log"
 decider_meta="$run_dir/session-decider.json"
 decider_result="$run_dir/decider-runner-result.json"
 rm -f "$decider_result"
-decider_capability_profile="${GLUERUN_DECIDER_CAPABILITY_PROFILE:-decider-core}"
-gluerun_runner_contract_prepare \
-  "$GLUERUN_RUNNER_BIN" decider "$decider_capability_profile" "$decider_result"
+decider_capability_profile="${SINGULAR_DECIDER_CAPABILITY_PROFILE:-decider-core}"
+singular_runner_contract_prepare \
+  "$SINGULAR_RUNNER_BIN" decider "$decider_capability_profile" "$decider_result"
 # `exec` so $! IS the runner script, not a subshell wrapping it. The runner is a
 # cooperative citizen — it traps TERM and group-kills its own provider session —
 # but only if the TERM actually reaches it; with an intermediate subshell the
@@ -184,11 +184,11 @@ gluerun_runner_contract_prepare \
 # (which holds the read-only restore guard) never ran. Deliberately NOT a new
 # session: the runner stays in this shell's group so Ctrl-C still reaches it.
 (
-  export GLUERUN_RUNNER_ROLE=decider
-  export GLUERUN_RUNNER_CAPABILITY_PROFILE="$decider_capability_profile"
-  export GLUERUN_RUNNER_RESULT_FILE="$decider_result"
-  export GLUERUN_RUNNER_RUN_ID="$run_id"
-  exec "$GLUERUN_RUNNER_BIN" "${GLUERUN_RUNNER_CONTRACT_ARGS[@]}" \
+  export SINGULAR_RUNNER_ROLE=decider
+  export SINGULAR_RUNNER_CAPABILITY_PROFILE="$decider_capability_profile"
+  export SINGULAR_RUNNER_RESULT_FILE="$decider_result"
+  export SINGULAR_RUNNER_RUN_ID="$run_id"
+  exec "$SINGULAR_RUNNER_BIN" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
     --level readonly -C "$worktree" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \
@@ -196,14 +196,14 @@ gluerun_runner_contract_prepare \
     --session-meta "$decider_meta"
 ) >>"$decider_log" 2>&1 &
 decider_pid=$!
-gluerun_decider_status_write \
+singular_decider_status_write \
   "Running the decider for ${task_id:-unscoped} ($failure_class)" \
   "Validate and record the decider verdict" provider-runner "$decider_pid"
 deadline=$((SECONDS + decider_timeout_sec))
 while kill -0 "$decider_pid" 2>/dev/null; do
   if [[ "$SECONDS" -ge "$deadline" ]]; then
     timed_out="yes"
-    gluerun_decider_kill_tree "$decider_pid"
+    singular_decider_kill_tree "$decider_pid"
     wait "$decider_pid" 2>/dev/null || true
     run_ec=124
     break
@@ -213,28 +213,28 @@ done
 if [[ "$timed_out" != "yes" ]]; then
   wait "$decider_pid" || run_ec=$?
 fi
-gluerun_decider_status_write \
+singular_decider_status_write \
   "Validating the decider verdict for ${task_id:-unscoped}" \
   "Persist the selected recovery action"
-gluerun_session_meta_finalize "$decider_meta" "decider" "$task_id" "$run_id" \
-  "$(basename "$GLUERUN_RUNNER_BIN")" "$(gluerun_prompt_sha "$prompt_file")" "" 1 || true
+singular_session_meta_finalize "$decider_meta" "decider" "$task_id" "$run_id" \
+  "$(basename "$SINGULAR_RUNNER_BIN")" "$(singular_prompt_sha "$prompt_file")" "" 1 || true
 
 if [[ "$timed_out" == "yes" ]]; then
-  gluerun_decider_timeout_action
+  singular_decider_timeout_action
   owner="human"; [[ "$action" == "retry" ]] && owner="l1"
-  gluerun_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "$owner"
-  gluerun_append_event "decider.timeout" "readonly decider timed out" \
+  singular_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "$owner"
+  singular_append_event "decider.timeout" "readonly decider timed out" \
     "$(python3 - "$task_id" "$run_id" "$failure_class" "$action" "$decider_timeout_sec" <<'PY'
 import json, sys
 task_id, run_id, failure_class, action, timeout_sec = sys.argv[1:6]
 print(json.dumps({"taskId": task_id, "runId": run_id, "failureClass": failure_class, "timeoutSec": int(timeout_sec), "action": action}, separators=(",", ":")))
 PY
 )"
-elif [[ -f "$verdict" ]] && gluerun_extract_json "$verdict" "$verdict" 2>/dev/null; then
+elif [[ -f "$verdict" ]] && singular_extract_json "$verdict" "$verdict" 2>/dev/null; then
   validation_log="$run_dir/decision-$failure_class.validation.log"
-  if gluerun_validate_decider_verdict "$verdict" "$failure_class" "$task_id" >"$validation_log" 2>&1; then
-    a="$(gluerun_json_field "$verdict" action 2>/dev/null || echo "")"
-    r="$(gluerun_json_field "$verdict" rationale 2>/dev/null || echo "")"
+  if singular_validate_decider_verdict "$verdict" "$failure_class" "$task_id" >"$validation_log" 2>&1; then
+    a="$(singular_json_field "$verdict" action 2>/dev/null || echo "")"
+    r="$(singular_json_field "$verdict" rationale 2>/dev/null || echo "")"
     if [[ -n "$a" ]]; then action="$a"; fi
     if [[ -n "$r" ]]; then rationale="$r"; fi
   else
@@ -242,8 +242,8 @@ elif [[ -f "$verdict" ]] && gluerun_extract_json "$verdict" "$verdict" 2>/dev/nu
     invalid_reason="$(cat "$validation_log" 2>/dev/null || echo "schema validation failed")"
     action="escalate-parked"
     rationale="invalid decider verdict; parked by fallback: $invalid_reason"
-    gluerun_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "human"
-    gluerun_append_event "decider.invalid_verdict" "decider verdict failed validation; using fallback" \
+    singular_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "human"
+    singular_append_event "decider.invalid_verdict" "decider verdict failed validation; using fallback" \
       "$(decider_event_data "$invalid_reason")"
   fi
 else
@@ -251,8 +251,8 @@ else
   # Falls back to the escalate-parked default, but record WHY so a prose stall is
   # visible rather than indistinguishable from a deliberate human-park decision.
   [[ -f "$verdict" ]] && cp "$verdict" "$invalid_verdict" 2>/dev/null || true
-  gluerun_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "human"
-  gluerun_append_event "decider.unparseable" "decider produced no parseable JSON action; using fallback" \
+  singular_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "human"
+  singular_append_event "decider.unparseable" "decider produced no parseable JSON action; using fallback" \
     "$(decider_event_data "unparseable")"
 fi
 
@@ -265,15 +265,15 @@ if [[ "$action" == "escalate-infra" ]]; then
   # Distinct from escalate-parked on purpose: this says the work is fine and the
   # environment is not, which is a different queue for whoever reads it — one
   # needs a human to judge, the other needs a human to fix. Both come back
-  # through `gluerun unpark`.
-  gluerun_append_event "decider.parked_infrastructure" \
+  # through `singular unpark`.
+  singular_append_event "decider.parked_infrastructure" \
     "decision parked on an environment failure, not a product defect" \
     "$(decider_event_data "$rationale")"
 elif [[ "$action" == "escalate-parked" ]]; then
-  gluerun_append_event "decider.parked" "decision parked for human review" \
+  singular_append_event "decider.parked" "decision parked for human review" \
     "$(decider_event_data "$rationale")"
 else
-  gluerun_append_event "decider.verdict" "decider chose an action" \
+  singular_append_event "decider.verdict" "decider chose an action" \
     "$(decider_event_data)"
 fi
 

@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Tests gluerun_select_l2_runner: storage_proof tasks route to the Claude runner
+# Tests singular_select_l2_runner: storage_proof tasks route to the Claude runner
 # (real-PostgreSQL egress that the codex sandbox blocks); every other task keeps
-# the default runner; an explicit GLUERUN_RUNNER override always wins. Uses synthetic
+# the default runner; an explicit SINGULAR_RUNNER override always wins. Uses synthetic
 # task fixtures so it is self-contained and free.
 
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
-export GLUERUN_ENGINE_HOME="$ENGINE_HOME"
-export GLUERUN_MODULES="storage-proof"
+export SINGULAR_ENGINE_HOME="$ENGINE_HOME"
+export SINGULAR_MODULES="storage-proof"
 source "$SCRIPT_DIR/lib.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/gluerun-runner-sel.XXXXXX")"
+work="$(mktemp -d "${TMPDIR:-/tmp}/singular-runner-sel.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
 default_runner="$work/codex-run.sh"; printf '#!/usr/bin/env bash\n' >"$default_runner"; chmod +x "$default_runner"
 claude_runner="$work/claude-run.sh"; printf '#!/usr/bin/env bash\n' >"$claude_runner"; chmod +x "$claude_runner"
 
-# storage_proof fixture: matches gluerun_task_requires_storage_proof_red_guard
+# storage_proof fixture: matches singular_task_requires_storage_proof_red_guard
 # (objective: storage_proof + real PostgreSQL proof; criteria: marked nonzero;
 # required evidence: skip-guard-red).
 proof_task="$work/proof.md"
@@ -49,29 +49,29 @@ State packet and auditor verdict.
 EOF
 
 # --- predicate sanity ----------------------------------------------------------
-gluerun_task_requires_storage_proof_red_guard "$proof_task" || fail "predicate: proof task should require guard"
-gluerun_task_requires_storage_proof_red_guard "$spec_task"  && fail "predicate: spec task should NOT require guard" || true
+singular_task_requires_storage_proof_red_guard "$proof_task" || fail "predicate: proof task should require guard"
+singular_task_requires_storage_proof_red_guard "$spec_task"  && fail "predicate: spec task should NOT require guard" || true
 pass "predicate distinguishes storage_proof vs spec"
 
 # --- selection: storage_proof -> claude ---------------------------------------
-unset GLUERUN_RUNNER
-got="$(gluerun_select_l2_runner "$proof_task" "$default_runner" "$claude_runner")"
+unset SINGULAR_RUNNER
+got="$(singular_select_l2_runner "$proof_task" "$default_runner" "$claude_runner")"
 [[ "$got" == "$claude_runner" ]] || fail "storage_proof task should route to claude runner (got $got)"
 pass "storage_proof task routes to claude runner"
 
 # --- selection: non-proof -> default ------------------------------------------
-got="$(gluerun_select_l2_runner "$spec_task" "$default_runner" "$claude_runner")"
+got="$(singular_select_l2_runner "$spec_task" "$default_runner" "$claude_runner")"
 [[ "$got" == "$default_runner" ]] || fail "spec task should keep default runner (got $got)"
 pass "non-proof task keeps default runner"
 
-# --- explicit GLUERUN_RUNNER override wins even for storage_proof -----------------
-got="$(GLUERUN_RUNNER="$default_runner" gluerun_select_l2_runner "$proof_task" "$default_runner" "$claude_runner")"
-[[ "$got" == "$default_runner" ]] || fail "explicit GLUERUN_RUNNER override should win (got $got)"
-pass "explicit GLUERUN_RUNNER override wins"
+# --- explicit SINGULAR_RUNNER override wins even for storage_proof -----------------
+got="$(SINGULAR_RUNNER="$default_runner" singular_select_l2_runner "$proof_task" "$default_runner" "$claude_runner")"
+[[ "$got" == "$default_runner" ]] || fail "explicit SINGULAR_RUNNER override should win (got $got)"
+pass "explicit SINGULAR_RUNNER override wins"
 
 # --- missing/non-executable claude runner -> default --------------------------
-unset GLUERUN_RUNNER
-got="$(gluerun_select_l2_runner "$proof_task" "$default_runner" "$work/nonexistent.sh")"
+unset SINGULAR_RUNNER
+got="$(singular_select_l2_runner "$proof_task" "$default_runner" "$work/nonexistent.sh")"
 [[ "$got" == "$default_runner" ]] || fail "absent claude runner should fall back to default (got $got)"
 pass "absent claude runner falls back to default"
 
