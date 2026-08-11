@@ -1,15 +1,13 @@
 /* core/plans.js — the plan-thread registry client (0.8.0; sidebar threads 0.10.0;
-   thread sub-menu 0.12.0).
+   static header surface tabs 0.18.0).
    Fetches /api/plans once at boot (and lazily as the pointer enters the threads
    column), owns the sidebar threads list (#side-threads-list — the live plan plus
-   every archived plan) plus the active thread's surface sub-menu (#thread-subnav,
-   nested under whichever thread row is active) and the historical-mode banner,
-   and — in historical mode — paints the archived plan's gates into the Plan
-   workbench readout.
+   every archived plan), the historical-mode banner, the stop reason, and — in
+   historical mode — the archived plan's gates in the Plan workbench readout.
 
    Import direction: plans.js → core/api.js only (never a surface, never app.js,
-   never the router — the active surface is read from location.hash instead), so
-   it sits low in the graph and any surface + main.js may import it. That still
+   never the router — surface state remains the router's responsibility), so it
+   sits low in the graph and any surface + main.js may import it. That still
    holds with the execution-state subscription (0.17.0): the store lives in
    core/api.js, so plans.js reads app.js's execution facts without importing
    app.js. The tiny esc/fmtDate helpers are local (kept dependency-free on
@@ -18,7 +16,7 @@
    PMGO-003 vocabulary rule: this module describes DATA SOURCES, never execution.
    A plan row's meta says "connected" (we are attached to the live tree) or a
    date; the words running / stopped / waiting / blocked belong to execution and
-   appear here only in #crumb-exec, which is fed from the exec store. */
+   appear here only in #stop-reason, which is fed from the exec store. */
 
 import { activePlan, isHistorical, apiFetch, switchPlan, onExecState } from "./api.js";
 
@@ -83,65 +81,10 @@ function threadRow(id, tone, active, name, meta) {
   </button>`;
 }
 
-// ------------------------------------------------------------- sub-menu -------
-// The active thread's surface sections, vertically under its row (0.12.0 — the
-// former header tab row). data-surface values / hashes are unchanged; the router
-// delegates clicks on this nav and mirrors aria-pressed on surface switches.
-const SURFACE_ROWS = [
-  ["home", "Home", "i-grid"],
-  ["plan", "Plan", "i-graph"],
-  ["consoles", "Consoles", "i-terminal"],
-  ["agents", "Agents", "i-hub"],
-];
-
-// The active surface, read from location.hash (mirrors router.currentRoute()'s
-// surface resolution, incl. the legacy #TASK-/#NODE:/#L1:/#PLAN hashes) so this
-// module needn't import the router (which imports app.js).
-function hashSurface() {
-  let raw = "";
-  try { raw = decodeURIComponent((location.hash || "").replace(/^#/, "")); } catch (e) {}
-  const first = raw.split("/")[0];
-  if (["home", "plan", "consoles", "agents", "providers"].includes(first)) return first;
-  if (/^(TASK-\d+|NODE:|L1:|PLAN$)/.test(raw)) return "plan";
-  return "home";
-}
-
-// The sub-menu is ONE persistent node, built once and re-parented under the
-// active thread row on every threads repaint — so the router's click delegation
-// and the consoles live badge (main.js writes dataset.live) survive repaints.
-let subnavEl = null;
-function ensureSubnav() {
-  if (subnavEl) return subnavEl;
-  subnavEl = document.createElement("nav");
-  subnavEl.id = "thread-subnav";
-  subnavEl.setAttribute("aria-label", "Thread sections");
-  subnavEl.innerHTML = SURFACE_ROWS.map(([s, label, ic]) =>
-    `<button type="button" data-surface="${s}" aria-pressed="false" title="${label}">
-      <svg class="icon" aria-hidden="true"><use href="#${ic}"/></svg><span class="tsn-label">${label}</span>
-    </button>`).join("");
-  return subnavEl;
-}
-
-// Re-sync row state after a repaint: aria-pressed from the hash (the router
-// mirrors it on subsequent switches), and the historical Agents disable —
-// Agents is a live-repo surface, unreachable while pinned to an archive.
-function syncSubnav() {
-  const cur = hashSurface();
-  for (const b of ensureSubnav().querySelectorAll("[data-surface]")) {
-    b.setAttribute("aria-pressed", String(b.dataset.surface === cur));
-    if (b.dataset.surface === "agents") {
-      b.disabled = isHistorical();
-      b.title = isHistorical() ? "live only" : "Agents";
-    }
-  }
-}
-
 // ------------------------------------------------------------- threads --------
 // Paint the sidebar threads list: the live plan first (acts as back-to-live while
 // historical), then every archived plan newest-first. plansData==null (older
 // server) or an empty registry → just the live row (feature quietly minimal).
-// The surface sub-menu nests under whichever row is active (exactly one always
-// is: the live row in live mode, the pinned archived row in historical mode).
 function renderThreads() {
   const host = document.getElementById("side-threads-list");
   if (!host) return;
@@ -150,7 +93,7 @@ function renderThreads() {
   // Live row: green (success) dot = we are CONNECTED to the live tree (a data
   // source), active (page bg) only when live. The meta used to read "live",
   // which operators read as "the orchestration loop is running" — the dot stays,
-  // the word does not (PMGO-003). Execution state is #crumb-exec's job.
+  // the word does not (PMGO-003). Execution state is the top stop chip's job.
   let html = threadRow("", "success", live, "Current plan", "connected");
   for (const p of list) {
     const on = p.id === activePlan;
@@ -162,35 +105,23 @@ function renderThreads() {
     html += threadRow(activePlan, "integration", true, activePlan, "archived");
   }
   host.innerHTML = html;
-  const active = host.querySelector('.side-thread[data-active="true"]');
-  if (active) { syncSubnav(); active.insertAdjacentElement("afterend", ensureSubnav()); }
-}
-
-// ------------------------------------------------------------- breadcrumb -----
-// The stage-header breadcrumb's current-thread name (0.11.0): "Current plan" while
-// live, else the archived plan's name. plans.js owns both, so it paints it here;
-// the breadcrumb's repo basename is painted by core/dock.js from the snapshot.
-function paintBreadcrumb() {
-  const cur = document.getElementById("crumb-plan");
-  if (!cur) return;
-  if (!isHistorical()) { cur.textContent = "Current plan"; return; }
-  const entry = activePlanEntry();
-  cur.textContent = (entry && entry.name) || activePlan || "archived plan";
 }
 
 // ------------------------------------------------------------- exec chip ------
-// #crumb-exec — the ONLY execution-state text in the breadcrumb. Stopped names
-// the reason ("Stopped — operator approval required for G100"), which is what
-// turns a status into a next action; running renders nothing at all, because the
-// dock's loop cell already owns that word and two liveness readouts in one
-// viewport is how PMGO-003 started. Fed by core/api.js's exec store, which
-// app.js writes only in live mode — so an archived plan leaves the chip hidden.
+// #stop-reason is the reason half of the top-bar stop chip. app.js exclusively
+// owns #stop-text ("stopped" / "stop clear"); this module appends the actionable
+// reason without either writer replacing the other's text. Fed by core/api.js's
+// exec store, which app.js writes only in live mode.
 function paintExecCrumb(state) {
-  const chip = document.getElementById("crumb-exec");
-  if (!chip) return;
-  if (!state || !state.stopPresent) { chip.textContent = ""; chip.hidden = true; return; }
-  chip.textContent = "Stopped" + (state.stopReason ? " — " + state.stopReason : "");
-  chip.hidden = false;
+  const reason = document.getElementById("stop-reason");
+  if (!reason) return;
+  if (isHistorical() || !state || !state.stopPresent || !state.stopReason) {
+    reason.textContent = "";
+    reason.hidden = true;
+    return;
+  }
+  reason.textContent = " — " + state.stopReason;
+  reason.hidden = false;
 }
 
 // ------------------------------------------------------------- banner ---------
@@ -240,11 +171,12 @@ export function initPlans() {
   }
 
   if (isHistorical()) {
-    // Providers (static #side-nav) is a live-only surface — disable it once here.
-    // The Agents row lives in the repainted #thread-subnav, so its disable is
-    // applied by syncSubnav() on every repaint instead.
-    const nav = document.querySelector('#side-nav [data-surface="providers"]');
-    if (nav) { nav.disabled = true; nav.title = "live only"; }
+    // Agents + Providers are live-only surfaces. Both controls are static, so a
+    // single boot-time disable matches the router's historical redirect.
+    for (const nav of document.querySelectorAll('#surface-tabs [data-surface="agents"], #side-nav [data-surface="providers"]')) {
+      nav.disabled = true;
+      nav.title = "live only";
+    }
   }
 
   // Execution chip: subscribe-with-replay, so it paints on the first snapshot
@@ -253,8 +185,7 @@ export function initPlans() {
 
   renderThreads();   // paints the live row (+ self-heal id) immediately
   paintBanner();     // shows the id fallback immediately; refreshed once plans resolve
-  paintBreadcrumb(); // stage-header current-thread name (live label immediately)
-  fetchPlans().then(() => { renderThreads(); paintBanner(); paintBreadcrumb(); paintArchivedGates(); });
+  fetchPlans().then(() => { renderThreads(); paintBanner(); paintArchivedGates(); });
 }
 
 export { fmtDate };

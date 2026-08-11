@@ -61,14 +61,13 @@ function readyCount(snap, ov) {
   return null;
 }
 
-// Repo basename → the breadcrumb + rail brand caption (the dock owns the single
+// Repo basename → the rail brand caption (the dock owns the single
 // snapshot→chrome-text write so app.js/renderTop stays untouched). Only writes when
 // the live snapshot actually carries a repo path (the historical synthetic snapshot
 // does not), so a live→historical switch keeps the last-known repo rather than "—".
 function paintRepoChrome(snap) {
   const repo = snap && snap.repo ? basename(snap.repo) : "";
   if (!repo) return;
-  setText("crumb-repo", repo);
   setText("brand-repo", repo);
 }
 
@@ -81,7 +80,7 @@ function renderCells() {
   if (liveEl) liveEl.hidden = hist;
   if (histEl) histEl.hidden = !hist;
 
-  // Right cluster: repo · branch (breadcrumb repo rides along).
+  // Right cluster: repo · branch (the sidebar brand repo rides along).
   paintRepoChrome(snap);
   const entry = activePlanEntry();
   const repoBase = snap && snap.repo ? basename(snap.repo) : "";

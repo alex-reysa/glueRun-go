@@ -286,28 +286,24 @@ body.side-rail { --side-col: var(--side-w-rail); }
   min-height: 44px;
 }
 
-/* breadcrumb — repo › thread › surface (repo painted by dock, thread by plans,
-   the surface tail by the router on each route change). Earlier segments are
-   muted; only the current surface reads strong. */
-.crumbs { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 0 1 auto; }
-.crumb-repo,
-.crumb-thread {
-  color: var(--muted); font-size: 12px; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; max-width: 28ch;
+/* Static app-surface tabs. They share the .tab control recipe with Plan lenses
+   and the inspector, sized to the 32px navigation-row minimum. */
+#surface-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; }
+#surface-tabs .tab {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 11px;
 }
-.crumb-sep { color: var(--faint); font-size: 12px; flex: 0 0 auto; }
-/* execution state beside the plan title (PMGO-003) — quiet by construction: this
-   is a HOLD, not a fault, and it must never out-shout the surface segment. */
-.crumb-exec {
-  color: var(--muted); font-size: 11px; flex: 0 1 auto;
-  padding: 0 7px; height: 18px; display: inline-flex; align-items: center;
-  border-radius: var(--r-chip); border: 1px solid var(--hair);
-  background: rgba(0, 0, 0, 0.025);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 44ch;
-}
-.crumb-cur {
-  color: var(--ink); font-size: 12px; font-weight: 600; letter-spacing: -0.005em;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 34ch; flex: 0 1 auto;
+#surface-tabs .tab .icon { width: 14px; height: 14px; color: var(--muted); }
+#surface-tabs .tab[aria-pressed="true"] .icon { color: var(--text); }
+#surface-tabs .tab:disabled { opacity: 0.4; cursor: not-allowed; }
+/* The Consoles tab's live-session count badge (C4, painted by main.js). */
+#surface-tabs .tab[data-live]:not([data-live=""])::after {
+  content: attr(data-live);
+  min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
+  font: 600 9px var(--font-mono); line-height: 1;
+  color: #fff; background: var(--tone-green-solid);
+  border-radius: var(--radius-pill);
 }
 
 .health-flag {
@@ -326,8 +322,9 @@ body.side-rail { --side-col: var(--side-w-rail); }
 
 .top-spacer { flex: 1 1 auto; }
 
-#stop-chip { white-space: nowrap; height: 21px; border-radius: 5px; }
+#stop-chip { white-space: nowrap; height: 21px; border-radius: 5px; min-width: 0; max-width: min(48ch, 42vw); }
 #stop-chip[data-present="false"] { opacity: 0.55; }
+#stop-reason { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* conn dot + updated age relocated into the status dock; the ids stay the same so
    app.js (setConn / tickAge) keeps writing to them wherever they render. */
@@ -377,7 +374,6 @@ body.historical #app {
 }
 body.historical #plan-banner { display: flex; grid-area: banner; }
 body.historical #btn-refresh { display: none; }
-#thread-subnav button:disabled,
 #side-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ----------------------------------------------------------------------- */
@@ -393,19 +389,13 @@ body.historical #btn-refresh { display: none; }
   overflow: hidden;
 }
 
-/* Brand block at the top of the rail (~56px), moved out of the header. */
+/* Brand + collapse control at the top of the rail (~56px). */
 .side-brand {
   display: flex; align-items: center; gap: 10px;
   height: 56px; flex: 0 0 auto; padding: 0 14px;
   border-bottom: 1px solid var(--line-soft);
   min-width: 0; white-space: nowrap;
 }
-.side-brand .brand-mark {
-  width: 27px; height: 27px; flex: 0 0 auto;
-  display: grid; place-items: center; border-radius: 8px;
-  background: var(--ink); color: #fff;
-}
-.side-brand .brand-mark .icon { width: 15px; height: 15px; }
 .side-brand .brand-copy { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .side-brand .brand-copy strong { font-size: 13px; font-weight: 650; letter-spacing: -0.01em; color: var(--ink); }
 .side-brand .brand-copy small { font-size: 10px; color: var(--muted); max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
@@ -414,8 +404,8 @@ body.historical #btn-refresh { display: none; }
   font-size: 10px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
   color: var(--muted); margin: 0 0 7px; padding: 0 8px;
 }
-/* threads list grows + scrolls once there are more than ~8 plans; the app nav
-   and collapse chevron pin to the bottom. */
+/* threads list grows + scrolls once there are more than ~8 plans; app nav stays
+   pinned below it while the collapse control remains in the brand row. */
 #side-threads { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 10px 8px; }
 #side-threads-list { display: flex; flex-direction: column; gap: 3px; }
 
@@ -438,56 +428,14 @@ body.historical #btn-refresh { display: none; }
 .st-name { font-size: 12.5px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st-meta { font-family: var(--font-mono); font-size: 10px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* ---- thread sub-menu (0.12.0) — the active thread's surface sections
-   (Home / Plan / Consoles / Agents) as a nested tree under its row. One
-   persistent node (core/plans.js) re-parented on each threads repaint. ---- */
-#thread-subnav {
-  position: relative;
-  display: flex; flex-direction: column; gap: 1px;
-  margin: 2px 0 8px; padding-left: 30px;
-}
-/* tree guide — a soft hairline rail under the thread row's tone dot */
-#thread-subnav::before {
-  content: ""; position: absolute; left: 15px; top: 3px; bottom: 3px;
-  width: 1px; background: var(--line-soft);
-}
-#thread-subnav button {
-  position: relative;
-  display: flex; align-items: center; gap: 8px;
-  width: 100%; min-height: 31px; padding: 0 9px;
-  border: 0; border-radius: 7px;
-  background: transparent; color: #52525b; text-align: left; cursor: pointer;
-  font-size: 12px; font-weight: 500;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
-}
-#thread-subnav button .icon { width: 14px; height: 14px; flex: none; color: var(--muted); }
-#thread-subnav button:hover:not(:disabled) { color: var(--ink); background: rgba(0, 0, 0, 0.03); }
-#thread-subnav button[aria-pressed="true"] { color: var(--ink); background: rgba(0, 0, 0, 0.06); }
-#thread-subnav button[aria-pressed="true"] .icon { color: var(--ink); }
-.tsn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* the Consoles row's live-session count badge (C4, painted by main.js) */
-#thread-subnav button[data-live]:not([data-live=""])::after {
-  content: attr(data-live);
-  margin-left: auto;
-  min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box;
-  display: inline-flex; align-items: center; justify-content: center;
-  font: 600 9px var(--font-mono); line-height: 1;
-  color: #fff; background: var(--tone-green-solid);
-  border-radius: var(--radius-pill);
-}
-
 #side-nav { flex: 0 0 auto; border-top: 1px solid var(--line-soft); padding: 10px; }
 #side-nav button .icon { width: 15px; height: 15px; flex: none; color: var(--muted); }
 #side-nav button[aria-pressed="true"] .icon { color: var(--ink); }
 .sn-label { font-size: 12.5px; font-weight: 550; }
 
 #side-collapse {
-  flex: 0 0 auto; height: 34px; display: flex; align-items: center; justify-content: center;
-  border: 0; border-top: 1px solid var(--line-soft); background: transparent;
-  color: var(--muted); cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+  flex: 0 0 auto; width: 28px; height: 28px; margin-left: auto;
 }
-#side-collapse:hover { background: rgba(0, 0, 0, 0.03); color: var(--ink); }
 /* chevron points left (toward the rail) when open, right when collapsed */
 #side-collapse .icon { width: 14px; height: 14px; transform: rotate(180deg); transition: transform var(--dur-base) var(--ease-out); }
 #side-collapse[aria-expanded="false"] .icon { transform: rotate(0deg); }
@@ -495,6 +443,7 @@ body.historical #btn-refresh { display: none; }
 /* ---- collapsed icon rail: hide the prose, center the dot/icon glyphs ---- */
 body.side-rail .side-brand { justify-content: center; padding: 0; gap: 0; }
 body.side-rail .side-brand .brand-copy { display: none; }
+body.side-rail #side-collapse { margin-left: 0; }
 body.side-rail .side-eyebrow,
 body.side-rail .st-main,
 body.side-rail .sn-label { display: none; }
@@ -503,15 +452,6 @@ body.side-rail #side-nav { padding: 10px 8px; }
 body.side-rail .side-thread,
 body.side-rail #side-nav button { justify-content: center; gap: 0; padding: 4px 0; }
 body.side-rail .side-thread .tone-dot { width: 8px; height: 8px; }
-/* sub-menu in the rail: icon-only rows, centered, no tree guide; the title
-   attribute keeps each row identifiable, the live badge pins to the corner. */
-body.side-rail #thread-subnav { padding-left: 0; margin: 2px 0 6px; }
-body.side-rail #thread-subnav::before { display: none; }
-body.side-rail .tsn-label { display: none; }
-body.side-rail #thread-subnav button { justify-content: center; gap: 0; padding: 4px 0; }
-body.side-rail #thread-subnav button[data-live]:not([data-live=""])::after {
-  position: absolute; top: 2px; right: 4px; margin-left: 0;
-}
 
 /* Stat pills — compact inline chips in the single header row */
 .stat-strip {
@@ -822,7 +762,7 @@ select.filter:hover { border-color: var(--rule-strong); }
   transition: background var(--d-color) var(--ease), color var(--d-color) var(--ease);
 }
 .tab:hover { background: rgba(0, 0, 0, 0.04); color: var(--text); }
-.tab[aria-selected="true"] { background: rgba(0, 0, 0, 0.06); color: var(--text); }
+.tab[aria-selected="true"], .tab[aria-pressed="true"] { background: rgba(0, 0, 0, 0.06); color: var(--text); }
 
 #inspector-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 16px 20px; }
 
@@ -1271,8 +1211,9 @@ button.dock-cell:hover { background: rgba(0, 0, 0, 0.04); }
 }
 @media (max-width: 560px) {
   #top-bar { padding: 0 10px; gap: 8px; }
-  /* narrow: keep only the current surface segment of the breadcrumb */
-  .crumb-repo, .crumb-thread, .crumb-sep { display: none; }
+  /* The top tabs are the only surface navigation, so preserve all four as icons. */
+  #surface-tabs .tab { padding: 0 8px; }
+  #surface-tabs .surface-tab-label { display: none; }
   #dock-gates, #dock-tasks, #dock-frontier { display: none; }
   #inspector { height: 92vh; }
 }

@@ -1,9 +1,8 @@
 /* plan.css — the Plan surface (0.6.0 console redesign). Loaded after styles.css.
    Warm-neutral pm-go tokens only (tokens.css). Owns the Plan workbench grid
    (header · 196px lens nav · center pane · 360px aside) and the shared lens
-   chrome (detail cards, dimming classes, scroll-shadow fades). The former
-   header surface switcher moved into the sidebar as the thread sub-menu
-   (#thread-subnav — styles.css, with the other sidebar rules). */
+   chrome (detail cards, dimming classes, scroll-shadow fades). The app-level
+   surface tabs live in the top bar (#surface-tabs — styles.css). */
 
 /* ---- surfaces occupy the main grid cell; only the active one shows ---- */
 .surface { grid-area: main; min-height: 0; min-width: 0; background: var(--surface-page); }

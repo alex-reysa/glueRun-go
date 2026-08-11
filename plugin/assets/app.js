@@ -296,7 +296,7 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     if (stopChip) {
       stopChip.dataset.present = String(stopPresent);
       stopChip.dataset.tone = stopPresent ? "warn" : "idle";
-      const st = $("stop-text"); if (st) st.textContent = stopPresent ? "stop present" : "stop clear";
+      const st = $("stop-text"); if (st) st.textContent = stopPresent ? "stopped" : "stop clear";
     }
 
     renderPlanFilters();

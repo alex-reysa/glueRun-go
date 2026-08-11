@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# 0.10.0: headless-Chrome DOM assertions over the console app shell + the rebuilt
+# 0.18.0: headless-Chrome DOM assertions over the console app shell + the rebuilt
 # dependency-matrix lens. Hermetic like test-console-cli.sh: a mktemp fixture repo,
 # a console server started on a free port and killed in the trap, and an isolated
 # Chrome profile so a running browser can't clash. When no Google Chrome is present
@@ -102,18 +102,29 @@ count() { grep -o "$1" "$dom" 2>/dev/null | grep -c . || true; }
 # --- app-shell assertions ------------------------------------------------------
 assert_contains "$html" 'id="side-bar"' "left app sidebar (#side-bar) missing"
 
-# 0.12.0: the header tab row is gone; the surface tabs live in the sidebar as
-# the active thread's vertical sub-menu (#thread-subnav, painted by plans.js).
-assert_absent   "$html" 'id="surface-nav"'   "removed header #surface-nav still present"
-assert_contains "$html" 'id="thread-subnav"' "thread sub-menu (#thread-subnav) missing"
+# 0.18.0: the one surface-tab row is static markup inside #top-bar. It must
+# never move back under a thread (or duplicate there) as plans repaint.
+assert_absent   "$html" 'id="surface-nav"'    "removed legacy #surface-nav still present"
+assert_absent   "$html" 'id="thread-subnav"' "retired #thread-subnav still present"
+assert_contains "$html" 'id="surface-tabs"'  "top-bar surface tabs (#surface-tabs) missing"
 
-# The sub-menu (and with it every data-surface button) must be nested inside
-# #side-bar: 4 sub-menu rows + the 1 providers row in #side-nav, nothing else.
+top="${html#*id=\"top-bar\"}"; top="${top%%</header>*}"
+assert_contains "$top" 'id="surface-tabs"' "#surface-tabs not nested inside #top-bar"
+tabs="${top#*id=\"surface-tabs\"}"; tabs="${tabs%%</nav>*}"
+got="$(printf '%s' "$tabs" | grep -o 'data-surface=' | grep -c . || true)"
+[[ "$got" -eq 4 ]] \
+  || fail "expected 4 data-surface buttons inside #surface-tabs, got $got"
+
+# The sidebar retains the thread registry and the one app-level Providers row.
 side="${html#*id=\"side-bar\"}"; side="${side%%</aside>*}"
-assert_contains "$side" 'id="thread-subnav"' "#thread-subnav not nested inside #side-bar"
 got="$(printf '%s' "$side" | grep -o 'data-surface=' | grep -c . || true)"
-[[ "$got" -eq 5 ]] \
-  || fail "expected 5 data-surface buttons inside #side-bar (4 sub-menu rows + providers), got $got"
+[[ "$got" -eq 1 ]] \
+  || fail "expected 1 data-surface button inside #side-bar (Providers), got $got"
+
+# Collapse belongs in the brand row, and the old decorative brand square is gone.
+brand="${side#*class=\"side-brand\"}"; brand="${brand%%</div>*}"
+assert_contains "$brand" 'id="side-collapse"' "#side-collapse not nested inside .side-brand"
+assert_absent "$side" 'brand-mark' "retired sidebar .brand-mark still present"
 
 got="$(count 'data-surface="providers"')"
 [[ "$got" -eq 1 ]] || fail "expected data-surface=\"providers\" exactly once, got $got"
@@ -124,10 +135,15 @@ got="$(count 'data-surface=')"
 
 for s in home plan consoles agents; do
   got="$(count "data-surface=\"$s\"")"
-  [[ "$got" -eq 1 ]] || fail "sub-menu row data-surface=\"$s\" not present exactly once (got $got)"
+  [[ "$got" -eq 1 ]] || fail "top-bar tab data-surface=\"$s\" not present exactly once (got $got)"
 done
 
 assert_absent "$html" "plan-switcher-select" "removed header plan-switcher-select still present"
+if [[ "$html" =~ class=\"([^\"]*[[:space:]])?crumbs([[:space:]][^\"]*)?\" ]]; then
+  fail "retired breadcrumb .crumbs still present"
+fi
+assert_absent "$html" 'id="crumb-surface"' "retired breadcrumb #crumb-surface still present"
+assert_contains "$html" 'id="stop-reason"' "stop reason target (#stop-reason) missing"
 
 # --- matrix (rebuilt lens) assertions ------------------------------------------
 assert_contains "$html" "plan-mx-scroll" "matrix scroll container (plan-mx-scroll) missing — did #plan/matrix render?"
