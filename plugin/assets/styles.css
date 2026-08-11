@@ -288,7 +288,7 @@ body.side-rail { --side-col: var(--side-w-rail); }
 
 /* Static app-surface tabs. They share the .tab control recipe with Plan lenses
    and the inspector, sized to the 32px navigation-row minimum. */
-#surface-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; }
+#surface-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 0 auto; }
 #surface-tabs .tab {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 32px; padding: 0 11px;
@@ -1214,6 +1214,13 @@ button.dock-cell:hover { background: rgba(0, 0, 0, 0.04); }
   /* The top tabs are the only surface navigation, so preserve all four as icons. */
   #surface-tabs .tab { padding: 0 8px; }
   #surface-tabs .surface-tab-label { display: none; }
+  /* Reserve those four controls, then compact status without hiding its truth:
+     health remains a tone dot, stop remains "stopped" / "stop clear" (the full
+     reason stays on the chip title), and Refresh keeps its labelled title. */
+  #health-flag { padding: 0 6px; gap: 0; }
+  #health-text, #stop-reason { display: none; }
+  #stop-chip { flex: 0 0 auto; max-width: none; }
+  #btn-refresh { width: 32px; min-width: 32px; padding: 0; gap: 0; font-size: 0; }
   #dock-gates, #dock-tasks, #dock-frontier { display: none; }
   #inspector { height: 92vh; }
 }

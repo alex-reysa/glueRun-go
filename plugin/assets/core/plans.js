@@ -115,13 +115,16 @@ function renderThreads() {
 function paintExecCrumb(state) {
   const reason = document.getElementById("stop-reason");
   if (!reason) return;
+  const chip = document.getElementById("stop-chip");
   if (isHistorical() || !state || !state.stopPresent || !state.stopReason) {
     reason.textContent = "";
     reason.hidden = true;
+    if (chip) chip.removeAttribute("title");
     return;
   }
   reason.textContent = " — " + state.stopReason;
   reason.hidden = false;
+  if (chip) chip.title = state.stopReason;
 }
 
 // ------------------------------------------------------------- banner ---------

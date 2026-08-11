@@ -274,7 +274,8 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     // Historical (archived) mode: the live health/stop signals don't apply — show a
     // neutral "archived" state (the Refresh button + conn dot are hidden via CSS).
     if (isHistorical()) {
-      const hf = $("health-flag"); if (hf) hf.dataset.tone = "idle";
+      const hf = $("health-flag");
+      if (hf) { hf.dataset.tone = "idle"; hf.title = "health — archived"; hf.setAttribute("aria-label", "health — archived"); }
       const ht = $("health-text"); if (ht) ht.textContent = "archived";
       const stopChip = $("stop-chip");
       if (stopChip) {
@@ -287,7 +288,9 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
 
     // health flag
     const healthTone = d.health === "healthy" ? "success" : d.health === "blocker" ? "error" : "warn";
-    const hf = $("health-flag"); if (hf) hf.dataset.tone = healthTone;
+    const healthLabel = d.health || "unknown";
+    const hf = $("health-flag");
+    if (hf) { hf.dataset.tone = healthTone; hf.title = "health — " + healthLabel; hf.setAttribute("aria-label", "health — " + healthLabel); }
     const ht = $("health-text"); if (ht) ht.textContent = d.health || "—";
 
     // stop chip — amber when present (an intentional hold, not a fault)
