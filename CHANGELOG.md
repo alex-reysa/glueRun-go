@@ -7,6 +7,93 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.18.0] — 2026-08-11 — Quiet at full scale
+
+The 68-node, 45-stage AXON plan exposed console problems that small fixtures
+could not: navigation scrolled away, a lens rail consumed useful canvas, most
+Timeline bars had no readable label, repeating Matrix lines overpowered the
+data, and the Agents model picker offered no option for the model actually in
+use. This release refines those surfaces without changing the engine or any
+schema. `schemaVersion` stays **v2**.
+
+### App navigation is static and always in reach
+
+Home, Plan, Consoles and Agents now live as one static tab row in the top bar.
+The row exists before a thread is selected, never moves under a thread, and
+remains available when the thread registry is empty. The sidebar keeps plan
+identity, Providers and its rail toggle; the toggle sits in the brand row and
+both expanded and rail modes still navigate.
+
+The retired breadcrumb does not take the stop explanation with it. One status
+chip now composes two disjoint writers: execution owns `stopped` / `stop clear`,
+and the plan store owns the actionable reason. At 560px all four surface tabs
+remain distinct icon controls; health, stopped state and Refresh compact without
+covering them, while titles and accessibility labels retain the full truth.
+
+### Plan views lead the toolbar instead of taking a column
+
+Timeline, Matrix, DAG and Tasks now lead the workbench toolbar as a horizontal
+tablist, followed by search and filters. A dependency-free lens registry is
+shared by the router and workbench, removing the duplicate lists that could
+drift. The old 196px lens column is returned to the canvas, the drilldown remains
+the grid's second column, and toolbar controls share a 28px rhythm. Arrow keys,
+Home and End operate the tablist, including the empty-DAG Tasks fallback.
+
+### Timeline labels the activity it draws
+
+Visible bar labels use the numeric task suffix (`0041`), while the full task id
+and title remain in the tooltip, accessible name and detail view. Label placement
+can use any retry segment or a quiet outside gap. Before this pass 86 of 107 bar
+segments had no label; in the final AXON window 32 of 37 distinct tasks have a
+visible label.
+
+Scale is driven by legibility: the median interval targets 56px, then yields to
+an absolute full-canvas ceiling of eight pane widths. Compressed idle gaps share
+a bounded width budget but remain individually represented. A ResizeObserver
+recomputes the axis when the rail, drilldown or viewport changes and preserves
+both scroll axes. Short runs become wider and easier to read; very long campaigns
+can scroll farther until the cap binds.
+
+Lane padding drops from 8px to 4px and area headers from 30px to 24px. Tasks with
+no recorded node are not renamed away or hidden: each area shows an honest
+`unattributed · N — no node recorded` disclosure, collapsed by default with a
+heat trace and expandable by pointer or keyboard.
+
+### Matrix structure is quieter and CSS-tunable
+
+Default Matrix cells are borderless. Only stage boundaries receive the standard
+one-pixel separator, structural sticky edges use the subtle hairline, and the
+upper triangle uses a 45% sunken-surface wash instead of a hard stair-step fill.
+The lens emits semantic boundary, wash, state, hover and failure attributes;
+inline border/fill paint and repeating `--n-400` lines are gone.
+
+### Agent model choices match the configured provider
+
+Agents and Providers now share one provider-keyed model vocabulary, including
+the full `gpt-5.6*` family. Agent model fields are native selects with the current
+value prepended and deduplicated, so unknown values remain selectable instead of
+being silently replaced. Providers retain their free-text inputs with the same
+shared suggestions. The duplicate model datalist ids disappear.
+
+The System settings model group now honours its role-matrix layout: one shared
+model and service tier, followed by planner, worker and auditor reasoning. It
+uses the existing dirty, validation and save path, and its subregions meet at
+single hairlines rather than floating as cards.
+
+### Follow-ups
+
+Timeline filter wiring remains a separate pass. A future server-supplied model
+catalog (`options[]` on `/api/settings` items) can replace the client fallback
+vocabulary and the adjacent inference workarounds.
+
+### Migrating from 0.17.0
+
+Nothing is required. This is a console-only release: no engine behaviour,
+configuration shape, persisted state or schema changes. Existing plans and
+archives open unchanged.
+
+---
+
 ## [0.17.0] — 2026-08-10 — Proof, not assumption
 
 Two field reports, one release. The Spokit localization sessions found six
