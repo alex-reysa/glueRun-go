@@ -148,6 +148,8 @@
 .ag-set-input:disabled { color: var(--text-faint); background: var(--surface-soft); cursor: not-allowed; }
 .ag-set-input.is-invalid { border-color: var(--tone-red-dot); background: color-mix(in srgb, var(--tone-red-dot) 6%, transparent); }
 select.ag-set-input { appearance: none; padding-right: 26px; }
+.ag-set-editor .select-wrap { width: 100%; min-width: 0; }
+.ag-set-editor .select-wrap .icon { width: 12px; height: 12px; }
 .ag-set-num { position: relative; display: inline-flex; align-items: center; width: 100%; }
 .ag-set-unit { position: absolute; right: 10px; font-size: 10.5px; color: var(--text-faint); pointer-events: none; }
 .ag-set-toggle {
@@ -161,6 +163,18 @@ select.ag-set-input { appearance: none; padding-right: 26px; }
 .ag-set-dirty { width: 7px; height: 7px; border-radius: 999px; background: var(--tone-coral-dot); flex: none; }
 .ag-set-editor-foot { display: flex; align-items: center; gap: 12px; justify-content: flex-end; margin-top: 12px; }
 .ag-set-hint { font-size: 11px; color: var(--tone-amber-fg); }
+
+/* editable role matrix: one shared model/tier, then per-role reasoning */
+.ag-role-matrix-shared { padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--surface-subtle); }
+.ag-role-matrix-shared-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 2px 1px; font-size: 10.5px; font-weight: 600; color: var(--text-meta); }
+.ag-role-matrix-shared-head span:last-child { font-size: 9.5px; font-weight: 500; color: var(--text-faint); }
+.ag-role-matrix-shared .ag-set-erow { padding-right: 0; padding-left: 0; }
+.ag-role-matrix-shared .ag-set-erow:last-child { border-bottom: 0; }
+.ag-role-matrix-columns { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 14px; padding: 12px 2px 3px; font-size: 9.5px; color: var(--text-faint); }
+.ag-role-matrix-columns span:last-child { text-align: right; }
+.ag-role-matrix-role { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.ag-role-matrix-cap { padding: 1px 6px; border-radius: 4px; background: var(--tone-zinc-bg); color: var(--tone-zinc-fg); font: 500 9.5px var(--font-mono); }
+.ag-role-matrix-extra { padding: 12px 2px 3px; font-size: 9.5px; color: var(--text-faint); }
 
 /* ---- System settings panel ---- */
 .ag-sys-panel { position: fixed; inset: 0; z-index: 45; }
@@ -179,5 +193,11 @@ select.ag-set-input { appearance: none; padding-right: 26px; }
 .ag-sys-x .icon { width: 13px; height: 13px; }
 .ag-sys-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 22px; }
 .ag-sys-group .co-eyebrow { display: block; margin-bottom: 8px; }
+
+@media (max-width: 480px) {
+  .ag-set-erow, .ag-role-matrix-columns { grid-template-columns: minmax(0, 1fr); }
+  .ag-role-matrix-columns span:last-child { display: none; }
+  .ag-set-erow-val { justify-content: flex-start; }
+}
 
 @keyframes ag-spin { to { transform: rotate(360deg); } }

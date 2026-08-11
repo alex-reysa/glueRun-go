@@ -17,17 +17,21 @@ import { S, esc, escAttr, icon, relTime, toast, viewRaw, viewPrompt, viewSession
 import { subscribe as subscribeSessions, feedState } from "../core/sessions-feed.js";
 import { writeRoute } from "../core/router.js";
 import { apiFetch } from "../core/api.js";
+import { modelOptions } from "../core/models.js";
 
 const shortRun = (r) => String(r || "").replace(/^ORIGIN-|^RUN-/, "").slice(0, 16);
 
-// Free-text model input still gets a datalist of the common families.
-const KNOWN_MODELS = ["claude-opus-4-8", "claude-sonnet-4-5", "claude-haiku-4-5", "gpt-5.5", "gpt-5", "gpt-5-codex", "o4-mini"];
 const REASONING_ALL = ["minimal", "low", "medium", "high", "xhigh"];
 // enum option domains keyed by env key (the settings API doesn't ship choices)
 const ENUM_OPTIONS = { GLUERUN_CODEX_SERVICE_TIER: ["default", "flex", "priority"] };
 const effortOptions = (model) => /codex|gpt/i.test(model || "") ? ["minimal", "low", "medium", "high"]
   : /claude/i.test(model || "") ? ["low", "medium", "high", "xhigh"] : REASONING_ALL;
 const shortEnv = (k) => String(k || "").replace(/^GLUERUN_/, "").toLowerCase();
+const modelProvider = (row) => {
+  if (row.provider) return String(row.provider).toLowerCase();
+  const match = /^GLUERUN_([^_]+)_/.exec(String(row.envKey || ""));
+  return match ? match[1].toLowerCase() : String((AG.config && AG.config.provider) || "").toLowerCase();
+};
 // card → prompt-library role (the template a role runs); resolved to a file name
 // via /api/prompts' role field.
 const PROMPT_ROLE = { origin: "origin", planner: "planner", developer: "developer", auditor: "auditor", reviewer: "reviewer", decider: "decider", "recovery-worker": "developer" };
@@ -319,7 +323,7 @@ function roleSettingRows(card) {
   const role = cardConfigRole(card);
   if (role && AG.config && AG.config.roles && AG.config.roles[role]) {
     const r = AG.config.roles[role]; const src = r.source || {};
-    if (src.model) rows.push({ envKey: src.model, label: "model", value: r.model || "", kind: "model" });
+    if (src.model) rows.push({ envKey: src.model, label: "model", value: r.model || "", kind: "model", provider: AG.config.provider });
     if (src.effort) rows.push({ envKey: src.effort, label: "effort", value: r.effort || "", kind: "reasoning", options: effortOptions(r.model) });
   }
   if (card.limits && AG.config && AG.config.limits) {
@@ -359,28 +363,63 @@ function settingFieldHtml(row) {
     if (dv && !opts.includes(dv)) opts = [dv, ...opts];
     return `<span class="select-wrap"><select class="ag-set-input filter" ${common}>${opts.map((o) => `<option value="${escAttr(o)}"${o === dv ? " selected" : ""}>${esc(o)}</option>`).join("")}</select><span class="chev">${icon("i-chev")}</span></span>`;
   }
-  if (row.kind === "model") return `<input class="ag-set-input" list="ag-model-list" value="${escAttr(dv)}" placeholder="model" ${common}>`;
+  if (row.kind === "model") {
+    const opts = modelOptions(modelProvider(row), dv);
+    return `<span class="select-wrap"><select class="ag-set-input filter mono" aria-label="${escAttr(row.label || "model")}" ${common}>${opts.map((o) => `<option value="${escAttr(o)}"${o === dv ? " selected" : ""}>${esc(o || "CLI default")}</option>`).join("")}</select><span class="chev">${icon("i-chev")}</span></span>`;
+  }
   if (row.kind === "count" || row.kind === "duration" || row.kind === "bytes")
     return `<span class="ag-set-num"><input class="ag-set-input" type="number" min="0" step="1" value="${escAttr(dv)}" ${common}>${row.unit ? `<span class="ag-set-unit">${esc(row.unit)}</span>` : ""}</span>`;
   return `<input class="ag-set-input" value="${escAttr(dv)}" ${common}>`;   // identifier / other
 }
 
-function renderSettingEditor(rows, opts) {
-  opts = opts || {};
-  if (!rows.length) return `<div class="section-empty">no editable settings</div>`;
-  const body = rows.map((row) => {
-    const meaning = row.meaning ? `<span class="ag-set-meaning">${esc(row.meaning)}</span>` : "";
-    const derived = row.kind === "derived" ? ' data-derived="1"' : "";
-    return `<div class="ag-set-erow"${derived}>
-      <div class="ag-set-erow-key"><span class="ag-set-elabel">${esc(row.label)}</span>${meaning}<code class="ag-set-env mono">${esc(row.envKey)}</code></div>
-      <div class="ag-set-erow-val">${settingFieldHtml(row)}<span class="ag-set-dirty" title="unsaved" hidden></span></div>
-    </div>`;
-  }).join("");
-  return `<div class="ag-set-editor" data-editor="${escAttr(opts.editorId || "ed")}">
-    <datalist id="ag-model-list">${KNOWN_MODELS.map((m) => `<option value="${escAttr(m)}"></option>`).join("")}</datalist>
-    ${body}
-    <div class="ag-set-editor-foot"><span class="ag-set-hint" hidden>unsaved changes</span><button class="primary-button compact ag-set-save" type="button" data-ag-save="${escAttr(opts.editorId || "ed")}" disabled>Save</button></div>
+function settingRowHtml(row, keyBody, className) {
+  const meaning = row.meaning ? `<span class="ag-set-meaning">${esc(row.meaning)}</span>` : "";
+  const derived = row.kind === "derived" ? ' data-derived="1"' : "";
+  const classes = `ag-set-erow${className ? " " + className : ""}`;
+  const key = keyBody || `<span class="ag-set-elabel">${esc(row.label)}</span>${meaning}<code class="ag-set-env mono">${esc(row.envKey)}</code>`;
+  return `<div class="${classes}"${derived}>
+    <div class="ag-set-erow-key">${key}</div>
+    <div class="ag-set-erow-val">${settingFieldHtml(row)}<span class="ag-set-dirty" title="unsaved" hidden></span></div>
   </div>`;
+}
+
+function settingEditorHtml(body, opts, className) {
+  const id = (opts && opts.editorId) || "ed";
+  return `<div class="ag-set-editor${className ? " " + className : ""}" data-editor="${escAttr(id)}">
+    ${body}
+    <div class="ag-set-editor-foot"><span class="ag-set-hint" hidden>unsaved changes</span><button class="primary-button compact ag-set-save" type="button" data-ag-save="${escAttr(id)}" disabled>Save</button></div>
+  </div>`;
+}
+
+function renderSettingEditor(rows, opts) {
+  if (!rows.length) return `<div class="section-empty">no editable settings</div>`;
+  return settingEditorHtml(rows.map((row) => settingRowHtml(row)).join(""), opts);
+}
+
+// The models group is one shared model/tier followed by per-role reasoning.
+// Keep it one editor so the existing dirty, validation and POST paths remain the
+// single write path; lookups by env key make the layout robust to spec ordering.
+function renderRoleMatrix(rows, opts) {
+  const byKey = new Map(rows.map((row) => [row.envKey, row]));
+  const used = new Set();
+  const take = (key) => { const row = byKey.get(key); if (row) used.add(key); return row; };
+  const shared = [take("GLUERUN_CODEX_MODEL"), take("GLUERUN_CODEX_SERVICE_TIER")].filter(Boolean);
+  const roles = [
+    ["planner", "L1", take("GLUERUN_CODEX_PLANNER_REASONING_EFFORT")],
+    ["worker", "L2", take("GLUERUN_CODEX_L2_REASONING_EFFORT")],
+    ["auditor", "gate", take("GLUERUN_CODEX_AUDITOR_REASONING_EFFORT")],
+  ].filter((entry) => entry[2]);
+  const sharedBody = shared.map((row) => settingRowHtml(row)).join("");
+  const roleBody = roles.map(([name, cap, row]) => {
+    const meaning = row.meaning ? `<span class="ag-set-meaning">${esc(row.meaning)}</span>` : "";
+    const key = `<span class="ag-role-matrix-role"><span>${esc(name)}</span><span class="ag-role-matrix-cap">${esc(cap)}</span></span>${meaning}<code class="ag-set-env mono">${esc(row.envKey)}</code>`;
+    return settingRowHtml(row, key, "ag-role-matrix-row");
+  }).join("");
+  const extras = rows.filter((row) => !used.has(row.envKey));
+  const body = `${sharedBody ? `<div class="ag-role-matrix-shared"><div class="ag-role-matrix-shared-head"><span>all roles</span><span>shared</span></div>${sharedBody}</div>` : ""}
+    ${roleBody ? `<div class="ag-role-matrix-columns" aria-hidden="true"><span>role</span><span>reasoning</span></div>${roleBody}` : ""}
+    ${extras.length ? `<div class="ag-role-matrix-extra">additional</div>${extras.map((row) => settingRowHtml(row)).join("")}` : ""}`;
+  return body ? settingEditorHtml(body, opts, "ag-role-matrix") : `<div class="section-empty">no editable settings</div>`;
 }
 
 // value read helper (input/select vs toggle button)
@@ -453,7 +492,9 @@ function renderSysPanel() {
       envKey: it.envKey || it.key, label: it.label, value: it.value, kind: it.kind, unit: it.unit, meaning: it.meaning,
       options: it.kind === "reasoning" ? REASONING_ALL : (ENUM_OPTIONS[it.envKey || it.key] || null),
     }));
-    return `<section class="ag-sys-group"><div class="co-eyebrow">${esc(g.title || g.category)}</div>${renderSettingEditor(rows, { editorId: "sys-" + String(g.title || "g").replace(/\W+/g, "") })}</section>`;
+    const opts = { editorId: "sys-" + String(g.title || "g").replace(/\W+/g, "") };
+    const editor = g.layout === "matrix" ? renderRoleMatrix(rows, opts) : renderSettingEditor(rows, opts);
+    return `<section class="ag-sys-group"><div class="co-eyebrow">${esc(g.title || g.category)}</div>${editor}</section>`;
   }).join("") || `<div class="section-empty">no settings</div>`;
 }
 

@@ -22,6 +22,7 @@
 
 import { esc, escAttr, icon, relTime, toast } from "../app.js";
 import { apiFetch, isHistorical } from "../core/api.js";
+import { MODEL_VOCABULARY, modelOptions } from "../core/models.js";
 
 const POLL_MS = 60000;   // cache-aligned with the server's 60s providers TTL
 
@@ -35,17 +36,6 @@ const MODEL_KEY = {
   opencode: "GLUERUN_OPENCODE_MODEL",
   cursor: "GLUERUN_CURSOR_MODEL",
   grok: "GLUERUN_GROK_MODEL",
-};
-
-// Per-provider datalist vocab (spec model vocabulary, mid-2026). Empty = free
-// text (grok has no published list; opencode takes provider/model strings).
-const MODEL_VOCAB = {
-  claude: ["claude-opus-4-8", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5", "opus", "fable", "sonnet", "haiku"],
-  codex: ["gpt-5.6-sol", "gpt-5.6", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex"],
-  gemini: ["gemini-3.1-pro-preview", "gemini-3-pro", "gemini-3-flash", "gemini-3.5-flash", "gemini-2.5-pro"],
-  cursor: ["auto", "gpt-5.3-codex", "gpt-5.3-codex-low", "gpt-5.3-codex-high", "gpt-5.3-codex-xhigh", "gpt-5.2", "cursor-grok-4.5-high"],
-  opencode: ["anthropic/claude-sonnet-4-5", "anthropic/claude-opus-4-8", "openai/gpt-5.6", "google/gemini-3-pro"],
-  grok: [],
 };
 
 // status → pm-go status tone. missing renders a dashed, de-emphasised card.
@@ -227,13 +217,14 @@ function modelKnobHtml(p) {
   const key = MODEL_KEY[p.id];
   if (!key) return "";
   const cur = (PV.configEnv && PV.configEnv[key]) || "";
-  const vocab = MODEL_VOCAB[p.id] || [];
+  const hasVocab = (MODEL_VOCABULARY[p.id] || []).length > 0;
+  const vocab = modelOptions(p.id, cur).filter(Boolean);
   const listId = "pv-models-" + p.id;
   const placeholder = (p.id === "claude" || p.id === "codex") ? "model" : "CLI default";
   return `<div class="pv-model">
     <span class="pv-model-label">model</span>
-    <input class="pv-model-input" type="text" ${vocab.length ? `list="${listId}"` : ""} data-pv-model="${escAttr(p.id)}" data-key="${escAttr(key)}" data-baseline="${escAttr(cur)}" value="${escAttr(cur)}" placeholder="${escAttr(placeholder)}" autocomplete="off" spellcheck="false">
-    ${vocab.length ? `<datalist id="${listId}">${vocab.map((m) => `<option value="${escAttr(m)}"></option>`).join("")}</datalist>` : ""}
+    <input class="pv-model-input" type="text" ${hasVocab ? `list="${listId}"` : ""} data-pv-model="${escAttr(p.id)}" data-key="${escAttr(key)}" data-baseline="${escAttr(cur)}" value="${escAttr(cur)}" placeholder="${escAttr(placeholder)}" autocomplete="off" spellcheck="false">
+    ${hasVocab ? `<datalist id="${listId}">${vocab.map((m) => `<option value="${escAttr(m)}"></option>`).join("")}</datalist>` : ""}
     <button class="primary-button compact pv-model-save" data-pv-model-save="${escAttr(p.id)}" disabled>Save</button>
     <code class="pv-model-key mono">${esc(key)}</code>
   </div>`;
