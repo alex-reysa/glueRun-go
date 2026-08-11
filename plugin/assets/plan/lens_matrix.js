@@ -25,7 +25,6 @@ const PAD = 24;             // horizontal breathing room + scrollbar allowance
 const PAD_V = 20;           // vertical breathing room (fit math)
 const CELL_MIN = 22, CELL_MAX = 44;
 const LG_CELL = 32;         // at/above this the row label stacks title over id
-const TONE = { ink: "var(--n-800)", blue: "var(--tone-blue-dot)", green: "var(--tone-green-dot)" };
 const FOLLOW_KEY = "gluerun.plan.mx.follow";
 
 const clamp = (lo, hi, v) => Math.max(lo, Math.min(hi, v));
@@ -79,12 +78,13 @@ function build() {
   const fit = computeFit(n, CELL); fitX = fit.x; fitY = fit.y;
   const lg = CELL >= LG_CELL;
   const stageStart = (i) => i === 0 || order[i].stage !== order[i - 1].stage;
+  const stageAttr = (i) => stageStart(i) ? ` data-stage-start="1"` : "";
   const width = LABEL_W + n * CELL;
 
   // column header row: a sticky corner spacer over the labels, then vertical ids
   let head = `<div class="pm-colhead pm-corner" style="width:${LABEL_W}px"></div>`;
   order.forEach((col, i) => {
-    head += `<div class="pm-colhead-cell" data-colhead="${escAttr(col.id)}" title="${escAttr(col.id)}" style="width:${CELL}px;${stageStart(i) ? "border-left:1px solid var(--n-400)" : ""}">
+    head += `<div class="pm-colhead-cell" data-colhead="${escAttr(col.id)}"${stageAttr(i)} title="${escAttr(col.id)}" style="width:${CELL}px">
       <span class="pmch-stage">${stageStart(i) ? esc(col.stage.split("-")[0]) : ""}</span>
       <span class="pmch-id">${esc(col.id)}</span></div>`;
   });
@@ -94,17 +94,16 @@ function build() {
   order.forEach((row, rowIndex) => {
     let cells = "";
     order.forEach((col, colIndex) => {
-      const bl = stageStart(colIndex) ? "1px solid var(--n-400)" : "1px solid var(--border-subtle)";
       if (row.id === col.id) {
-        cells += `<button class="pm-cell pm-diag" data-diag="${escAttr(row.id)}" data-node="${escAttr(row.id)}" style="width:${CELL}px;height:${CELL}px;border-left:${bl}">${diagMark(row)}</button>`;
+        cells += `<button class="pm-cell pm-diag" data-diag="${escAttr(row.id)}" data-node="${escAttr(row.id)}"${stageAttr(colIndex)} style="width:${CELL}px;height:${CELL}px">${diagMark(row)}</button>`;
       } else {
         const dep = depSets[row.id].has(col.id);
-        const tint = colIndex < rowIndex ? "transparent" : "var(--surface-sunken)";
-        cells += `<div class="pm-cell" data-row="${escAttr(row.id)}" data-col="${escAttr(col.id)}" data-dep="${dep}" style="width:${CELL}px;height:${CELL}px;border-left:${bl};background:${tint}">${dep ? `<span class="pm-mark"></span>` : ""}</div>`;
+        const upperAttr = colIndex > rowIndex ? ` data-upper="1"` : "";
+        cells += `<div class="pm-cell" data-row="${escAttr(row.id)}" data-col="${escAttr(col.id)}" data-dep="${dep}"${stageAttr(colIndex)}${upperAttr} style="width:${CELL}px;height:${CELL}px">${dep ? `<span class="pm-mark"></span>` : ""}</div>`;
       }
     });
     const title = (nodesById[row.id].description || "").split(".")[0] || row.id;
-    rows += `<div class="pm-row" data-row="${escAttr(row.id)}" style="border-top:${stageStart(rowIndex) ? "1px solid var(--n-400)" : "1px solid var(--border-subtle)"}">
+    rows += `<div class="pm-row" data-row="${escAttr(row.id)}"${stageAttr(rowIndex)}>
       <button class="pm-rowlabel" data-node="${escAttr(row.id)}" data-selected="false" title="${escAttr(row.id + " — " + title)}" style="width:${LABEL_W}px;height:${CELL}px">
         <span class="pmrl-text">
           <span class="pmrl-title">${esc(title)}</span>
@@ -164,11 +163,10 @@ function diagMark(n) {
   const passed = g.status === "passed", active = (c.active || 0) > 0;
   const failed = g.status === "failed" || g.status === "blocked" || g.status === "invalid";
   const isEval = n.kind === "evaluation" || n.kind === "gate";
-  let bg = "var(--n-100)", dot = "var(--n-400)", border = "1.5px dashed var(--n-300)";
-  if (passed || active) { bg = "var(--ink)"; dot = "#fff"; border = "1px solid var(--ink)"; }
-  else if (isEval) { bg = "var(--tone-coral-bg)"; dot = "var(--tone-coral-dot)"; border = "1.5px solid var(--tone-coral-dot)"; }
-  const inner = passed ? "" : `<span class="pmd-dot" style="background:${dot}"></span>`;
-  return `<span class="pm-diagpill${failed ? " is-failed" : ""}" style="background:${bg};border:${border}">${inner}</span>`;
+  const state = passed ? "passed" : active ? "active" : isEval ? "evaluation" : "idle";
+  const failedAttr = failed ? ` data-failed="1"` : "";
+  const inner = passed ? "" : `<span class="pmd-dot"></span>`;
+  return `<span class="pm-diagpill" data-state="${state}"${failedAttr}>${inner}</span>`;
 }
 
 // --------------------------------------------------------------- paint -----
@@ -186,13 +184,13 @@ function repaint(hover) {
     const mark = el.firstElementChild;
     if (!mark) continue;
     if (st.tone) {
-      mark.style.background = TONE[st.tone];
-      mark.style.opacity = st.dim ? "0.12" : st.tone === "ink" ? "0.82" : "1";
+      mark.dataset.tone = st.tone;
+      mark.dataset.dim = String(st.dim);
     }
   }
   // The sticky row labels are now opaque, so the hover tint lives on the label
   // element itself (cached beside the cells — no queries in this hot path).
-  for (const [id, el] of Object.entries(rowLabelEls)) el.style.background = id === hover ? "var(--surface-sunken)" : "var(--surface-panel)";
+  for (const [id, el] of Object.entries(rowLabelEls)) el.dataset.hover = String(id === hover);
   for (const [id, el] of Object.entries(colHeadEls)) el.dataset.hover = String(id === hover);
   for (const [id, el] of Object.entries(diagEls)) el.dataset.selected = String(id === selectedId);
   if (hover && detailEl) showDetail(hover); else if (detailEl) detailEl.hidden = true;

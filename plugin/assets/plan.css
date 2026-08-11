@@ -391,7 +391,7 @@
 .pm-colhead-row {
   display: flex; align-items: flex-end;
   position: sticky; top: 0; z-index: 7;
-  background: var(--surface-panel); border-bottom: 1px solid var(--border-default);
+  background: var(--surface-panel); border-bottom: 1px solid var(--border-subtle);
   padding-top: 10px;
 }
 .pm-colhead { flex: none; }
@@ -403,6 +403,11 @@
   flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px;
   cursor: pointer; padding-bottom: 5px; overflow: hidden;
 }
+.pm-colhead-cell[data-stage-start="1"] { border-left: 1px solid var(--border-default); }
+/* The sticky corner/labels already own the first separator; avoid stacking a
+   second hairline at the first stage while retaining its semantic marker. */
+.pm-corner + .pm-colhead-cell[data-stage-start="1"],
+.pm-rowlabel + .pm-cell[data-stage-start="1"] { border-left: 0; }
 .pm-colhead-cell .pmch-stage { font: 700 8px var(--font-sans); letter-spacing: 0.06em; color: var(--text-meta); height: 10px; }
 .pm-colhead-cell .pmch-id {
   font: 400 8.5px var(--font-mono); color: var(--text-faint);
@@ -411,7 +416,9 @@
 }
 .pm-colhead-cell[data-hover="true"] .pmch-id { color: var(--text-primary); font-weight: 600; }
 
-.pm-row { display: flex; align-items: stretch; }
+.pm-row { display: flex; align-items: stretch; border-top: 0; }
+.pm-row[data-stage-start="1"] { border-top: 1px solid var(--border-default); }
+.pm-colhead-row + .pm-row[data-stage-start="1"] { border-top: 0; }
 /* the row label is sticky-left + opaque so scrolled cells can never bleed under
    the readable title/id (mirrors .tl-gutter). Title is primary; id ellipsizes. */
 .pm-rowlabel {
@@ -420,6 +427,7 @@
   background: var(--surface-panel); border-right: 1px solid var(--border-subtle);
   padding: 0 12px 0 14px; cursor: pointer; border-top: 0; text-align: left;
 }
+.pm-rowlabel[data-hover="true"] { background: var(--surface-sunken); }
 .pmrl-text { display: flex; align-items: baseline; gap: 7px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
 .pm-grid.pm-lg .pmrl-text { flex-direction: column; align-items: stretch; gap: 1px; }
 .pm-rowlabel .pmrl-title { font: 500 11.5px var(--font-sans); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -427,13 +435,26 @@
 .pm-grid.pm-lg .pmrl-id { max-width: 100%; }
 .pm-row:hover .pmrl-title { color: var(--text-primary); }
 .pm-rowlabel .pmrl-gate { margin-left: auto; flex: none; align-self: center; }
-.pm-cell { flex: none; display: flex; align-items: center; justify-content: center; padding: 0; }
-.pm-cell.pm-diag { cursor: pointer; background: var(--surface-panel); border-top: 0; }
-.pm-mark { width: calc(var(--pm-cell) * 0.5); height: calc(var(--pm-cell) * 0.5); border-radius: 3.5px; background: var(--n-800); opacity: 0.82; transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
-.pm-diagpill { width: calc(var(--pm-cell) * 0.72); height: calc(var(--pm-cell) * 0.72); border-radius: var(--radius-pill); display: flex; align-items: center; justify-content: center; outline-offset: 2px; }
-.pm-diagpill.is-failed { outline: 2px solid var(--tone-red-dot); }
+.pm-cell { flex: none; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; }
+.pm-cell[data-stage-start="1"] { border-left: 1px solid var(--border-default); }
+.pm-cell[data-upper="1"] { background: color-mix(in srgb, var(--surface-sunken) 45%, transparent); }
+.pm-cell.pm-diag { cursor: pointer; }
+.pm-mark { width: calc(var(--pm-cell) * 0.5); height: calc(var(--pm-cell) * 0.5); border-radius: 3.5px; background: var(--text-muted); opacity: 0.82; transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+.pm-mark[data-tone="blue"] { background: var(--tone-blue-dot); opacity: 1; }
+.pm-mark[data-tone="green"] { background: var(--tone-green-dot); opacity: 1; }
+.pm-mark[data-dim="true"] { opacity: 0.12; }
+.pm-diagpill {
+  width: calc(var(--pm-cell) * 0.72); height: calc(var(--pm-cell) * 0.72);
+  border-radius: var(--radius-pill); display: flex; align-items: center; justify-content: center;
+  outline-offset: 2px; background: var(--surface-soft); border: 1.5px dashed var(--border-default);
+}
+.pm-diagpill[data-state="passed"], .pm-diagpill[data-state="active"] { background: var(--ink); border: 1px solid var(--ink); }
+.pm-diagpill[data-state="evaluation"] { background: var(--tone-coral-bg); border: 1.5px solid var(--tone-coral-dot); }
+.pm-diagpill[data-failed="1"] { outline: 2px solid var(--tone-red-dot); }
 .pm-diag[data-selected="true"] .pm-diagpill { outline: 2px solid var(--ink); }
-.pm-diagpill .pmd-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); }
+.pm-diagpill .pmd-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--text-faint); }
+.pm-diagpill[data-state="active"] .pmd-dot { background: var(--on-dark); }
+.pm-diagpill[data-state="evaluation"] .pmd-dot { background: var(--tone-coral-dot); }
 /* footer is sticky-left (width:max-content) so the acyclicity line stays readable
    at the pane's left edge however far the grid is scrolled right. */
 .pm-footer { margin-top: 14px; display: flex; align-items: center; gap: 8px; padding: 0 14px 16px; color: var(--ghost); font: 400 11px var(--font-sans); position: sticky; left: 0; width: max-content; }
