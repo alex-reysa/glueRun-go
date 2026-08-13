@@ -2,6 +2,48 @@
 
 ## Decision Log
 
+### 2026-08-13T21:34:27Z — TASK-0109 — escalate-parked
+
+- Run: `RUN-20260813T212941Z-RECOVERY-TASK-0109-19936`
+- Branch: `n/a`
+- Authority: operator-proxy:codex
+- Rationale: operator counter-decision: second accepted verdict revoked before integration after exact-contract review found three coverage regressions—synthetic rather than real-checkout full-lstat status proof, one rather than ten detached recovery cycles, and removed live resume-fallback proof
+
+### 2026-08-13T21:33:32Z — TASK-0109 — quarantine-retry
+
+- Run: `RUN-20260813T212941Z-RECOVERY-TASK-0109-19936`
+- Branch: `n/a`
+- Authority: operator-proxy:codex
+- Rationale: second accepted recovery packet quarantined before integration: independent exact-contract review found accepted ed8fc1bc regressed real-checkout lstat proof to a synthetic repo and reduced the required repeated low-disk recovery proof from 10 cycles to one
+
+### 2026-08-13T21:29:57Z — TASK-0109 — accept
+
+- Run: `RUN-20260813T212941Z-RECOVERY-TASK-0109-19936`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: origin
+- Rationale: deterministic acceptance of existing stranded packet; branch head matches packet; scope, secret scan, evidence, and rerun commands passed
+
+### 2026-08-13T21:29:03Z — TASK-0109 — escalate-infra
+
+- Run: `RUN-20260813T211009Z-78320`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0109`.
+
+### 2026-08-13T21:29:03Z — TASK-0109 — decide:escalate-infra
+
+- Run: `RUN-20260813T211009Z-78320`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
+### 2026-08-13T21:20:37Z — TASK-0109 — decide:retry
+
+- Run: `RUN-20260813T211009Z-78320`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
 ### 2026-08-13T21:09:30Z — TASK-0109 — unpark
 
 - Run: `ORIGIN-20260813T210930Z-77569`
