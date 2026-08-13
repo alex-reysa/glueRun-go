@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-13T22:13:10Z — TASK-0109 — unpark
+
+- Run: `ORIGIN-20260813T221310Z-7400`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: operator-proxy: exact candidate ede05b0e quarantined; retry requires two in-process archive executions and literal incoming caller state/event proof
+
 ### 2026-08-13T22:10:09Z — TASK-0109 — quarantine-clarified
 
 - Run: `RUN-20260813T213939Z-24911`
