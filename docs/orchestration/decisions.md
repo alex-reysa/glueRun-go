@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-13T23:50:12Z — TASK-0109 — integrate
+
+- Run: `ORIGIN-20260813T230100Z-TASK0109-NATIVE`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: origin
+- Rationale: merged agent/session/TASK-0109-per-try-worker-log (b874a87466e118eef167190a66e048d944ab7544) into agent/integration as 9d9c41f2223cd35b634a7c722ee4cb5ed9ca620a; gate green; acceptance=accepted
+
 ### 2026-08-13T22:50:16Z — TASK-0109 — accept
 
 - Run: `RUN-20260813T221358Z-8581`
