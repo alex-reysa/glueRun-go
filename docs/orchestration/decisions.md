@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-13T21:09:30Z — TASK-0109 — unpark
+
+- Run: `ORIGIN-20260813T210930Z-77569`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh amended retry required: prior accepted packet quarantined before integration after 8/8 fixture runs polluted authoritative events; exact six-file candidate preserved under refs/singular/operator-candidates/TASK-0109/RUN-20260813T203430Z-96335-attempt-2
+
 ### 2026-08-13T21:07:59Z — TASK-0109 — escalate-parked
 
 - Run: `RUN-20260813T210341Z-RECOVERY-TASK-0109-29558`
