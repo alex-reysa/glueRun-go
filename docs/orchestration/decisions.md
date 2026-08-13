@@ -2,6 +2,41 @@
 
 ## Decision Log
 
+### 2026-08-13T20:04:19Z — TASK-0108 — integrate
+
+- Run: `ORIGIN-20260813T193859Z-52506`
+- Branch: `agent/eval/TASK-0108-reliability-contract`
+- Authority: origin
+- Rationale: merged agent/eval/TASK-0108-reliability-contract (3fffc6362347e21b83e76fa27a4732a72f589d7e) into agent/integration as 41380c1b470585cbbbba2633a5fa564211893bff; gate green; acceptance=accepted
+
+### 2026-08-13T19:34:08Z — TASK-0108 — decide:rerun-tests
+
+- Run: `ORIGIN-20260813T191032Z-64937`
+- Branch: `agent/eval/TASK-0108-reliability-contract`
+- Authority: decider
+- Rationale: integration-gate-red -> rerun-tests: The sole failure is an apparently transient capacity-resumption or cleanup race in an unrelated test, while all other 193 tests passed and the candidate changes only documentation; rerun the integration gate with retries available.
+
+### 2026-08-13T19:09:42Z — TASK-0108 — decide:revalidate-evidence
+
+- Run: `ORIGIN-20260813T190852Z-60011`
+- Branch: `agent/eval/TASK-0108-reliability-contract`
+- Authority: decider
+- Rationale: integration-gate-red -> revalidate-evidence: All reported integration checks passed, so the red gate is inconsistent with the available evidence. Revalidate the complete gate evidence before retrying or changing scope.
+
+### 2026-08-13T18:50:40Z — TASK-0108 — decide:revalidate-evidence
+
+- Run: `ORIGIN-20260813T182615Z-70987`
+- Branch: `agent/eval/TASK-0108-reliability-contract`
+- Authority: decider
+- Rationale: integration-gate-red -> revalidate-evidence: The supplied integration evidence is fully green (194 passed, 0 failed), which conflicts with the red gate classification. Re-audit the gate result and evidence binding before retrying or promoting.
+
+### 2026-08-13T18:25:52Z — TASK-0108 — accept
+
+- Run: `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256`
+- Branch: `agent/eval/TASK-0108-reliability-contract`
+- Authority: origin
+- Rationale: deterministic acceptance of existing stranded packet; branch head matches packet; scope, secret scan, evidence, and rerun commands passed
+
 ### 2026-08-13T17:14:03Z — TASK-0108 — escalate-infra
 
 - Run: `RUN-20260813T170836Z-93780`
