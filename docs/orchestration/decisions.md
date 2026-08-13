@@ -2,6 +2,48 @@
 
 ## Decision Log
 
+### 2026-08-13T21:07:59Z — TASK-0109 — escalate-parked
+
+- Run: `RUN-20260813T210341Z-RECOVERY-TASK-0109-29558`
+- Branch: `n/a`
+- Authority: operator-proxy:codex
+- Rationale: operator counter-decision: accepted verdict revoked before integration because test fixture polluted authoritative event history 8/8 times; recovery packet quarantined intact and task/DAG amended for fresh hermeticity audit
+
+### 2026-08-13T21:06:23Z — TASK-0109 — quarantine-retry
+
+- Run: `RUN-20260813T210341Z-RECOVERY-TASK-0109-29558`
+- Branch: `n/a`
+- Authority: operator-proxy:codex
+- Rationale: accepted recovery packet quarantined before integration: test fixture polluted authoritative event log with eight synthetic resume-run archive events; task amended for hermetic state isolation and must pass a fresh worker/auditor cycle
+
+### 2026-08-13T21:04:20Z — TASK-0109 — accept
+
+- Run: `RUN-20260813T210341Z-RECOVERY-TASK-0109-29558`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: origin
+- Rationale: deterministic acceptance of existing stranded packet; branch head matches packet; scope, secret scan, evidence, and rerun commands passed
+
+### 2026-08-13T20:54:39Z — TASK-0109 — escalate-infra
+
+- Run: `RUN-20260813T203430Z-96335`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0109`.
+
+### 2026-08-13T20:54:38Z — TASK-0109 — decide:escalate-infra
+
+- Run: `RUN-20260813T203430Z-96335`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
+### 2026-08-13T20:46:29Z — TASK-0109 — decide:retry
+
+- Run: `RUN-20260813T203430Z-96335`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
 ### 2026-08-13T20:04:19Z — TASK-0108 — integrate
 
 - Run: `ORIGIN-20260813T193859Z-52506`

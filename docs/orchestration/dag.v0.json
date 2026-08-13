@@ -20,7 +20,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-00-contract"],
-      "requiredCompletion": "an infra retry leaves every prior try's worker log, runner result, and provider envelope unchanged; the archive carries all sidecars; singular status is observational before every state/scaffold mutation; low-disk recovery's detached fixture waits and drains without racing its completion marker"
+      "requiredCompletion": "an infra retry leaves every prior try's worker log, runner result, and provider envelope unchanged; the archive carries all sidecars; singular status is observational before every state/scaffold mutation; low-disk recovery's detached fixture waits and drains without racing its completion marker; focused fixtures are hermetic and write zero synthetic event or control-state bytes into the invoking checkout"
     },
     {
       "id": "rel-02-try-hygiene",
