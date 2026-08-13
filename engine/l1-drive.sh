@@ -731,7 +731,7 @@ run_worker_phase() {
   # (the breaker/quota-backoff machinery owns it).
   local worker_infra_max="${SINGULAR_WORKER_INFRA_MAX:-1}"
   [[ "$worker_infra_max" =~ ^[0-9]+$ ]] || worker_infra_max=1
-  local worker_try worker_fc worker_result_file
+  local worker_try worker_fc worker_result_file worker_try_log worker_classification_log
 
   # ---- Session affinity (T-E5): resume decision (first try only) ------------
   # Reuse the implementer's prior runtime session iff every gate passes; else go
@@ -780,6 +780,8 @@ run_worker_phase() {
 
   local worker_resume_failed="no"
   for ((worker_try=0; worker_try<=worker_infra_max; worker_try++)); do
+    worker_try_log="$run_dir/worker-attempt-${n}-try-${worker_try}.log"
+    worker_classification_log="$worker_try_log"
     if [[ "$worker_try" -gt 0 ]]; then
       singular_append_event "worker.infra_retry" "worker infra failure; re-running worker only" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$worker_try,\"reason\":\"$worker_fc\"}"
@@ -805,7 +807,10 @@ run_worker_phase() {
     SINGULAR_RUNNER_CAPABILITY_PROFILE="$worker_capability_profile" \
     SINGULAR_RUNNER_RESULT_FILE="$worker_result_file" \
       "$l2_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
-        "${worker_run_args[@]}" >"$run_dir/worker-codex.log" 2>&1 || worker_rc=$?
+        "${worker_run_args[@]}" >"$worker_try_log" 2>&1 || worker_rc=$?
+    printf -- '--- worker try %s (attempt %s) ---\n' "$worker_try" "$n" \
+      >>"$run_dir/worker-codex.log" || true
+    cat "$worker_try_log" >>"$run_dir/worker-codex.log" 2>/dev/null || true
 
     # Resume-refused (86) or resume-failure (86): the runner could not reuse the
     # session. Fall back to FRESH within the SAME try (don't consume an infra/main
@@ -817,6 +822,7 @@ run_worker_phase() {
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"role\":\"implementer\",\"attempt\":$n,\"sessionId\":\"$worker_resume_id\"}" || true
       worker_strategy="fresh"; worker_strategy_reason="resume-failed"
       echo "  worker resume failed; falling back to fresh run..."
+      worker_classification_log="$run_dir/worker-attempt-${n}-try-${worker_try}-resume-fallback.log"
       worker_result_file="$run_dir/implementer-attempt-${n}-try-${worker_try}-resume-fallback-runner-result.json"
       worker_rc=0
       singular_runner_contract_prepare \
@@ -827,14 +833,17 @@ run_worker_phase() {
         "$l2_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
           --level l2 -C "$worktree" --run-id "$run_id" \
           --prompt-file "$active_prompt" --output-last-message "$run_dir/last-message.json" \
-          --session-meta "$session_meta_implementer" >"$run_dir/worker-codex.log" 2>&1 || worker_rc=$?
+          --session-meta "$session_meta_implementer" >"$worker_classification_log" 2>&1 || worker_rc=$?
+      printf -- '--- worker resume-fallback try %s (attempt %s) ---\n' "$worker_try" "$n" \
+        >>"$run_dir/worker-codex.log" || true
+      cat "$worker_classification_log" >>"$run_dir/worker-codex.log" 2>/dev/null || true
     fi
 
     # Classify infra-vs-not. quota -> NOT infra (let the normal/breaker path own
     # it). timeout(rc 124)/empty-output(rc!=0, empty file) -> infra: retry the
     # worker only. invalid-output (output exists, rc 0) -> NOT infra; that is a
     # potential worker-no-packet handled by packet validation below.
-    worker_fc="$(singular_planner_failure_class "$run_dir/worker-codex.log" "$worker_rc" \
+    worker_fc="$(singular_planner_failure_class "$worker_classification_log" "$worker_rc" \
       "$run_dir/last-message.json" "$worker_result_file")"
     # "empty-output" only counts as infra when the runner itself failed (rc!=0);
     # a rc-0 run that emitted an empty file is a clean run with no packet (prose),
