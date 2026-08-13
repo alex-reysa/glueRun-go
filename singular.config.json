@@ -40,7 +40,8 @@
     "eval": [
       "docs/",
       "README.md",
-      "CHANGELOG.md"
+      "CHANGELOG.md",
+      "VERSION"
     ]
   },
   "proofLayers": [],
