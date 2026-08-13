@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-08-13T17:14:03Z — TASK-0108 — escalate-infra
+
+- Run: `RUN-20260813T170836Z-93780`
+- Branch: `agent/eval/TASK-0108-reliability-contract`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0108`.
+
+### 2026-08-13T17:14:02Z — TASK-0108 — decide:escalate-infra
+
+- Run: `RUN-20260813T170836Z-93780`
+- Branch: `agent/eval/TASK-0108-reliability-contract`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
 ### 2026-07-13T02:41:16Z — TASK-0107 — integrate
 
 - Run: `ORIGIN-20260713T023224Z-78099`
