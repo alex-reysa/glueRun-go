@@ -95,7 +95,7 @@ carries its own strict-test-first RED before behavior changes.
 
 | Task | Node | Fix |
 |---|---|---|
-| TASK-0109 | rel-01-per-try-logs | Per-try evidence/archive parity + truly read-only status bootstrap fix |
+| TASK-0109 | rel-01-per-try-logs | Per-try evidence/archive parity + truly read-only status bootstrap fix + deterministic detached low-disk regression |
 | TASK-0110 | rel-02-try-hygiene | Clear stale `last-message.json` between tries; test the try>0-fresh invariant |
 | TASK-0111 | rel-03-integrity-reclass | Source-integrity violation gets its own class + parked-for-human routing |
 | TASK-0112 | rel-04-evidence-remedy | `revalidate-evidence` gets a real evidence-only handler (zero implementer calls) |
