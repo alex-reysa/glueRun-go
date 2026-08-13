@@ -1,7 +1,7 @@
 # Reliability Sprint 01 — dogfood field report
 
-- Status: active; `rel-00-contract` integrated/promoted; TASK-0109 is blocked after independent review
-  revoked and quarantined a third accepted packet before import/integration
+- Status: active; `rel-00-contract` integrated/promoted; TASK-0109 was natively accepted at exact candidate
+  `b874a87466e118eef167190a66e048d944ab7544` and is held under STOP before import/integration
 - Engine under test: Singular 0.18.0 (self-hosted)
 - Target release: 0.19.0
 - Program: `rel-*` in `docs/orchestration/dag.v0.json`
@@ -16,6 +16,8 @@
 - Initial targeted `rel-01-per-try-logs` run: 2026-08-13T20:34:31Z–20:54:39Z; packet quarantined
 - Amended `rel-01-per-try-logs` retry: 2026-08-13T21:10:09Z–21:34:27Z; STOP retained after quarantine
 - Seed-restored `rel-01-per-try-logs` retry: 2026-08-13T21:39:39Z–22:06:25Z; STOP retained before integration
+- Literal-contract `rel-01-per-try-logs` retry: 2026-08-13T22:13:59Z–22:50:16Z; natively accepted;
+  STOP restored before import/integration
 
 ## Operator boundaries
 
@@ -87,6 +89,11 @@
 | 2026-08-13T21:54:56Z | same run, attempt 2 host verification/audit | Exact-head gate green; reviewer selected `fresh/tainted` | Three more green executions normalized zero times. The fresh reviewer hit `evidence-show.sh`'s read-only lock failure again, accepted the candidate, and primary cumulative audit charge remained below the hard bound at 47,825 + 45,651 = 93,476 | `audit-verification-2-{0,1,2}.log`, context event, audit, final manifest and role results |
 | 2026-08-13T22:01:42Z | same run, sampled paired audit | Primary and paired auditors both returned `accepted` | Paired review ran from an unresolved base `[TASK-ID]` prompt with no run-bound audit contract, missed that the fixture runs once against a synthetic caller root, then emitted eleven positive “findings”; the recorder marked `agreement:false`/`disagreement:true` despite matching accepted verdicts | `paired-audit-raw.json`, `paired-audit.json`, paired runner result, exact test lines |
 | 2026-08-13T22:05:49Z | operator hold/quarantine | Accepted inbox packet stopped before import/integration | STOP prevented import/integration. Independent exact-contract review revoked acceptance: both auditors counted external gate reruns instead of the explicit `>=2` in-process fixture executions and accepted a synthetic `$tmp/invoking-checkout` guard rather than literal incoming caller checkout/state/event paths | Third quarantine manifest SHA-256 `c01d6384...`, clarified decision, candidate ref |
+| 2026-08-13T22:13:59Z | `RUN-20260813T221358Z-8581`, attempt 1 | Literal-contract TASK-0109 retry | Fresh implementer produced the requested exact proof, but the worker gate failed because its strict incoming-state inventory observed the gate's own live `.singular-state` log activity; policy archived the attempt as `gate-red` | `attempts/1/{gate-check.log,gate-report.json}`, attempt index |
+| 2026-08-13T22:23:51Z | same run, attempt 2 | Policy retry selected `fresh/role-mismatch` for the same implementer role | Gate-red returned before host session metadata finalization, so the valid prior implementer session could not resume. The fresh worker retained the exact contract and committed `b874a874`; provider command lifecycle overlap briefly inspected a still-running partial regression log, then bounded reruns established all five terminal green markers | Context-strategy event; `worker-codex.log` items 36–42; candidate commit and packet |
+| 2026-08-13T22:40:26Z | same run, host verification | Exact candidate gate already green | Three additional verifier executions were also green but all failed strict normalization because the focused gate chain does not write the observation file; evidence-only fallback completed after about 6m57s | `audit-verification-2-{0,1,2}.log`, normalization errors and final verification record |
+| 2026-08-13T22:50:15Z | same run, native audit | TASK-0109 accepted with no findings or fixes | Auditor verified the direct parent, exact six-file scope, exact seed retention, literal two-iteration hostile-state contract, green commands, and hashes. Usage was 562,461 input / 476,160 cached / 7,496 output; canary charge 86,301 < 100,000. The historical `resume-run` identity remained exactly eight events—no ninth fake event. | `audit.json`, final evidence manifest, runner result, inbox packet |
+| 2026-08-13T22:50:44Z | operator quiescence | Accepted packet awaiting import/integration | STOP was written after native acceptance and before any import, exact-tree integration, rel-01 promotion, or runtime activation | `.singular-state/STOP`, inbox packet, event slice |
 
 ## Finding ledger
 
@@ -289,8 +296,8 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-012 — host audit reruns a passing gate three times because strict observations are absent
 
-- First seen: 2026-08-13T17:11:36Z; frequency: 21/21 disposable verification tries across seven audited
-  attempts (TASK-0108 once and TASK-0109 six times). Every three-try group was entirely green and still
+- First seen: 2026-08-13T17:11:36Z; frequency: 24/24 disposable verification tries across eight audited
+  attempts (TASK-0108 once and TASK-0109 seven times). Every three-try group was entirely green and still
   fell back to evidence-only verification.
 - Classification: new; severity: high for expensive gates; impact: degraded cost and audit evidence; did not
   itself block this task.
@@ -306,19 +313,19 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Evidence: TASK-0108's `audit-verification-1-{0,1,2}.log`; TASK-0109's
   `RUN-20260813T203430Z-96335/audit-verification-{1,2}-{0,1,2}.log` and
   `RUN-20260813T211009Z-78320/audit-verification-{1,2}-{0,1,2}.log` and
-  `RUN-20260813T213939Z-24911/audit-verification-{1,2}-{0,1,2}.log`; matching normalization errors; and fourteen
-  `audit.verification_infra_retry` events across the four runs.
+  `RUN-20260813T213939Z-24911/audit-verification-{1,2}-{0,1,2}.log` and
+  `RUN-20260813T221358Z-8581/audit-verification-2-{0,1,2}.log`; matching normalization errors.
 - Operator cost/action: about six seconds for TASK-0108, then roughly 39 seconds on TASK-0109 attempt 1 and
   66 seconds on its strengthened attempt 2. The amended retry added about 40 and 43 seconds for attempts 1
   and 2. The seed-restored run added about 75 and 77 seconds for attempts 1 and 2. All three TASK-0109 host
-  executions in every group were redundant with the already-green worker gate, and reviewer input remained
-  only evidence-verified.
+  executions in every group were redundant with the already-green worker gate. The literal-contract run added
+  about 417 seconds for one three-try group, and reviewer input remained only evidence-verified.
 - Resolution: open for a future sprint.
 
 ### FR-013 — the prescribed bounded evidence reader is unusable in the Codex auditor sandbox
 
-- First seen: 2026-08-13T17:12:38Z; frequency: 7/7 audited attempts that invoked bounded retrieval
-  (TASK-0108 plus all six TASK-0109 audits).
+- First seen: 2026-08-13T17:12:38Z; frequency: 8/8 audited attempts that invoked bounded retrieval
+  (TASK-0108 plus all seven TASK-0109 audits).
 - Classification: new environment/engine interaction; severity: medium; impact: degraded audit access and
   annoyed; non-blocking only because the auditor worked around it with direct reads.
 - Symptom: `evidence-show.sh` failed while reading `packet.json` with `PermissionError: [Errno 1] Operation
@@ -695,10 +702,10 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Operator cost/action: identify and quarantine the eight records mentally during event/health analysis; no
   live log was rewritten or deleted. The attempt-1 auditor caught four important coverage gaps but did not
   catch this test isolation problem, and the attempt-2 auditor accepted the revised head with it still present.
-- Resolution: behavioral containment is observed: the seed-restored worker gate and six host reruns produced
-  no ninth fake event. Exact acceptance remains blocked because the candidate runs the hermetic archive fixture
-  only once and protects a synthetic `$tmp/invoking-checkout` rather than the literal invoking checkout. The eight
-  historical fake events remain immutable evidence and must be filtered by their exact identities.
+- Resolution: exact behavioral containment is now natively accepted at `b874a874`: the fixture invokes the
+  production archive helper exactly twice in one process against distinct roots, checks the literal incoming
+  caller checkout/state/event inventories after each iteration and a bounded final drain, and produced no ninth
+  fake event. The eight historical fake events remain immutable evidence and must be filtered by exact identity.
 
 ### FR-030 — exact-head deterministic acceptance cannot detect prior host-state leakage
 
@@ -791,9 +798,9 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   `c01d63842a1cbe74f8b9e30d9e171b118a266d2be4bc7077054b4626c792ff31`.
 - Operator cost/action: manually cross-walked every acceptance clause after three model reviews and eight
   green gate executions, held STOP, revoked acceptance, and quarantined the packet before integration.
-- Resolution: candidate rejected; TASK-0109 now requires exactly two helper invocations against distinct roots
-  in one test process and records/checks literal incoming caller checkout, state root, and event path; a
-  `$tmp/invoking-checkout` surrogate is explicitly insufficient. Fresh audit is required.
+- Resolution: candidate `ede05b0e` rejected. The terminal retry produced exact successor `b874a874`, whose
+  authored gate and fresh native audit verified exactly two helper invocations against distinct roots in one
+  process plus literal incoming caller checkout/state/event inventories after each and final drain.
 
 ### FR-034 — paired-audit agreement flag contradicts matching accepted verdicts
 
@@ -835,6 +842,67 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   observability evidence rather than independent approval.
 - Resolution: open; bind the paired prompt before using paired results for audit-quality metrics.
 
+### FR-036 — strict caller-state proof can observe its own gate log
+
+- First seen: 2026-08-13T22:23:50Z; frequency: 1/1 first attempts in the literal-contract run.
+- Classification: new test/harness-boundary defect; severity: medium; impact: degraded and caused one
+  product retry, but did not block the run.
+- Symptom: attempt 1's gate ended `failed-product` with `after archive iteration 1: incoming state inventory
+  changed: .../.singular-state`. The hostile-state proof included the live caller state root in its recursive
+  inventory, so activity produced by the enclosing gate could be mistaken for product leakage.
+- Expected: the proof remains strict over the literal incoming checkout/state/event paths while its baseline
+  and observation window cannot include writes owned by the enclosing gate itself.
+- Code/evidence anchor: candidate `tests/test-per-try-artifacts.sh:5-66,234-366`; attempt-1
+  `gate-check.log` and `gate-report.json` in `RUN-20260813T221358Z-8581`.
+- Operator cost/action: one 9m52s failed attempt and a full fresh retry; no assertion exclusion or weakened
+  inventory was accepted. Resolution: exact attempt-2 candidate passed the authored gate and native audit.
+
+### FR-037 — gate-red skips implementer session finalization and forces a role-mismatch restart
+
+- First seen: 2026-08-13T22:23:51Z; frequency: 1/1 same-role retry after a worker gate failure.
+- Classification: new session-lifecycle defect; severity: medium; impact: degraded cost/context continuity.
+- Symptom: attempt 2 selected `fresh role-mismatch` although attempt 1 had completed a valid implementer call
+  for the same task/run/role. The gate-red path returns before host-authority fields are merged into the
+  implementer session metadata, leaving the next routing decision unable to resume it.
+- Expected: every completed provider call is finalized before any later product-gate return, or a gate-red
+  retry receives an explicit usable same-role session record.
+- Code anchor (0.18.0): early gate returns at `engine/l1-drive.sh:912-916`; finalization only at
+  `:1027-1031`; role-mismatch decision at `engine/lib.sh:6493-6496`.
+- Evidence/cost: attempt index, session metadata, and context-strategy event in the terminal run; the entire
+  second implementer pass ran fresh. Resolution: open for a future sprint.
+
+### FR-038 — provider command lifecycle allowed a dependent read before its regression command completed
+
+- First seen: 2026-08-13T22:38Z; frequency: 1 observed overlap in the accepted attempt-2 implementer call.
+- Classification: new provider/tool lifecycle near-miss; severity: medium; impact: degraded evidence and
+  cost; non-blocking because the worker detected the partial result and re-established terminal evidence.
+- Symptom: provider command item 36 started the grouped regression, while items 37–38 inspected the same
+  evidence log before item 36 completed and saw only two of five terminal markers. After item 36 reported
+  green, the worker reran the focused low-disk test and full group (items 40–41); item 42 then confirmed all
+  five markers and bound hashes.
+- Expected: a dependent inspection cannot run until its foreground command has a terminal lifecycle result,
+  or concurrency is explicit and partial evidence is marked non-terminal.
+- Code/evidence anchor: no engine product-code anchor identified; `worker-codex.log` items 36–42 and the final
+  packet's command-log hashes in `RUN-20260813T221358Z-8581`.
+- Operator cost/action: duplicate regression work and manual transcript review. Resolution: contained in this
+  attempt; investigate provider command serialization/completion signaling.
+
+### FR-039 — focused green gate and strict-observation verifier contract are structurally incompatible
+
+- First seen in this exact form: 2026-08-13T22:42:46Z; frequency: 3/3 verifier tries in the accepted attempt.
+- Classification: new anchor for the recurring FR-012 twin drift; severity: medium; impact: degraded time,
+  compute, and audit evidence; non-blocking after evidence-only fallback.
+- Symptom: all three exact-head verifier reruns produced the same green 1,004-byte log, but each normalization
+  failed `gate-report: strict gate observation missing`. The focused TASK-0109 gate is a direct chain of five
+  test scripts; only the aggregate `tests/run.sh` harness writes the exported observation contract.
+- Expected: `gate-check` adapts any authored green gate to the strict observation schema, or verification
+  recognizes a hash-identical focused gate without classifying absent harness-specific metadata as infra.
+- Code anchor: export at `engine/gate-check.sh:70-72,102`; strict requirement/fallback at
+  `engine/audit-verify.sh:240-249,370-388`; the sole writer at `tests/run.sh:111-135`.
+- Evidence/cost: `audit-verification-2-{0,1,2}.log` and matching normalization errors; about 417 seconds
+  elapsed from the already-green worker gate to evidence-only verification. Resolution: open; this occurrence
+  raises FR-012 to 24/24 redundant green verification tries across eight audited attempts.
+
 ## Known-issue observation log
 
 These are cost/frequency measurements, not new discoveries.
@@ -842,15 +910,15 @@ These are cost/frequency measurements, not new discoveries.
 | Known issue | Occurrences | Time/token/evidence cost | Run/attempt evidence |
 |---|---:|---|---|
 | Context-route reviewer transcript mismatch causes fresh reviewer sessions | 3/3 reviewer resume opportunities | All TASK-0109 attempt-2 reviews selected `fresh/tainted` despite valid attempt-1 reviewer sessions. The fresh reviews charged 62,600, 68,806, and 45,651 input; the first two pushed their cumulative canaries over 100,000, while the third remained under at 93,476. | Context events and reviewer results in all three TASK-0109 run roots |
-| Worker per-try logs overwritten on infra retry | 0 worker-infra retries; 3 adjacent policy retries | No infra retry fired. All three TASK-0109 attempt-2 policy retries used the old controller's compatibility-log lifecycle; each attempt-1 archive preserved worker bytes, but none carried the complete reviewer/result/envelope set (FR-017). | All three TASK-0109 `attempts/1/` directories versus run roots |
+| Worker per-try logs overwritten on infra retry | 0 worker-infra retries; 4 adjacent policy retries | No infra retry fired. All four TASK-0109 attempt-2 policy retries used the old controller's compatibility-log lifecycle; the latest gate-red archive again ran before TASK-0109's product fix could become active. | All four TASK-0109 `attempts/1/` directories versus run roots |
 | 240-minute stale hard cap reclaims live work | 0 occurrences | No worker approached 240 minutes; the cap did not fire | TASK-0108 and all three TASK-0109 run-status/event slices |
 
 ## Active dogfood questions
 
 | Question | Evidence to collect | Current answer |
 |---|---|---|
-| Does self-hosted audit catch weak worker output before integration? | Worker packet, audit verdict/findings, gate result, integration event | Mixed and presently insufficient: all three attempt-1 auditors rejected green packets and found meaningful gaps. All three attempt-2 auditors accepted after their ledgers cleared, but successively missed live event pollution, three explicit seed regressions, then two literal hermeticity criteria. The sampled paired auditor repeated the third miss. Operator supervision quarantined all three accepted packets before integration. |
-| Are role budgets realistic; were mid-run raises needed and honored? | Session/run-control files, timeout events, operator actions, elapsed time | Variable. The first two TASK-0109 reviewer pairs charged 139,516 and 151,702 and terminalized accepted results. The seed-restored pair fit at 93,476, while its resumed implementer used 129,021 fresh input and the post-acceptance paired reviewer added 82,494. No deadline raise was requested; the hard canary has no supported raise. |
+| Does self-hosted audit catch weak worker output before integration? | Worker packet, audit verdict/findings, gate result, integration event | Mixed. Three earlier final auditors accepted packets later revoked by exact-contract review. In the fourth run, the native auditor accepted `b874a874` only after the authored gate and independent contract checks agreed on the direct parent, exact six-file tree, literal two-iteration hostile-state proof, and no ninth event. This is one clean native acceptance, not enough to erase the prior audit escapes. |
+| Are role budgets realistic; were mid-run raises needed and honored? | Session/run-control files, timeout events, operator actions, elapsed time | Variable. The first two TASK-0109 reviewer pairs charged 139,516 and 151,702 and terminalized accepted results. The seed-restored pair fit at 93,476. The terminal native auditor used 562,461 input / 476,160 cached / 7,496 output for a canary charge of 86,301, so no raise was needed. No deadline raise was requested; the hard canary has no supported raise. |
 | Is dispatch fair across parallel lanes at concurrency 3? | Ready time, dispatch time, start time, completion time per node | Not yet evaluable: recovery has only just promoted the serial bootstrap node. The parallel frontier is now eligible for the resumed autonomous loop. |
 | What manual operator work should the engine perform or surface? | Every intervention and missing/ambiguous status signal | In addition to launch work, deterministic packet recovery, immutable snapshotting, exact-tree integration, status-mutation attribution, flaky-test isolation, proof cross-binding, long-job polling, cumulative-token reconstruction, and false-event attribution all required manual operator work. |
 
@@ -861,7 +929,7 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | Task | Node | Outcome | Product attempts | Audit / recovery / integration tries | Worker run IDs | Gate / packet evidence |
 |---|---|---|---:|---:|---|---|
 | TASK-0108 | rel-00-contract | integrated as `41380c1b`; authoritative gate passed at 20:27:09Z | 1 | 4 / 2 / 4 | `RUN-20260813T170836Z-93780`; recovery `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256` | Immutable source snapshot; accepted imported packet/audit; final exact-tree 194/194; `rel-00-contract.gate-result.json` |
-| TASK-0109 | rel-01-per-try-logs | blocked after third accepted packet quarantined before integration; latest exact seed is restored but literal hermeticity proof is incomplete | 6 | 6 / 3 / 0 | `RUN-20260813T203430Z-96335`, `RUN-20260813T211009Z-78320`, `RUN-20260813T213939Z-24911`; accepted recoveries `...210341...`, `...212941...` | Six worker gates green; all three final audits accepted; latest primary charge 93,476; all three packets preserved in operator quarantine |
+| TASK-0109 | rel-01-per-try-logs | natively accepted at `b874a874`; held under STOP before import/integration | 8 | 7 / 3 / 0 | Prior three run IDs plus terminal `RUN-20260813T221358Z-8581`; accepted recoveries `...210341...`, `...212941...` | Terminal attempt 1 gate-red; attempt 2 exact six-file candidate accepted with no findings, charge 86,301, and no ninth fake event; inbox packet awaits import |
 | TASK-0110 | rel-02-try-hygiene | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0111 | rel-03-integrity-reclass | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0112 | rel-04-evidence-remedy | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
@@ -892,6 +960,7 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | 2026-08-13T21:29:03Z | TASK-0109 / rel-01-per-try-logs | `escalate-infra` | Amended attempt-2 audit accepted; final refresh then failed provider-correct cumulative `151702 >= 100000` | Deterministic budget park. Stopped, preserved exact head `ed8fc1bc`, and used zero-model exact-head recovery with the breach explicit | `RUN-20260813T211009Z-78320` audit, attempts, final-refresh log, source snapshot |
 | 2026-08-13T21:34:00Z | TASK-0109 / rel-01-per-try-logs | operator quarantine | Accepted audit missed real-checkout lstat, ten-cycle low-disk, and live resume-fallback proof regressions | Quarantined second packet/audit intact, preserved candidate ref for evidence only, and hardened the task to mandate seed `08bcb2b0`; no integration attempted | `.singular-state/operator-quarantined-imports/TASK-0109/RUN-20260813T212941Z-RECOVERY-TASK-0109-19936/manifest.json` |
 | 2026-08-13T22:05:49Z | TASK-0109 / rel-01-per-try-logs | operator quarantine | Primary and paired accepted audits both missed explicit in-process fixture repetition `>=2` and literal incoming caller checkout/state/event identity | Retained STOP, revoked the third accepted result, preserved exact candidate `ede05b0e`, and quarantined its inbox packet before import/integration | Clarified third quarantine manifest `c01d6384...`, paired audit, exact-contract review |
+| 2026-08-13T22:50:44Z | TASK-0109 / rel-01-per-try-logs | accepted hold | Native audit accepted exact candidate `b874a874` with no findings; provider-correct charge 86,301 remained below the hard bound | Wrote STOP before import/integration so control state can be checkpointed and the exact-tree adapter/runtime overlay handoff remain quiescent | Terminal run audit, final manifest, inbox packet, STOP |
 
 ## Evidence capture checklist
 
@@ -902,25 +971,24 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 
 ## Current active-state snapshot
 
-- `agent/integration` is at control checkpoint `fffb91fc`, which contains TASK-0108's exact product
+- `agent/integration` is at control checkpoint `0a5ac687`, which contains TASK-0108's exact product
   merge `41380c1b470585cbbbba2633a5fa564211893bff`. That merge tree matches the independently tested candidate
   and its parents are pre-integration target `e0c15c9f` plus audited worker `3fffc636` in that order.
-- STOP remains present after TASK-0109's accepted handoff and operator quarantine; origin and Git-operation
+- STOP remains present after TASK-0109's native accepted handoff; origin and Git-operation
   locks are absent and no worker process remains. The general autonomous loop has not yet been restarted.
-- Gates: 1/18. `rel-00-contract` is authoritative/passed and TASK-0108 is `integrated`. TASK-0109 and its lease
-  are `blocked` pending literal hermeticity proof; the other 16 task files remain `ready`. The rel-07/08/09/11/12 parallel
-  lanes would be frontier-eligible after resume, while rel-02 and the rest of the serial lane wait on TASK-0109.
+- Gates: 1/18. `rel-00-contract` is authoritative/passed and TASK-0108 is `integrated`. TASK-0109 is accepted
+  in run state and its packet is in the inbox, pending import, exact-tree integration, and rel-01 promotion; the
+  other 16 task files remain `ready`.
 - Packets: the historical imported corpus is 107 plus TASK-0108's accepted recovery packet/audit. The
   recovery packet, gate evidence, decision, and integrated task status are retained as control-state evidence.
-  TASK-0109 produced three accepted packets (two deterministic recoveries and the seed-restored live run), but
-  operator review quarantined all three before any integration; the active imported directory and inbox contain
-  no TASK-0109 packet.
+  Three earlier TASK-0109 packets remain quarantined. The terminal native packet for exact candidate `b874a874`
+  is the sole active TASK-0109 inbox item and has not yet been imported or integrated.
 - Resources: configured/effective slots are 3/3; current filesystem headroom is about 39 GiB with no capacity
   pressure.
 - Provider/runtime proof: the immutable 0.18.0 overlay changes only `engine/evidence-manifest.sh`, keeps raw
   provider usage, charges coherent Codex cached replay correctly, and was active for all twelve primary
-  TASK-0109 role calls plus the sampled paired review. Effective runner/model were Codex and `gpt-5.6-sol`;
-  the three final primary canaries used corrected fresh totals 139,516, 151,702, and 93,476. Push remains disabled.
+  earlier TASK-0109 role calls plus the sampled paired review. Effective runner/model were Codex and
+  `gpt-5.6-sol`; the terminal native auditor's corrected charge was 86,301. Push remains disabled.
 - No push, tag, publish, install, current-symlink/default flip, blind unpark, cherry-pick, or tracked driver
   engine patch occurred. All exceptional recovery and exact-tree proof actions are preserved in ignored,
   hash-indexed operator evidence.
@@ -935,12 +1003,12 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 - [ ] Operator has reviewed the exact release diff and evidence.
 
 Recommendation: **not yet ready for rel-99 promotion**. Bootstrap recovery is complete and rel-00 is green,
-but 17 tasks remain, TASK-0109 is blocked again, and no release-candidate evidence exists. Three accepted
-TASK-0109 packets were quarantined rather than integrated. The latest candidate restores the exact `08bcb2b0`
-seed and contains the intended behavior, but must execute the hostile archive fixture exactly twice in one
-process and recursively guard literal incoming caller checkout/state/event paths—not a synthetic surrogate—
-after each, then obtain a fresh audit before integrating/promoting rel-01
-before resuming the eligible parallel lanes. Rel-99 must remain pending until every non-release gate is
+but 17 tasks remain and no release-candidate evidence exists. Three superseded TASK-0109 packets remain
+quarantined; the fourth candidate `b874a874` is natively accepted and independently matches the exact literal
+contract, including two same-process archive invocations against distinct roots, recursive literal caller
+checkout/state/event guards after each and final drain, and no ninth fake event. It is ready for the bounded
+quiescent import, exact-tree integration, authoritative rel-01 promotion proof, and immutable runtime-overlay
+handoff—not for release promotion. Rel-99 must remain pending until every non-release gate is
 authoritative/passed, every park and material finding has explicit disposition, the exact release diff and
 synchronized version surfaces are green, the field-report canary and fresh-consumer proof pass, and the
 hash-bound human-gate request is reviewed. No push, tag, publish, install, default flip, or release promotion

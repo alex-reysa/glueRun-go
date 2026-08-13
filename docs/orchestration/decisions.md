@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-08-13T22:50:16Z — TASK-0109 — accept
+
+- Run: `RUN-20260813T221358Z-8581`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-08-13T22:23:51Z — TASK-0109 — decide:retry
+
+- Run: `RUN-20260813T221358Z-8581`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
 ### 2026-08-13T22:13:10Z — TASK-0109 — unpark
 
 - Run: `ORIGIN-20260813T221310Z-7400`
