@@ -41,7 +41,10 @@
       "docs/",
       "README.md",
       "CHANGELOG.md",
-      "VERSION"
+      "VERSION",
+      ".singular-version",
+      "singular.config.json",
+      "templates/singular.config.json"
     ]
   },
   "proofLayers": [],

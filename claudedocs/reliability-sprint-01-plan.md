@@ -99,7 +99,7 @@ carries its own strict-test-first RED before behavior changes.
 | TASK-0110 | rel-02-try-hygiene | Clear stale `last-message.json` between tries; test the try>0-fresh invariant |
 | TASK-0111 | rel-03-integrity-reclass | Source-integrity violation gets its own class + parked-for-human routing |
 | TASK-0112 | rel-04-evidence-remedy | `revalidate-evidence` gets a real evidence-only handler (zero implementer calls) |
-| TASK-0113 | rel-05-manifest-remedy-bound | Bounded retry at the four one-shot evidence-manifest `audit-infra` emitters |
+| TASK-0113 | rel-05-manifest-remedy-bound | Bounded retry at the four one-shot evidence-manifest `audit-infra` emitters; provider-correct Codex canary charging discovered by the bootstrap dogfood run |
 | TASK-0114 | rel-06-terminal-handoff | Durable terminal-pending handoff; double success can never park as infra |
 | TASK-0115 | rel-07-run-control | Read-only run-control: deadline/cancel re-read inside every poll loop |
 | TASK-0116 | rel-08-route-transcript | Fix the reviewer transcript filename in ctx routing (live bug in self-hosting) |

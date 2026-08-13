@@ -56,7 +56,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-04-evidence-remedy"],
-      "requiredCompletion": "a single transient evidence-manifest or binding failure is retried within its own bound; a completed auditor verdict is never discarded as an infrastructure park"
+      "requiredCompletion": "a single transient evidence-manifest or binding failure is retried within its own bound; Codex cached replay is not charged as fresh audit input; a completed auditor verdict is never discarded as an infrastructure park"
     },
     {
       "id": "rel-06-terminal-handoff",
@@ -164,6 +164,10 @@
       "layer": "evaluation",
       "kind": "evaluation",
       "authority": "operator",
+      "humanGate": {
+        "requestRef": "docs/orchestration/human-gates/rel-99-release.human-gate.json",
+        "approvalRef": "docs/orchestration/human-gates/rel-99-release.human-approval.json"
+      },
       "dependsOn": [
         "rel-08-route-transcript",
         "rel-09-l1-lease-liveness",
@@ -173,7 +177,7 @@
         "rel-15-snapshot-checkpoint",
         "rel-16-infra-try-resume"
       ],
-      "requiredCompletion": "0.19.0 changelog and contract docs shipped; full suite, field-report canary, and fresh-consumer checks green; schemaVersion stays v2 with a nothing-required migration note"
+      "requiredCompletion": "0.19.0 changelog and contract docs shipped; all version pins synchronized; full suite, field-report canary, and fresh-consumer checks green; exact release artifacts receive operator approval; schemaVersion stays v2 with a nothing-required migration note"
     }
   ]
 }
