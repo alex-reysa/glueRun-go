@@ -2,6 +2,41 @@
 
 ## Decision Log
 
+### 2026-08-13T22:10:09Z — TASK-0109 — quarantine-clarified
+
+- Run: `RUN-20260813T213939Z-24911`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: operator-proxy:codex
+- Rationale: This supplements both 22:06 counter-decisions. Exact review found two independent blockers: the archive helper executes only once instead of twice in one process, and the test inventories a fabricated `$tmp/invoking-checkout` rather than the literal incoming caller checkout, state root, and event path. The accepted packet remains quarantined before import/integration; candidate `ede05b0e` is evidence seed only.
+
+### 2026-08-13T22:06:25Z — TASK-0109 — escalate-parked
+
+- Run: `RUN-20260813T213939Z-24911`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: operator-proxy:codex
+- Rationale: Human/operator exact-contract review overruled accepted audit before integration; amend the fixture to invoke the hermetic archive path twice inside one test process, preserving ede05b0e as the new seed.
+
+### 2026-08-13T22:06:25Z — TASK-0109 — quarantine-retry
+
+- Run: `RUN-20260813T213939Z-24911`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: operator-proxy:codex
+- Rationale: Accepted packet revoked before import/integration: the hermetic archive fixture executes once, not the contractually required two in-process repetitions; primary and paired audits missed or contradicted this criterion. Candidate preserved at refs/singular/operator-candidates/TASK-0109/RUN-20260813T213939Z-24911-attempt-2.
+
+### 2026-08-13T21:58:56Z — TASK-0109 — accept
+
+- Run: `RUN-20260813T213939Z-24911`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-08-13T21:51:47Z — TASK-0109 — decide:retry
+
+- Run: `RUN-20260813T213939Z-24911`
+- Branch: `agent/session/TASK-0109-per-try-worker-log`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
 ### 2026-08-13T21:38:04Z — TASK-0109 — unpark
 
 - Run: `ORIGIN-20260813T213804Z-23950`

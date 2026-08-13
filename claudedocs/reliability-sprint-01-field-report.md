@@ -1,7 +1,7 @@
 # Reliability Sprint 01 — dogfood field report
 
-- Status: active; `rel-00-contract` integrated/promoted; TASK-0109 is blocked for a mandatory seed-restored
-  retry after independent review revoked and quarantined a second accepted packet before integration
+- Status: active; `rel-00-contract` integrated/promoted; TASK-0109 is blocked after independent review
+  revoked and quarantined a third accepted packet before import/integration
 - Engine under test: Singular 0.18.0 (self-hosted)
 - Target release: 0.19.0
 - Program: `rel-*` in `docs/orchestration/dag.v0.json`
@@ -15,6 +15,7 @@
 - Bootstrap resumed: 2026-08-13T18:24:22Z; `rel-00-contract` promoted: 2026-08-13T20:27:09Z
 - Initial targeted `rel-01-per-try-logs` run: 2026-08-13T20:34:31Z–20:54:39Z; packet quarantined
 - Amended `rel-01-per-try-logs` retry: 2026-08-13T21:10:09Z–21:34:27Z; STOP retained after quarantine
+- Seed-restored `rel-01-per-try-logs` retry: 2026-08-13T21:39:39Z–22:06:25Z; STOP retained before integration
 
 ## Operator boundaries
 
@@ -79,6 +80,13 @@
 | 2026-08-13T21:29:03Z | same run, attempt 2 terminal handoff | Accepted audit terminalized as `escalate-infra` | Final refresh summed 82,896 + 68,806 provider-correct auditor input = `151702 >= 100000`; policy parked the accepted result and STOP remained in place | Final-refresh log, attempts index, run status, decision and lease |
 | 2026-08-13T21:29:41Z | `RUN-20260813T212941Z-RECOVERY-TASK-0109-19936` | Deterministic zero-model recovery accepted/imported `ed8fc1bc` | Exact head, clean merge tree, six-file scope, secrets, current successful commands, and syntax proof passed. Provenance explicitly retained the source breach rather than resetting it | Recovery manifest/provenance, packet SHA-256 `4259ed45...`, audit SHA-256 `c79ba4c1...` |
 | 2026-08-13T21:34:00Z | independent exact-contract review | Second accepted packet quarantined before integration | Review found three regressed proofs the accepted audit missed: status used a synthetic repository/direct reconcile instead of real-checkout CLI `status` plus full lstat; low-disk coverage fell from ten cycles to one; and live rc-86 resume-refusal/fallback execution was replaced by a fabricated archive file. The packet/audit were preserved intact and TASK-0109 was hardened for mandatory seed restoration | Second quarantine manifest, `quarantine-retry`/`escalate-parked` decisions, hardened task contract |
+| 2026-08-13T21:37:57Z | control commits `af17357e` / `fffb91fc` | TASK-0109 hardened and deliberately returned to the frontier | Moved mandatory `08bcb2b0` restoration into the rendered Objective, made all three regressed proofs literal/numeric acceptance terms, and unparked only TASK-0109 under STOP | Commits, task contract, `ORIGIN-20260813T213804Z-23950` decision |
+| 2026-08-13T21:39:39Z | `RUN-20260813T213939Z-24911` | Seed-restored TASK-0109 attempt 1 dispatched alone | Worker restored the exact seed: five owned paths remained byte-identical to `08bcb2b0` and only `test-per-try-artifacts.sh` gained the hermeticity work. Candidate `4815b9e4` passed the five-test gate, including real-checkout full-lstat status and ten detached cycles | Worker audit log, seed diff, commit and gate report |
+| 2026-08-13T21:48:17Z | same run, attempt 1 host verification/audit | Exact-head gate green; auditor verdict `needs-fix` | All three host executions passed and all normalizations failed again. Auditor correctly caught that live rc-86 resume/fallback did not emit/assert result/envelope names or exact aggregate ordering/bytes; it charged 47,825 fresh input tokens | `audit-verification-1-{0,1,2}.log`, attempt-1 audit, findings ledger and runner result |
+| 2026-08-13T21:51:48Z | same run, attempt 2 | Implementer session resumed | Worker added 36 lines only to `test-per-try-artifacts.sh`, resolved all four product finding/fix entries, and committed `ede05b0e`; the authored gate passed and the original authoritative event log still contained exactly eight `resume-run` fixtures—no ninth fake event | Resume result, re-audit diff, gate log, event count |
+| 2026-08-13T21:54:56Z | same run, attempt 2 host verification/audit | Exact-head gate green; reviewer selected `fresh/tainted` | Three more green executions normalized zero times. The fresh reviewer hit `evidence-show.sh`'s read-only lock failure again, accepted the candidate, and primary cumulative audit charge remained below the hard bound at 47,825 + 45,651 = 93,476 | `audit-verification-2-{0,1,2}.log`, context event, audit, final manifest and role results |
+| 2026-08-13T22:01:42Z | same run, sampled paired audit | Primary and paired auditors both returned `accepted` | Paired review ran from an unresolved base `[TASK-ID]` prompt with no run-bound audit contract, missed that the fixture runs once against a synthetic caller root, then emitted eleven positive “findings”; the recorder marked `agreement:false`/`disagreement:true` despite matching accepted verdicts | `paired-audit-raw.json`, `paired-audit.json`, paired runner result, exact test lines |
+| 2026-08-13T22:05:49Z | operator hold/quarantine | Accepted inbox packet stopped before import/integration | STOP prevented import/integration. Independent exact-contract review revoked acceptance: both auditors counted external gate reruns instead of the explicit `>=2` in-process fixture executions and accepted a synthetic `$tmp/invoking-checkout` guard rather than literal incoming caller checkout/state/event paths | Third quarantine manifest SHA-256 `c01d6384...`, clarified decision, candidate ref |
 
 ## Finding ledger
 
@@ -281,16 +289,15 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-012 — host audit reruns a passing gate three times because strict observations are absent
 
-- First seen: 2026-08-13T17:11:36Z; frequency: 15/15 disposable verification tries across five audited
-  attempts (TASK-0108 once and TASK-0109 four times). Every three-try group was entirely green and still
+- First seen: 2026-08-13T17:11:36Z; frequency: 21/21 disposable verification tries across seven audited
+  attempts (TASK-0108 once and TASK-0109 six times). Every three-try group was entirely green and still
   fell back to evidence-only verification.
 - Classification: new; severity: high for expensive gates; impact: degraded cost and audit evidence; did not
   itself block this task.
 - Symptom: each authored task gate passed on all three host reruns, but every normalization failed with
   `gate-report: strict gate observation missing`. The engine classified this structural report mismatch as
   retryable verification infrastructure, reran the same passing command twice more, then used an
-  evidence-only fallback. TASK-0109 reproduced this identically before all four of its audits across the
-  original and amended runs.
+  evidence-only fallback. TASK-0109 reproduced this identically before all six of its audits across three runs.
 - Expected: an ordinary authored gate command is adapted into the strict observation contract once, or its
   first successful hash-bound result is reused. Missing structural metadata must not trigger three complete
   deterministic gate executions.
@@ -298,18 +305,20 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   `engine/audit-verify.sh:378-387`.
 - Evidence: TASK-0108's `audit-verification-1-{0,1,2}.log`; TASK-0109's
   `RUN-20260813T203430Z-96335/audit-verification-{1,2}-{0,1,2}.log` and
-  `RUN-20260813T211009Z-78320/audit-verification-{1,2}-{0,1,2}.log`; matching normalization errors; and ten
-  `audit.verification_infra_retry` events across the three runs.
+  `RUN-20260813T211009Z-78320/audit-verification-{1,2}-{0,1,2}.log` and
+  `RUN-20260813T213939Z-24911/audit-verification-{1,2}-{0,1,2}.log`; matching normalization errors; and fourteen
+  `audit.verification_infra_retry` events across the four runs.
 - Operator cost/action: about six seconds for TASK-0108, then roughly 39 seconds on TASK-0109 attempt 1 and
   66 seconds on its strengthened attempt 2. The amended retry added about 40 and 43 seconds for attempts 1
-  and 2. All three TASK-0109 host executions in every group were redundant with the already-green worker gate,
-  and the final reviewer input was still only evidence-verified.
+  and 2. The seed-restored run added about 75 and 77 seconds for attempts 1 and 2. All three TASK-0109 host
+  executions in every group were redundant with the already-green worker gate, and reviewer input remained
+  only evidence-verified.
 - Resolution: open for a future sprint.
 
 ### FR-013 — the prescribed bounded evidence reader is unusable in the Codex auditor sandbox
 
-- First seen: 2026-08-13T17:12:38Z; frequency: 5/5 audited attempts that invoked bounded retrieval
-  (TASK-0108 plus all four TASK-0109 audits).
+- First seen: 2026-08-13T17:12:38Z; frequency: 7/7 audited attempts that invoked bounded retrieval
+  (TASK-0108 plus all six TASK-0109 audits).
 - Classification: new environment/engine interaction; severity: medium; impact: degraded audit access and
   annoyed; non-blocking only because the auditor worked around it with direct reads.
 - Symptom: `evidence-show.sh` failed while reading `packet.json` with `PermissionError: [Errno 1] Operation
@@ -319,17 +328,18 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   and routine read-only Git evidence commands do not flood the reviewer transcript with host cache errors.
 - Code anchor (0.18.0): installed `engine/evidence-show.sh` temporary retrieval lock; auditor prompt/tool
   contract assembled by `engine/l1-drive.sh`.
-- Evidence: TASK-0108 and both TASK-0109 run roots' auditor logs and verdict rationales. Both amended-retry
-  reviewers again recorded the read-only cache-lock failure and used immutable Git/manifest inspection.
+- Evidence: TASK-0108 and all three TASK-0109 run roots' auditor logs and verdict rationales. Both
+  seed-restored-run reviewers again recorded the read-only cache-lock failure and used immutable Git/manifest
+  inspection.
 - Operator cost/action: every audit had to fall back to raw/direct inspection, expanding context and weakening
   the intended bounded-evidence boundary. TASK-0109's reviewers still completed valid direct hash/diff checks.
 - Resolution: open for a future sprint.
 
 ### FR-014 — Codex model-cache schema mismatch produces repeated non-fatal provider errors
 
-- First seen: pre-launch Doctor; frequency: 88 cache load/renew errors across the first three worker/auditor
-  runs. The amended TASK-0109 retry added 34 unique root-log occurrences (14 implementer, 20 reviewer) to the
-  prior 54.
+- First seen: pre-launch Doctor; frequency: 108 cache load/renew errors across the first four worker/auditor
+  runs. The seed-restored TASK-0109 run added 20 unique root-artifact occurrences (11 implementer, eight
+  primary reviewer, one paired-review envelope) to the prior 88.
 - Classification: new compatibility near-miss; severity: low; impact: degraded provider signal / annoyed;
   non-blocking in this run.
 - Symptom: Codex CLI 0.145.0 reads a cache written for 0.147 and repeatedly reports a missing
@@ -345,7 +355,7 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-015 — accepted audit is terminalized as infrastructure failure by hard token-canary accounting
 
-- First seen: 2026-08-13T17:14:03Z; frequency: 3/3 audits that returned `accepted` at a task-final handoff;
+- First seen: 2026-08-13T17:14:03Z; frequency: 3/4 audits that returned `accepted` at a task-final handoff;
   classification: new reproduction of the terminal handoff/budget failure family targeted by this sprint.
 - Severity: critical; impact: blocked the entire DAG first at `rel-00-contract`, then blocked TASK-0109 after
   the bootstrap recovery had advanced the serial lane.
@@ -360,6 +370,10 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - The amended retry reproduced it again. Its first auditor rejected `6fd30118` using 539,600 raw / 456,704
   cached / 82,896 fresh input and 9,236 output tokens. Its second auditor accepted `ed8fc1bc` using 523,462 /
   454,656 / 68,806 / 6,388, then final refresh summed the two fresh charges to `151702 >= 100000` and parked it.
+- The seed-restored retry was the first needs-fix cycle to fit: reviewers used 292,561/244,736/47,825/6,362
+  and 364,627/318,976/45,651/7,266 raw/cached/fresh/output. Their cumulative 93,476 stayed below 100,000,
+  final refresh succeeded, and the engine accepted the packet normally. Independent product review—not the
+  canary—later caused its quarantine.
 - Expected: durable accounting cannot reverse an accepted verdict into a terminal infrastructure park.
   Budget enforcement must use the intended quantity and provide a supported recovery/remedy path.
 - Code anchor (0.18.0): hard defaults/max and bounded config in `engine/evidence-manifest.sh:55-87`; cumulative
@@ -376,6 +390,10 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Amended-retry implementer attempt 1 was 2,244,161/2,153,472/90,689/14,063; resumed attempt 2 was
   4,091,847/3,893,760/198,087/25,792. Across its four role calls, raw/cached/fresh/output totals were
   7,399,070/6,958,592/440,478/55,479. No mid-run raise was requested or available.
+- Seed-restored implementer attempt 1 was 1,622,737/1,553,664/69,073/19,331; resumed attempt 2 was
+  2,441,469/2,312,448/129,021/25,596. Its four primary calls totaled
+  4,721,394/4,429,824/291,570/58,555. The sampled paired auditor separately used
+  397,886/315,392/82,494/8,150.
 - Evidence: all three run roots' `audit.json`, `attempts/index.json`, `run-status.json`,
   `evidence-manifest-final-refresh.log`, and per-role runner-result JSON files. TASK-0109's final refresh states
   the corrected cumulative values exactly: `139516 >= 100000` and `151702 >= 100000`.
@@ -385,7 +403,8 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   `9d6a4470...` and `62c15ef4...`.
 - Resolution: TASK-0108 was operationally recovered; both TASK-0109 canary parks were recovered without a
   new model call, but their packets were later quarantined for independent product-evidence findings and
-  TASK-0109 remains blocked. The immutable overlay
+  the third TASK-0109 run demonstrated that a two-review cycle can fit when cumulative fresh input is 93,476.
+  TASK-0109 nevertheless remains blocked on product proof. The immutable overlay
   activated for TASK-0109 and proved the provider-correct charging rule works, while also demonstrating that
   a fixed cumulative-across-attempts hard bound can still reverse an accepted retry even when every reviewer
   call fits individually. The permanent accounting/remedy work remains bound to TASK-0113/TASK-0114. Evidence:
@@ -420,7 +439,7 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-017 — attempt archive omits the artifacts needed to diagnose an audit-infra terminal
 
-- First seen: 2026-08-13T17:14:03Z; frequency: 5/5 archived product attempts (TASK-0108 once, TASK-0109 four times).
+- First seen: 2026-08-13T17:14:03Z; frequency: 7/7 archived product attempts (TASK-0108 once, TASK-0109 six times).
 - Classification: new/broader evidence-retention defect adjacent to the known per-try log-loss issue;
   severity: high; impact: degraded evidence and unsafe retry/GC exposure.
 - Symptom: each attempt directory copied the compatibility worker log but omitted `auditor-codex.log`, role
@@ -431,7 +450,7 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   especially the accepted verdict and the accounting failure that later overrode it.
 - Code anchor (0.18.0): copy selection in `engine/lib.sh:6567-6618`; TASK-0109 changes this function on its
   unintegrated worker branch.
-- Evidence: all five attempt directories, their run roots, and both TASK-0109 runs' runner-result/envelope sets.
+- Evidence: all seven attempt directories, their run roots, and all three TASK-0109 runs' runner-result/envelope sets.
   TASK-0109 attempt 1's archived worker log did preserve its exact 303,036 bytes (SHA-256 `e72b0ca1...`) before
   attempt 2 truncated the root compatibility log to a new 49,556-byte stream, but none of its reviewer or
   accounting sidecars were co-located with that archive.
@@ -657,8 +676,8 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-029 — focused archive test leaks synthetic lifecycle events into the live driver log
 
-- First seen: 2026-08-13T20:42:23Z; frequency: 8/8 TASK-0109 gate executions that reached the archive fixture:
-  four in attempt 1 and four in attempt 2 (one worker gate plus three host verification runs per attempt).
+- First seen: 2026-08-13T20:42:23Z; frequency: eight escapes in the first eight TASK-0109 gate executions;
+  zero new escapes in the next 16 executions across two amended runs. The authoritative count remains eight.
 - Classification: new test-isolation defect and audit near-miss; severity: high; impact: blocked integration
   and degraded durable telemetry/provenance; unsafe to treat as genuine lifecycle history.
 - Symptom: the real `.singular-state/events.ndjson` gained eight fabricated `l1.attempt_archived` events for
@@ -676,10 +695,10 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Operator cost/action: identify and quarantine the eight records mentally during event/health analysis; no
   live log was rewritten or deleted. The attempt-1 auditor caught four important coverage gaps but did not
   catch this test isolation problem, and the attempt-2 auditor accepted the revised head with it still present.
-- Resolution: containment active. The accepted recovery packet was quarantined before integration and its
-  exact bytes retained. TASK-0109 now requires hostile inherited state/event paths, repeated fixture runs,
-  and before/after event-byte plus file-set identity; a fresh worker/auditor cycle must satisfy that amendment.
-  The eight historical fake events remain immutable evidence and must be filtered by their exact identities.
+- Resolution: behavioral containment is observed: the seed-restored worker gate and six host reruns produced
+  no ninth fake event. Exact acceptance remains blocked because the candidate runs the hermetic archive fixture
+  only once and protects a synthetic `$tmp/invoking-checkout` rather than the literal invoking checkout. The eight
+  historical fake events remain immutable evidence and must be filtered by their exact identities.
 
 ### FR-030 — exact-head deterministic acceptance cannot detect prior host-state leakage
 
@@ -708,7 +727,7 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-031 — no supported verb revokes or quarantines an accepted imported packet
 
-- First seen: 2026-08-13T21:05:30Z; frequency: 2/2 accepted packets requiring pre-integration revocation.
+- First seen: 2026-08-13T21:05:30Z; frequency: 3/3 accepted packets requiring pre-integration revocation.
 - Classification: new operator-control friction; severity: medium; impact: degraded/near-miss, with STOP as the
   only reason the weak packet could not race into integration.
 - Symptom: `singular supersede` quarantines inbox packets only by burying the whole canonical task, while
@@ -718,15 +737,17 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   records their hashes/reason, restores task and lease to a deliberate parked state, and remains reversible.
 - Code anchor: `engine/ops.sh:121-225` supersede path and `engine/import-packet.sh:82-101` publication; integration
   scans every task directory under `docs/orchestration/packets/imported` in `engine/integrate.sh:129-135`.
-- Evidence: ignored operator quarantine manifest with packet SHA `feae1e1d...` and audit SHA `57c26fe2...`, plus
-  the `quarantine-retry` and `escalate-parked` counter-decisions.
-- Operator cost/action: held STOP, verified quiescence, recoverably moved two files by exact path, restored the
+- Evidence: all three ignored operator quarantine manifests and their packet/audit hashes, plus the
+  `quarantine-retry` and `escalate-parked` counter-decisions. The third preserves packet `f8a39a9e...`, primary
+  audit `be47766c...`, paired record `f8b36cd7...`, and paired raw verdict `afd04580...`.
+- Operator cost/action: held STOP, verified quiescence, recoverably moved exact artifacts by explicit path, restored the
   lease to blocked, created a durable candidate ref, and verified no active TASK-0109 import/inbox remained.
 - Resolution: open engine feature request; the manual quarantine is hash-bound and reversible for this run.
 
 ### FR-032 — rendered worker prompt drops an authored recovery seed and enables coverage regression
 
-- First seen: 2026-08-13T21:10:10Z; frequency: 1/1 task retries carrying a standalone `Recovery seed:` field.
+- First seen: 2026-08-13T21:10:10Z; frequency: 1/2 relevant task retries. The first relied on a standalone
+  `Recovery seed:` field and dropped it; the next duplicated mandatory restoration into the rendered Objective.
 - Classification: new task-rendering and audit near-miss; severity: high; impact: blocked and degraded. No weak
   packet integrated because operator supervision compared the accepted candidate to the preserved seed.
 - Symptom: TASK-0109 named exact recovery ref `08bcb2b0` and instructed the worker to restore its six owned
@@ -745,7 +766,74 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Operator cost/action: two implementer calls, two fresh reviewers, twelve redundant host gate reruns across
   the two TASK-0109 runs, another deterministic recovery, and a second manual quarantine. The task now places
   mandatory seed restoration inside its rendered Objective and makes each regressed proof numerically explicit.
-- Resolution: contained for the next retry; general unknown-field/rendered-authority validation remains open.
+- Resolution: the seed-restored run proved local containment: five owned paths remained byte-identical to the
+  seed and only the intended test was additive, preserving the exact real-checkout, ten-cycle, and live-fallback
+  proofs. General unknown-field/rendered-authority validation remains open.
+
+### FR-033 — two accepted auditors overlook literal hermeticity acceptance terms
+
+- First seen: 2026-08-13T22:01:42Z; frequency: 2/2 auditors reviewing seed-restored candidate `ede05b0e`.
+- Classification: new audit-quality defect; severity: high; impact: blocked integration. STOP prevented the
+  accepted packet from reaching integration.
+- Symptom: the primary attempt-2 auditor and sampled independent paired auditor both returned `accepted` and
+  claimed complete acceptance coverage. The candidate invokes `singular_attempt_archive` once, not at least
+  twice as the task explicitly requires; its file/hash comparison also targets a synthetic
+  `$tmp/invoking-checkout`, not the literal invoking checkout named by the contract. The paired rationale claims
+  “repeated” hermetic execution even though it counted external worker/host gate invocations, which the task
+  explicitly does not permit as a substitute.
+- Expected: audit maps each explicit acceptance term to a concrete assertion and fails closed when a numeric
+  repetition bound or named trust boundary is absent; external repeated gate executions do not substitute for
+  repetition inside the fixture being tested.
+- Code anchor at `ede05b0e`: `tests/test-per-try-artifacts.sh:13-29` creates/snapshots the synthetic host root;
+  `:197-261` sources helpers and archives exactly once. Acceptance text is TASK-0109 lines 133-136.
+- Evidence: `RUN-20260813T213939Z-24911/{audit.json,paired-audit-raw.json,paired-audit.json}`, exact candidate
+  source, task contract, six green host-verification logs, and clarified quarantine manifest SHA-256
+  `c01d63842a1cbe74f8b9e30d9e171b118a266d2be4bc7077054b4626c792ff31`.
+- Operator cost/action: manually cross-walked every acceptance clause after three model reviews and eight
+  green gate executions, held STOP, revoked acceptance, and quarantined the packet before integration.
+- Resolution: candidate rejected; TASK-0109 now requires exactly two helper invocations against distinct roots
+  in one test process and records/checks literal incoming caller checkout, state root, and event path; a
+  `$tmp/invoking-checkout` surrogate is explicitly insufficient. Fresh audit is required.
+
+### FR-034 — paired-audit agreement flag contradicts matching accepted verdicts
+
+- First seen: 2026-08-13T22:01:42Z; frequency: 1/1 sampled paired audits in this sprint.
+- Classification: new experiment/observability defect; severity: medium; impact: degraded audit telemetry;
+  non-blocking relative to the separate FR-033 product-proof block.
+- Symptom: primary and paired auditors both returned `accepted`, and the paired audit reported no required
+  fixes. Its `findings` array contained eleven positive verification statements, yet the recorder emitted
+  `agreement:false` and `disagreement:true`. The record therefore contradicts both verdict comparison and its
+  own accepted rationale, falsely counting an audit escape/directional disagreement.
+- Expected: agreement compares the primary and paired verdict/fix disposition, while positive evidence notes
+  are not treated as adverse findings. If any non-empty `findings` array intentionally flags disagreement,
+  the auditor contract must reserve that field for actionable defects and reject positive observations there.
+- Code anchor (0.18.0): `engine/ctx-paired-audit.sh:112-156` defines disagreement as paired verdict not accepted
+  **or any non-empty findings**, without reading the primary verdict or distinguishing positive notes.
+- Evidence: `RUN-20260813T213939Z-24911/{audit.json,paired-audit-raw.json,paired-audit.json}` and event line 1305.
+- Operator cost/action: manually interpreted the raw paired verdict rather than trusting its agreement flag;
+  downstream experiment/escape metrics for this sample must exclude or correct the false disagreement.
+- Resolution: open for a future sprint.
+
+### FR-035 — paired audit launches with an unresolved generic prompt
+
+- First seen: 2026-08-13T22:01:42Z; frequency: 1/1 sampled paired audits in this sprint.
+- Classification: new audit-context defect; severity: high; impact: degraded evidence quality and cost;
+  non-blocking only because the hook is post-acceptance/observability and operator review remained active.
+- Symptom: the paired hook passes `docs/orchestration/prompts/auditor.md` unchanged, leaving `[TASK-ID]`
+  unresolved and appending none of the primary auditor's run-bound task, scope, manifest-reader, host-
+  classification, or output-schema contract. The reviewer had to discover TASK-0109 and its artifacts by broad
+  repository search. It nevertheless returned accepted, missed FR-033, and spent 397,886 raw / 315,392 cached /
+  82,494 fresh input plus 8,150 output tokens.
+- Expected: the independent pass is fresh in session identity but receives an immutable run-bound prompt with
+  exact task/run/branch, owned scope, compact manifest, host verification, bounded evidence reader, and verdict
+  schema. Freshness must not mean context-free discovery.
+- Code anchor (0.18.0): `engine/ctx-paired-audit.sh:84-105` selects the base prompt and invokes the runner
+  directly; unlike `engine/l1-drive.sh:232-295`, it performs no placeholder substitution or audit-contract append.
+- Evidence: the base auditor prompt, paired provider envelope/commands, `paired-audit-raw.json`, and its broad
+  `rg` discovery transcript under `RUN-20260813T213939Z-24911`.
+- Operator cost/action: manually reconstructed the missing run binding and treated the paired result as weak
+  observability evidence rather than independent approval.
+- Resolution: open; bind the paired prompt before using paired results for audit-quality metrics.
 
 ## Known-issue observation log
 
@@ -753,16 +841,16 @@ These are cost/frequency measurements, not new discoveries.
 
 | Known issue | Occurrences | Time/token/evidence cost | Run/attempt evidence |
 |---|---:|---|---|
-| Context-route reviewer transcript mismatch causes fresh reviewer sessions | 2/2 reviewer resume opportunities | Both TASK-0109 attempt-2 reviews selected `fresh/tainted` despite valid attempt-1 reviewer sessions. The original fresh review charged 62,600 input; the amended retry charged 68,806, and both helped push cumulative canaries over 100,000. | Context events and reviewer results in both TASK-0109 run roots |
-| Worker per-try logs overwritten on infra retry | 0 worker-infra retries; 2 adjacent policy retries | No infra retry fired. Both TASK-0109 attempt-2 policy retries truncated the old controller's root worker log; each attempt-1 compatibility-log archive preserved worker bytes, but neither old-runtime archive carried reviewer/result/envelope sidecars (FR-017). | Both TASK-0109 `attempts/1/` directories versus run roots |
-| 240-minute stale hard cap reclaims live work | 0 occurrences | No worker approached 240 minutes; the cap did not fire | TASK-0108 and both TASK-0109 run-status/event slices |
+| Context-route reviewer transcript mismatch causes fresh reviewer sessions | 3/3 reviewer resume opportunities | All TASK-0109 attempt-2 reviews selected `fresh/tainted` despite valid attempt-1 reviewer sessions. The fresh reviews charged 62,600, 68,806, and 45,651 input; the first two pushed their cumulative canaries over 100,000, while the third remained under at 93,476. | Context events and reviewer results in all three TASK-0109 run roots |
+| Worker per-try logs overwritten on infra retry | 0 worker-infra retries; 3 adjacent policy retries | No infra retry fired. All three TASK-0109 attempt-2 policy retries used the old controller's compatibility-log lifecycle; each attempt-1 archive preserved worker bytes, but none carried the complete reviewer/result/envelope set (FR-017). | All three TASK-0109 `attempts/1/` directories versus run roots |
+| 240-minute stale hard cap reclaims live work | 0 occurrences | No worker approached 240 minutes; the cap did not fire | TASK-0108 and all three TASK-0109 run-status/event slices |
 
 ## Active dogfood questions
 
 | Question | Evidence to collect | Current answer |
 |---|---|---|
-| Does self-hosted audit catch weak worker output before integration? | Worker packet, audit verdict/findings, gate result, integration event | Mixed: both attempt-1 auditors rejected green packets and identified meaningful proof gaps. Both attempt-2 auditors accepted after their ledgers cleared, but the first missed live event pollution and the second missed three explicit seed/acceptance regressions. Operator supervision quarantined both accepted packets before integration. |
-| Are role budgets realistic; were mid-run raises needed and honored? | Session/run-control files, timeout events, operator actions, elapsed time | Not for normal needs-fix cycles. The original TASK-0109 reviewers charged 76,916 + 62,600 = 139,516; the amended retry charged 82,896 + 68,806 = 151,702. Each individual review fit, each cumulative run terminalized its accepted result. Resumed implementers used 201,588 and 198,087 fresh input. No deadline raise was requested; the hard canary has no supported raise. |
+| Does self-hosted audit catch weak worker output before integration? | Worker packet, audit verdict/findings, gate result, integration event | Mixed and presently insufficient: all three attempt-1 auditors rejected green packets and found meaningful gaps. All three attempt-2 auditors accepted after their ledgers cleared, but successively missed live event pollution, three explicit seed regressions, then two literal hermeticity criteria. The sampled paired auditor repeated the third miss. Operator supervision quarantined all three accepted packets before integration. |
+| Are role budgets realistic; were mid-run raises needed and honored? | Session/run-control files, timeout events, operator actions, elapsed time | Variable. The first two TASK-0109 reviewer pairs charged 139,516 and 151,702 and terminalized accepted results. The seed-restored pair fit at 93,476, while its resumed implementer used 129,021 fresh input and the post-acceptance paired reviewer added 82,494. No deadline raise was requested; the hard canary has no supported raise. |
 | Is dispatch fair across parallel lanes at concurrency 3? | Ready time, dispatch time, start time, completion time per node | Not yet evaluable: recovery has only just promoted the serial bootstrap node. The parallel frontier is now eligible for the resumed autonomous loop. |
 | What manual operator work should the engine perform or surface? | Every intervention and missing/ambiguous status signal | In addition to launch work, deterministic packet recovery, immutable snapshotting, exact-tree integration, status-mutation attribution, flaky-test isolation, proof cross-binding, long-job polling, cumulative-token reconstruction, and false-event attribution all required manual operator work. |
 
@@ -773,7 +861,7 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | Task | Node | Outcome | Product attempts | Audit / recovery / integration tries | Worker run IDs | Gate / packet evidence |
 |---|---|---|---:|---:|---|---|
 | TASK-0108 | rel-00-contract | integrated as `41380c1b`; authoritative gate passed at 20:27:09Z | 1 | 4 / 2 / 4 | `RUN-20260813T170836Z-93780`; recovery `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256` | Immutable source snapshot; accepted imported packet/audit; final exact-tree 194/194; `rel-00-contract.gate-result.json` |
-| TASK-0109 | rel-01-per-try-logs | blocked for mandatory seed-restored retry; two accepted recovery packets quarantined before integration after operator caught FR-029 then FR-032 | 4 | 4 / 3 / 0 | `RUN-20260813T203430Z-96335`, `RUN-20260813T211009Z-78320`; accepted recoveries `...210341...`, `...212941...` | Four worker gates green; both final audits accepted then parked at `139516`/`151702`; both packet/audit pairs hash-bound in operator quarantine |
+| TASK-0109 | rel-01-per-try-logs | blocked after third accepted packet quarantined before integration; latest exact seed is restored but literal hermeticity proof is incomplete | 6 | 6 / 3 / 0 | `RUN-20260813T203430Z-96335`, `RUN-20260813T211009Z-78320`, `RUN-20260813T213939Z-24911`; accepted recoveries `...210341...`, `...212941...` | Six worker gates green; all three final audits accepted; latest primary charge 93,476; all three packets preserved in operator quarantine |
 | TASK-0110 | rel-02-try-hygiene | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0111 | rel-03-integrity-reclass | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0112 | rel-04-evidence-remedy | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
@@ -803,6 +891,7 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | 2026-08-13T21:05:30Z | TASK-0109 / rel-01-per-try-logs | operator quarantine | Accepted audit had missed FR-029's authoritative event-log pollution | Quarantined packet/audit intact, restored blocked lease, preserved candidate ref, and amended the task for a fresh hermetic retry; no integration attempted | `.singular-state/operator-quarantined-imports/TASK-0109/RUN-20260813T210341Z-RECOVERY-TASK-0109-29558/manifest.json` |
 | 2026-08-13T21:29:03Z | TASK-0109 / rel-01-per-try-logs | `escalate-infra` | Amended attempt-2 audit accepted; final refresh then failed provider-correct cumulative `151702 >= 100000` | Deterministic budget park. Stopped, preserved exact head `ed8fc1bc`, and used zero-model exact-head recovery with the breach explicit | `RUN-20260813T211009Z-78320` audit, attempts, final-refresh log, source snapshot |
 | 2026-08-13T21:34:00Z | TASK-0109 / rel-01-per-try-logs | operator quarantine | Accepted audit missed real-checkout lstat, ten-cycle low-disk, and live resume-fallback proof regressions | Quarantined second packet/audit intact, preserved candidate ref for evidence only, and hardened the task to mandate seed `08bcb2b0`; no integration attempted | `.singular-state/operator-quarantined-imports/TASK-0109/RUN-20260813T212941Z-RECOVERY-TASK-0109-19936/manifest.json` |
+| 2026-08-13T22:05:49Z | TASK-0109 / rel-01-per-try-logs | operator quarantine | Primary and paired accepted audits both missed explicit in-process fixture repetition `>=2` and literal incoming caller checkout/state/event identity | Retained STOP, revoked the third accepted result, preserved exact candidate `ede05b0e`, and quarantined its inbox packet before import/integration | Clarified third quarantine manifest `c01d6384...`, paired audit, exact-contract review |
 
 ## Evidence capture checklist
 
@@ -813,24 +902,25 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 
 ## Current active-state snapshot
 
-- `agent/integration` is at control checkpoint `014466d5`, which contains TASK-0108's exact product
+- `agent/integration` is at control checkpoint `fffb91fc`, which contains TASK-0108's exact product
   merge `41380c1b470585cbbbba2633a5fa564211893bff`. That merge tree matches the independently tested candidate
   and its parents are pre-integration target `e0c15c9f` plus audited worker `3fffc636` in that order.
-- STOP remains present after TASK-0109's terminal handoff; origin and Git-operation locks are absent and no
-  worker process remains. The general autonomous loop has not yet been restarted.
+- STOP remains present after TASK-0109's accepted handoff and operator quarantine; origin and Git-operation
+  locks are absent and no worker process remains. The general autonomous loop has not yet been restarted.
 - Gates: 1/18. `rel-00-contract` is authoritative/passed and TASK-0108 is `integrated`. TASK-0109 and its lease
-  are `blocked` pending a fresh run of the hermeticity amendment; the other 16 task files remain `ready`. The rel-07/08/09/11/12 parallel
+  are `blocked` pending literal hermeticity proof; the other 16 task files remain `ready`. The rel-07/08/09/11/12 parallel
   lanes would be frontier-eligible after resume, while rel-02 and the rest of the serial lane wait on TASK-0109.
 - Packets: the historical imported corpus is 107 plus TASK-0108's accepted recovery packet/audit. The
   recovery packet, gate evidence, decision, and integrated task status are retained as control-state evidence.
-  TASK-0109's two deterministic recoveries emitted accepted packets, but operator review quarantined both exact
-  packet/audit pairs before any integration; the active imported directory and inbox contain no TASK-0109 packet.
+  TASK-0109 produced three accepted packets (two deterministic recoveries and the seed-restored live run), but
+  operator review quarantined all three before any integration; the active imported directory and inbox contain
+  no TASK-0109 packet.
 - Resources: configured/effective slots are 3/3; current filesystem headroom is about 39 GiB with no capacity
   pressure.
 - Provider/runtime proof: the immutable 0.18.0 overlay changes only `engine/evidence-manifest.sh`, keeps raw
-  provider usage, charges coherent Codex cached replay correctly, and was active for all eight TASK-0109 role
-  calls. Effective runner/model were Codex and `gpt-5.6-sol`; the two final canaries used corrected fresh
-  totals 139,516 and 151,702. Push remains disabled.
+  provider usage, charges coherent Codex cached replay correctly, and was active for all twelve primary
+  TASK-0109 role calls plus the sampled paired review. Effective runner/model were Codex and `gpt-5.6-sol`;
+  the three final primary canaries used corrected fresh totals 139,516, 151,702, and 93,476. Push remains disabled.
 - No push, tag, publish, install, current-symlink/default flip, blind unpark, cherry-pick, or tracked driver
   engine patch occurred. All exceptional recovery and exact-tree proof actions are preserved in ignored,
   hash-indexed operator evidence.
@@ -845,9 +935,11 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 - [ ] Operator has reviewed the exact release diff and evidence.
 
 Recommendation: **not yet ready for rel-99 promotion**. Bootstrap recovery is complete and rel-00 is green,
-but 17 tasks remain, TASK-0109 is blocked for an amended fresh retry, and no release-candidate evidence exists.
-Two accepted TASK-0109 packets were quarantined rather than integrated. Restore the exact `08bcb2b0` seed,
-add only the hermetic event-state fix, preserve all prior proofs, then obtain a fresh audit and integrate/promote rel-01
+but 17 tasks remain, TASK-0109 is blocked again, and no release-candidate evidence exists. Three accepted
+TASK-0109 packets were quarantined rather than integrated. The latest candidate restores the exact `08bcb2b0`
+seed and contains the intended behavior, but must execute the hostile archive fixture exactly twice in one
+process and recursively guard literal incoming caller checkout/state/event paths—not a synthetic surrogate—
+after each, then obtain a fresh audit before integrating/promoting rel-01
 before resuming the eligible parallel lanes. Rel-99 must remain pending until every non-release gate is
 authoritative/passed, every park and material finding has explicit disposition, the exact release diff and
 synchronized version surfaces are green, the field-report canary and fresh-consumer proof pass, and the
