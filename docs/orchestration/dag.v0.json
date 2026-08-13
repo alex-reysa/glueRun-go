@@ -20,7 +20,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-00-contract"],
-      "requiredCompletion": "an infra retry leaves every prior try's worker log, runner result, and provider envelope on disk unchanged; the attempt archive carries the auditor log and per-try sidecars"
+      "requiredCompletion": "an infra retry leaves every prior try's worker log, runner result, and provider envelope unchanged; the archive carries all sidecars; singular status is observational before every state/scaffold mutation"
     },
     {
       "id": "rel-02-try-hygiene",
@@ -128,7 +128,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-06-terminal-handoff", "rel-11-supervised-job", "rel-12-identity-canon"],
-      "requiredCompletion": "two identical gate launches execute the consumer command once and share the result; identity drift forces fresh; a supervisor death reconciles to interrupted classified as gate infrastructure; evidence binding unchanged"
+      "requiredCompletion": "identical gates attach by exact identity; integration gates execute the exact staged tree in a disposable worktree and bind both parents; supervisor death reconciles interrupted; evidence binding stays unchanged"
     },
     {
       "id": "rel-14-run-status-v1",
