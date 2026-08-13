@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-13T21:38:04Z — TASK-0109 — unpark
+
+- Run: `ORIGIN-20260813T213804Z-23950`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: mandatory seed-restored retry: restore exact six owned files from preserved 08bcb2b0 candidate, add only hermetic state/event isolation, preserve real-checkout full-lstat, ten-cycle low-disk, and live resume-fallback proofs
+
 ### 2026-08-13T21:34:27Z — TASK-0109 — escalate-parked
 
 - Run: `RUN-20260813T212941Z-RECOVERY-TASK-0109-19936`
