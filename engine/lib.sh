@@ -6574,11 +6574,16 @@ singular_attempt_archive() {
   local dest="$run_dir/attempts/$n"
   mkdir -p "$dest"
   local f
-  for f in l2-active-prompt.md auditor-active-prompt.md last-message.json packet.json worker-codex.log \
+  for f in l2-active-prompt.md auditor-active-prompt.md last-message.json packet.json worker-codex.log auditor-codex.log \
            scope-check.log gate-check.json gate-check.log secret-scan.log audit.json; do
     if [[ -f "$run_dir/$f" ]]; then cp "$run_dir/$f" "$dest/$f"; fi
   done
   for f in "$run_dir"/decision-*.json; do
+    if [[ -f "$f" ]]; then cp "$f" "$dest/"; fi
+  done
+  for f in "$run_dir"/worker-attempt-"$n"-try-*.log \
+           "$run_dir"/*-attempt-"$n"-try-*runner-result.json \
+           "$run_dir"/*-attempt-"$n"-try-*.provider-envelope.raw; do
     if [[ -f "$f" ]]; then cp "$f" "$dest/"; fi
   done
   printf '%s\n' "${failure_class:-accepted}" >"$dest/failure.txt"
