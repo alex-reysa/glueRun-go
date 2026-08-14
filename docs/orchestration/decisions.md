@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-08-14T14:39:33Z — TASK-0115 — unpark
+
+- Run: `ORIGIN-20260814T143933Z-64396`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh reset for strict exact-base behavioral RED, immutable verifier, bounded no-follow control read, expiry ordering, and schema mirror
+
+### 2026-08-14T14:39:33Z — TASK-0111 — unpark
+
+- Run: `ORIGIN-20260814T143933Z-64397`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh reset after cumulative audit-token canary and stale manifest; recapture exact-base RED before consulting preserved seed
+
 ### 2026-08-14T14:26:50Z — TASK-0115 — escalate-parked
 
 - Run: `RUN-20260814T132932Z-92946`
