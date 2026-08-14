@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T04:15:47Z — TASK-0110 — unpark
+
+- Run: `ORIGIN-20260814T041546Z-15069`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh rel-02 rerun under verified FR-050/FR-052 overlay; prior primary acceptance revoked by paired findings; exact candidate evidence-only
+
 ### 2026-08-14T04:13:28Z — FR-050/FR-052 — frozen overlay selected per process
 
 - Authority: `operator-proxy:codex`; bounded runtime selection only.
