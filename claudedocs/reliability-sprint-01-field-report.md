@@ -56,6 +56,11 @@
 - Rel-02 composite runtime build/freeze: 2026-08-14T06:28:38Z–06:54:39Z; the fresh compact proof matrix
   passed, an independent reviewer returned PASS, and the exact one-file successor was recursively frozen
   301/301. It was not activated; STOP and the rounded-99% disk hold prevented any next-wave controller launch
+- Storage recovery and future guardrail: 2026-08-14T12:57:09Z–13:15:19Z; three inactive regenerable cache
+  roots, five obsolete Singular worktrees, and 35 exact manifest-bound generated Axon/EAS fixture roots were
+  removed without touching preserved branches, refs, evidence, overlays, videos, or the active Spokit TTS
+  worktree. The final fixture pass recovered 8,076,214,272 free bytes and the application metric fell to 97%;
+  bounded automatic storage hygiene was reserved for `TASK-0126` / `rel-17-storage-hygiene` in version 0.20
 
 ## Operator boundaries
 
@@ -163,6 +168,7 @@
 | 2026-08-14T06:28:38Z–06:41:18Z | rel-02 composite construction and proof restart | Exact one-file successor built; initial full-copy proof was stopped for space amplification, then rerun compactly | The first focused root and two mutation roots copied the repository's roughly 1.8 GiB `.git` store three times: exact sizes 1,931,036 + 1,930,576 + 1,930,576 KiB = 5,792,188 KiB (about 5.52 GiB). Free space fell from about 7.3 GiB to about 1.6 GiB and the application metric reached about 99.68% (rounded 100). After confirming zero processes/open handles, only those three exact roots were depth-first deleted. Their pre-restoration output was retained as explicitly noncanonical provenance; fresh compact syntax/anchor, focused TASK-0110, two-line mutation-sensitivity, and 14/14 FR-050/FR-052 canaries then passed. | Exact roots `singular-rel02-focused.dnFOtE`, `singular-rel02-mutation-1.H10sgm`, `singular-rel02-mutation-2.kzNWnk`; excluded inventory SHA-256 `79c4fcd5...`; canonical focused/mutation/V10 logs `c865313e...` / `4e4dddc7...` / `afeeaf37...` |
 | 2026-08-14T06:48:10Z–06:48:35Z | second durable scoped TMP cleanup | 2,503 older synthetic fixture roots removed; no controller work authorized | A pre-hashed 2,503-root manifest removed 456,925,184 allocated bytes of older `legacy-gluerun`, `legacy-pmgo-task9001`, and pre-V10 Singular fixtures. A first validator pass aborted before deletion on five 0755 roots; the corrected exact-path pass deleted all targets and gained 555,683,840 free bytes. STOP, empty inbox, clean Git state, both overlays, 3,983 protected temp roots, and all 28,713 video paths stayed invariant. This is the second durable cleanup record; the earlier TASK-0110 disk-watch cleanup remains the first. | New pre/postcondition SHA-256 `854fbb48...` / `e512338e...`, aborted-pass SHA-256 `8c693ca5...`; prior cleanup record SHA-256 `96239033...` |
 | 2026-08-14T06:52:23Z–06:54:39Z | rel-02 composite verification and freeze | Independent PASS; exact successor frozen; activation explicitly absent | At head `9c1af1ab`/tree `38960d88`, the 300-entry bundle differed from frozen v3 only at executable `engine/l1-drive.sh`; 299 other entries remained identical and `engine/evidence-manifest.sh` stayed `aabfd6d9...`. The fresh six-suite compatibility matrix passed. Independent review returned PASS with no unexpected secret-token matches, then all 301 filesystem objects were set `uchg` and post-freeze verification passed. Pre/post snapshots prove no install, current/default/symlink/config change or activation record; no later controller started. | Exact overlay `singular-0.18.0-canary-rel02-v1-try-hygiene-composite-20260814t062838z`; L1/bundle/delta SHA-256 `5533f114...` / `5cf82603...` / `d69a6d4d...`; independent review `92f0424b...`; post-freeze verification `10ea47b5...`; metadata `e5b04846...`; no-activation snapshots `78a3347a...` / `d42afb0a...` |
+| 2026-08-14T12:57:09Z–13:15:19Z | exact storage recovery under STOP | Capacity restored; no controller or release action | After fresh non-symlink/process/open-handle checks, only the descendants of three inactive regenerable Adobe/Telegram cache roots were cleared (2,139,144 KiB logical). Exactly five obsolete clean Singular worktrees were then removed and pruned (68,256 KiB upper bound) while all branches, candidate refs, and durable run evidence remained. Finally, an independently verified 35-path manifest removed abandoned generated Axon/npm/EAS fixtures: 16,496,136 KiB logical, conservative APFS estimate 6,862,112 KiB, observed free-space gain 8,076,214,272 bytes. All 35 roots are absent; STOP, empty inbox, Git state, frozen overlays, and the active Spokit TTS worktree remain intact. Free space reached 14,139,944,960 bytes and application usage fell from rounded 99% to rounded 97%. | Cleanup target/plan/result SHA-256 `29eb1763...` / `2ae187b4...` / `ac455fb5...`; independent 35-path PASS; preserved TASK-0115/TASK-0116 branch and candidate refs |
 
 ## Finding ledger
 
@@ -1372,8 +1378,11 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   Guard samples later straddled the 98.5% rounding boundary without a gate failure or persisted drift, so every
   later drive still requires the same explicit capacity preflight. This observation is not a new rel-99 release
   blocker. A later, separate exact cleanup removed another 2,503 older synthetic fixture roots and gained
-  555,683,840 free bytes, but the 2026-08-14T07:03:29Z sample was still 98.649% (rounded 99). No next-wave
-  controller was launched.
+  555,683,840 free bytes, but the 2026-08-14T07:03:29Z sample was still 98.649% (rounded 99). The operator then
+  cleared only three inactive regenerable cache roots and five exact obsolete worktrees before an independently
+  verified 35-root generated-fixture pass recovered another 8,076,214,272 free bytes. The 13:15:19Z result
+  recorded 14,139,944,960 free bytes and 97.140% used (rounded 97). No next-wave controller was launched during
+  cleanup; the capacity hold is operationally cleared, while a fresh preflight remains mandatory.
 
 ### FR-054 — disposable proof roots copy the full Git object store and amplify disk use
 
@@ -1403,8 +1412,11 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Resolution for this run: mitigated, engine behavior open. The proof restarted with compact fixtures and fresh
   canonical syntax/anchor, TASK-0110 focused, independently mutation-sensitive, FR-050/FR-052 14-case, and
   six-suite compatibility logs; independent review returned PASS. The composite was frozen only afterward.
-  Current capacity still rounds 99, so the finding remains an operational next-wave blocker until a fresh
-  below-threshold buffer exists; it is not by itself a new rel-99 product-release blocker.
+  The later exact 35-root generated-fixture cleanup restored a rounded-97 application metric, so this is no
+  longer an operational next-wave capacity blocker. The permanent behavior remains open but is deliberately
+  outside the active 0.19 DAG: commit `f77681e8` reserves the bounded, default-hard-stop/opt-in-cleaner contract
+  as `TASK-0126` / `rel-17-storage-hygiene` for version 0.20. It is not by itself a new rel-99 product-release
+  blocker.
 
 ## Known-issue observation log
 
@@ -1493,8 +1505,10 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   recorded recovery, retry pre-head `3a104dce6ec2d38757bbc8cffc6a8cf92194d551` merged exact worker
   `7ca9c5c1` as product merge `1b69af277f96f3f1b5cf3c904abebddfa4074469`/tree
   `923a88ca445c0684f66905f9ee8ab0cb3f483baf`. Post-integration checkpoint `93b13a47` and rel-02
-  promotion-evidence commit `9c1af1abff997f0b7ce9c162b47d75838bc34216` followed; the latter is the current
-  `agent/integration` HEAD with tree `38960d888765884657a294e2bae9cc1ba778558d`. This history descends from the v3
+  promotion-evidence commit `9c1af1abff997f0b7ce9c162b47d75838bc34216`, composite-report checkpoint
+  `8bdfb88bb91d2c3eaa05b32fe92ed8ccb1b15501`, and bounded-storage-hygiene plan commit
+  `f77681e8f0b54e4059e4d4e211e85ad9e62f25af` followed; the latter is the current
+  `agent/integration` HEAD with tree `76b2a5f657770ff5dc0c916290d6c77e2219bf6f`. This history descends from the v3
   activation-decision checkpoint `2bf02d3a935bf89c7630caf4d9bf9e15a66e95b1`, recovery-contract checkpoint
   `03a66438d24431fb62427b336aeabd68df2b3019`, amended-wave launch
   `97862d9370649c90ae67c825ed5d14ca3d37e530`, and first-wave control
@@ -1505,6 +1519,9 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   proof, and freeze. At the current audit no Singular auto, reconcile, drive/worker writer, integration/gate
   process, origin lock, or Git-operation lock exists. The composite was not activated, TASK-0111/TASK-0115/
   TASK-0116 were not launched, and the next-wave controller-launch count is zero.
+- All five obsolete child worktrees are absent and only the main worktree remains registered. The integrated
+  TASK-0108/TASK-0109/TASK-0110 heads remain reachable from integration; unintegrated TASK-0115/TASK-0116
+  heads remain on their exact branches and create-only candidate refs, with byte-identical durable run evidence.
 - Gates are now 3/18. TASK-0108/TASK-0109/TASK-0110 are `integrated`, and rel-00/rel-01/rel-02 are
   authoritatively passed under STOP;
   TASK-0115/TASK-0116 remain `blocked` under explicit amended contracts; the other 13 sprint tasks are
@@ -1525,9 +1542,9 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   from one exact base in the same second. The later TASK-0110-only reset ran from exact base `94876831` under v3,
   stayed source/scope clean, and produced accepted `7ca9c5c1`. Its exact packet is imported; the first integration
   failed only the environmental console disk-watch condition, and the retry passed 195/195/source clean before
-  creating exact merge `1b69af27`. Independent 2026-08-14T07:03:29Z capacity sampling found 6,678,237,184
-  free bytes and 98.649% used, which still rounds to the console/controller hold threshold of 99; configured
-  concurrency therefore does not authorize a launch.
+  creating exact merge `1b69af27`. The final 2026-08-14T13:15:19Z exact cleanup result recorded
+  14,139,944,960 free bytes and 97.140% used (rounded 97), clearing the console/controller capacity hold.
+  Configured concurrency is available again, but STOP and the explicit next-wave handoff still prevent launch.
 - The last actuated L1 runtime was the absolute, recursively `uchg` v3 overlay
   `singular-0.18.0-canary-rel01-v3-manifest-bind-fr050-20260814t025814z`, selected only in the relevant
   `SINGULAR_ENGINE_HOME` process with existing-packet auto-heal OFF. It differs from frozen rel-01-v2
@@ -1591,12 +1608,12 @@ agreement. Its first staged integration failed closed at 194/195 only on the env
 watch, then left no merge residue. Exact fixture cleanup restored the application metric to 98% and the focused
 console suite passed 275/275; the fresh full integration then passed 195/195 and created exact merge
 `1b69af27`. Rel-02 promotion independently passed another 195/195 and its authoritative v1 gate validates.
-The exact composite runtime is now independently verified and frozen, but remains unactivated; the current
-rounded-99 disk sample prevents its next-wave selection. FR-047 is
+The exact composite runtime is now independently verified and frozen, but remains unactivated; exact cleanup
+restored a rounded-97 capacity buffer while STOP still prevents its next-wave selection. FR-047 is
 assigned to rel-06 and FR-049 to the rel-99 operator-disposition
-inventory; FR-048/FR-051 and the permanent FR-050/FR-052 remedies remain release blockers. FR-053 is
-operationally resolved for the completed integration retry; FR-054 is a current next-wave capacity blocker,
-not a new product-release blocker. V3 contains the fresh native L1 binding/secret-ordering path and the frozen
+inventory; FR-048/FR-051 and the permanent FR-050/FR-052 remedies remain release blockers. FR-053 and the
+immediate FR-054 capacity incident are operationally resolved; the permanent bounded cleaner is reserved for
+0.20 TASK-0126 and is not a new 0.19 product-release blocker. V3 contains the fresh native L1 binding/secret-ordering path and the frozen
 composite adds the two promoted per-try cleanup lines, but rel-05 has not yet shipped the shared native/
 deterministic finalizer. Rel-99 must remain
 pending until every non-release gate is
