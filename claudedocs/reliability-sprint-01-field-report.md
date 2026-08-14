@@ -135,6 +135,7 @@
 | 2026-08-14T03:15:00Z | fresh-wave operator-proxy disposition | All three L1 processes terminal; STOP retained | Rejected all three outputs as integration inputs. TASK-0110/TASK-0116 accepted packets remained recoverably quarantined; TASK-0115 had no accepted or inbox packet, and its needs-review root remained evidence-only. Exact heads were pinned under create-only operator-candidate refs, task contracts were re-amended for the escaped proofs, and no import, integration, gate promotion, push, or release action occurred. | Top decision entry, quarantine manifests, three candidate refs, amended task/DAG state |
 | 2026-08-14T04:06:12Z | FR-050/FR-052 operator-overlay checkpoint | One-file v3 runtime independently verified and recursively frozen; not activated | Predecessor canaries reproduced both stale accepted-packet binding and import of a secret-bearing inbox after root quarantine. V10 then passed 14/14 clean/secret/scanner-source/stamp/refresh/binding/interruption cases; the exact-byte six-suite compatibility run passed. The 300-entry overlay differs from frozen rel-01-v2 only at executable `engine/l1-drive.sh`; all 301 filesystem objects are `uchg`. Installed defaults, config, symlinks, tracked paths, predecessor bytes, and activation records remained unchanged. | Overlay l1 SHA-256 `ebec05d7...`; bundle `79d255df...`; metadata `71c08fd0...`; V10 summary `cf1cd004...`; post-freeze verification `53cd2874...` |
 | 2026-08-14T04:12:04Z | tracked recovery-contract checkpoint | Contract audit PASS; control branch clean except this report | Committed the independently audited rel-02/rel-05/rel-06/rel-07/rel-08/rel-99 recovery amendments, DAG ownership, plan, and counter-decisions as `03a66438`/tree `b8fba8c2`. The contract now covers native/waiver/existing-packet finalization, STOP-safe reset-only cleanup, frozen-base run-control proof, literal reviewer `probe`, and paired-audit operator disposition. STOP remained present; no inbox, activation, rerun, import, integration, or promotion occurred. | Commit `03a66438d24431fb62427b336aeabd68df2b3019`; final amendment audit; DAG/task/parser/layout/planning/diagnostic checks |
+| 2026-08-14T04:13:28Z | v3 per-process activation preflight | Frozen overlay selected without persistent default/config change | At clean head `2f0d5e62`, repeated frozen verification and L1 syntax, version, DAG validation, and read-only status all passed through the exact overlay environment. HEAD, tracked status, STOP, inbox, and authoritative events remained byte-identical. Existing-packet auto-heal is forced OFF until permanent rel-05; no task was unparked or run. | Activation record SHA-256 `4da4846e...`; status output `3998a3d0...`; frozen verification output `99d30ccb...`; unchanged event SHA `61ed7dd3...` |
 
 ## Finding ledger
 
@@ -1280,14 +1281,16 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Evidence/containment: static ordering and the integrated quarantine contract are sufficient to construct the
   escape; STOP and an empty inbox currently prevent import. The two fresh accepted packets were manually removed
   for independent findings, not by the artifact scan.
-- Resolution: release-blocking. A verified, recursively frozen, not-yet-activated v3 operator overlay adds a
+- Resolution: release-blocking. A verified, recursively frozen v3 operator overlay is now selected per process
+  and adds a
   quiet packet-only read-only scan before
   atomic acceptance stamping, refreshes/verifies the accepted packet manifest binding, and publishes inbox only
   afterward for fresh native L1 acceptance; all pre-rel-05 drives explicitly disable unsafe existing-packet
   auto-heal. The permanent TASK-0113 contract now converges native and deterministic recovery publication on
   the same finalizer. Predecessor import reproduction, V10's 14/14 patched cases, six compatibility suites,
-  exact one-file inventory, recursive `uchg`, and no-activation snapshot all passed independently. Per-process
-  activation and fresh TASK-0110 proof remain mandatory; rel-99 stays blocked regardless of the rest of the wave.
+  exact one-file inventory, recursive `uchg`, no-activation snapshot, and per-process read-only activation
+  preflight all passed independently. Fresh TASK-0110 proof and permanent rel-05 integration remain mandatory;
+  rel-99 stays blocked regardless of the rest of the wave.
 
 ## Known-issue observation log
 
@@ -1367,10 +1370,11 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 
 ## Current active-state snapshot
 
-- The control branch is checkpointed at
-  `03a66438d24431fb62427b336aeabd68df2b3019`/tree
-  `b8fba8c2629277b098265642d5179bed60832a5b` on `agent/integration`, descending from amended-wave launch
-  head `97862d9370649c90ae67c825ed5d14ca3d37e530` and first-wave control
+- The activation-decision checkpoint immediately before this report is
+  `2bf02d3a935bf89c7630caf4d9bf9e15a66e95b1`/tree
+  `33ed3d5c2c93ad8e6cdf993db73959a26a191627` on `agent/integration`. It descends from recovery-contract
+  checkpoint `03a66438d24431fb62427b336aeabd68df2b3019`, amended-wave launch
+  `97862d9370649c90ae67c825ed5d14ca3d37e530`, and first-wave control
   head `9f460e09bcca91ec9ee3446896edc5340a0ed1ae`. Ancestor merge `9d9c41f2`
   has the exact TASK-0109 tree, expected parents, and six owned paths; rel-01 promotion remains bound to
   exact launch checkpoint `9c1f2e7b`/tree-index `af2f0cce`.
@@ -1388,16 +1392,16 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 - Configured/effective capacity remains 3/3 with about 31.4 GiB free. The fresh direct wave reset and launched
   TASK-0110/TASK-0115/TASK-0116 from one exact base in the same second; all three stayed scope/source clean and
   no packet was imported or integrated.
-- Runtime remains the absolute, recursively `uchg` overlay
-  `singular-0.18.0-canary-rel01-v2-b874a874`, selected only through `SINGULAR_ENGINE_HOME`. It differs from
-  the prior verified overlay in exactly the three promoted rel-01 controller paths and preserves the
-  provider-correct `evidence-manifest.sh` patch. Its 300-entry manifest is
-  `eb42e919a61232473f28a97c3370fa3925d589988fd8ae3023698e112cfcf25c`; activation record is
-  `b4eb1d08e1e7ecf06fff1082b0fdd809dc32f53d8f66c52d8bf941c258b55588`. Both waves verified that
+- Runtime is now the absolute, recursively `uchg` v3 overlay
+  `singular-0.18.0-canary-rel01-v3-manifest-bind-fr050-20260814t025814z`, selected only through
+  `SINGULAR_ENGINE_HOME` with existing-packet auto-heal OFF. It differs from the frozen rel-01-v2 predecessor
+  only at `engine/l1-drive.sh`; the other 299 entries, including the provider-correct
+  `evidence-manifest.sh`, are byte-identical. Its bundle is `79d255df...`; activation record is
+  `4da4846e...`. Both waves verified that
   Codex cached-input charging is correct, while reproducing the fixed cumulative canary's terminal-handoff
-  defect at 101,302, 178,060, and now 147,124 fresh primary-reviewer input. The v3 one-file mitigation is
-  independently verified and recursively frozen but not yet active: l1 SHA `ebec05d7...`, bundle
-  `79d255df...`, metadata `71c08fd0...`, and post-freeze proof `53cd2874...`.
+  defect at 101,302, 178,060, and now 147,124 fresh primary-reviewer input. The active per-process v3
+  mitigation is independently verified and recursively frozen: l1 SHA `ebec05d7...`, bundle `79d255df...`,
+  metadata `71c08fd0...`, and post-freeze proof `53cd2874...`.
 - No push, tag, publish, install, current-symlink/default flip, blind unpark, old-candidate cherry-pick, or
   tracked driver engine patch occurred. All exceptional recovery and exact-tree proof actions remain in
   ignored, hash-indexed operator evidence.
@@ -1422,8 +1426,9 @@ STOP. Neither three-lane wave produced an import or integration. The fresh wave'
 preserved and rejected as authority; its two accepted packets were quarantined, while TASK-0115 produced no
 accepted or inbox packet and retained only a needs-review evidence root. FR-047 is assigned to rel-06 and FR-049
 to the rel-99 operator-disposition inventory; the remaining FR-048/FR-050/FR-051/FR-052 proof and runtime
-defects remain release blockers, including the live-enabled packet-secret containment escape whose verified,
-frozen v3 overlay mitigation is not yet activated. Rel-99 must remain pending until every non-release gate is
+defects remain release blockers, including the live-enabled packet-secret containment escape now contained for
+fresh native L1 by the active per-process v3 overlay but not yet fixed permanently in rel-05. Rel-99 must remain
+pending until every non-release gate is
 authoritative/passed, every park and material finding has explicit disposition, the exact release diff and
 synchronized version surfaces are green, the field-report canary and fresh-consumer proof pass, and the
 hash-bound human-gate request is reviewed. No push, tag, publish, install, default flip, or release promotion
