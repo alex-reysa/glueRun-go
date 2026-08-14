@@ -2,6 +2,27 @@
 
 ## Decision Log
 
+### 2026-08-14T23:16:50Z — TASK-0120 — unpark
+
+- Run: `ORIGIN-20260814T231650Z-55804`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh reset required after import-only RED; legacy binding parity must execute before RED
+
+### 2026-08-14T23:16:50Z — TASK-0115 — unpark
+
+- Run: `ORIGIN-20260814T231650Z-55854`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh reset required after seed-materialization barrier violation; origin marker is mandatory
+
+### 2026-08-14T23:16:49Z — TASK-0112 — unpark
+
+- Run: `ORIGIN-20260814T231649Z-55805`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh reset required after structural missing-helper RED; router-level behavioral RED is mandatory
+
 ### 2026-08-14T22:59:21Z — TASK-0112 — decide:retry
 
 - Run: `RUN-20260814T225643Z-30248`
