@@ -169,6 +169,8 @@
 | 2026-08-14T06:48:10Z–06:48:35Z | second durable scoped TMP cleanup | 2,503 older synthetic fixture roots removed; no controller work authorized | A pre-hashed 2,503-root manifest removed 456,925,184 allocated bytes of older `legacy-gluerun`, `legacy-pmgo-task9001`, and pre-V10 Singular fixtures. A first validator pass aborted before deletion on five 0755 roots; the corrected exact-path pass deleted all targets and gained 555,683,840 free bytes. STOP, empty inbox, clean Git state, both overlays, 3,983 protected temp roots, and all 28,713 video paths stayed invariant. This is the second durable cleanup record; the earlier TASK-0110 disk-watch cleanup remains the first. | New pre/postcondition SHA-256 `854fbb48...` / `e512338e...`, aborted-pass SHA-256 `8c693ca5...`; prior cleanup record SHA-256 `96239033...` |
 | 2026-08-14T06:52:23Z–06:54:39Z | rel-02 composite verification and freeze | Independent PASS; exact successor frozen; activation explicitly absent | At head `9c1af1ab`/tree `38960d88`, the 300-entry bundle differed from frozen v3 only at executable `engine/l1-drive.sh`; 299 other entries remained identical and `engine/evidence-manifest.sh` stayed `aabfd6d9...`. The fresh six-suite compatibility matrix passed. Independent review returned PASS with no unexpected secret-token matches, then all 301 filesystem objects were set `uchg` and post-freeze verification passed. Pre/post snapshots prove no install, current/default/symlink/config change or activation record; no later controller started. | Exact overlay `singular-0.18.0-canary-rel02-v1-try-hygiene-composite-20260814t062838z`; L1/bundle/delta SHA-256 `5533f114...` / `5cf82603...` / `d69a6d4d...`; independent review `92f0424b...`; post-freeze verification `10ea47b5...`; metadata `e5b04846...`; no-activation snapshots `78a3347a...` / `d42afb0a...` |
 | 2026-08-14T12:57:09Z–13:15:19Z | exact storage recovery under STOP | Capacity restored; no controller or release action | After fresh non-symlink/process/open-handle checks, only the descendants of three inactive regenerable Adobe/Telegram cache roots were cleared (2,139,144 KiB logical). Exactly five obsolete clean Singular worktrees were then removed and pruned (68,256 KiB upper bound) while all branches, candidate refs, and durable run evidence remained. Finally, an independently verified 35-path manifest removed abandoned generated Axon/npm/EAS fixtures: 16,496,136 KiB logical, conservative APFS estimate 6,862,112 KiB, observed free-space gain 8,076,214,272 bytes. All 35 roots are absent; STOP, empty inbox, Git state, frozen overlays, and the active Spokit TTS worktree remain intact. Free space reached 14,139,944,960 bytes and application usage fell from rounded 99% to rounded 97%. | Cleanup target/plan/result SHA-256 `29eb1763...` / `2ae187b4...` / `ac455fb5...`; independent 35-path PASS; preserved TASK-0115/TASK-0116 branch and candidate refs |
+| 2026-08-14T15:53:12Z–16:13:29Z | `RUN-20260814T155312Z-23686` | TASK-0111 accepted under the frozen rel-02 composite; import held for explicit paired-accounting disposition | Exact candidate `eec44d4ff2e4c0460a17952f6c8a485217cbf7ce` retained the two reviewed production blobs, strengthened only the owned test, and passed its focused/combined/host gates with source integrity verified. The primary auditor accepted with zero findings at 47,174 fresh input. The forced post-accept paired auditor independently accepted with agreement and zero findings, using 133,678 fresh input. Root, manifest, and inbox bind the same 3,361-byte packet at SHA-256 `f35afe6ebb36f5588ada25e2abd11efb60692542f6aa2db0cca609a3cdc998fd`. Because the paired hook is post-accept observability, its usage is not part of the primary 100,000-token canary and its artifacts are not in the pre-pair manifest; STOP holds import until rel-99 explicitly records that separate accounting. | Candidate/gate/audit/manifest/paired artifacts; audit SHA-256 `ebfd5eb6...`; manifest `a1e1c09f...`; paired record `1d85f9f4...`; inbox packet `f35afe6e...` |
+| 2026-08-14T15:53:28Z–15:56:02Z | `RUN-20260814T155328Z-24392` | TASK-0115 recovery rejected before product work | The canonical 86-byte RED failed inside OpenSSL before the supervised child started, so it was an invalid setup failure rather than the required behavioral RED. The origin stopped the retry; no production/schema edit, seed read, audit, canary, paired review, commit, or inbox packet followed. The failed scratch worktree was later removed after its exact evidence and recovery contract were preserved. | RED SHA-256 `87c1ba7b...`; identical host-gate bytes; run evidence; amended TASK-0115 sixth recovery boundary |
 
 ## Finding ledger
 
@@ -1418,6 +1420,30 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   as `TASK-0126` / `rel-17-storage-hygiene` for version 0.20. It is not by itself a new rel-99 product-release
   blocker.
 
+### FR-055 — post-accept paired-review cost is outside the primary canary and accepted manifest
+
+- First seen: 2026-08-14T13:35:57Z; frequency: 2/2 forced paired reviews in the rel-03/07/08 recovery waves
+  completed after native acceptance and outside the accepted evidence-manifest refresh.
+- Classification: known post-accept observability/accounting boundary; severity: medium; impact: product
+  acceptance remains valid, but release evidence can otherwise imply that every reviewer was manifest-bound
+  and below the primary 100,000-token canary.
+- Symptom: TASK-0111's primary reviewer used 47,174 fresh input and passed the primary canary. Its distinct
+  forced paired reviewer then used 133,678 fresh input, accepted with agreement and zero findings, and wrote
+  its record/event after the accepted packet/manifest/inbox transaction. TASK-0116 similarly used 57,129
+  primary plus 88,135 paired fresh input. The current manifest contract accounts only the primary reviewer;
+  summing the paired pass into that canary or claiming it is already manifest-bound are both inaccurate.
+- Expected: every field report and rel-99 disposition states the two ledgers separately: primary input-minus-
+  cache is acceptance policy, while paired usage/verdict is post-accept observability. Any future policy that
+  makes paired review authoritative or manifest-bound must add a new finalization transaction and its own
+  explicit budget rather than silently reinterpreting accepted evidence.
+- Evidence/containment: TASK-0111 primary and paired runner results record 47,174 and 133,678 fresh input;
+  `paired-audit.json` is accepted with `agreement=true`, `disagreement=false`, and zero findings. The accepted
+  3,361-byte packet remains byte-identical across root/inbox/manifest at SHA-256 `f35afe6e...`. STOP holds both
+  new accepted packets out of import while this accounting disposition is checkpointed.
+- Resolution: product-PASS, governance hold only. Record the separate paired cost and clean verdict in the
+  rel-99 inventory before import/release review. Do not reject the product or mutate the accepted transaction;
+  keep any permanent combined-budget/manifest extension in a later explicitly scoped task.
+
 ## Known-issue observation log
 
 These are cost/frequency measurements, not new discoveries.
@@ -1446,12 +1472,12 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | TASK-0108 | rel-00-contract | integrated as `41380c1b`; authoritative gate passed at 20:27:09Z | 1 | 4 / 2 / 4 | `RUN-20260813T170836Z-93780`; recovery `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256` | Immutable source snapshot; accepted imported packet/audit; final exact-tree 194/194; `rel-00-contract.gate-result.json` |
 | TASK-0109 | rel-01-per-try-logs | integrated as `9d9c41f2`; authoritative gate passed at 00:47:13Z under STOP | 8 | 7 / 3 / 1 (+1 promotion) | Prior three run IDs plus terminal `RUN-20260813T221358Z-8581`; accepted recoveries `...210341...`, `...212941...`; integration `ORIGIN-20260813T230100Z-TASK0109-NATIVE`; promotion `ORIGIN-20260813T235754Z-8483` | Exact six-file `b874a874` accepted with no findings and charge 86,301; native staged integration and exact-head promotion each passed 195/195; v1 gate/hash bindings validate, fake events still eight |
 | TASK-0110 | rel-02-try-hygiene | integrated as exact merge `1b69af27`; authoritative rel-02 gate passed | 4 | 2 primary (+2 paired) / 0 / 2 (1 environmental red, 1 green) + 1 promotion | `RUN-20260814T010432Z-76912`; rejected `RUN-20260814T022422Z-15250`; accepted `RUN-20260814T041625Z-15168`; integrations `ORIGIN-20260814T045100Z-TASK0110-NATIVE` and `...053240Z...R2`; promotion `ORIGIN-20260814T055942Z-33888` | Exact three-file candidate and packet/audit bindings retained; first staged gate was 194/195 only on unchanged console health at 99% disk; cleanup restored 98%; retry and promotion each passed fresh 195/195; exact merge parents/tree/delta and v1 gate/task/upstream/source/log/report bindings all validate |
-| TASK-0111 | rel-03-integrity-reclass | ready; frontier-eligible after rel-02 promotion, not dispatched | 0 | 0 | — | — |
+| TASK-0111 | rel-03-integrity-reclass | accepted at exact candidate `eec44d4f`; import held only for FR-055 accounting disposition | 6 | 5 primary (+1 paired) / 0 / 0 | failed `RUN-20260814T132935Z-93314`; failed `RUN-20260814T144108Z-64620`; accepted `RUN-20260814T155312Z-23686` | Fresh RED and exact recovery-seed materialization; focused/combined/host gates green; source clean; primary and paired accepted with zero findings; root/manifest/inbox packet SHA `f35afe6e...` |
 | TASK-0112 | rel-04-evidence-remedy | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0113 | rel-05-manifest-remedy-bound | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0114 | rel-06-terminal-handoff | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
-| TASK-0115 | rel-07-run-control | blocked; fresh retry added signed v1 authority but did not satisfy fresh-RED or timeout-0 parity; no accepted/inbox packet | 5 | 4 / 0 / 0 | `RUN-20260814T010432Z-76911`; fresh `RUN-20260814T022422Z-15249` | Old `68c48b4a` threat-model ref/snapshot retained; fresh `032a32c0` gate green but final refresh failed `147124 >= 100000`; accepted audit escaped FR-051; needs-review packet and create-only candidate ref retained as evidence |
-| TASK-0116 | rel-08-route-transcript | blocked; fresh accepted packet revoked because `review` did not prove the literal unpinned `probe`; quarantined | 3 | 3 / 0 / 0 | `RUN-20260814T010432Z-76945`; fresh `RUN-20260814T022422Z-15254` | Old `98628d0d` seed retained; fresh `c5a2842a` gate green/source clean and primary 52,620 fresh, but FR-048 escaped; quarantine/candidate ref retained, no import |
+| TASK-0115 | rel-07-run-control | ready under the sixth recovery boundary; latest run stopped on invalid OpenSSL setup RED, with no product/schema edit or packet | 13 | 5 primary / 0 / 0 | prior runs plus `RUN-20260814T132932Z-92946`, `RUN-20260814T144110Z-64875`, and `RUN-20260814T155328Z-24392` | Exact `a2cc125a` 12-file recovery tree retained; latest 86-byte setup failure is evidence-only; failed scratch worktree removed; next run must produce the child-started behavioral RED before seed access |
+| TASK-0116 | rel-08-route-transcript | accepted at exact candidate `8e78b89b`; import held with TASK-0111 for FR-055 disposition | 4 | 4 primary (+1 paired) / 0 / 0 | prior two runs plus accepted `RUN-20260814T132934Z-93231` | Literal `probe` recovery passed exact scope/gates/source checks; primary and paired accepted with zero findings; accepted inbox packet SHA `2b6b3b16...` |
 | TASK-0117 | rel-09-l1-lease-liveness | ready; frontier-eligible after rel-00 promotion | 0 | 0 / 0 / 0 | — | — |
 | TASK-0118 | rel-10-failure-domains | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0119 | rel-11-supervised-job | ready; frontier-eligible after rel-00 promotion | 0 | 0 / 0 / 0 | — | — |
@@ -1498,64 +1524,27 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 
 ## Current active-state snapshot
 
-- The fresh TASK-0110 reset ran from exact control checkpoint
-  `9487683176cd5a93abddae9ffdce9b84532e0ac2`/tree
-  `949e77752af11ca4ba277b14203a50405fb86cf3`. Acceptance/report evidence was checkpointed as
-  `b042f8c4`, and native import produced control checkpoint `72726cee`. After one environmental red and its
-  recorded recovery, retry pre-head `3a104dce6ec2d38757bbc8cffc6a8cf92194d551` merged exact worker
-  `7ca9c5c1` as product merge `1b69af277f96f3f1b5cf3c904abebddfa4074469`/tree
-  `923a88ca445c0684f66905f9ee8ab0cb3f483baf`. Post-integration checkpoint `93b13a47` and rel-02
-  promotion-evidence commit `9c1af1abff997f0b7ce9c162b47d75838bc34216`, composite-report checkpoint
-  `8bdfb88bb91d2c3eaa05b32fe92ed8ccb1b15501`, and bounded-storage-hygiene plan commit
-  `f77681e8f0b54e4059e4d4e211e85ad9e62f25af` followed; the latter is the current
-  `agent/integration` HEAD with tree `76b2a5f657770ff5dc0c916290d6c77e2219bf6f`. This history descends from the v3
-  activation-decision checkpoint `2bf02d3a935bf89c7630caf4d9bf9e15a66e95b1`, recovery-contract checkpoint
-  `03a66438d24431fb62427b336aeabd68df2b3019`, amended-wave launch
-  `97862d9370649c90ae67c825ed5d14ca3d37e530`, and first-wave control
-  head `9f460e09bcca91ec9ee3446896edc5340a0ed1ae`. Ancestor merge `9d9c41f2`
-  has the exact TASK-0109 tree, expected parents, and six owned paths; rel-01 promotion remains bound to
-  exact launch checkpoint `9c1f2e7b`/tree-index `af2f0cce`.
-- STOP remained present through the successful integration retry, authoritative rel-02 promotion, composite
-  proof, and freeze. At the current audit no Singular auto, reconcile, drive/worker writer, integration/gate
-  process, origin lock, or Git-operation lock exists. The composite was not activated, TASK-0111/TASK-0115/
-  TASK-0116 were not launched, and the next-wave controller-launch count is zero.
-- All five obsolete child worktrees are absent and only the main worktree remains registered. The integrated
-  TASK-0108/TASK-0109/TASK-0110 heads remain reachable from integration; unintegrated TASK-0115/TASK-0116
-  heads remain on their exact branches and create-only candidate refs, with byte-identical durable run evidence.
-- Gates are now 3/18. TASK-0108/TASK-0109/TASK-0110 are `integrated`, and rel-00/rel-01/rel-02 are
-  authoritatively passed under STOP;
-  TASK-0115/TASK-0116 remain `blocked` under explicit amended contracts; the other 13 sprint tasks are
-  `ready`—12 non-release tasks plus rel-99.
-- The imported corpus is now 110 product packets plus 110 audit sidecars. The active inbox is empty; imported
-  `RUN-20260814T041625Z-15168.json` remains byte-identical to its accepted root at SHA-256 `264577d6...`, and
-  its imported audit is SHA-256 `40cb23e2...`.
-  Five packets are recoverably quarantined: three superseded TASK-0109 recoveries plus the earlier rejected
-  TASK-0110 and TASK-0116 packets. Rejected exact candidates `fa95b8dc`, `032a32c0`, and `c5a2842a` remain under create-only
-  operator refs alongside the two first-wave refs; accepted exact candidate `7ca9c5c1` is separately pinned at
-  `refs/singular/operator-candidates/TASK-0110/RUN-20260814T041625Z-15168-attempt-1`. TASK-0110's old
-  uncommitted diff and all first-wave snapshots remain inventory-bound. The older artifacts are not acceptance,
-  import, integration, or promotion authority; only the current exact packet/audit were imported. The first
-  staged integration created no merge commit; retry merge `1b69af27` has exact parents/tree/three-path delta.
-  The authoritative event log has 3,373 lines and still contains exactly the original eight `resume-run`
-  fixture events.
-- Configured concurrency remains 3 and no slot is in use. The earlier direct wave launched TASK-0110/TASK-0115/TASK-0116
-  from one exact base in the same second. The later TASK-0110-only reset ran from exact base `94876831` under v3,
-  stayed source/scope clean, and produced accepted `7ca9c5c1`. Its exact packet is imported; the first integration
-  failed only the environmental console disk-watch condition, and the retry passed 195/195/source clean before
-  creating exact merge `1b69af27`. The final 2026-08-14T13:15:19Z exact cleanup result recorded
-  14,139,944,960 free bytes and 97.140% used (rounded 97), clearing the console/controller capacity hold.
-  Configured concurrency is available again, but STOP and the explicit next-wave handoff still prevent launch.
-- The last actuated L1 runtime was the absolute, recursively `uchg` v3 overlay
-  `singular-0.18.0-canary-rel01-v3-manifest-bind-fr050-20260814t025814z`, selected only in the relevant
-  `SINGULAR_ENGINE_HOME` process with existing-packet auto-heal OFF. It differs from frozen rel-01-v2
-  only at `engine/l1-drive.sh`; the other 299 entries, including the provider-correct
-  `evidence-manifest.sh`, are byte-identical. Its bundle is `79d255df...`; activation record is
-  `4da4846e...`. Both waves verified that
-  Codex cached-input charging is correct, while reproducing the fixed cumulative canary's terminal-handoff
-  defect at 101,302, 178,060, and now 147,124 fresh primary-reviewer input. The active per-process v3
-  mitigation is independently verified and recursively frozen: l1 SHA `ebec05d7...`, bundle `79d255df...`,
-  metadata `71c08fd0...`, and post-freeze proof `53cd2874...`. The fresh native acceptance exercised that
-  overlay's clean path end-to-end and left root/manifest/inbox correctly bound at `264577d6...`.
+- Control history now includes the bounded-storage plan `f77681e8`, storage-recovery report `943b2f7b`,
+  independently audited recovery/storage guardrails `7d17c4ee`, R4 reset/recovery checkpoints `322a8668` and
+  `d716606a`, and this final R5 report/control delta. The earlier exact TASK-0109/TASK-0110 integration and
+  rel-01/rel-02 promotion objects remain unchanged and reachable.
+- STOP is present. No Singular auto, reconcile, drive/worker, integration/gate, provider, origin-lock, or Git
+  lock remains live. All R5 process groups are terminal. The frozen rel-02 composite was selected only by the
+  relevant drive processes; it was not installed or made a persistent default.
+- Only the main Git worktree remains registered. The later TASK-0111/TASK-0115/TASK-0116 worktrees were removed
+  after terminal-state, open-handle, branch/ref, and evidence checks; accepted candidates `eec44d4f` and
+  `8e78b89b` remain on their exact branches, and TASK-0115 recovery seeds remain under create-only refs.
+- Gates remain 3/18. TASK-0108/TASK-0109/TASK-0110 are `integrated`; TASK-0111 and TASK-0116 are `accepted`;
+  TASK-0115 is `ready` with its failed lease and sixth recovery boundary retained. The remaining 12 sprint
+  tasks are `ready`, including rel-99; 11 are non-release tasks.
+- The imported corpus remains 110 product packets plus 110 audit sidecars. Inbox now contains exactly the held
+  TASK-0116 packet `RUN-20260814T132934Z-93231.json` at SHA-256 `2b6b3b16...` and held TASK-0111 packet
+  `RUN-20260814T155312Z-23686.json` at SHA-256 `f35afe6e...`. Neither was imported. Five older packets remain
+  recoverably quarantined, and all prior candidate refs/snapshots remain evidence-only unless explicitly
+  identified as accepted. The authoritative event log has 3,621 lines.
+- Configured concurrency remains 3 with no slot in use. The final exact cleanup plus subsequent bounded runs
+  left at least 12.991 GiB free in the final guarded samples, with the shared positive-half-up application
+  metric at 97%. STOP and the FR-055 governance hold prevent import or another launch.
 - The exact successor at
   `/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.singular-state/operator-engine-overlays/singular-0.18.0-canary-rel02-v1-try-hygiene-composite-20260814t062838z`
   now preserves v3 and adds only TASK-0110's cleanup of `last-message.json` before each try and before same-try
@@ -1571,8 +1560,9 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   `10ea47b5d61f677a6812b39b5fc270350afa84e438766f0095f9c8f4b1ea9010`. Pre/post no-activation snapshot
   SHA-256 values `78a3347a7a49a49b1f9e7d823cec78475000ebe5a2456236116fab72e583bf3d` and
   `d42afb0ae17f9f2408e6afe62ddb26627203459172ca99ec06f9b926d2fefc72` prove no install/default/current-
-  symlink/config or activation change. It has not been selected for a controller; every later L1 drive still
-  requires both an explicit per-process handoff and a fresh below-threshold capacity preflight.
+  symlink/config or activation change. It was selected only through explicit per-process handoffs for the
+  later recovery drives and remains uninstalled/not-default; every future L1 drive still requires the same
+  explicit handoff and a fresh below-threshold capacity preflight.
 - The compact proof matrix is itself hash-bound: syntax/anchors
   `336f94e1eeb81e824934951e74055022848a91177e6615247e9b332a0577e3da`, focused TASK-0110
   `c865313eba3aa4e9f93b1e2e00a9b3992703a8dcf959d77beac1284f57de3887`, two independent cleanup-line
@@ -1593,9 +1583,9 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 - [ ] Operator has reviewed the exact release diff and evidence.
 
 Recommendation: **not yet ready for rel-99 promotion**. Bootstrap recovery is complete and rel-00/rel-01/rel-02
-are green, but 15 sprint tasks remain unfinished: TASK-0115/TASK-0116 are blocked under corrected contracts,
-12 other non-release tasks are ready/dependency-
-blocked, and rel-99 is ready but operator-gated.
+are green. TASK-0111 and TASK-0116 are accepted but deliberately held outside import while FR-055 is recorded;
+TASK-0115 is ready under its corrected sixth recovery contract; 11 other non-release tasks remain ready or
+dependency-blocked, and rel-99 is ready but operator-gated.
 No release-candidate evidence exists. Five packets remain quarantined: three superseded TASK-0109 packets and
 the earlier rejected TASK-0110/TASK-0116 acceptances. Exact candidate
 `b874a874` is integrated as merge `9d9c41f2` after a 195/195 staged-tree gate and promoted by a fresh 195/195
@@ -1608,11 +1598,13 @@ agreement. Its first staged integration failed closed at 194/195 only on the env
 watch, then left no merge residue. Exact fixture cleanup restored the application metric to 98% and the focused
 console suite passed 275/275; the fresh full integration then passed 195/195 and created exact merge
 `1b69af27`. Rel-02 promotion independently passed another 195/195 and its authoritative v1 gate validates.
-The exact composite runtime is now independently verified and frozen, but remains unactivated; exact cleanup
-restored a rounded-97 capacity buffer while STOP still prevents its next-wave selection. FR-047 is
+The exact composite runtime is independently verified, frozen, and used only by explicit per-process selection;
+it remains uninstalled and not the persistent default. Exact cleanup restored a rounded-97 capacity buffer
+while STOP prevents further actuation. FR-047 is
 assigned to rel-06 and FR-049 to the rel-99 operator-disposition
 inventory; FR-048/FR-051 and the permanent FR-050/FR-052 remedies remain release blockers. FR-053 and the
-immediate FR-054 capacity incident are operationally resolved; the permanent bounded cleaner is reserved for
+immediate FR-054 capacity incident are operationally resolved; FR-055 is a rel-99 accounting disposition, not
+a product rejection. The permanent bounded cleaner is reserved for
 0.20 TASK-0126 and is not a new 0.19 product-release blocker. V3 contains the fresh native L1 binding/secret-ordering path and the frozen
 composite adds the two promoted per-try cleanup lines, but rel-05 has not yet shipped the shared native/
 deterministic finalizer. Rel-99 must remain

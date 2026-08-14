@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-08-14T16:07:40Z — TASK-0111 — accept
+
+- Run: `RUN-20260814T155312Z-23686`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-08-14T15:55:59Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260814T155328Z-24392`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
 ### 2026-08-14T15:42:42Z — TASK-0115 — decide:retry
 
 - Run: `RUN-20260814T154054Z-11264`
