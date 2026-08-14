@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T19:16:24Z — TASK-0111 — integrate
+
+- Run: `ORIGIN-20260814T184903Z-44861`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: origin
+- Rationale: merged agent/foundation/TASK-0111-integrity-reclass (eec44d4ff2e4c0460a17952f6c8a485217cbf7ce) into agent/integration as c38ede4033014b952eb988714588b2a9d3f720cc; gate green; acceptance=accepted
+
 ### 2026-08-14T18:47:03Z — TASK-0111 — decide:amend-scope
 
 - Run: `ORIGIN-20260814T181848Z-54853`
