@@ -23,6 +23,10 @@
   195/195 and was committed; STOP retained before `rel-01-per-try-logs` promotion
 - Native `rel-01-per-try-logs` promotion: 2026-08-13T23:57:54Z–2026-08-14T00:47:13Z; fresh
   195/195 proof passed and the v1 gate was recorded; STOP retained before runtime-overlay activation
+- Successor runtime overlay verification: 2026-08-14T00:52:43Z–00:56:27Z; immutable rel-01 controller
+  bundle verified behind STOP
+- Successor runtime overlay activated by environment: 2026-08-14T01:00:43Z; clean status/health/DAG
+  preflight completed, with no install, symlink, or default-version change
 
 ## Operator boundaries
 
@@ -102,6 +106,8 @@
 | 2026-08-13T22:58:43Z | `ORIGIN-20260813T225843Z-71671` | Accepted TASK-0109 packet imported under STOP | Reconcile imported the sole active packet, committed its packet/audit and control state as `de7e9d52`, dispatched nothing, and left the exact worker head unchanged | Imported packet/audit, commits `8c99e896` and `de7e9d52`, reconcile event slice |
 | 2026-08-13T23:00:00Z–23:50:12Z | `ORIGIN-20260813T230100Z-TASK0109-NATIVE` | Native TASK-0109 integration completed; rel-01 not yet promoted | The staged merge changed exactly `engine/l1-drive.sh`, `engine/lib.sh`, `engine/reconcile.sh`, `tests/test-executable-resolution.sh`, `tests/test-per-try-artifacts.sh`, and `tests/test-reconcile-low-disk.sh`. The full suite passed 195/195 in 3,010,561ms with `sourceIntegrity.status=verified`, `changedPaths=[]`, log SHA-256 `8646d137c1b11a96a89bd34bcb897ebcd55bc279a95cec190a9f34cb9310d4c1`, and the authoritative fake-event count still exactly eight. Merge `9d9c41f2` has parents `de7e9d52` then `b874a874` and tree `bf6553eb58227f1ae86fcdeb0728fc6fc6512cef`. | Integration run/gate report and log, merge object, event slice |
 | 2026-08-13T23:57:54Z–2026-08-14T00:47:13Z | `ORIGIN-20260813T235754Z-8483` | Native `rel-01-per-try-logs` promotion completed under STOP | Exact checkpoint head `9c1f2e7b`/tree `af2f0cce` remained frozen while the fresh suite passed 195/195 in 2,959s; `test-per-try-artifacts.sh` consumed about 26m25s. Gate-result SHA-256 is `a2a13d96c0735b441bc46ecd8f2498968eead794098b0f0fe641fc1ec8da74d8`, strict report SHA-256 `eab36f165117de1518bf7f9aadd60d9a0445cd7f7f94847d718d4c3b107fe0ab`, and log SHA-256 `8646d137c1b11a96a89bd34bcb897ebcd55bc279a95cec190a9f34cb9310d4c1`. Independent source/task-set/command/log/report/evidence-binding hashes passed; `singular gate validate` and both rel-00/rel-01 `area-gate` checks passed. | `docs/orchestration/gates/rel-01-per-try-logs.gate-result.json`, its three evidence files, promotion events, launch/terminal identity snapshots |
+| 2026-08-14T00:52:43Z–00:56:27Z | operator overlay `singular-0.18.0-canary-rel01-v2-b874a874` | Verified successor runtime prepared; activation not performed | Built at exact path `/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.singular-state/operator-engine-overlays/singular-0.18.0-canary-rel01-v2-b874a874` from the prior Codex-cache overlay. The type/mode/hash diff contains exactly `engine/l1-drive.sh` (`65a8d761f20ab9073bf839d936f3e4f794f65cc36ef26462f216567a39beb069`), `engine/lib.sh` (`54eb097871a0750adae372d767f22a185ed006a373562d67cb5f55a5b9076476`), and `engine/reconcile.sh` (`8e9989bc154416dc5f7f1f95dee27279ad63c9d92e64f4339b8c43bd62eb7e4b`); preserved `engine/evidence-manifest.sh` is `aabfd6d9b868cbeb12816b25a12477761b95b862f4be245e0c8311a3ee3ce25d`. Bundle-manifest SHA-256 is `eb42e919a61232473f28a97c3370fa3925d589988fd8ae3023698e112cfcf25c`, metadata SHA-256 is `df2a56ffa8ae99fe260046dd6ed94a3cb02d205ec5a4492f52a472cc3398f80c`, and delta-record SHA-256 is `c3a1ea4ce94400b67b5f97e30173afb9a4ffe1cdccf3257077c583c90558ffc1`. The focused five-command gate passed in 58s with log SHA-256 `d3a7ec08539ef0b0df46377456d8606259c5e90b955629c9a38e72c7af58d49f`; binding SHA-256 `a37fb394c5f79a0e9cc4acde2266d232f5ca802858c27bf60d43d794870ef637` ties it to worker `b874a87466e118eef167190a66e048d944ab7544`/tree `3efce762d9018fdf73b0b550db9e83941dc82e59`. Full-suite binding SHA-256 `71959703760326110695a514c064440f05e71e8e1ed0616a0fd51c335a849e98` ties the bundle to the prior 195/195 integration and passed promotion. All 301 filesystem objects, including the root, carry `uchg`. STOP stayed present; the predecessor overlay is superseded for the next activation but retained intact rather than deleted. | `.singular-state/operator-engine-overlay-records/singular-0.18.0-canary-rel01-v2-b874a874/{overlay-metadata.json,overlay-bundle.type-mode-sha256.tsv,predecessor-to-overlay.diff.tsv,focused-gate.log,focused-gate-binding.tsv,full-suite-promotion-binding.tsv}` |
+| 2026-08-14T01:00:43Z | environment-only runtime activation | Successor overlay active behind STOP | Pinned `SINGULAR_ENGINE_HOME` to the verified successor's absolute path without installing a bundle or changing any symlink/current/default version. `singular status`, `singular health`, and DAG inspection resolved the new runtime cleanly and preserved tracked scaffold metadata; health reported 3 configured/effective slots and 34.3 GB free. Activation record SHA-256 is `b4eb1d08e1e7ecf06fff1082b0fdd809dc32f53d8f66c52d8bf941c258b55588`. The predecessor overlay remains intact as the superseded rollback artifact, and STOP prevented dispatch during the handoff. | `.singular-state/operator-engine-overlay-records/singular-0.18.0-canary-rel01-v2-b874a874/activation-20260814T010043Z.json`, clean Git status apart from this report, both immutable overlay paths |
 
 ## Finding ledger
 
@@ -1039,11 +1045,22 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   the authoritative event log still contains exactly the original eight `resume-run` fixture events.
 - Resources: configured/effective slots are 3/3; current filesystem headroom is about 39 GiB with no capacity
   pressure.
-- Provider/runtime proof: the immutable 0.18.0 overlay changes only `engine/evidence-manifest.sh`, keeps raw
-  provider usage, charges coherent Codex cached replay correctly, and was active for all twelve primary
-  earlier TASK-0109 role calls plus the sampled paired review. Effective runner/model were Codex and
-  `gpt-5.6-sol`; the terminal native auditor's corrected charge was 86,301. TASK-0109's engine changes are
-  integrated and promoted in source but have not yet been activated as the controller runtime. Push remains disabled.
+- Provider/runtime proof: the predecessor immutable 0.18.0 overlay changes only
+  `engine/evidence-manifest.sh`, keeps raw provider usage, charges coherent Codex cached replay correctly,
+  and was active for all twelve primary earlier TASK-0109 role calls plus the sampled paired review.
+  Effective runner/model were Codex and `gpt-5.6-sol`; the terminal native auditor's corrected charge was
+  86,301. Verified successor `singular-0.18.0-canary-rel01-v2-b874a874` exists at the exact ignored overlay
+  path, differs from that predecessor in exactly the three promoted rel-01 controller paths, preserves the
+  evidence-manifest fix, and has 300 manifest entries / 301 recursively immutable (`uchg`) filesystem objects.
+  Its bundle manifest is `eb42e919a61232473f28a97c3370fa3925d589988fd8ae3023698e112cfcf25c`
+  and metadata file is `df2a56ffa8ae99fe260046dd6ed94a3cb02d205ec5a4492f52a472cc3398f80c`;
+  its 58-second focused gate and the existing 195/195 full-suite/promotion proof are hash-bound in the overlay
+  record. The successor is now selected through `SINGULAR_ENGINE_HOME` only. Its immutable metadata retains
+  the pre-activation build status `verified-not-activated`; the later environment activation passed status,
+  health, and DAG preflight without altering tracked scaffolds. Its activation record is hash-bound as
+  `b4eb1d08e1e7ecf06fff1082b0fdd809dc32f53d8f66c52d8bf941c258b55588`. STOP remains present,
+  health reports 3/3 slots and 34.3 GB free, and the predecessor is retained intact as a superseded rollback
+  artifact rather than deleted. No install, symlink/current pointer, default-version, or push change occurred.
 - No push, tag, publish, install, current-symlink/default flip, blind unpark, cherry-pick, or tracked driver
   engine patch occurred. All exceptional recovery and exact-tree proof actions are preserved in ignored,
   hash-indexed operator evidence.
@@ -1062,8 +1079,8 @@ green, but 16 tasks remain (15 non-release tasks plus rel-99) and no release-can
 quarantined; the fourth candidate `b874a874` is natively accepted and integrated as exact merge `9d9c41f2`
 after a 195/195 staged-tree gate, then promoted by a fresh 195/195 exact-head proof at `9c1f2e7b`. Its literal contract includes two same-process archive invocations against
 distinct roots, recursive literal caller checkout/state/event guards after each and final drain, and no ninth
-fake event. It is ready for a quiescent immutable runtime-overlay handoff and resumed frontier dispatch—not
-for release promotion. Rel-99 must remain pending until every non-release gate is
+fake event. The immutable successor runtime is fully verified and activated by environment behind STOP; it is
+ready for resumed frontier dispatch—not for release promotion. Rel-99 must remain pending until every non-release gate is
 authoritative/passed, every park and material finding has explicit disposition, the exact release diff and
 synchronized version surfaces are green, the field-report canary and fresh-consumer proof pass, and the
 hash-bound human-gate request is reviewed. No push, tag, publish, install, default flip, or release promotion
