@@ -10,10 +10,9 @@ Durable semantic state (cycle heartbeat and process telemetry live under `.singu
 Target branch: `agent/integration`
 Imported packets: 109
 Tasks: 125
-Gates passed: 23/23
+Gates passed: 24/24
 
 Task statuses:
-- accepted: 1
-- integrated: 108
+- integrated: 109
 - ready: 16
 <!-- singular:reconcile-snapshot:end -->
