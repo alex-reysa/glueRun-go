@@ -2,6 +2,27 @@
 
 ## Decision Log
 
+### 2026-08-14T02:21:34Z — TASK-0116 — unpark
+
+- Run: `ORIGIN-20260814T022134Z-14058`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: amended rel-08 artifact-alignment contract with enabled final and paired audit fresh pins preserved; rerun fresh
+
+### 2026-08-14T02:21:34Z — TASK-0115 — unpark
+
+- Run: `ORIGIN-20260814T022134Z-14104`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: amended rel-07 signed run-control v1 authority contract; prior path-hiding candidate evidence-only; rerun fresh
+
+### 2026-08-14T02:21:34Z — TASK-0110 — unpark
+
+- Run: `ORIGIN-20260814T022133Z-14059`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: amended rel-02 maxConcurrent=3 causal-leakage contract; prior run evidence-only; rerun fresh
+
 ### 2026-08-14T01:47:45Z — first-wave contract correction — operator-proxy
 
 - Runs: `RUN-20260814T010432Z-76912`, `RUN-20260814T010432Z-76911`, and
