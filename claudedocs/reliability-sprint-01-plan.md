@@ -122,7 +122,7 @@ carries its own strict-test-first RED before behavior changes.
 | TASK-0112 | rel-04-evidence-remedy | `revalidate-evidence` gets a real evidence-only handler (zero implementer calls) |
 | TASK-0113 | rel-05-manifest-remedy-bound | Exact-base finalization/recovery REDs; bounded evidence-manifest/binding retries; provider-correct Codex charging; one quiet fail-closed root/manifest/inbox finalizer for native and accept-existing publication |
 | TASK-0114 | rel-06-terminal-handoff | Durable terminal-pending handoff; accept-finalizing revalidates rel-05 secret/binding evidence before publication; STOP-safe exact-task reset-only cleanup |
-| TASK-0115 | rel-07-run-control | Authenticated signed exact-run control inside every bounded poll loop; frozen-target no-control golden; signed control inert at timeout zero |
+| TASK-0115 | rel-07-run-control | Authenticated signed exact-run control inside every bounded poll loop; expiry-before-poll and bounded no-follow snapshots; host-pinned verifier; schema mirror/sync; frozen-target no-control golden; signed control inert at timeout zero |
 | TASK-0116 | rel-08-route-transcript | Literal reviewer `probe` flips to exact resume on the corrected transcript mapping while final/paired audit independence pins remain intact |
 | TASK-0117 | rel-09-l1-lease-liveness | L1 planning-lease liveness probe before wall-clock reclaim |
 | TASK-0118 | rel-10-failure-domains | Additive `failureDomain` + formalized attempts-index schema |

@@ -2,6 +2,69 @@
 
 ## Decision Log
 
+### 2026-08-14T14:26:50Z — TASK-0115 — escalate-parked
+
+- Run: `RUN-20260814T132932Z-92946`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: decider terminal action after gate-red
+
+### 2026-08-14T14:26:50Z — TASK-0115 — decide:escalate-parked
+
+- Run: `RUN-20260814T132932Z-92946`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: gate-red -> escalate-parked
+
+### 2026-08-14T14:01:34Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260814T132932Z-92946`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
+### 2026-08-14T13:53:21Z — TASK-0111 — escalate-infra
+
+- Run: `RUN-20260814T132935Z-93314`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0111`.
+
+### 2026-08-14T13:53:21Z — TASK-0111 — decide:escalate-infra
+
+- Run: `RUN-20260814T132935Z-93314`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
+### 2026-08-14T13:46:58Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260814T132932Z-92946`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: decider
+- Rationale: gate-red -> retry: The failed preservation behavior is a concrete, locally fixable implementation defect, and two retries remain. Return it to L1 to correct the valid re-read extension path and rerun the gate.
+
+### 2026-08-14T13:43:51Z — TASK-0111 — decide:retry
+
+- Run: `RUN-20260814T132935Z-93314`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
+### 2026-08-14T13:41:12Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260814T132932Z-92946`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
+### 2026-08-14T13:35:58Z — TASK-0116 — accept
+
+- Run: `RUN-20260814T132934Z-93231`
+- Branch: `agent/routing/TASK-0116-route-transcript-fix`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-08-14T13:26:24Z — TASK-0116 — unpark
 
 - Run: `ORIGIN-20260814T132624Z-91939`

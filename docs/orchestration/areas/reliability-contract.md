@@ -58,9 +58,11 @@ against which the implementing task and its auditor must verify the change.
 - **Planning-lease reclaim without liveness.** The L1 planning-lease reclaim path
   `singular_l1_reclaim_stale` performs wall-clock reclaim without first probing process-tree
   liveness.
-- **Reviewer transcript filename mismatch.** `engine/ctx-route-drive.sh` reads
+- **Unpinned reviewer transcript mapping defect.** `engine/ctx-route-drive.sh` reads
   `audit-codex.log`, while the driver writes `auditor-codex.log`; with context routing enabled,
-  reviewer resume therefore fails closed.
+  an ordinary unpinned reviewer therefore fails closed instead of resuming. Final-audit and
+  paired-audit are deliberately fresh-pinned and were never made fresh by this mismatch;
+  master-off behavior remains the legacy path.
 
 ## Explicit deferrals
 
@@ -71,8 +73,9 @@ The following work is outside this reliability program. Workers and auditors mus
   checkpoint garbage collection.
 - A full at-most-once effect ledger, wrapper, or receipt system; effect receipts remain in the
   consumer product layer.
-- writable run-control, including extensions with generation or identity binding, beyond the
-  scoped deadline/cancel re-read behavior.
+- a production run-control writer, signing-key provisioning, or cross-process/run persistent
+  high-water ledger. `rel-07-run-control` permits only externally pre-signed, exact-run records
+  and per-bounded-invocation monotonic deadline/cancel re-read behavior.
 - cross-run resume after an `escalate-infra` unpark cycle.
 - budget heuristics derived from historical timing, including minimum multiples of p95; these
   remain console or consumer policy.
