@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T20:09:51Z — TASK-0116 — integrate
+
+- Run: `ORIGIN-20260814T194512Z-13844`
+- Branch: `agent/routing/TASK-0116-route-transcript-fix`
+- Authority: origin
+- Rationale: merged agent/routing/TASK-0116-route-transcript-fix (8e78b89bd3d8c78336443ee7e34f7bc12b9e7b0d) into agent/integration as 4db3985c3e0c8854d746e86497986d1093187516; gate green; acceptance=accepted
+
 ### 2026-08-14T19:16:24Z — TASK-0111 — integrate
 
 - Run: `ORIGIN-20260814T184903Z-44861`
