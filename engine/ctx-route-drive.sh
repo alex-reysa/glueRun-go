@@ -28,7 +28,7 @@
 # `<strategy> <arg-or-reason>` and never exits non-zero (delegated from the spine).
 #
 # Assembled routing context (all derived, nothing new asked of the call-site):
-#   transcript  <run_dir>/worker-codex.log for implementer, <run_dir>/audit-codex.log
+#   transcript  <run_dir>/worker-codex.log for implementer, <run_dir>/auditor-codex.log
 #               for reviewer, <run_dir>/<role>-codex.log otherwise — the persisted
 #               provider-run log is the deterministic session-size proxy the window
 #               gate estimates from; run_dir = dirname(meta). A missing/empty log
@@ -49,7 +49,7 @@ singular_ctx_route_decide() {
   run_dir="$(dirname "$meta")"
   case "$role" in
     implementer) transcript="$run_dir/worker-codex.log" ;;
-    reviewer)    transcript="$run_dir/audit-codex.log" ;;
+    reviewer)    transcript="$run_dir/auditor-codex.log" ;;
     *)           transcript="$run_dir/${role}-codex.log" ;;
   esac
   lease_key="$key"
