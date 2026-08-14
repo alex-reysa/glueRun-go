@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T05:13:04Z — TASK-0110 — decide:rerun-tests
+
+- Run: `ORIGIN-20260814T045100Z-TASK0110-NATIVE`
+- Branch: `agent/session/TASK-0110-try-hygiene`
+- Authority: decider
+- Rationale: integration-gate-red -> rerun-tests: Only one test failed while 194 passed, and the log provides no specific deterministic defect. With the full retry budget available, one clean gate rerun is the smallest reversible action to distinguish a transient console-server failure from a reproducible issue.
+
 ### 2026-08-14T04:28:24Z — TASK-0110 — accept
 
 - Run: `RUN-20260814T041625Z-15168`
