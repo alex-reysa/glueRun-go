@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T18:47:03Z — TASK-0111 — decide:amend-scope
+
+- Run: `ORIGIN-20260814T181848Z-54853`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: decider
+- Rationale: integration-gate-red -> amend-scope: The failure is deterministic and isolated to a retired identity in one documentation file. Minimally add claudedocs/reliability-sprint-01-field-report.md to the task scope, correct the branding reference, and rerun the gate.
+
 ### 2026-08-14T16:07:40Z — TASK-0111 — accept
 
 - Run: `RUN-20260814T155312Z-23686`
