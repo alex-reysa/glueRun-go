@@ -787,6 +787,7 @@ run_worker_phase() {
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$worker_try,\"reason\":\"$worker_fc\"}"
       echo "  worker infra retry $worker_try/$worker_infra_max ($worker_fc)..."
     fi
+    rm -f "$run_dir/last-message.json"
     # Resume only on the FIRST try; infra retries are always fresh.
     local worker_run_args=(--level l2 -C "$worktree" --run-id "$run_id" \
       --prompt-file "$active_prompt" --output-last-message "$run_dir/last-message.json" \
@@ -825,6 +826,7 @@ run_worker_phase() {
       worker_classification_log="$run_dir/worker-attempt-${n}-try-${worker_try}-resume-fallback.log"
       worker_result_file="$run_dir/implementer-attempt-${n}-try-${worker_try}-resume-fallback-runner-result.json"
       worker_rc=0
+      rm -f "$run_dir/last-message.json"
       singular_runner_contract_prepare \
         "$l2_runner" implementer "$worker_capability_profile" "$worker_result_file"
       SINGULAR_RUNNER_ROLE=implementer \

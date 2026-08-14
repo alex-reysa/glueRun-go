@@ -270,6 +270,12 @@ while [[ \$# -gt 0 ]]; do
 done
 if [[ "\$level" == "l2" ]]; then
   printf '%s\n' "\$argv" >> "$workroot/worker-argv.log"
+  if [[ "\${SINGULAR_TEST_FORCE_INFRA_RETRY:-0}" == "1" ]]; then
+    count=0
+    [[ -f "$workroot/worker-infra-count" ]] && count="\$(cat "$workroot/worker-infra-count")"
+    printf '%s\n' "\$((count + 1))" > "$workroot/worker-infra-count"
+    [[ "\$count" -gt 0 ]] || exit 124
+  fi
   mkdir -p "\$worktree/internal/widget"
   printf 'package widget\n' > "\$worktree/internal/widget/parser.go"
   # A COMPLETE, schema-valid worker packet (the driver re-stamps authority fields
@@ -280,6 +286,12 @@ PKT
   [[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "WORKER-SID" "gpt-5.5" "medium" "\$worktree" 0
 else
   printf '%s\n' "\$argv" >> "$workroot/auditor-argv.log"
+  if [[ "\${SINGULAR_TEST_FORCE_INFRA_RETRY:-0}" == "1" ]]; then
+    count=0
+    [[ -f "$workroot/auditor-infra-count" ]] && count="\$(cat "$workroot/auditor-infra-count")"
+    printf '%s\n' "\$((count + 1))" > "$workroot/auditor-infra-count"
+    [[ "\$count" -gt 0 ]] || exit 124
+  fi
   [[ -n "\$out" ]] && printf '{"verdict":"accepted"}\n' > "\$out"
   [[ -n "\$meta" ]] && singular_codex_session_meta_write "\$meta" "REVIEWER-SID" "gpt-5.5" "high" "\$worktree" 0
 fi
@@ -291,7 +303,11 @@ run_drive() {
   # Leading VAR=val args (if any) are passed through to env for the drive.
   ( cd "$drv_root" && env SINGULAR_ROOT="$drv_root" SINGULAR_STATE_DIR="$drv_root/.singular-state" \
       SINGULAR_ORCH_DIR="$drv_root/docs/orchestration" SINGULAR_TASKS_DIR="$drv_root/docs/orchestration/tasks" \
-      SINGULAR_TARGET_BRANCH=target SINGULAR_RUNNER="$mock_runner" SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
+      SINGULAR_TARGET_BRANCH=target SINGULAR_DISPATCH_BASE_SHA= SINGULAR_DISPATCH_BATCH_ID= \
+      SINGULAR_JSON_CONFIG_FILE="$drv_root/absent-config.json" \
+      SINGULAR_CONFIG_FILE="$drv_root/absent-config.sh" \
+      SINGULAR_LOCAL_CONFIG_FILE="$drv_root/absent-local-config.sh" \
+      SINGULAR_CTX_ROUTING=0 SINGULAR_RUNNER="$mock_runner" SINGULAR_ENGINE_HOME="$ENGINE_HOME" \
       "$@" "$SCRIPT_DIR/l1-drive.sh" TASK-0001 )
 }
 
@@ -362,5 +378,75 @@ out2="$(run_drive SINGULAR_SESSION_AFFINITY=0 2>&1)" || { echo "$out2" | tail -2
 grep -q -- "--resume-session" "$workroot/worker-argv.log" && fail "affinity-0: worker argv must contain no --resume-session"
 grep -q -- "--resume-session" "$workroot/auditor-argv.log" && fail "affinity-0: auditor argv must contain no --resume-session"
 pass "SINGULAR_SESSION_AFFINITY=0: no --resume-session in any argv; decisions fresh disabled"
+
+# --- Infra retry contract: resumable try 0, fresh try 1 for BOTH roles --------
+mkdir -p "$workroot/bin"
+cat > "$workroot/bin/date" <<'SH'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "$arg" == +RUN-* ]]; then
+    printf 'RUN-AFFINITY-INFRA\n'
+    exit 0
+  fi
+done
+exec /bin/date "$@"
+SH
+chmod +x "$workroot/bin/date"
+
+git -C "$drv_root" checkout -q target
+rm -rf "$drv_root/.singular-state/runs" "$drv_root/.singular-state/leases" 2>/dev/null || true
+python3 - "$drv_root/docs/orchestration/tasks/TASK-0001.md" <<'PY'
+import sys
+p = sys.argv[1]; t = open(p).read().replace("Status: accepted", "Status: ready")
+open(p, "w").write(t)
+PY
+git -C "$drv_root" worktree prune 2>/dev/null || true
+
+retry_run_id="RUN-AFFINITY-INFRA"
+retry_run_dir="$drv_root/.singular-state/runs/$retry_run_id"
+retry_worker_meta="$retry_run_dir/session-implementer.json"
+retry_reviewer_meta="$retry_run_dir/session-reviewer.json"
+warmup_out="$(run_drive PATH="$workroot/bin:$PATH" 2>&1)" \
+  || { echo "$warmup_out" | tail -40; fail "affinity retry warmup drive failed"; }
+[[ -f "$retry_worker_meta" && -f "$retry_reviewer_meta" ]] \
+  || fail "warmup drive must record both resumable role sessions"
+
+git -C "$drv_root" checkout -q target
+rm -rf "$drv_root/.singular-state/leases" 2>/dev/null || true
+python3 - "$drv_root/docs/orchestration/tasks/TASK-0001.md" <<'PY'
+import sys
+p = sys.argv[1]; t = open(p).read().replace("Status: accepted", "Status: ready")
+open(p, "w").write(t)
+PY
+git -C "$drv_root" worktree prune 2>/dev/null || true
+
+retry_wt="$(python3 -c 'import json;print(json.load(open("'"$retry_worker_meta"'"))["cwd"])')"
+retry_head="$(git -C "$drv_root" rev-parse HEAD)"
+singular_session_meta_finalize "$retry_worker_meta" implementer TASK-0001 "$retry_run_id" \
+  "$(basename "$mock_runner")" "$(singular_prompt_sha "$retry_run_dir/l2-prompt.md")" "$retry_head" 1
+singular_session_meta_finalize "$retry_reviewer_meta" reviewer TASK-0001 "$retry_run_id" \
+  "$(basename "$mock_runner")" "$(singular_prompt_sha "$retry_run_dir/auditor-prompt.md")" "$retry_head" 1
+retry_worker_decision="$(singular_session_resume_decide "$retry_worker_meta" implementer TASK-0001 \
+  "$retry_run_id" "$(basename "$mock_runner")" "$(singular_prompt_sha "$retry_run_dir/l2-prompt.md")" \
+  "$retry_wt" "$retry_head")"
+assert_eq "$retry_worker_decision" "resume WORKER-SID" \
+  "recorded worker session must be resumable before forcing its infra retry"
+
+: > "$workroot/worker-argv.log"; : > "$workroot/auditor-argv.log"
+rm -f "$workroot/worker-infra-count" "$workroot/auditor-infra-count"
+retry_out="$(run_drive PATH="$workroot/bin:$PATH" SINGULAR_TEST_FORCE_INFRA_RETRY=1 \
+  SINGULAR_WORKER_INFRA_MAX=1 SINGULAR_AUDIT_INFRA_MAX=1 2>&1)" \
+  || { echo "$retry_out" | tail -40; fail "infra-retry affinity drive failed"; }
+assert_eq "$(wc -l < "$workroot/worker-argv.log" | tr -d ' ')" "2" "worker infra retry invocation count"
+assert_eq "$(wc -l < "$workroot/auditor-argv.log" | tr -d ' ')" "2" "auditor infra retry invocation count"
+grep -q -- "--resume-session WORKER-SID" <(sed -n '1p' "$workroot/worker-argv.log") \
+  || fail "worker try 0 must receive its resumable session"
+grep -q -- "--resume-session" <(sed -n '2p' "$workroot/worker-argv.log") \
+  && fail "worker try 1 must be fresh after infra failure"
+grep -q -- "--resume-session REVIEWER-SID" <(sed -n '1p' "$workroot/auditor-argv.log") \
+  || fail "auditor try 0 must receive its resumable session"
+grep -q -- "--resume-session" <(sed -n '2p' "$workroot/auditor-argv.log") \
+  && fail "auditor try 1 must be fresh after infra failure"
+pass "infra retries: worker and auditor try 0 resume; both try 1 invocations are fresh"
 
 echo "ALL SESSION-AFFINITY TESTS PASSED"
