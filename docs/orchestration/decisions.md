@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T01:11:45Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260814T010432Z-76911`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
 ### 2026-08-14T01:11:15Z — TASK-0116 — decide:retry
 
 - Run: `RUN-20260814T010432Z-76945`
