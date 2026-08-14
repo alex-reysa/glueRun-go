@@ -33,11 +33,37 @@ fi
 ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$ENGINE_HOME/engine/lib.sh"
 CTX_ADAPTER="$ENGINE_HOME/engine/ctx-route-drive.sh"
+L1_DRIVER="$ENGINE_HOME/engine/l1-drive.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: expected [$2], got [$1]"; }
 assert_ne() { [[ "$1" != "$2" ]] || fail "$3: expected NOT [$2], got [$1]"; }
 pass() { echo "ok: $*"; }
+
+# Derive the durable transcript basenames from the driver's write sites. This
+# keeps the driver as the artifact-name source of truth: if either persisted log
+# is renamed without updating the adapter, the behavioral fixtures below fail
+# closed with window-pressure instead of silently testing a stale hard-coded name.
+driver_transcript_name() { # <role>
+  local role="$1" name
+  case "$role" in
+    implementer)
+      name="$(sed -nE 's@.*>>"\$run_dir/([^"/]+-codex\.log)".*@\1@p' "$L1_DRIVER" \
+        | sort -u)"
+      ;;
+    reviewer)
+      name="$(sed -nE 's@^[[:space:]]*local auditor_log="\$run_dir/([^"/]+)".*@\1@p' \
+        "$L1_DRIVER" | sort -u)"
+      ;;
+    *) fail "unsupported driver transcript role: $role" ;;
+  esac
+  [[ -n "$name" && "$name" != *$'\n'* ]] \
+    || fail "$role driver transcript assignment must resolve to exactly one basename: [$name]"
+  printf '%s\n' "$name"
+}
+
+IMPLEMENTER_TRANSCRIPT_NAME="$(driver_transcript_name implementer)"
+REVIEWER_TRANSCRIPT_NAME="$(driver_transcript_name reviewer)"
 
 # --- Isolated state ----------------------------------------------------------
 tmp="$(mktemp -d)"
@@ -45,6 +71,7 @@ trap 'rm -rf "$tmp"' EXIT
 export SINGULAR_ROOT="$tmp"
 export SINGULAR_STATE_DIR="$tmp/state"
 export SINGULAR_TARGET_BRANCH="target"
+unset SINGULAR_CTX_ROUTING
 mkdir -p "$SINGULAR_STATE_DIR"
 # shellcheck disable=SC1090
 source "$LIB" || fail "sourcing lib.sh failed"
@@ -149,17 +176,17 @@ rm -f "$lease"
 # 2a. All gates pass -> the decider's resume stands. The adapter assembles the
 # implementer transcript path as <run_dir>/worker-codex.log; make it small so the
 # window gate passes.
-printf 'small transcript\n' > "$rd/worker-codex.log"
+printf 'small transcript\n' > "$rd/$IMPLEMENTER_TRANSCRIPT_NAME"
 got="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "resume SID-T" "ON implementer: all gates pass -> resume"
 
 # 2b. Window pressure -> fresh window-pressure (transcript missing = fail-closed).
-rm -f "$rd/worker-codex.log"
+rm -f "$rd/$IMPLEMENTER_TRANSCRIPT_NAME"
 got="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "fresh window-pressure" "ON implementer: missing transcript downgrades to fresh window-pressure"
 
 # 2c. Live generalized session lease -> fresh session-lease (first refusal wins).
-printf 'small transcript\n' > "$rd/worker-codex.log"
+printf 'small transcript\n' > "$rd/$IMPLEMENTER_TRANSCRIPT_NAME"
 mkdir -p "$(dirname "$lease")"
 printf '{"pid": %s}\n' "$$" > "$lease"
 got="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
@@ -171,11 +198,23 @@ got="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$mf" TASK-1 RUN-1 co
 assert_eq "$got" "fresh runner-changed" "ON implementer: gates never turn fresh into resume"
 pass "ON routing: pass->resume; window/lease each downgrade to their fresh reason"
 
+# 2e. Reviewer artifact alignment at a literal unpinned step. The transcript is
+# created under the name the driver actually persists, not an adapter-owned
+# expectation. Every ordinary gate passes, so the reviewer must resume.
+mr_probe="$tmp/run-on-rev-probe"; mkdir -p "$mr_probe"
+rev_probe="$mr_probe/session-reviewer.json"
+mk_meta "$rev_probe" reviewer SID-reviewer "role=reviewer"
+printf 'small transcript\n' > "$mr_probe/$REVIEWER_TRANSCRIPT_NAME"
+got="$(SINGULAR_CTX_ROUTING=1 decide reviewer probe "$rev_probe" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+assert_eq "$got" "resume SID-reviewer" "ON reviewer probe: driver transcript passes window gate"
+pass "driver-derived transcript paths align; reviewer probe -> $got"
+
 # =============================================================================
 # 3. Reviewer independence pin — the live audit site never resumes
 # =============================================================================
 mr="$tmp/run-on-rev"; mkdir -p "$mr"
 rev="$mr/session-reviewer.json"; mk_meta "$rev" reviewer SID-R "role=reviewer"
+printf 'small transcript\n' > "$mr/$REVIEWER_TRANSCRIPT_NAME"
 sanity="$(legacy_decide "$rev" reviewer "$HEAD2")"
 assert_eq "$sanity" "resume SID-R" "sanity: decider would resume at the reviewer fixture"
 for step in final-audit paired-audit; do
@@ -215,7 +254,7 @@ check_one_line() { # <output> <label>
 }
 rd="$tmp/run-shape"; mkdir -p "$rd"
 m="$rd/session-implementer.json"; mk_meta "$m" implementer SID-T
-printf 'small transcript\n' > "$rd/worker-codex.log"
+printf 'small transcript\n' > "$rd/$IMPLEMENTER_TRANSCRIPT_NAME"
 rc=0; out="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")" || rc=$?
 assert_eq "$rc" "0" "adapter exit 0 (resume path)"
 check_one_line "$out" "resume path"
