@@ -252,16 +252,20 @@ body.side-rail { --side-col: var(--side-w-rail); }
   position: fixed;
   inset: 0;
   display: grid;
-  grid-template-rows: 44px minmax(0, 1fr) 32px;
+  grid-template-rows: 44px minmax(0, 1fr) var(--inspector-row, 0px) 32px;
   grid-template-columns: var(--side-col) minmax(0, 1fr);
   grid-template-areas:
     "side top"
     "side main"
+    "side inspector"
     "dock dock";
   gap: 0;
   padding: 0;
-  transition: grid-template-columns var(--duration-default) var(--ease-standard);
+  transition: grid-template-columns var(--duration-default) var(--ease-standard), grid-template-rows var(--duration-default) var(--ease-standard);
 }
+
+#app[data-inspector-docked="true"] { --inspector-row: var(--inspector-height, 320px); }
+#app[data-inspector-docked="true"][data-inspector-collapsed="true"] { --inspector-row: 56px; }
 
 #top-bar { grid-area: top; }
 #side-bar { grid-area: side; }
@@ -364,12 +368,13 @@ body.side-rail { --side-col: var(--side-w-rail); }
    down column 1). --side-col still governs the width, so the rail toggle works
    here too. */
 body.historical #app {
-  grid-template-rows: 44px auto minmax(0, 1fr) 32px;
+  grid-template-rows: 44px auto minmax(0, 1fr) var(--inspector-row, 0px) 32px;
   grid-template-columns: var(--side-col) minmax(0, 1fr);
   grid-template-areas:
     "side top"
     "side banner"
     "side main"
+    "side inspector"
     "dock dock";
 }
 body.historical #plan-banner { display: flex; grid-area: banner; }
@@ -660,8 +665,8 @@ select.filter:hover { border-color: var(--rule-strong); }
 .ov-unread { font-size: 9.5px; font-family: var(--mono); color: var(--tone-cobalt); }
 @media (max-width: 760px) { #event-overlay { flex-basis: 34px; } #event-overlay:not([data-collapsed="true"]) { flex-basis: 220px; } }
 
-/* Node inspector — bottom-sheet modal. A scrim dims everything; the sheet slides up
-   from the bottom taking most of the viewport, with generous, centered content. */
+/* Shared detail inspector. Plan selections dock in the app grid on wide screens;
+   the same DOM becomes a modal bottom drawer elsewhere and on narrow screens. */
 #inspector-scrim {
   position: fixed; inset: 0; z-index: 39;
   background: rgba(18, 20, 26, 0.42);
@@ -672,6 +677,7 @@ select.filter:hover { border-color: var(--rule-strong); }
 #inspector-scrim[data-open="true"] { opacity: 1; pointer-events: auto; }
 
 #inspector {
+  grid-area: inspector;
   position: fixed;
   left: 0; right: 0; bottom: 0;
   height: 86vh;
@@ -688,29 +694,57 @@ select.filter:hover { border-color: var(--rule-strong); }
   transition: transform var(--d-struct) var(--ease);
   will-change: transform;
 }
-#inspector:not([data-subject-kind="none"]) { transform: translateY(0); }
-#inspector.dragging { transition: none; }
+#inspector[data-presentation="modal"]:not([data-subject-kind="none"]) { transform: translateY(0); }
 
-/* grab handle at the top — visual affordance + drag/click to dismiss */
+/* Wide Plan dock: a flat, bounded stage row—not a floating card. The lens keeps
+   the full horizontal canvas and yields only the persisted vertical allocation. */
+#inspector[data-presentation="dock"] {
+  position: relative;
+  inset: auto;
+  width: auto; height: auto; max-height: none;
+  z-index: 25;
+  background: var(--surface-panel);
+  border: 0; border-top: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
+  transition: none;
+  will-change: auto;
+}
+#inspector[data-presentation="dock"][data-subject-kind="none"] { visibility: hidden; }
+#inspector.dragging { transition: none; user-select: none; }
+#inspector[data-collapsed="true"] #inspector-tabs,
+#inspector[data-collapsed="true"] #inspector-body { display: none; }
+#inspector[data-presentation="modal"][data-collapsed="true"] { height: 56px; }
+#insp-collapse .icon { transition: transform var(--d-base) var(--ease); transform: rotate(90deg); }
+#inspector[data-collapsed="true"] #insp-collapse .icon { transform: rotate(-90deg); }
+
+/* Resizable top edge. It is also a keyboard separator (↑/↓, Home/End). */
 #inspector-grip {
   flex: 0 0 auto;
-  height: 20px; width: 100%;
-  border: 0; background: transparent; cursor: grab;
+  height: 10px; width: 100%; padding: 0;
+  border: 0; background: transparent; cursor: default;
   display: flex; align-items: center; justify-content: center;
   touch-action: none;
 }
+#inspector[data-presentation="dock"] #inspector-grip { cursor: ns-resize; }
 #inspector-grip::after {
-  content: ""; width: 40px; height: 4px; border-radius: 999px;
-  background: rgba(0, 0, 0, 0.16);
+  content: ""; width: 44px; height: 2px; border-radius: 999px;
+  background: var(--rule-strong);
   transition: background var(--d-color) var(--ease), width var(--d-base) var(--ease);
 }
-#inspector-grip:hover::after { background: rgba(0, 0, 0, 0.3); width: 52px; }
-#inspector.dragging #inspector-grip { cursor: grabbing; }
+#inspector[data-presentation="dock"] #inspector-grip:hover::after,
+#inspector[data-presentation="dock"] #inspector-grip:focus-visible::after { background: var(--text-faint); width: 58px; }
+#inspector-grip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+#inspector.dragging #inspector-grip { cursor: ns-resize; }
 
 /* Centered content column so wide screens read comfortably, not stretched */
 #inspector #inspector-body { padding: 22px max(22px, calc((100% - 1080px) / 2)) 36px; }
 #inspector #inspector-title { padding-inline: max(18px, calc((100% - 1080px) / 2)); }
 #inspector #inspector-tabs { padding-inline: max(18px, calc((100% - 1080px) / 2)); }
+#inspector[data-presentation="dock"] #inspector-body { padding: 16px max(18px, calc((100% - 1180px) / 2)) 24px; }
+#inspector[data-presentation="dock"] #inspector-title,
+#inspector[data-presentation="dock"] #inspector-tabs { padding-inline: max(14px, calc((100% - 1180px) / 2)); }
 
 #inspector-title {
   display: flex; align-items: center; gap: 10px;
@@ -882,51 +916,212 @@ select.filter:hover { border-color: var(--rule-strong); }
 .node-row .nr-meta { grid-column: 1 / -1; font-size: 10.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; }
 .gate-link { cursor: pointer; }
 
-/* Plan overview panel — progress, phase ladder, source inputs */
-.ov-progress-head { display: flex; align-items: baseline; gap: 10px; }
-.ov-pct { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; color: color-mix(in srgb, var(--tone-violet) 82%, #000 18%); }
-.ov-progress-sub { font-size: 12px; color: var(--muted); }
-/* execution chip + the historical/combined secondary line (PMGO-002) */
-.ov-exec-chip { margin-left: auto; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; }
-.ov-progress-cohort { margin-top: 7px; font-size: 11px; color: var(--faint); }
-.ov-progress-bar { margin-top: 8px; height: 8px; border-radius: 999px; background: rgba(0, 0, 0, 0.06); overflow: hidden; }
-.ov-progress-fill { display: block; height: 100%; border-radius: 999px; background: var(--tone-violet); transition: width var(--d-struct) var(--ease); }
-.ph-ladder { display: flex; flex-direction: column; gap: 5px; }
-.ph-row { display: grid; grid-template-columns: 28px 1fr auto auto; align-items: center; gap: 10px; }
-.ph-stage { font-family: var(--mono); font-weight: 600; font-size: 12px; }
-.ph-bar { height: 6px; border-radius: 999px; background: rgba(0, 0, 0, 0.06); overflow: hidden; }
-.ph-fill { display: block; height: 100%; border-radius: 999px; background: var(--tone-gray); transition: width var(--d-struct) var(--ease); }
-.ph-fill[data-status="complete"] { background: var(--tone-forest); }
-.ph-fill[data-status="active"] { background: var(--tone-cobalt); }
-.ph-pips { display: inline-flex; gap: 3px; }
-.ph-pip { width: 9px; height: 9px; border-radius: 3px; border: 0; padding: 0; cursor: pointer; background: var(--tone); }
-.ph-count { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
-
-/* live loop pulse strip — heartbeat next to the coarse node % */
-.pulse-strip {
-  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
-  padding: 8px 11px; border-radius: var(--r-btn);
-  background: rgba(0, 0, 0, 0.025); border: 1px solid var(--hair);
+/* Plan overview — a single campaign instrument, not a card dashboard. */
+.ov-progress-panel { gap: 24px; min-width: 0; }
+.ov-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(260px, 0.75fr);
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  background: var(--paper);
 }
-.pulse-led { width: 8px; height: 8px; border-radius: 999px; background: var(--tone, var(--tone-gray)); flex: 0 0 auto; }
-.pulse-strip[data-state="progressing"] .pulse-led { animation: pulse 2.4s var(--ease) infinite; }
-.pulse-label { font-size: 12px; font-weight: 600; color: var(--text); }
-.pulse-area { font-family: var(--mono); font-weight: 500; color: var(--tone-cobalt); }
-.pulse-stats { display: flex; gap: 13px; margin-left: auto; flex-wrap: wrap; }
-.pulse-stat { display: inline-flex; align-items: baseline; gap: 5px; }
-.ps-k { font-size: 9px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-.ps-v { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text); }
+.ov-campaign { min-width: 0; padding: 18px 20px 17px; }
+.ov-control-state {
+  min-width: 0;
+  padding: 18px 20px 17px;
+  border-left: 1px solid var(--line-soft);
+  background: var(--surface-subtle);
+}
+.ov-progress-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
+.ov-pct {
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  color: var(--accent);
+}
+.ov-progress-sub { font-size: 12.5px; color: var(--body); }
+.ov-progress-bar {
+  height: 6px;
+  margin-top: 13px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--line-soft);
+}
+.ov-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration-layout) var(--ease-standard);
+}
+.ov-progress-cohort {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 8px;
+  margin-top: 10px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.ov-cohort-value { color: var(--body); font-weight: 500; }
+.ov-exec-state { margin-top: 10px; min-width: 0; }
+.ov-exec-line { display: flex; align-items: center; flex-wrap: wrap; gap: 7px 9px; min-width: 0; }
+.ov-exec-chip { flex: 0 0 auto; }
+.ov-exec-reason { min-width: 0; font-size: 11px; color: var(--body); overflow-wrap: anywhere; }
+.ov-exec-note { max-width: 40ch; margin: 8px 0 0; font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.ov-exec-state[data-state="progressing"] .tone-dot { animation: pulse 2.4s var(--ease-standard) infinite; }
 
-/* per-area frontier activity — which area the loop is feeding now */
-.fa-list { display: flex; flex-direction: column; gap: 7px; }
-.fa-row { padding: 7px 9px; border-radius: var(--r-btn); border: 1px solid var(--hair); }
-.fa-row.fa-active { border-color: color-mix(in srgb, var(--tone-forest) 34%, transparent); background: color-mix(in srgb, var(--tone-forest) 5%, transparent); }
-.fa-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.fa-area { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
-.fa-tag { font-size: 8.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--tone-forest); border: 1px solid color-mix(in srgb, var(--tone-forest) 30%, transparent); border-radius: 4px; padding: 0 5px; }
-.fa-rate { margin-left: auto; font-size: 11px; color: var(--muted); }
-.fa-rate .num { font-family: var(--mono); font-weight: 600; color: var(--tone-forest); }
+/* Latest control-loop telemetry: one quiet ledger row below the summary. */
+.pulse-strip {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.25fr) minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  border-block: 1px solid var(--line-soft);
+}
+.pulse-strip-label { padding: 10px 12px 10px 0; }
+.pulse-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 0; margin: 0; }
+.pulse-stat {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 1px solid var(--line-soft);
+}
+.ps-k { font-size: 9px; font-weight: 600; letter-spacing: 0.055em; text-transform: uppercase; color: var(--muted); }
+.ps-v {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 20px; }
+.ov-section-note { max-width: 62ch; font-size: 10.5px; line-height: 1.4; color: var(--faint); text-align: right; }
+
+/* Phase ledger — stable labels, one progress rail, inspectable node signals. */
+.ph-ladder { display: flex; flex-direction: column; border-top: 1px solid var(--line-soft); }
+.ph-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) minmax(120px, 1fr) max-content 40px;
+  grid-template-areas: "stage bar pips count";
+  align-items: center;
+  gap: 10px 14px;
+  min-width: 0;
+  min-height: 42px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.ph-stage { grid-area: stage; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ph-stage-code { flex: 0 0 auto; font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--text); }
+.ph-stage-name { min-width: 0; overflow: hidden; font-size: 11.5px; color: var(--body); text-overflow: ellipsis; white-space: nowrap; }
+.ph-bar {
+  grid-area: bar;
+  height: 5px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--line-soft);
+}
+.ph-fill { display: block; height: 100%; border-radius: inherit; background: var(--faint); transition: width var(--duration-layout) var(--ease-standard); }
+.ph-fill[data-status="complete"] { background: var(--success); }
+.ph-fill[data-status="active"] { background: var(--accent); }
+.ph-pips { grid-area: pips; display: inline-flex; align-items: center; justify-self: end; min-width: 0; }
+.ph-pip {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+}
+.ph-pip::after { content: ""; width: 8px; height: 8px; border-radius: 3px; background: var(--tone); }
+.ph-pip:hover { background: var(--surface-hover); }
+.ph-pip:focus-visible { outline-color: var(--accent); outline-offset: -2px; }
+.ph-count { grid-area: count; justify-self: end; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+
+/* Per-area frontier activity reads as one ledger, with no nested card stack. */
+.fa-list { display: flex; flex-direction: column; border-top: 1px solid var(--line-soft); }
+.fa-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 150px) minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 10px 16px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.fa-row.fa-active { padding-left: 10px; background: var(--success-soft); box-shadow: inset 2px 0 var(--success); }
+.fa-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fa-area { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.fa-tag { padding: 1px 5px; border: 1px solid color-mix(in srgb, var(--success) 30%, transparent); border-radius: var(--radius-xs); font-size: 8.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--success); }
+.fa-nodes { min-width: 0; }
+.fa-row .dep-chip { max-width: 100%; min-width: 0; background: var(--paper); }
+.fa-row .dep-chip-id { min-width: 0; overflow-wrap: anywhere; }
+.fa-rate { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.fa-rate .num { font-family: var(--mono); font-weight: 600; color: var(--success); }
 .fa-rate.fa-quiet { color: var(--faint); }
+
+@media (max-width: 720px) {
+  .ov-progress-panel { gap: 20px; }
+  .ov-summary { grid-template-columns: minmax(0, 1fr); }
+  .ov-control-state { border-top: 1px solid var(--line-soft); border-left: 0; }
+  .ov-exec-note { max-width: 58ch; }
+  .pulse-strip { grid-template-columns: minmax(0, 1fr); }
+  .pulse-strip-label { padding: 9px 0 7px; }
+  .pulse-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line-soft); }
+  .pulse-stat { padding: 9px 10px; border-top: 1px solid var(--line-soft); }
+  .pulse-stat:nth-child(-n + 2) { border-top: 0; }
+  .pulse-stat:nth-child(odd) { border-left: 0; }
+  .ov-section-head { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .ov-section-note { text-align: left; }
+  .ph-row {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    grid-template-areas: "stage count" "bar bar" "pips pips";
+    gap: 7px 12px;
+    min-height: 0;
+    padding: 10px 0;
+  }
+  .ph-stage-name { overflow: visible; text-overflow: clip; white-space: normal; }
+  .ph-pips {
+    width: 100%;
+    overflow-x: auto;
+    justify-self: stretch;
+    justify-content: flex-start;
+    overscroll-behavior-x: contain;
+  }
+  .ph-pip { flex-basis: 40px; width: 40px; height: 40px; }
+  .fa-row {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    grid-template-areas: "head rate" "nodes nodes";
+    gap: 8px 12px;
+    padding: 11px 0;
+  }
+  .fa-head { grid-area: head; }
+  .fa-nodes { grid-area: nodes; }
+  .fa-rate { grid-area: rate; }
+  .fa-row .dep-chip { min-height: 40px; padding: 7px 10px; }
+}
+
+@media (max-width: 440px) {
+  .ov-campaign, .ov-control-state { padding: 16px; }
+  .ov-pct { font-size: 28px; }
+  .pulse-stat { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .fa-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "rate" "nodes"; }
+  .fa-rate { white-space: normal; }
+}
 .src-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 9px; padding: 6px 0; border-bottom: 1px solid var(--hair); }
 .src-row:last-child { border-bottom: 0; }
 .src-path { font-size: 11.5px; font-weight: 600; }
@@ -1208,6 +1403,20 @@ button.dock-cell:hover { background: rgba(0, 0, 0, 0.04); }
   .term-panes { flex-direction: column; }
   /* On narrow widths the dock keeps the essential cells; drop the repo·branch label. */
   .dock-repo { display: none; }
+  #inspector[data-presentation="modal"] {
+    height: min(78vh, 680px, calc(100dvh - 72px));
+    max-height: calc(100dvh - 72px);
+    border-radius: 14px 14px 0 0;
+  }
+  #inspector[data-presentation="modal"][data-collapsed="true"] { height: 62px; }
+  #inspector #inspector-title,
+  #inspector #inspector-tabs { padding-inline: 12px; }
+  #inspector #inspector-body { padding: 14px 14px 24px; }
+  #inspector-title { gap: 8px; min-height: 54px; padding-block: 6px; }
+  .insp-head-actions { gap: 2px; }
+  .insp-head-actions .icon-btn { width: 36px; height: 36px; }
+  #insp-collapse, #insp-close { width: 40px; height: 40px; }
+  #inspector-grip { height: 8px; }
 }
 @media (max-width: 560px) {
   #top-bar { padding: 0 10px; gap: 8px; }
@@ -1222,5 +1431,10 @@ button.dock-cell:hover { background: rgba(0, 0, 0, 0.04); }
   #stop-chip { flex: 0 0 auto; max-width: none; }
   #btn-refresh { width: 32px; min-width: 32px; padding: 0; gap: 0; font-size: 0; }
   #dock-gates, #dock-tasks, #dock-frontier { display: none; }
-  #inspector { height: 92vh; }
+  #inspector .insp-raw-cluster,
+  #inspector #insp-chip,
+  #inspector #insp-console,
+  #inspector #insp-pin { display: none; }
+  #inspector-title .bezel { display: none; }
+  #inspector-title { min-height: 54px; }
 }

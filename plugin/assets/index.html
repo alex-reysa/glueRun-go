@@ -202,7 +202,6 @@
       </div>
       <div id="plan-body">
         <div id="plan-pane" aria-label="Plan lens"></div>
-        <aside id="plan-aside" data-open="true" aria-label="Node drilldown"></aside>
       </div>
     </section>
     <section id="surface-consoles" class="surface" data-active="false" hidden>
@@ -217,6 +216,45 @@
     <section id="surface-home" class="surface" data-active="false" hidden>
       <div class="home-body" id="home-body"></div>
     </section>
+
+    <!-- SHARED DETAIL DOCK — Plan selections use this full-stage-width row on
+         wide screens. The same inspector becomes a modal bottom drawer on narrow
+         screens and outside Plan, so every lens shares one detail implementation. -->
+    <div id="inspector-scrim" data-open="false"></div>
+    <aside id="inspector" class="glass" data-subject-kind="none" data-presentation="modal" data-collapsed="false" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Selected item details">
+      <button id="inspector-grip" type="button" role="separator" tabindex="-1" aria-orientation="horizontal" aria-label="Resize details panel" title="Drag or use arrow keys to resize"></button>
+      <div id="inspector-title" tabindex="-1">
+        <span class="bezel" id="insp-bezel" data-tone="idle"><svg class="icon"><use href="#i-box"/></svg></span>
+        <div class="insp-head-main">
+          <div class="insp-head-top">
+            <span class="insp-id mono" id="insp-id"></span>
+            <span class="insp-title" id="insp-title">select an item to inspect</span>
+          </div>
+          <div class="insp-sub" id="insp-sub"></div>
+        </div>
+        <div class="insp-head-actions">
+          <span class="insp-raw-cluster" id="insp-raw-cluster"></span>
+          <span class="status-chip" id="insp-chip" data-tone="idle" hidden><span class="tone-dot"></span><span></span></span>
+          <button class="icon-btn" id="insp-console" title="Open console" aria-label="Open this run in the Consoles surface" hidden><svg class="icon"><use href="#i-terminal"/></svg></button>
+          <button class="icon-btn" id="insp-pin" aria-pressed="false" title="Pin task" aria-label="Pin task" hidden><svg class="icon"><use href="#i-pin"/></svg></button>
+          <button class="icon-btn" id="insp-collapse" type="button" aria-expanded="true" title="Collapse details" aria-label="Collapse details"><svg class="icon"><use href="#i-chev"/></svg></button>
+          <button class="icon-btn" id="insp-close" type="button" title="Close details (Esc)" aria-label="Close details"><svg class="icon"><use href="#i-stop"/></svg></button>
+        </div>
+      </div>
+      <div id="inspector-tabs" role="tablist"></div>
+      <div id="inspector-body">
+        <div class="insp-state" id="inspector-skeleton">
+          <div class="skeleton-bar" style="width:40%"></div>
+          <div class="skeleton-bar" style="width:80%"></div>
+          <div class="skeleton-bar" style="width:60%"></div>
+        </div>
+        <div class="insp-state" id="inspector-error">
+          <svg class="icon"><use href="#i-alert"/></svg>
+          <div class="hint" id="inspector-error-text">could not load task detail</div>
+        </div>
+        <div id="inspector-panels"></div>
+      </div>
+    </aside>
 
     <!-- PERSISTENT STATUS DOCK (0.11.0) — the ambient system-state layer, painted
          each snapshot tick by core/dock.js from the app.js store (S.snap + the
@@ -263,42 +301,6 @@
       <span class="dock-cell dock-conn"><span id="conn-dot" data-state="down"></span><span class="dock-conn-lbl">updated</span><span id="refresh-age" class="mono">—</span></span>
     </footer>
   </main>
-
-  <!-- NODE INSPECTOR — bottom-sheet modal (slides up over everything, scrim to dismiss) -->
-  <div id="inspector-scrim" data-open="false"></div>
-  <aside id="inspector" class="glass" data-subject-kind="none" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Node inspector">
-    <button id="inspector-grip" title="Dismiss" aria-label="Dismiss inspector"></button>
-    <div id="inspector-title">
-      <span class="bezel" id="insp-bezel" data-tone="idle"><svg class="icon"><use href="#i-box"/></svg></span>
-      <div class="insp-head-main">
-        <div class="insp-head-top">
-          <span class="insp-id mono" id="insp-id"></span>
-          <span class="insp-title" id="insp-title">select a node to inspect</span>
-        </div>
-        <div class="insp-sub" id="insp-sub"></div>
-      </div>
-      <div class="insp-head-actions">
-        <span class="insp-raw-cluster" id="insp-raw-cluster"></span>
-        <span class="status-chip" id="insp-chip" data-tone="idle" hidden><span class="tone-dot"></span><span></span></span>
-        <button class="icon-btn" id="insp-console" title="Open console" aria-label="Open this run in the Consoles surface" hidden><svg class="icon"><use href="#i-terminal"/></svg></button>
-        <button class="icon-btn" id="insp-pin" aria-pressed="false" title="Pin node"><svg class="icon"><use href="#i-pin"/></svg></button>
-        <button class="icon-btn" id="insp-close" title="Close inspector (Esc)"><svg class="icon"><use href="#i-stop"/></svg></button>
-      </div>
-    </div>
-    <div id="inspector-tabs" role="tablist"></div>
-    <div id="inspector-body">
-      <div class="insp-state" id="inspector-skeleton">
-        <div class="skeleton-bar" style="width:40%"></div>
-        <div class="skeleton-bar" style="width:80%"></div>
-        <div class="skeleton-bar" style="width:60%"></div>
-      </div>
-      <div class="insp-state" id="inspector-error">
-        <svg class="icon"><use href="#i-alert"/></svg>
-        <div class="hint" id="inspector-error-text">could not load task detail</div>
-      </div>
-      <div id="inspector-panels"></div>
-    </div>
-  </aside>
 
   <div id="toast"></div>
   <div id="sr-status" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap"></div>

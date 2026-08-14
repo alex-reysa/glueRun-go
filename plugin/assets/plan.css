@@ -1,6 +1,6 @@
 /* plan.css — the Plan surface (0.6.0 console redesign). Loaded after styles.css.
    Warm-neutral pm-go tokens only (tokens.css). Owns the Plan workbench grid
-   (header lens tabs · center pane · 360px aside) and the shared lens
+   (header lens tabs · full-width center pane) and the shared lens
    chrome (detail cards, dimming classes, scroll-shadow fades). The app-level
    surface tabs live in the top bar (#surface-tabs — styles.css). */
 
@@ -26,7 +26,7 @@
   letter-spacing: 0.02em;
 }
 
-/* ---- Plan workbench: header row + 2-column body ---- */
+/* ---- Plan workbench: header row + full-width lens body ---- */
 #plan-workbench-header {
   display: flex;
   align-items: center;
@@ -39,8 +39,7 @@
 #plan-body {
   flex: 1 1 auto;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: block;
 }
 
 /* Horizontal lens tabs lead the toolbar: choose the view, then filter it. */
@@ -90,6 +89,8 @@
 
 /* center pane */
 #plan-pane {
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -105,84 +106,6 @@
   font-size: 12.5px;
 }
 
-/* right drilldown aside */
-#plan-aside {
-  width: 360px;
-  border-left: 1px solid var(--border-subtle);
-  background: var(--surface-panel);
-  padding: 12px;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: relative;
-  transition: width var(--dur-slow) var(--ease-out);
-}
-#plan-aside[data-open="false"] {
-  width: 40px;
-  padding: 12px 0;
-  align-items: center;
-  overflow: hidden;
-}
-.plan-aside-toggle {
-  align-self: flex-end;
-  width: 26px; height: 26px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-.plan-aside-toggle:hover { background: var(--surface-hover); color: var(--text-primary); }
-.plan-aside-toggle .icon { transition: transform var(--dur-base) var(--ease-out); }
-#plan-aside[data-open="true"] .plan-aside-toggle .icon { transform: rotate(90deg); }
-#plan-aside[data-open="false"] .plan-aside-toggle .icon { transform: rotate(-90deg); }
-#plan-aside[data-open="false"] > :not(.plan-aside-toggle) { display: none; }
-
-.plan-aside-empty {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 8px; height: 100%; color: var(--text-faint); text-align: center; padding: 20px;
-}
-.plan-aside-empty .icon { width: 22px; height: 22px; opacity: 0.5; }
-.plan-aside-head { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle); }
-.plan-aside-id { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-primary); }
-.plan-aside-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.plan-chip {
-  font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
-  padding: 2px 7px; border-radius: var(--radius-xs);
-  color: var(--text-meta); background: var(--surface-soft);
-  text-transform: uppercase; white-space: nowrap;
-}
-.plan-chip.kind { color: var(--tone-coral-fg); background: var(--tone-coral-bg); }
-.plan-aside-gate { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.plan-aside-meta { font-size: 10.5px; color: var(--text-faint); font-family: var(--font-mono); }
-/* one-sentence "why isn't this moving" line under the gate chip — a quiet rule
-   on the left, never a coloured banner */
-.plan-aside-note {
-  font-size: 11.5px; line-height: 1.45; color: var(--text-secondary);
-  padding-left: 9px; border-left: 2px solid var(--border-subtle);
-}
-.plan-aside-block { display: flex; flex-direction: column; gap: 6px; }
-.plan-aside-text { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
-.plan-depchip {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-default); background: var(--surface-page);
-  font-size: 11px; cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
-}
-.plan-depchip:hover { border-color: var(--border-strong); background: var(--surface-soft); }
-.plan-taskrows { display: flex; flex-direction: column; gap: 2px; }
-.plan-taskrow {
-  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  padding: 5px 7px; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-.plan-taskrow:hover { background: var(--surface-hover); }
-.plan-taskrow-id { font-size: 11px; color: var(--text-primary); flex: 0 0 auto; }
-.plan-taskrow-state { font-size: 10.5px; color: var(--text-meta); margin-left: auto; }
-
 /* tasks lens — quiet table: 36px header row, hairline body rows, calm hover */
 #plan-pane .task-table thead th {
   height: 36px; padding: 0 12px;
@@ -192,6 +115,12 @@
 #plan-pane .task-table tbody tr { border-bottom: 1px solid var(--line-soft); }
 #plan-pane .task-table tbody tr:hover { background: rgba(0, 0, 0, 0.025); }
 .task-table td.c-node { white-space: nowrap; }
+.plan-task-link {
+  margin: -4px; padding: 4px;
+  border: 0; border-radius: var(--radius-xs); background: transparent;
+  color: inherit; font: inherit; cursor: pointer;
+}
+.plan-task-link:hover { background: var(--surface-soft); }
 .plan-node-link {
   font-family: var(--font-mono); font-size: 10.5px; color: var(--tone-blue-fg);
   border: 0; background: transparent; padding: 1px 4px; border-radius: var(--radius-xs); cursor: pointer;
@@ -577,11 +506,3 @@
 .tl-cycle-strip { position: absolute; bottom: 0; left: 0; height: 4px; }
 .tl-cycle { position: absolute; bottom: 0; height: 4px; background: var(--n-100); }
 .tl-detail { right: 26px; bottom: 22px; }
-
-/* responsive — narrow only the drilldown; the lens tabs already wrap with the toolbar. */
-@media (max-width: 1100px) {
-  #plan-aside { width: 300px; }
-}
-@media (max-width: 860px) {
-  #plan-aside[data-open="true"] { width: 260px; }
-}

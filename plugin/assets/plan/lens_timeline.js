@@ -573,7 +573,7 @@ function wire() {
     const node = e.target.closest(".tl-node-gutter");
     if (node) { if (node.dataset.node && bus.onNodeSelect) bus.onNodeSelect(node.dataset.node); return; }
     const bar = e.target.closest(".tl-bar[data-task]");
-    if (bar) select("l2", bar.dataset.task);
+    if (bar) { bar.focus({ preventScroll: true }); select("l2", bar.dataset.task); }
   });
   flow.addEventListener("keydown", (e) => {
     const bar = e.target.closest('.tl-bar[role="button"][data-task]');
