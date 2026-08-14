@@ -1,6 +1,7 @@
 # Reliability Sprint 01 — dogfood field report
 
-- Status: active; `rel-00-contract` and `rel-01-per-try-logs` are integrated/promoted; TASK-0109 is
+- Status: active; `rel-00-contract`, `rel-01-per-try-logs`, and `rel-02-try-hygiene` are
+  integrated/promoted; TASK-0109 is
   integrated as merge `9d9c41f2223cd35b634a7c722ee4cb5ed9ca620a`, and its authoritative gate was
   recorded at exact checkpoint head `9c1f2e7b5703d00f476b2115442938c57779f813`
 - Engine under test: Singular 0.18.0 (self-hosted)
@@ -49,6 +50,9 @@
 - Native TASK-0110 integration retry: 2026-08-14T05:32:40Z–05:55:27Z; supported staged gate passed 195/195
   with verified source integrity and exact three-path merge `1b69af277f96f3f1b5cf3c904abebddfa4074469`;
   STOP retained before rel-02 promotion and composite-runtime handoff
+- Native `rel-02-try-hygiene` promotion: 2026-08-14T05:59:43Z–06:21:45Z; fresh 195/195 proof passed at
+  clean checkpoint `93b13a47497d5ed179247ed4b4434a043cd63f3e`, authoritative v1 gate validated, and STOP retained
+  before composite-runtime construction
 
 ## Operator boundaries
 
@@ -151,6 +155,7 @@
 | 2026-08-14T04:51:00Z–05:13:05Z | `ORIGIN-20260814T045100Z-TASK0110-NATIVE` | First native TASK-0110 integration failed closed at 194/195 | The exact staged merge retained expected three-path tree `38df7285...`; TASK-0110's two candidate tests passed and source integrity was verified with `changedPaths=[]`. Only `test-console-server.sh` failed: verbose replay identified `CollectHomeTests.test_empty_repo_zeros_ok`, where the Data volume rounded to 99% and correctly returned health `watch` instead of expected `ok`. Integration aborted with HEAD `72726cee`, no merge/index residue, STOP present, and one decider-authored rerun decision. | Gate log/report SHA-256 `110d1b9e...` / `da9a377e...`; failed method replay; exact abort-state audit |
 | 2026-08-14T05:13:05Z–05:26:33Z | operator environmental recovery | Disk-watch precondition restored without product changes | Removed only 3,787 abandoned synthetic engine-test fixture directories under the user TMPDIR (1,017,040 KiB; two target-manifest SHAs `4b126b0f...` and `28e49dfc...`). Zero selected fixtures remain; unrelated Axon/Spokit/EAS/browser/cache roots, videos, Git/control state, packets, events, and frozen overlays were independently verified intact. The application capacity metric became 98%; an isolated verbose rerun passed all 275 console tests in 17.470s, including the exact former failure. | Ignored cleanup record SHA-256 `96239033...`; console log SHA-256 `53777ccd...`; independent cleanup audit |
 | 2026-08-14T05:32:40Z–05:55:27Z | `ORIGIN-20260814T053240Z-TASK0110-NATIVE-R2` | Native TASK-0110 integration retry completed | Exact pre-head `3a104dce` staged only the accepted three paths and produced expected tree `923a88ca445c0684f66905f9ee8ab0cb3f483baf`. The supported gate passed 195/195 in 1,323,329ms; `test-console-server.sh` and both TASK-0110 tests passed, source integrity was `verified` with `changedPaths=[]`, and final application capacity rounded to 98%. A single read-only guard sample briefly rounded to 99% later in the suite, but no gate/control/source drift occurred and the metric returned to 98%. Merge `1b69af277f96f3f1b5cf3c904abebddfa4074469` has parents `[3a104dce,7ca9c5c1]`, exact tree `923a88ca...`, and exact three-path first-parent delta. | Gate log/report SHA-256 `8646d137...` / `65710a7d...`; merge object; source snapshots; terminal guard audit |
+| 2026-08-14T05:59:43Z–06:21:45Z | `ORIGIN-20260814T055942Z-33888` | `rel-02-try-hygiene` promoted authoritatively | At clean checkpoint `93b13a47`/tree `2f30b30f`, the configured promoter SHA-256 `53cf46c8...` ran a fresh `bash tests/run.sh`: 195/195 passed, including console and both TASK-0110 regressions. Gate-result v1 is `passed`, `authoritative`, and `deterministic-proof`; task set is exactly TASK-0110, upstream exactly rel-01, source/task/log/report hashes match, and both `singular gate validate` and `singular area-gate` passed. The disk metric briefly crossed the rounding boundary during L1 tests and ended at 98.512% (rounded 99), but no gate/control/source binding failed. STOP and the empty inbox remained intact. | Regression/observation/report/result SHA-256 `8646d137...` / `dde079fb...` / `7bcda6c2...` / `842bbd60...`; validation outputs; guard audit |
 | 2026-08-14T04:13:28Z | v3 per-process activation preflight | Frozen overlay selected without persistent default/config change | At clean head `2f0d5e62`, repeated frozen verification and L1 syntax, version, DAG validation, and read-only status all passed through the exact overlay environment. HEAD, tracked status, STOP, inbox, and authoritative events remained byte-identical. Existing-packet auto-heal is forced OFF until permanent rel-05; no task was unparked or run. | Activation record SHA-256 `4da4846e...`; status output `3998a3d0...`; frozen verification output `99d30ccb...`; unchanged event SHA `61ed7dd3...` |
 
 ## Finding ledger
@@ -1354,8 +1359,10 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   families, all videos, packets/events, Git/control state, and both frozen overlays. The application metric
   fell to 98% and all 275 console tests passed. Cleanup record SHA-256 is `96239033...`. The supported full
   integration retry then passed 195/195 with `test-console-server.sh` green and source integrity verified;
-  merge `1b69af27` is exact. A later guard sample briefly rounded to 99% before returning to final 98%, without
-  a gate failure or persisted drift. This observation is not a new rel-99 release blocker.
+  merge `1b69af27` is exact. Fresh rel-02 promotion independently passed 195/195 with the console green again.
+  Guard samples later straddled the 98.5% rounding boundary without a gate failure or persisted drift, so every
+  later drive still requires the same explicit capacity preflight. This observation is not a new rel-99 release
+  blocker.
 
 ## Known-issue observation log
 
@@ -1384,7 +1391,7 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 |---|---|---|---:|---:|---|---|
 | TASK-0108 | rel-00-contract | integrated as `41380c1b`; authoritative gate passed at 20:27:09Z | 1 | 4 / 2 / 4 | `RUN-20260813T170836Z-93780`; recovery `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256` | Immutable source snapshot; accepted imported packet/audit; final exact-tree 194/194; `rel-00-contract.gate-result.json` |
 | TASK-0109 | rel-01-per-try-logs | integrated as `9d9c41f2`; authoritative gate passed at 00:47:13Z under STOP | 8 | 7 / 3 / 1 (+1 promotion) | Prior three run IDs plus terminal `RUN-20260813T221358Z-8581`; accepted recoveries `...210341...`, `...212941...`; integration `ORIGIN-20260813T230100Z-TASK0109-NATIVE`; promotion `ORIGIN-20260813T235754Z-8483` | Exact six-file `b874a874` accepted with no findings and charge 86,301; native staged integration and exact-head promotion each passed 195/195; v1 gate/hash bindings validate, fake events still eight |
-| TASK-0110 | rel-02-try-hygiene | integrated as exact merge `1b69af27`; rel-02 promotion pending under STOP | 4 | 2 primary (+2 paired) / 0 / 2 (1 environmental red, 1 green) | `RUN-20260814T010432Z-76912`; rejected `RUN-20260814T022422Z-15250`; accepted `RUN-20260814T041625Z-15168`; integrations `ORIGIN-20260814T045100Z-TASK0110-NATIVE` and `...053240Z...R2` | Exact three-file candidate and packet/audit bindings retained; first staged gate was 194/195 only on unchanged console health at 99% disk; cleanup restored 98%; retry passed 195/195/source clean and merged expected parents/tree/delta as `1b69af27` |
+| TASK-0110 | rel-02-try-hygiene | integrated as exact merge `1b69af27`; authoritative rel-02 gate passed | 4 | 2 primary (+2 paired) / 0 / 2 (1 environmental red, 1 green) + 1 promotion | `RUN-20260814T010432Z-76912`; rejected `RUN-20260814T022422Z-15250`; accepted `RUN-20260814T041625Z-15168`; integrations `ORIGIN-20260814T045100Z-TASK0110-NATIVE` and `...053240Z...R2`; promotion `ORIGIN-20260814T055942Z-33888` | Exact three-file candidate and packet/audit bindings retained; first staged gate was 194/195 only on unchanged console health at 99% disk; cleanup restored 98%; retry and promotion each passed fresh 195/195; exact merge parents/tree/delta and v1 gate/task/upstream/source/log/report bindings all validate |
 | TASK-0111 | rel-03-integrity-reclass | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0112 | rel-04-evidence-remedy | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0113 | rel-05-manifest-remedy-bound | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
@@ -1453,7 +1460,8 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 - STOP remained present through the 05:55:27Z successful native integration retry. No Singular auto, reconcile,
   drive/worker writer, integration/gate process, origin lock, or Git-operation lock remains. The earlier paired
   pass was read-only with respect to the accepted candidate; no post-integration reconcile or promotion ran.
-- Gates remain 2/18. TASK-0108/TASK-0109/TASK-0110 are `integrated`; rel-02 promotion is pending under STOP;
+- Gates are now 3/18. TASK-0108/TASK-0109/TASK-0110 are `integrated`, and rel-00/rel-01/rel-02 are
+  authoritatively passed under STOP;
   TASK-0115/TASK-0116 remain `blocked` under explicit amended contracts; the other 13 sprint tasks are
   `ready`—12 non-release tasks plus rel-99.
 - The imported corpus is now 110 product packets plus 110 audit sidecars. The active inbox is empty; imported
@@ -1466,7 +1474,7 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   uncommitted diff and all first-wave snapshots remain inventory-bound. The older artifacts are not acceptance,
   import, integration, or promotion authority; only the current exact packet/audit were imported. The first
   staged integration created no merge commit; retry merge `1b69af27` has exact parents/tree/three-path delta.
-  The authoritative event log has 3,371 lines and still contains exactly the original eight `resume-run`
+  The authoritative event log has 3,373 lines and still contains exactly the original eight `resume-run`
   fixture events.
 - Configured/effective capacity remains 3/3. The earlier direct wave launched TASK-0110/TASK-0115/TASK-0116
   from one exact base in the same second. The later TASK-0110-only reset ran from exact base `94876831` under v3,
@@ -1484,8 +1492,10 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   mitigation is independently verified and recursively frozen: l1 SHA `ebec05d7...`, bundle `79d255df...`,
   metadata `71c08fd0...`, and post-freeze proof `53cd2874...`. The fresh native acceptance exercised that
   overlay's clean path end-to-end and left root/manifest/inbox correctly bound at `264577d6...`. V3 deliberately
-  remains frozen and lacks TASK-0110's two integrated cleanup lines; no later L1 drive may start until a new
-  independently verified composite overlay is frozen and selected per process.
+  remains frozen and lacks TASK-0110's two integrated cleanup lines; rel-02 promotion is now exact and green,
+  but no later L1 drive may start until a new independently verified composite overlay is frozen and selected
+  per process. The disk metric ended promotion at 98.512% (rounded 99), so that handoff also requires a fresh
+  below-threshold capacity preflight.
 - No push, tag, publish, install, current-symlink/default flip, blind unpark, old-candidate cherry-pick, or
   tracked driver engine patch occurred. All exceptional recovery and exact-tree proof actions remain in
   ignored, hash-indexed operator evidence.
@@ -1499,9 +1509,9 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 - [ ] No unresolved finding makes promotion unsafe.
 - [ ] Operator has reviewed the exact release diff and evidence.
 
-Recommendation: **not yet ready for rel-99 promotion**. Bootstrap recovery is complete and rel-00/rel-01 are
-green, but 15 sprint tasks remain unfinished: TASK-0110 is integrated and awaits rel-02 promotion,
-TASK-0115/TASK-0116 are blocked under corrected contracts, 12 other non-release tasks are ready/dependency-
+Recommendation: **not yet ready for rel-99 promotion**. Bootstrap recovery is complete and rel-00/rel-01/rel-02
+are green, but 15 sprint tasks remain unfinished: TASK-0115/TASK-0116 are blocked under corrected contracts,
+12 other non-release tasks are ready/dependency-
 blocked, and rel-99 is ready but operator-gated.
 No release-candidate evidence exists. Five packets remain quarantined: three superseded TASK-0109 packets and
 the earlier rejected TASK-0110/TASK-0116 acceptances. Exact candidate
@@ -1514,7 +1524,8 @@ accepted candidate `7ca9c5c1`; its manifest-bound packet/audit were imported und
 agreement. Its first staged integration failed closed at 194/195 only on the environmental 99% console disk
 watch, then left no merge residue. Exact fixture cleanup restored the application metric to 98% and the focused
 console suite passed 275/275; the fresh full integration then passed 195/195 and created exact merge
-`1b69af27`. Rel-02 promotion and a frozen composite runtime remain required before later drives. FR-047 is
+`1b69af27`. Rel-02 promotion independently passed another 195/195 and its authoritative v1 gate validates.
+A frozen composite runtime remains required before later drives. FR-047 is
 assigned to rel-06 and FR-049 to the rel-99 operator-disposition
 inventory; FR-048/FR-051 and the permanent FR-050/FR-052 remedies remain release blockers. FR-053 is
 operationally resolved for this retry and is not a new release blocker. V3 now contains the
