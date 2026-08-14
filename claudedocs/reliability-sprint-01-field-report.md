@@ -1,9 +1,9 @@
 # Reliability Sprint 01 — dogfood field report
 
 - Status: active; `rel-00-contract`, `rel-01-per-try-logs`, and `rel-02-try-hygiene` are
-  integrated/promoted; TASK-0109 is
-  integrated as merge `9d9c41f2223cd35b634a7c722ee4cb5ed9ca620a`, and its authoritative gate was
-  recorded at exact checkpoint head `9c1f2e7b5703d00f476b2115442938c57779f813`
+  integrated/promoted. TASK-0109 is integrated as merge `9d9c41f2223cd35b634a7c722ee4cb5ed9ca620a`;
+  TASK-0110 is integrated as exact three-path merge `1b69af277f96f3f1b5cf3c904abebddfa4074469`;
+  current promotion-evidence checkpoint is `9c1af1abff997f0b7ce9c162b47d75838bc34216`
 - Engine under test: Singular 0.18.0 (self-hosted)
 - Target release: 0.19.0
 - Program: `rel-*` in `docs/orchestration/dag.v0.json`
@@ -53,6 +53,9 @@
 - Native `rel-02-try-hygiene` promotion: 2026-08-14T05:59:43Z–06:21:45Z; fresh 195/195 proof passed at
   clean checkpoint `93b13a47497d5ed179247ed4b4434a043cd63f3e`, authoritative v1 gate validated, and STOP retained
   before composite-runtime construction
+- Rel-02 composite runtime build/freeze: 2026-08-14T06:28:38Z–06:54:39Z; the fresh compact proof matrix
+  passed, an independent reviewer returned PASS, and the exact one-file successor was recursively frozen
+  301/301. It was not activated; STOP and the rounded-99% disk hold prevented any next-wave controller launch
 
 ## Operator boundaries
 
@@ -157,6 +160,9 @@
 | 2026-08-14T05:32:40Z–05:55:27Z | `ORIGIN-20260814T053240Z-TASK0110-NATIVE-R2` | Native TASK-0110 integration retry completed | Exact pre-head `3a104dce` staged only the accepted three paths and produced expected tree `923a88ca445c0684f66905f9ee8ab0cb3f483baf`. The supported gate passed 195/195 in 1,323,329ms; `test-console-server.sh` and both TASK-0110 tests passed, source integrity was `verified` with `changedPaths=[]`, and final application capacity rounded to 98%. A single read-only guard sample briefly rounded to 99% later in the suite, but no gate/control/source drift occurred and the metric returned to 98%. Merge `1b69af277f96f3f1b5cf3c904abebddfa4074469` has parents `[3a104dce,7ca9c5c1]`, exact tree `923a88ca...`, and exact three-path first-parent delta. | Gate log/report SHA-256 `8646d137...` / `65710a7d...`; merge object; source snapshots; terminal guard audit |
 | 2026-08-14T05:59:43Z–06:21:45Z | `ORIGIN-20260814T055942Z-33888` | `rel-02-try-hygiene` promoted authoritatively | At clean checkpoint `93b13a47`/tree `2f30b30f`, the configured promoter SHA-256 `53cf46c8...` ran a fresh `bash tests/run.sh`: 195/195 passed, including console and both TASK-0110 regressions. Gate-result v1 is `passed`, `authoritative`, and `deterministic-proof`; task set is exactly TASK-0110, upstream exactly rel-01, source/task/log/report hashes match, and both `singular gate validate` and `singular area-gate` passed. The disk metric briefly crossed the rounding boundary during L1 tests and ended at 98.512% (rounded 99), but no gate/control/source binding failed. STOP and the empty inbox remained intact. | Regression/observation/report/result SHA-256 `8646d137...` / `dde079fb...` / `7bcda6c2...` / `842bbd60...`; validation outputs; guard audit |
 | 2026-08-14T04:13:28Z | v3 per-process activation preflight | Frozen overlay selected without persistent default/config change | At clean head `2f0d5e62`, repeated frozen verification and L1 syntax, version, DAG validation, and read-only status all passed through the exact overlay environment. HEAD, tracked status, STOP, inbox, and authoritative events remained byte-identical. Existing-packet auto-heal is forced OFF until permanent rel-05; no task was unparked or run. | Activation record SHA-256 `4da4846e...`; status output `3998a3d0...`; frozen verification output `99d30ccb...`; unchanged event SHA `61ed7dd3...` |
+| 2026-08-14T06:28:38Z–06:41:18Z | rel-02 composite construction and proof restart | Exact one-file successor built; initial full-copy proof was stopped for space amplification, then rerun compactly | The first focused root and two mutation roots copied the repository's roughly 1.8 GiB `.git` store three times: exact sizes 1,931,036 + 1,930,576 + 1,930,576 KiB = 5,792,188 KiB (about 5.52 GiB). Free space fell from about 7.3 GiB to about 1.6 GiB and the application metric reached about 99.68% (rounded 100). After confirming zero processes/open handles, only those three exact roots were depth-first deleted. Their pre-restoration output was retained as explicitly noncanonical provenance; fresh compact syntax/anchor, focused TASK-0110, two-line mutation-sensitivity, and 14/14 FR-050/FR-052 canaries then passed. | Exact roots `singular-rel02-focused.dnFOtE`, `singular-rel02-mutation-1.H10sgm`, `singular-rel02-mutation-2.kzNWnk`; excluded inventory SHA-256 `79c4fcd5...`; canonical focused/mutation/V10 logs `c865313e...` / `4e4dddc7...` / `afeeaf37...` |
+| 2026-08-14T06:48:10Z–06:48:35Z | second durable scoped TMP cleanup | 2,503 older synthetic fixture roots removed; no controller work authorized | A pre-hashed 2,503-root manifest removed 456,925,184 allocated bytes of older `legacy-gluerun`, `legacy-pmgo-task9001`, and pre-V10 Singular fixtures. A first validator pass aborted before deletion on five 0755 roots; the corrected exact-path pass deleted all targets and gained 555,683,840 free bytes. STOP, empty inbox, clean Git state, both overlays, 3,983 protected temp roots, and all 28,713 video paths stayed invariant. This is the second durable cleanup record; the earlier TASK-0110 disk-watch cleanup remains the first. | New pre/postcondition SHA-256 `854fbb48...` / `e512338e...`, aborted-pass SHA-256 `8c693ca5...`; prior cleanup record SHA-256 `96239033...` |
+| 2026-08-14T06:52:23Z–06:54:39Z | rel-02 composite verification and freeze | Independent PASS; exact successor frozen; activation explicitly absent | At head `9c1af1ab`/tree `38960d88`, the 300-entry bundle differed from frozen v3 only at executable `engine/l1-drive.sh`; 299 other entries remained identical and `engine/evidence-manifest.sh` stayed `aabfd6d9...`. The fresh six-suite compatibility matrix passed. Independent review returned PASS with no unexpected secret-token matches, then all 301 filesystem objects were set `uchg` and post-freeze verification passed. Pre/post snapshots prove no install, current/default/symlink/config change or activation record; no later controller started. | Exact overlay `singular-0.18.0-canary-rel02-v1-try-hygiene-composite-20260814t062838z`; L1/bundle/delta SHA-256 `5533f114...` / `5cf82603...` / `d69a6d4d...`; independent review `92f0424b...`; post-freeze verification `10ea47b5...`; metadata `e5b04846...`; no-activation snapshots `78a3347a...` / `d42afb0a...` |
 
 ## Finding ledger
 
@@ -1335,7 +1341,10 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   exact one-file inventory, recursive `uchg`, no-activation snapshot, and per-process read-only activation
   preflight all passed independently. Fresh TASK-0110 now demonstrates the clean native path, but permanent
   rel-05 integration and deterministic-recovery parity remain mandatory; rel-99 stays blocked regardless of the
-  rest of the wave.
+  rest of the wave. The rel-02 successor now composes those v3 containment bytes with TASK-0110's two exact
+  per-try cleanup lines. Its fresh 14/14 canary, six compatibility suites, one-file inventory, independent
+  PASS, and 301/301 recursive freeze all verify, but it has not been activated and does not replace the
+  permanent rel-05 requirement.
 
 ### FR-053 — integration reaches a deterministic console disk-watch failure without a matching preflight
 
@@ -1362,7 +1371,40 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   merge `1b69af27` is exact. Fresh rel-02 promotion independently passed 195/195 with the console green again.
   Guard samples later straddled the 98.5% rounding boundary without a gate failure or persisted drift, so every
   later drive still requires the same explicit capacity preflight. This observation is not a new rel-99 release
-  blocker.
+  blocker. A later, separate exact cleanup removed another 2,503 older synthetic fixture roots and gained
+  555,683,840 free bytes, but the 2026-08-14T07:03:29Z sample was still 98.649% (rounded 99). No next-wave
+  controller was launched.
+
+### FR-054 — disposable proof roots copy the full Git object store and amplify disk use
+
+- First seen: 2026-08-14T06:32Z during rel-02 composite proof; frequency: 1/1 initial focused/mutation proof
+  constructions used full repository copies before the compact restart.
+- Classification: new operator-proof harness / space-amplification defect; severity: high for this host;
+  impact: composite freeze and every later drive were held while the application capacity metric rounded 100.
+- Symptom: three disposable roots each copied the repository's roughly 1.8 GiB `.git` store. Exact allocated
+  sizes were 1,931,036 KiB for `singular-rel02-focused.dnFOtE` and 1,930,576 KiB each for
+  `singular-rel02-mutation-1.H10sgm` and `singular-rel02-mutation-2.kzNWnk`: 5,792,188 KiB total (about
+  5.52 GiB). Host free space fell from about 7.3 GiB to about 1.6 GiB; the application metric reached about
+  99.68% and rounded to 100 even though the proof fixtures needed only a small source/test surface.
+- Expected: disposable proof construction shares or omits the large Git object store, checks the application
+  capacity metric before expansion, and installs exact-path cleanup traps. A focused test and its two mutation
+  controls must not require three independent full-history copies.
+- Evidence/containment: exact-path inspection found no live process or open handle. Only those three validated
+  roots were depth-first deleted; all are absent. The first focused path/log and mutation output remain
+  explicitly noncanonical under the overlay record's `excluded-noncanonical/` inventory SHA-256
+  `79c4fcd53eb49a329a9f4957e6a3484ca5f9732c6cfc1f9b065b9c0cb61ccf7e`. This separately validated deletion
+  is not mislabeled as a third durable cleanup record. The first durable record is
+  `.singular-state/operator-cleanups/TASK-0110/20260814T052633Z-console-disk-watch/cleanup-record.json`, SHA-256
+  `962390337142fa2acb6ec8f6a4fb1c080f20657ccdc8e88197e09b0a79818966`. The second is
+  `.singular-state/operator-cleanup-records/cleanup-20260814t064118z-tmp-fixtures-v2/`, with exact pre/post
+  SHA-256 `854fbb48a49c95676c4201e5b2eaa34a0df24d384b9c44dc26bbf765920fcd55` /
+  `e512338ec7fe7288e5f062421fd2ec6f39fcb321ac611e38e558b43916d1fab3` and fail-closed aborted-pass SHA-256
+  `8c693ca504b9e2ef491ce3b7d34ec0ec084090d12656cdba52451e5256559685`.
+- Resolution for this run: mitigated, engine behavior open. The proof restarted with compact fixtures and fresh
+  canonical syntax/anchor, TASK-0110 focused, independently mutation-sensitive, FR-050/FR-052 14-case, and
+  six-suite compatibility logs; independent review returned PASS. The composite was frozen only afterward.
+  Current capacity still rounds 99, so the finding remains an operational next-wave blocker until a fresh
+  below-threshold buffer exists; it is not by itself a new rel-99 product-release blocker.
 
 ## Known-issue observation log
 
@@ -1392,7 +1434,7 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | TASK-0108 | rel-00-contract | integrated as `41380c1b`; authoritative gate passed at 20:27:09Z | 1 | 4 / 2 / 4 | `RUN-20260813T170836Z-93780`; recovery `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256` | Immutable source snapshot; accepted imported packet/audit; final exact-tree 194/194; `rel-00-contract.gate-result.json` |
 | TASK-0109 | rel-01-per-try-logs | integrated as `9d9c41f2`; authoritative gate passed at 00:47:13Z under STOP | 8 | 7 / 3 / 1 (+1 promotion) | Prior three run IDs plus terminal `RUN-20260813T221358Z-8581`; accepted recoveries `...210341...`, `...212941...`; integration `ORIGIN-20260813T230100Z-TASK0109-NATIVE`; promotion `ORIGIN-20260813T235754Z-8483` | Exact six-file `b874a874` accepted with no findings and charge 86,301; native staged integration and exact-head promotion each passed 195/195; v1 gate/hash bindings validate, fake events still eight |
 | TASK-0110 | rel-02-try-hygiene | integrated as exact merge `1b69af27`; authoritative rel-02 gate passed | 4 | 2 primary (+2 paired) / 0 / 2 (1 environmental red, 1 green) + 1 promotion | `RUN-20260814T010432Z-76912`; rejected `RUN-20260814T022422Z-15250`; accepted `RUN-20260814T041625Z-15168`; integrations `ORIGIN-20260814T045100Z-TASK0110-NATIVE` and `...053240Z...R2`; promotion `ORIGIN-20260814T055942Z-33888` | Exact three-file candidate and packet/audit bindings retained; first staged gate was 194/195 only on unchanged console health at 99% disk; cleanup restored 98%; retry and promotion each passed fresh 195/195; exact merge parents/tree/delta and v1 gate/task/upstream/source/log/report bindings all validate |
-| TASK-0111 | rel-03-integrity-reclass | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
+| TASK-0111 | rel-03-integrity-reclass | ready; frontier-eligible after rel-02 promotion, not dispatched | 0 | 0 | — | — |
 | TASK-0112 | rel-04-evidence-remedy | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0113 | rel-05-manifest-remedy-bound | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0114 | rel-06-terminal-handoff | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
@@ -1449,17 +1491,20 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   `949e77752af11ca4ba277b14203a50405fb86cf3`. Acceptance/report evidence was checkpointed as
   `b042f8c4`, and native import produced control checkpoint `72726cee`. After one environmental red and its
   recorded recovery, retry pre-head `3a104dce6ec2d38757bbc8cffc6a8cf92194d551` merged exact worker
-  `7ca9c5c1` as current product head `1b69af277f96f3f1b5cf3c904abebddfa4074469`/tree
-  `923a88ca445c0684f66905f9ee8ab0cb3f483baf` on `agent/integration`. It descends from the v3
+  `7ca9c5c1` as product merge `1b69af277f96f3f1b5cf3c904abebddfa4074469`/tree
+  `923a88ca445c0684f66905f9ee8ab0cb3f483baf`. Post-integration checkpoint `93b13a47` and rel-02
+  promotion-evidence commit `9c1af1abff997f0b7ce9c162b47d75838bc34216` followed; the latter is the current
+  `agent/integration` HEAD with tree `38960d888765884657a294e2bae9cc1ba778558d`. This history descends from the v3
   activation-decision checkpoint `2bf02d3a935bf89c7630caf4d9bf9e15a66e95b1`, recovery-contract checkpoint
   `03a66438d24431fb62427b336aeabd68df2b3019`, amended-wave launch
   `97862d9370649c90ae67c825ed5d14ca3d37e530`, and first-wave control
   head `9f460e09bcca91ec9ee3446896edc5340a0ed1ae`. Ancestor merge `9d9c41f2`
   has the exact TASK-0109 tree, expected parents, and six owned paths; rel-01 promotion remains bound to
   exact launch checkpoint `9c1f2e7b`/tree-index `af2f0cce`.
-- STOP remained present through the 05:55:27Z successful native integration retry. No Singular auto, reconcile,
-  drive/worker writer, integration/gate process, origin lock, or Git-operation lock remains. The earlier paired
-  pass was read-only with respect to the accepted candidate; no post-integration reconcile or promotion ran.
+- STOP remained present through the successful integration retry, authoritative rel-02 promotion, composite
+  proof, and freeze. At the current audit no Singular auto, reconcile, drive/worker writer, integration/gate
+  process, origin lock, or Git-operation lock exists. The composite was not activated, TASK-0111/TASK-0115/
+  TASK-0116 were not launched, and the next-wave controller-launch count is zero.
 - Gates are now 3/18. TASK-0108/TASK-0109/TASK-0110 are `integrated`, and rel-00/rel-01/rel-02 are
   authoritatively passed under STOP;
   TASK-0115/TASK-0116 remain `blocked` under explicit amended contracts; the other 13 sprint tasks are
@@ -1476,14 +1521,16 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   staged integration created no merge commit; retry merge `1b69af27` has exact parents/tree/three-path delta.
   The authoritative event log has 3,373 lines and still contains exactly the original eight `resume-run`
   fixture events.
-- Configured/effective capacity remains 3/3. The earlier direct wave launched TASK-0110/TASK-0115/TASK-0116
+- Configured concurrency remains 3 and no slot is in use. The earlier direct wave launched TASK-0110/TASK-0115/TASK-0116
   from one exact base in the same second. The later TASK-0110-only reset ran from exact base `94876831` under v3,
   stayed source/scope clean, and produced accepted `7ca9c5c1`. Its exact packet is imported; the first integration
   failed only the environmental console disk-watch condition, and the retry passed 195/195/source clean before
-  creating exact merge `1b69af27`.
-- Runtime is now the absolute, recursively `uchg` v3 overlay
-  `singular-0.18.0-canary-rel01-v3-manifest-bind-fr050-20260814t025814z`, selected only through
-  `SINGULAR_ENGINE_HOME` with existing-packet auto-heal OFF. It differs from the frozen rel-01-v2 predecessor
+  creating exact merge `1b69af27`. Independent 2026-08-14T07:03:29Z capacity sampling found 6,678,237,184
+  free bytes and 98.649% used, which still rounds to the console/controller hold threshold of 99; configured
+  concurrency therefore does not authorize a launch.
+- The last actuated L1 runtime was the absolute, recursively `uchg` v3 overlay
+  `singular-0.18.0-canary-rel01-v3-manifest-bind-fr050-20260814t025814z`, selected only in the relevant
+  `SINGULAR_ENGINE_HOME` process with existing-packet auto-heal OFF. It differs from frozen rel-01-v2
   only at `engine/l1-drive.sh`; the other 299 entries, including the provider-correct
   `evidence-manifest.sh`, are byte-identical. Its bundle is `79d255df...`; activation record is
   `4da4846e...`. Both waves verified that
@@ -1491,11 +1538,30 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   defect at 101,302, 178,060, and now 147,124 fresh primary-reviewer input. The active per-process v3
   mitigation is independently verified and recursively frozen: l1 SHA `ebec05d7...`, bundle `79d255df...`,
   metadata `71c08fd0...`, and post-freeze proof `53cd2874...`. The fresh native acceptance exercised that
-  overlay's clean path end-to-end and left root/manifest/inbox correctly bound at `264577d6...`. V3 deliberately
-  remains frozen and lacks TASK-0110's two integrated cleanup lines; rel-02 promotion is now exact and green,
-  but no later L1 drive may start until a new independently verified composite overlay is frozen and selected
-  per process. The disk metric ended promotion at 98.512% (rounded 99), so that handoff also requires a fresh
-  below-threshold capacity preflight.
+  overlay's clean path end-to-end and left root/manifest/inbox correctly bound at `264577d6...`.
+- The exact successor at
+  `/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.singular-state/operator-engine-overlays/singular-0.18.0-canary-rel02-v1-try-hygiene-composite-20260814t062838z`
+  now preserves v3 and adds only TASK-0110's cleanup of `last-message.json` before each try and before same-try
+  rc-86 fresh fallback. Exact SHA-256 values are L1
+  `5533f114f3af8509ce16d47149204cc7f5a68eee8e225f58686a57e221bf784c`, 300-entry bundle
+  `5cf826030002adcefd08498639e2fa13139df5c6841191324bd5c36b610deb87`, predecessor delta
+  `d69a6d4ddd160885b17d7d6e99489fed98e8f88a92393980d8e6f0eea92d27fa`, and preserved
+  `engine/evidence-manifest.sh` `aabfd6d9b868cbeb12816b25a12477761b95b862f4be245e0c8311a3ee3ce25d`.
+  The other 299 entries are identical, the fresh compact proof matrix and independent review passed, and all
+  301 objects are `uchg`. Canonical metadata, independent review, and post-freeze verification SHA-256 values
+  are `e5b048462b2251b52f295e0d0a2fcb692ad47d39c717d51d255551f48aa82887`,
+  `92f0424bd61d294b52846d877eb2949404702b07ef2c890f538d880d74cb9d79`, and
+  `10ea47b5d61f677a6812b39b5fc270350afa84e438766f0095f9c8f4b1ea9010`. Pre/post no-activation snapshot
+  SHA-256 values `78a3347a7a49a49b1f9e7d823cec78475000ebe5a2456236116fab72e583bf3d` and
+  `d42afb0ae17f9f2408e6afe62ddb26627203459172ca99ec06f9b926d2fefc72` prove no install/default/current-
+  symlink/config or activation change. It has not been selected for a controller; every later L1 drive still
+  requires both an explicit per-process handoff and a fresh below-threshold capacity preflight.
+- The compact proof matrix is itself hash-bound: syntax/anchors
+  `336f94e1eeb81e824934951e74055022848a91177e6615247e9b332a0577e3da`, focused TASK-0110
+  `c865313eba3aa4e9f93b1e2e00a9b3992703a8dcf959d77beac1284f57de3887`, two independent cleanup-line
+  mutations `4e4dddc71489c980cbbf238410fa204acafe0735446914a6b6a78612e00fc8d5`, FR-050/FR-052 14/14
+  `afeeaf37929942306bd9cc2e158cc8045858cbadc7f27a7f08ab68e7c7d77ce8`, and the exact-byte six-suite
+  compatibility run `2357f176ded03f8546533fe41edb1fa1cdaafe400d758743b0391eaa85fa1e76`.
 - No push, tag, publish, install, current-symlink/default flip, blind unpark, old-candidate cherry-pick, or
   tracked driver engine patch occurred. All exceptional recovery and exact-tree proof actions remain in
   ignored, hash-indexed operator evidence.
@@ -1525,12 +1591,14 @@ agreement. Its first staged integration failed closed at 194/195 only on the env
 watch, then left no merge residue. Exact fixture cleanup restored the application metric to 98% and the focused
 console suite passed 275/275; the fresh full integration then passed 195/195 and created exact merge
 `1b69af27`. Rel-02 promotion independently passed another 195/195 and its authoritative v1 gate validates.
-A frozen composite runtime remains required before later drives. FR-047 is
+The exact composite runtime is now independently verified and frozen, but remains unactivated; the current
+rounded-99 disk sample prevents its next-wave selection. FR-047 is
 assigned to rel-06 and FR-049 to the rel-99 operator-disposition
 inventory; FR-048/FR-051 and the permanent FR-050/FR-052 remedies remain release blockers. FR-053 is
-operationally resolved for this retry and is not a new release blocker. V3 now contains the
-fresh native L1 binding/secret-ordering path, but rel-05 has not yet shipped the shared native/deterministic
-finalizer. Rel-99 must remain
+operationally resolved for the completed integration retry; FR-054 is a current next-wave capacity blocker,
+not a new product-release blocker. V3 contains the fresh native L1 binding/secret-ordering path and the frozen
+composite adds the two promoted per-try cleanup lines, but rel-05 has not yet shipped the shared native/
+deterministic finalizer. Rel-99 must remain
 pending until every non-release gate is
 authoritative/passed, every park and material finding has explicit disposition, the exact release diff and
 synchronized version surfaces are green, the field-report canary and fresh-consumer proof pass, and the
