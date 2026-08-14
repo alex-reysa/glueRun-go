@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T22:59:21Z — TASK-0112 — decide:retry
+
+- Run: `RUN-20260814T225643Z-30248`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
 ### 2026-08-14T20:09:51Z — TASK-0116 — integrate
 
 - Run: `ORIGIN-20260814T194512Z-13844`
