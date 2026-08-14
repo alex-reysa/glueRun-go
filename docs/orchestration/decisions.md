@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T04:28:24Z — TASK-0110 — accept
+
+- Run: `RUN-20260814T041625Z-15168`
+- Branch: `agent/session/TASK-0110-try-hygiene`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-08-14T04:15:47Z — TASK-0110 — unpark
 
 - Run: `ORIGIN-20260814T041546Z-15069`
