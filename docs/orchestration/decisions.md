@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T05:55:27Z — TASK-0110 — integrate
+
+- Run: `ORIGIN-20260814T053240Z-TASK0110-NATIVE-R2`
+- Branch: `agent/session/TASK-0110-try-hygiene`
+- Authority: origin
+- Rationale: merged agent/session/TASK-0110-try-hygiene (7ca9c5c14a5816516c4d9769241e8c87f29122ee) into agent/integration as 1b69af277f96f3f1b5cf3c904abebddfa4074469; gate green; acceptance=accepted
+
 ### 2026-08-14T05:13:04Z — TASK-0110 — decide:rerun-tests
 
 - Run: `ORIGIN-20260814T045100Z-TASK0110-NATIVE`
