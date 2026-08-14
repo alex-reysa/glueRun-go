@@ -115,6 +115,7 @@ function showSurface(name) {
   document.querySelectorAll("#surface-tabs [data-surface], #side-nav [data-surface]").forEach((b) => {
     b.setAttribute("aria-pressed", String(b.dataset.surface === name));
   });
+  if (bus.onSurfaceChange) bus.onSurfaceChange(name);
 }
 
 // ------------------------------------------------------------- resolve -----

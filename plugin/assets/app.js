@@ -396,36 +396,156 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
   }
 
   // ========================================================= INSPECTOR ======
-  function select(kind, id) {
-    // Plan-surface node selection is owned by the workbench aside (360px
-    // drilldown), NOT the bottom sheet — but only when nothing is already open in
-    // the sheet (a node chip clicked inside an open task inspector still opens the
-    // node in the sheet, replacing the task view, as before).
-    if (kind === "node" && bus.onNodeSelect && bus.planVisible && bus.planVisible() && S.selectedKind === "none") {
+  let inspectorReturnFocus = null;
+  const storedInspectorHeight = Number(localStorage.getItem("singular.inspector.height"));
+  let preferredInspectorHeight = Number.isFinite(storedInspectorHeight) && storedInspectorHeight > 0
+    ? Math.round(Math.max(176, Math.min(560, storedInspectorHeight)))
+    : 320;
+  let inspectorHeight = preferredInspectorHeight;
+
+  function inspectorLimits() {
+    const chrome = 44 + 32 + (document.body.classList.contains("historical") ? 30 : 0);
+    const usable = Math.max(360, window.innerHeight - chrome);
+    const min = Math.min(220, Math.max(176, usable - 240));
+    const max = Math.max(min, Math.min(560, usable - 220));
+    return { min, max };
+  }
+
+  function setInspectorHeight(value, persist) {
+    const limits = inspectorLimits();
+    inspectorHeight = Math.round(Math.max(limits.min, Math.min(limits.max, Number(value) || 320)));
+    const app = $("app");
+    if (app) app.style.setProperty("--inspector-height", inspectorHeight + "px");
+    const grip = $("inspector-grip");
+    if (grip) {
+      grip.setAttribute("aria-valuemin", String(limits.min));
+      grip.setAttribute("aria-valuemax", String(limits.max));
+      grip.setAttribute("aria-valuenow", String(inspectorHeight));
+      grip.setAttribute("aria-valuetext", inspectorHeight + " pixels high");
+    }
+    if (persist) {
+      preferredInspectorHeight = inspectorHeight;
+      localStorage.setItem("singular.inspector.height", String(preferredInspectorHeight));
+    }
+  }
+
+  function setInspectorCollapsed(collapsed) {
+    const insp = $("inspector");
+    if (!insp) return;
+    insp.dataset.collapsed = String(!!collapsed);
+    const button = $("insp-collapse");
+    if (button) {
+      button.setAttribute("aria-expanded", String(!collapsed));
+      button.setAttribute("aria-label", collapsed ? "Expand details" : "Collapse details");
+      button.title = collapsed ? "Expand details" : "Collapse details";
+    }
+    syncInspectorPresentation();
+  }
+
+  function syncInspectorPresentation() {
+    const insp = $("inspector"), app = $("app"), scrim = $("inspector-scrim");
+    if (!insp || !app || !scrim) return;
+    const wasDocked = insp.dataset.presentation === "dock";
+    const open = S.selectedKind !== "none";
+    const narrow = !!(window.matchMedia && window.matchMedia("(max-width: 760px)").matches);
+    const docked = open && !narrow && !!(bus.planVisible && bus.planVisible());
+    const collapsed = open && insp.dataset.collapsed === "true";
+    insp.dataset.presentation = docked ? "dock" : "modal";
+    app.dataset.inspectorDocked = String(docked);
+    app.dataset.inspectorCollapsed = String(docked && collapsed);
+    scrim.dataset.open = String(open && !docked && !collapsed);
+    insp.setAttribute("aria-hidden", String(!open));
+    insp.toggleAttribute("inert", !open);
+    const grip = $("inspector-grip");
+    if (grip) {
+      grip.tabIndex = docked && !collapsed ? 0 : -1;
+      grip.setAttribute("aria-disabled", String(!docked || collapsed));
+    }
+    if (docked || collapsed) {
+      insp.setAttribute("role", "region");
+      insp.removeAttribute("aria-modal");
+    } else {
+      insp.setAttribute("role", "dialog");
+      insp.setAttribute("aria-modal", "true");
+    }
+    if (wasDocked && !docked && open && !collapsed && !insp.contains(document.activeElement)) {
+      focusInspectorModal(true);
+    }
+  }
+
+  function focusInspectorModal(onlyIfOutside) {
+    const insp = $("inspector");
+    if (!insp || insp.dataset.presentation !== "modal" || insp.dataset.collapsed === "true") return;
+    requestAnimationFrame(() => {
+      if (S.selectedKind === "none" || insp.dataset.presentation !== "modal" || insp.dataset.collapsed === "true") return;
+      if (!onlyIfOutside || !insp.contains(document.activeElement)) $("inspector-title").focus({ preventScroll: true });
+    });
+  }
+
+  function restoreInspectorFocus() {
+    const saved = inspectorReturnFocus;
+    inspectorReturnFocus = null;
+    requestAnimationFrame(() => {
+      const target = saved && saved.isConnected && !$("inspector").contains(saved)
+        ? saved
+        : document.querySelector('#plan-lens-tabs [role="tab"][aria-selected="true"]');
+      if (target && target.focus) target.focus({ preventScroll: true });
+    });
+  }
+
+  function trapInspectorFocus(e) {
+    const insp = $("inspector");
+    if (e.key !== "Tab" || S.selectedKind === "none" || !insp || insp.dataset.presentation !== "modal" || insp.dataset.collapsed === "true") return false;
+    const focusable = [...insp.querySelectorAll('button:not([disabled]):not([hidden]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => !el.closest("[hidden]") && el.getClientRects().length);
+    if (!focusable.length) { e.preventDefault(); $("inspector-title").focus(); return true; }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    const activeIndex = focusable.indexOf(document.activeElement);
+    if (activeIndex < 0) { e.preventDefault(); (e.shiftKey ? last : first).focus({ preventScroll: true }); return true; }
+    if (e.shiftKey && activeIndex === 0) { e.preventDefault(); last.focus({ preventScroll: true }); return true; }
+    if (!e.shiftKey && activeIndex === focusable.length - 1) { e.preventDefault(); first.focus({ preventScroll: true }); return true; }
+    return false;
+  }
+
+  function select(kind, id, opts) {
+    opts = opts || {};
+    const onPlan = !!(bus.planVisible && bus.planVisible());
+    // The workbench owns the shared marker + route for Plan nodes; it calls back
+    // with fromPlan so the one rich inspector renders the actual detail.
+    if (kind === "node" && onPlan && !opts.fromPlan && bus.onNodeSelect) {
       bus.onNodeSelect(id);
       return;
     }
-    S.selectedKind = kind; S.selectedId = id;
-    // Open/close the inspector bottom-sheet modal (scrim + slide-up sheet).
-    const insp = $("inspector");
+    if (onPlan && kind !== "node" && bus.onPlanSelectionClear) bus.onPlanSelectionClear();
+    const wasOpen = S.selectedKind !== "none";
     const open = kind !== "none";
+    const changed = kind !== S.selectedKind || id !== S.selectedId;
+    if (open && !wasOpen) {
+      const active = document.activeElement;
+      inspectorReturnFocus = active && active !== document.body && !$("inspector").contains(active) ? active : null;
+    }
+    S.selectedKind = kind; S.selectedId = id;
+    const insp = $("inspector");
+    if (open && (changed || !wasOpen)) setInspectorCollapsed(false);
     insp.dataset.subjectKind = kind;
     insp.dataset.taskId = kind === "l2" ? id : "";
-    insp.setAttribute("aria-hidden", String(!open));
-    insp.style.transform = ""; // clear any drag offset so CSS open/close takes over
-    $("inspector-scrim").dataset.open = String(open);
+    syncInspectorPresentation();
     // The router owns the URL hash; fall back to a legacy write if unwired (dev).
     if (bus.writeRoute) {
       if (kind === "l2") bus.writeRoute("task", id, S.inspTab);
       else if (kind === "node") bus.writeRoute("node", id, null);
       else if (kind === "overview") bus.writeRoute("overview", "plan", null);
+      else if (kind === "none") bus.writeRoute("none", null, null);
     } else {
       if (kind === "l2") { try { history.replaceState(null, "", "#" + id); } catch (e) {} }
       else if (kind === "node") { try { history.replaceState(null, "", "#NODE:" + id); } catch (e) {} }
       else if (kind === "overview") { try { history.replaceState(null, "", "#PLAN"); } catch (e) {} }
+      else if (kind === "none") { try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {} }
     }
     applyMarkers();
     renderInspector();
+    if (open) focusInspectorModal();
+    else restoreInspectorFocus();
   }
 
   // If an L2 inspector is open, drop its cached detail and refetch when the live
@@ -463,7 +583,9 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     $("insp-sub").innerHTML = sub
       ? `<span>${esc(sub)}</span>${mono ? `<span class="mono">${esc(mono)}</span>` : ""}`
       : "";
-    $("insp-pin").setAttribute("aria-pressed", String(S.pinnedId && S.pinnedId === id));
+    const pin = $("insp-pin");
+    pin.hidden = S.selectedKind !== "l2";
+    pin.setAttribute("aria-pressed", String(S.pinnedId && S.pinnedId === id));
     // "open console" is an L2-task-with-runId affordance only; renderTaskDetail
     // re-shows it after this. Hide it for every other subject.
     const cb = $("insp-console"); if (cb) { cb.hidden = true; cb.dataset.runid = ""; }
@@ -1115,32 +1237,81 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
 
   // ---- Plan overview ("mission control": progress · inputs · settings · status) ----
   function renderInspectorOverview() {
-    setInspHeader("PLAN", "plan overview", "orchestration mission control", null, "");
+    setInspHeader("PLAN", "plan overview", "campaign progress and control state", null, "");
     setTabs(["progress", "inputs", "settings", "status"]);
     const o = S.overview;
     if (!o) { showInspState("skeleton"); fetchOverview(); return; }
     showPanels(ovProgressPanel(o) + ovInputsPanel(o) + ovSettingsPanel(o) + ovStatusPanel(o));
   }
 
-  // Live heartbeat — node % is a coarse 34-node metric that sits flat for hours while
-  // L2 tasks grind toward one node's gate; this strip shows the loop IS moving.
-  function ovPulseStrip(o) {
+  // One truthful execution-state model feeds both the control summary and its
+  // telemetry. STOP deliberately blocks new dispatch without cancelling work that
+  // was already in verification, so the UI says exactly that instead of making a
+  // safety hold look like a broken engine.
+  function ovExecutionState(o) {
     const p = o.pulse || {};
     const age = p.activityAgeSeconds;
-    let state, tone, label;
-    if (!p.running) { state = "stopped"; tone = "idle"; label = "stopped"; }
-    else if (age != null && age <= 600) { state = "progressing"; tone = "integrated"; label = "running"; }
-    else { state = "idle"; tone = "stale"; label = "running · quiet"; }
-    const stat = (k, v) => `<span class="pulse-stat"><span class="ps-k">${k}</span><span class="ps-v">${v}</span></span>`;
-    return `<div class="pulse-strip" data-state="${state}">
-      <span class="pulse-led" data-tone="${tone}"></span>
-      <span class="pulse-label">${esc(label)}${p.activeArea ? ` · <span class="pulse-area">${esc(p.activeArea)}</span>` : ""}</span>
-      <span class="pulse-stats">
-        ${stat("iter", p.iteration != null ? p.iteration : "—")}
-        ${stat("last", p.lastActivityAt ? relTime(p.lastActivityAt, o.generatedAt) + " ago" : "—")}
-        ${stat("integ/hr", p.recentIntegrations != null ? p.recentIntegrations : "—")}
-        ${stat("lifetime", p.integrationsLifetime != null ? p.integrationsLifetime : "—")}
-      </span>
+    const reason = String((o.loop && o.loop.stopReason) || "").trim();
+    const sentinel = /STOP sentinel/i.test(reason);
+    let compactReason = reason.replace(/^stopped\s*/i, "").trim();
+    compactReason = compactReason.replace(/^[-—:]\s*/, "");
+    if (/^\([^()]+\)$/.test(compactReason)) compactReason = compactReason.slice(1, -1);
+
+    if (!p.running) {
+      const approval = /approval required/i.test(reason);
+      return {
+        state: "stopped",
+        tone: "idle",
+        label: "Stopped",
+        detail: sentinel ? "STOP sentinel" : (compactReason || "No active dispatch"),
+        note: approval
+          ? "A human decision is required before this frontier can advance."
+          : sentinel
+            ? "New dispatch is held; in-flight verification may still finish."
+            : "The control loop is not dispatching new work.",
+        reason,
+        sentinel,
+      };
+    }
+    if (age != null && age <= 600) {
+      return {
+        state: "progressing",
+        tone: "success",
+        label: "Running",
+        detail: p.activeArea ? `${p.activeArea} frontier` : "Recent activity",
+        note: p.activeArea
+          ? `The control loop is advancing the ${p.activeArea} frontier.`
+          : "The control loop is active and reporting recent work.",
+        reason: "",
+        sentinel: false,
+      };
+    }
+    return {
+      state: "quiet",
+      tone: "stale",
+      label: "Running · quiet",
+      detail: p.activeArea ? `${p.activeArea} frontier` : "No recent signal",
+      note: "No recent signal has landed; the control loop remains active.",
+      reason: "",
+      sentinel: false,
+    };
+  }
+
+  // Live heartbeat — node % is a coarse metric that can sit flat for hours while
+  // L2 tasks grind toward a gate. This compact ledger exposes the changing signal
+  // without repeating the STOP state already explained beside campaign progress.
+  function ovPulseStrip(o) {
+    const p = o.pulse || {};
+    const exec = ovExecutionState(o);
+    const stat = (k, v) => `<div class="pulse-stat"><dt class="ps-k">${esc(k)}</dt><dd class="ps-v">${esc(String(v))}</dd></div>`;
+    return `<div class="pulse-strip" data-state="${exec.state}" aria-label="Latest control-loop telemetry">
+      <span class="meta-label pulse-strip-label">latest signal</span>
+      <dl class="pulse-stats">
+        ${stat("iteration", p.iteration != null ? p.iteration : "—")}
+        ${stat("last activity", p.lastActivityAt ? relTime(p.lastActivityAt, o.generatedAt) + " ago" : "—")}
+        ${stat("integrations / hour", p.recentIntegrations != null ? p.recentIntegrations : "—")}
+        ${stat("total integrations", p.integrationsLifetime != null ? p.integrationsLifetime : "—")}
+      </dl>
     </div>`;
   }
 
@@ -1151,17 +1322,17 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     if (!fa.length) return '<span class="section-empty">all nodes gated — plan complete</span>';
     return fa.map((a) => {
       const nodes = (a.nodes || []).map((n) =>
-        `<button class="dep-chip" data-node-id="${escAttr(n.id)}" data-nav-node="1">${toneDot(gateTone(n.status))}<span class="dep-chip-id">${esc(n.id)}</span></button>`).join("");
+        `<button type="button" class="dep-chip" data-node-id="${escAttr(n.id)}" data-nav-node="1" aria-label="Open ${escAttr(n.id)} · ${escAttr(n.status)}">${toneDot(gateTone(n.status))}<span class="dep-chip-id">${esc(n.id)}</span></button>`).join("");
       const rate = a.recentIntegrations > 0
         ? `<span class="fa-rate"><span class="num">${a.recentIntegrations}</span> integrated · ${esc(relTime(a.lastAt, o.generatedAt))} ago</span>`
-        : `<span class="fa-rate fa-quiet">no recent integrations</span>`;
-      return `<div class="fa-row${a.active ? " fa-active" : ""}">
+        : `<span class="fa-rate fa-quiet">No recent integrations</span>`;
+      return `<div class="fa-row${a.active ? " fa-active" : ""}" role="listitem">
         <div class="fa-head">
           <span class="fa-area">${toneDot(a.active ? "integrated" : "idle")}<span>${esc(a.area)}</span></span>
           ${a.active ? '<span class="fa-tag">active</span>' : ""}
-          ${rate}
         </div>
-        <div class="chips-row">${nodes}</div>
+        <div class="chips-row fa-nodes">${nodes}</div>
+        ${rate}
       </div>`;
     }).join("");
   }
@@ -1172,23 +1343,34 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
   // no WHY is exactly the reading that made a deliberate operator hold look like
   // a broken engine.
   function ovExecChip(o) {
-    const running = !!(o.pulse && o.pulse.running);
-    const reason = (o.loop && o.loop.stopReason) || "";
-    const label = running ? "running" : (reason ? "stopped — " + reason : "stopped");
-    return `<span class="status-chip ov-exec-chip" data-tone="${running ? "success" : "idle"}">${toneDot(running ? "integrated" : "idle")}<span>${esc(label)}</span></span>`;
+    const exec = ovExecutionState(o);
+    const dotTone = exec.tone === "success" ? "integrated" : exec.tone;
+    const title = exec.reason ? ` title="${escAttr(exec.reason)}"` : "";
+    return `<div class="ov-exec-state" data-state="${exec.state}"${title}>
+      <div class="ov-exec-line">
+        <span class="status-chip ov-exec-chip" data-tone="${exec.tone}">${toneDot(dotTone)}<span>${esc(exec.label)}</span></span>
+        <span class="ov-exec-reason mono">${esc(exec.detail)}</span>
+      </div>
+      <p class="ov-exec-note">${esc(exec.note)}</p>
+    </div>`;
   }
 
   function ovProgressPanel(o) {
     const p = o.progress || {};
     const ladder = (o.stages || []).map((s) => {
       const pct = s.total ? Math.round(100 * s.passed / s.total) : 0;
+      const stage = String(s.stage || "");
+      const stageParts = /^([A-Za-z]+\d+)-(.*)$/.exec(stage);
+      const stageCode = stageParts ? stageParts[1] : "";
+      const stageName = (stageParts ? stageParts[2] : stage).replace(/-/g, " ");
+      const stageLabel = stageCode ? `${stageCode} ${stageName}` : stageName;
       const pips = (s.nodes || []).map((n) =>
-        `<button class="ph-pip" data-node-id="${escAttr(n.id)}" data-nav-node="1" data-tone="${gateTone(n.status)}" title="${escAttr(n.id + " · " + n.status)}"></button>`).join("");
-      return `<div class="ph-row" data-status="${esc(s.status)}">
-        <span class="ph-stage">${esc(s.stage)}</span>
-        <span class="ph-bar"><span class="ph-fill" data-status="${esc(s.status)}" style="width:${pct}%"></span></span>
-        <span class="ph-pips">${pips}</span>
-        <span class="ph-count">${s.passed}/${s.total}</span>
+        `<button type="button" class="ph-pip" data-node-id="${escAttr(n.id)}" data-nav-node="1" data-tone="${gateTone(n.status)}" title="${escAttr(n.id + " · " + n.status)}" aria-label="Open ${escAttr(n.id)} · ${escAttr(n.status)}"></button>`).join("");
+      return `<div class="ph-row" data-status="${esc(s.status)}" role="listitem">
+        <span class="ph-stage" title="${escAttr(stage)}"><span class="ph-stage-code">${esc(stageCode)}</span><span class="ph-stage-name">${esc(stageName)}</span></span>
+        <span class="ph-bar" role="progressbar" aria-label="${escAttr(stageLabel)} progress" aria-valuemin="0" aria-valuemax="${s.total}" aria-valuenow="${s.passed}" aria-valuetext="${s.passed} of ${s.total} nodes gated"><span class="ph-fill" data-status="${esc(s.status)}" style="width:${pct}%"></span></span>
+        <span class="ph-pips" aria-label="${escAttr(stageLabel)} node status">${pips}</span>
+        <span class="ph-count" aria-label="${s.passed} of ${s.total} nodes gated">${s.passed}/${s.total}</span>
       </div>`;
     }).join("");
     // PMGO-002 — the primary number is the CURRENT campaign. The historical
@@ -1196,26 +1378,47 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     // construction) and can never be a denominator this run is measured against;
     // reporting one blended "13 / 44 DAG nodes gated complete" beside a loop that
     // had never actuated made every reading of that number wrong. The combined
-    // figure survives as secondary mono text. No `cohorts` (older server) → the
-    // block renders exactly as it did before, chip and all.
+    // figure survives as secondary mono text. No `cohorts` (older server) falls
+    // back to the legacy aggregate without inventing a campaign split.
     const cur = p.cohorts && p.cohorts.current;
     const hist = (p.cohorts && p.cohorts.historical) || {};
-    const pct = cur ? cur.pct : p.pct;
+    const pctRaw = cur ? cur.pct : p.pct;
+    const pct = Number.isFinite(Number(pctRaw)) ? Math.max(0, Math.min(100, Math.round(Number(pctRaw)))) : null;
+    const passed = cur ? (cur.passed || 0) : (p.passedNodes || 0);
+    const total = cur ? (cur.total || 0) : (p.totalNodes || 0);
     const sub = cur
-      ? `${cur.passed || 0} / ${cur.total || 0} current campaign`
-      : `${p.passedNodes || 0} / ${p.totalNodes || 0} DAG nodes gated complete`;
+      ? `${passed} of ${total} nodes gated`
+      : `${passed} of ${total} DAG nodes gated`;
     const cohortLine = cur
-      ? `<div class="ov-progress-cohort mono">historical accepted ${hist.passed || 0}/${hist.total || 0} · combined ${p.passedNodes || 0}/${p.totalNodes || 0}</div>`
+      ? `<div class="ov-progress-cohort mono" aria-label="Historical accepted ${hist.passed || 0} of ${hist.total || 0}; combined ${p.passedNodes || 0} of ${p.totalNodes || 0}"><span>Historical accepted</span><span class="ov-cohort-value">${hist.passed || 0}/${hist.total || 0}</span><span aria-hidden="true">·</span><span>Combined</span><span class="ov-cohort-value">${p.passedNodes || 0}/${p.totalNodes || 0}</span></div>`
       : "";
-    return `<div class="tab-panel" data-tab="progress">
-      <div class="field-block">
-        <div class="ov-progress-head"><span class="ov-pct">${pct != null ? pct + "%" : "—"}</span>
-          <span class="ov-progress-sub">${sub}</span>${cur ? ovExecChip(o) : ""}</div>
-        <div class="ov-progress-bar"><span class="ov-progress-fill" style="width:${pct || 0}%"></span></div>${cohortLine}
-      </div>
+    const exec = ovExecutionState(o);
+    const frontierTitle = exec.state === "stopped" ? "frontier held" : "frontier activity";
+    const frontierNote = exec.state === "stopped"
+      ? (exec.sentinel ? "Ready work remains visible while new dispatch is held." : "Ready work remains visible while the control loop is stopped.")
+      : "Areas currently feeding the control loop.";
+    return `<div class="tab-panel ov-progress-panel" data-tab="progress">
+      <section class="ov-summary" aria-label="Current campaign and control-loop state">
+        <div class="ov-campaign">
+          <span class="meta-label">current campaign</span>
+          <div class="ov-progress-head"><span class="ov-pct">${pct != null ? pct + "%" : "—"}</span><span class="ov-progress-sub">${esc(sub)}</span></div>
+          <div class="ov-progress-bar" role="progressbar" aria-label="Current campaign progress" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${passed}" aria-valuetext="${passed} of ${total} nodes gated"><span class="ov-progress-fill" style="width:${pct || 0}%"></span></div>
+          ${cohortLine}
+        </div>
+        <div class="ov-control-state">
+          <span class="meta-label">control loop</span>
+          ${ovExecChip(o)}
+        </div>
+      </section>
       ${ovPulseStrip(o)}
-      <div class="field-block"><span class="meta-label">phases · D-stages + S0</span><div class="ph-ladder">${ladder}</div></div>
-      <div class="field-block"><span class="meta-label">active work · where the loop is grinding now</span><div class="fa-list">${ovActivityRows(o)}</div></div>
+      <section class="field-block ov-phase-block" aria-label="Phase progress">
+        <div class="ov-section-head"><span class="meta-label">phase progress</span><span class="ov-section-note mono">D-stages + S0</span></div>
+        <div class="ph-ladder" role="list">${ladder}</div>
+      </section>
+      <section class="field-block ov-frontier-block" aria-label="${frontierTitle}">
+        <div class="ov-section-head"><span class="meta-label">${frontierTitle}</span><span class="ov-section-note">${esc(frontierNote)}</span></div>
+        <div class="fa-list" role="list">${ovActivityRows(o)}</div>
+      </section>
     </div>`;
   }
 
@@ -1472,8 +1675,8 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     else if (/^L1:/.test(id)) select("l1", id);
   }
 
-  // Open a task in the inspector bottom sheet, and (on the Plan surface) switch to
-  // the Tasks lens and scroll/ring its row — the lens handles the scroll.
+  // Open a task in the shared inspector and, for explicit task navigation, switch
+  // to the Tasks lens and scroll/ring its row — the lens handles the scroll.
   function navigateToTask(id) {
     select("l2", id);
     if (bus.onTaskNavigate) bus.onTaskNavigate(id);
@@ -1505,38 +1708,53 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     planRefresh();
   }
 
-  // -------------------------------------------------- inspector bottom sheet
-  // Grip affordance: tap dismisses; drag the sheet down past a threshold dismisses,
-  // a small drag snaps back. (Esc and the scrim also dismiss.)
+  // ------------------------------------------------ shared inspector dock --
+  // The top separator resizes the wide Plan dock. On narrow screens the same
+  // component is a modal drawer; close/collapse remain explicit controls rather
+  // than overloading a drag gesture with destructive dismissal.
   function initInspectorSheet() {
     const insp = $("inspector");
     const grip = $("inspector-grip");
     let drag = null;
     const onMove = (e) => {
       if (!drag) return;
-      const dy = e.clientY - drag.y;
-      if (Math.abs(dy) > 4) drag.moved = true;
-      insp.style.transform = "translateY(" + Math.max(0, dy) + "px)";
+      setInspectorHeight(drag.height + drag.y - e.clientY, false);
     };
-    const end = (e) => {
+    const end = () => {
       if (!drag) return;
-      const dy = Math.max(0, (e.clientY || drag.y) - drag.y);
-      const moved = drag.moved;
       drag = null;
       insp.classList.remove("dragging");
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", end);
       window.removeEventListener("pointercancel", end);
-      if (!moved || dy > 130) select("none", null); // tap or far drag → dismiss
-      else insp.style.transform = "";               // small drag → snap back
+      setInspectorHeight(inspectorHeight, true);
     };
     grip.addEventListener("pointerdown", (e) => {
-      drag = { y: e.clientY, moved: false };
+      if (insp.dataset.presentation !== "dock" || insp.dataset.collapsed === "true") return;
+      e.preventDefault();
+      drag = { y: e.clientY, height: inspectorHeight };
       insp.classList.add("dragging");
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", end);
       window.addEventListener("pointercancel", end);
     });
+    grip.addEventListener("keydown", (e) => {
+      if (insp.dataset.presentation !== "dock" || insp.dataset.collapsed === "true") return;
+      const limits = inspectorLimits();
+      let next = inspectorHeight;
+      if (e.key === "ArrowUp") next += e.shiftKey ? 48 : 16;
+      else if (e.key === "ArrowDown") next -= e.shiftKey ? 48 : 16;
+      else if (e.key === "Home") next = limits.min;
+      else if (e.key === "End") next = limits.max;
+      else return;
+      e.preventDefault();
+      setInspectorHeight(next, true);
+    });
+    grip.addEventListener("dblclick", () => {
+      if (insp.dataset.presentation === "dock" && insp.dataset.collapsed !== "true") setInspectorHeight(320, true);
+    });
+    setInspectorHeight(preferredInspectorHeight, false);
+    syncInspectorPresentation();
   }
 
   // =========================================================== OVERLAY ======
@@ -1739,13 +1957,17 @@ import { apiFetch, isHistorical, setExecState } from "./core/api.js";
     });
     $("insp-pin").addEventListener("click", () => { if (S.selectedKind === "l2") togglePin(S.selectedId); });
     $("insp-console").addEventListener("click", () => { const r = $("insp-console").dataset.runid; if (r) location.hash = "#consoles/" + r; });
+    $("insp-collapse").addEventListener("click", () => setInspectorCollapsed($("inspector").dataset.collapsed !== "true"));
     $("insp-close").addEventListener("click", () => select("none", null));
     $("inspector-scrim").addEventListener("click", () => select("none", null));
+    bus.onSurfaceChange = syncInspectorPresentation;
     initInspectorSheet();
+    window.addEventListener("resize", () => { setInspectorHeight(preferredInspectorHeight, false); syncInspectorPresentation(); });
     overlayInit();
     startFeed();   // start the single /api/sessions poller (Consoles/Agents subscribers)
 
     document.addEventListener("keydown", (e) => {
+      if (trapInspectorFocus(e)) return;
       if (e.key === "/" && document.activeElement !== $("search-input")) { e.preventDefault(); $("search-input").focus(); }
       else if (e.key === "Escape") {
         const onSearch = document.activeElement === $("search-input");

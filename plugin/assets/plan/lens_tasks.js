@@ -32,7 +32,7 @@ function render() {
       : `<span class="plan-node-none">—</span>`;
     return `<tr data-task-id="${escAttr(t.id)}" data-layer="l2" data-selected="${S.selectedId === t.id}" data-pinned="${S.pinnedId === t.id}">
       <td>${statusChip(t.state)}</td>
-      <td class="c-id">${highlight(t.id, S.query)}</td>
+      <td class="c-id"><button type="button" class="plan-task-link" data-open-task="${escAttr(t.id)}" aria-label="Open details for ${escAttr(t.id)}">${highlight(t.id, S.query)}</button></td>
       <td class="c-title">${highlight(t.title || "", S.query)}</td>
       <td class="c-area">${esc(t.area)}</td>
       <td class="c-node">${nodeCell}</td>
@@ -66,7 +66,12 @@ export const lens = {
         const nodeLink = e.target.closest("[data-plan-node]");
         if (nodeLink) { e.stopPropagation(); if (bus.onNodeSelect) bus.onNodeSelect(nodeLink.dataset.planNode); return; }
         const row = e.target.closest("tr[data-task-id]");
-        if (row) select("l2", row.dataset.taskId);
+        if (row) {
+          e.stopPropagation();
+          const trigger = row.querySelector("[data-open-task]");
+          if (trigger) trigger.focus({ preventScroll: true });
+          select("l2", row.dataset.taskId);
+        }
       });
     }
   },
