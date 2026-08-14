@@ -2,6 +2,13 @@
 
 ## Decision Log
 
+### 2026-08-14T01:11:15Z — TASK-0116 — decide:retry
+
+- Run: `RUN-20260814T010432Z-76945`
+- Branch: `agent/routing/TASK-0116-route-transcript-fix`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
 ### 2026-08-13T23:50:12Z — TASK-0109 — integrate
 
 - Run: `ORIGIN-20260813T230100Z-TASK0109-NATIVE`
