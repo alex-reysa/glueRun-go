@@ -25,7 +25,9 @@ Confirmed and kept (with corrected scope):
   computed and then discarded by routing.
 - Provider/gate deadlines are frozen at spawn; a mid-flight budget raise has no effect
   (empirically confirmed: B211 kills at exactly the stale budget, three raises each landing
-  after the kill they were meant to prevent).
+  after the kill they were meant to prevent). Dogfood further proved that a same-UID supervised
+  child can forge a plain writable JSON control, so rel-07 now authenticates exact-run,
+  monotonic records with an external asymmetric signing authority.
 - Terminal handoff is an in-process EXIT trap; SIGKILL leaves a permanently `active` run-status
   record. A worker+auditor double success can still terminalize `escalate-infra`
   (post-verdict manifest-refresh and model-reported-inconclusive sites).
@@ -60,13 +62,19 @@ Corrected or dropped from the original plan:
 Unclaimed defects found by the audit, added to this sprint:
 
 - `engine/ctx-route-drive.sh` reads `audit-codex.log`; the driver writes `auditor-codex.log`.
-  With `SINGULAR_CTX_ROUTING=1` (this repo's own config!) the reviewer window gate fails closed
-  and reviewer resume is permanently disabled.
+  This is a stale artifact mapping for admissible non-independence reviewer routing. It does not
+  explain self-hosted final-review freshness: `final-audit` and `paired-audit` are deliberately
+  independence-pinned before the window gate when context routing is enabled and remain fresh
+  under all subordinate knobs by design; master-off behavior remains legacy-identical.
 - Worker `last-message.json` is never cleared between tries (the auditor clears its record);
   a stale try-0 output can mask an `empty-output` classification on try 1.
 - The attempt archive omits `auditor-codex.log` and all per-try runner-result/envelope sidecars.
 - Untested invariants: try>0 must omit `--resume-session`; `recover.sh`'s skip-because-alive
   branch; the `SINGULAR_STALE_HARD_MINUTES` boundary.
+- The rel-01 hermeticity regression compared every byte of the live shared `.singular-state`.
+  Under the authored three-lane scheduler, legitimate sibling evidence writes made unrelated
+  gates red. Rel-02 repairs the test with nonce-attributed leakage, private hostile state, and
+  fixed protected caller paths; shared state is expected to change concurrently.
 
 ## Safety invariants (release blockers, carried over and trimmed)
 
@@ -96,13 +104,13 @@ carries its own strict-test-first RED before behavior changes.
 | Task | Node | Fix |
 |---|---|---|
 | TASK-0109 | rel-01-per-try-logs | Per-try evidence/archive parity + truly read-only status bootstrap fix + deterministic detached low-disk regression |
-| TASK-0110 | rel-02-try-hygiene | Clear stale `last-message.json` between tries; test the try>0-fresh invariant |
+| TASK-0110 | rel-02-try-hygiene | Clear stale `last-message.json` between tries; test the try>0-fresh invariant; repair the rel-01 hermeticity fixture for parallel execution |
 | TASK-0111 | rel-03-integrity-reclass | Source-integrity violation gets its own class + parked-for-human routing |
 | TASK-0112 | rel-04-evidence-remedy | `revalidate-evidence` gets a real evidence-only handler (zero implementer calls) |
 | TASK-0113 | rel-05-manifest-remedy-bound | Bounded retry at the four one-shot evidence-manifest `audit-infra` emitters; provider-correct Codex canary charging discovered by the bootstrap dogfood run |
 | TASK-0114 | rel-06-terminal-handoff | Durable terminal-pending handoff; double success can never park as infra |
-| TASK-0115 | rel-07-run-control | Read-only run-control: deadline/cancel re-read inside every poll loop |
-| TASK-0116 | rel-08-route-transcript | Fix the reviewer transcript filename in ctx routing (live bug in self-hosting) |
+| TASK-0115 | rel-07-run-control | Authenticated read-only run-control: signed exact-run deadline/cancel records re-read inside every poll loop |
+| TASK-0116 | rel-08-route-transcript | Align the reviewer transcript artifact mapping while preserving final-audit independence pins |
 | TASK-0117 | rel-09-l1-lease-liveness | L1 planning-lease liveness probe before wall-clock reclaim |
 | TASK-0118 | rel-10-failure-domains | Additive `failureDomain` + formalized attempts-index schema |
 
@@ -137,7 +145,8 @@ fresh-consumer and migration compatibility green. Operator-authority release gat
 
 - `validated`/`candidate` checkpoint grades, restore lineage policy, checkpoint GC.
 - Cross-run session resume after an `escalate-infra` unpark cycle.
-- Writable run-control (extensions with generation/identity binding) beyond deadline/cancel re-read.
+- Run-control signer provisioning, key rotation, and operator writer/CLI UX; this sprint verifies
+  externally pre-signed records but does not manage private authority.
 - Generic job progress as a consumer-facing interface.
 - At-most-once effect ledger/wrapper/receipts (consumer product layer today).
 - Budget heuristics derived from history.
@@ -164,5 +173,8 @@ the new program). Tasks are `docs/orchestration/tasks/TASK-0108.md` through `TAS
 - Preview (dry-run, the no-arg default): `singular reconcile`
 - One real cycle: `singular reconcile --actuate`
 - Autonomous: `singular auto` (respects `SINGULAR_MAX_HOURS`, maxConcurrent 3)
+- Focused tests must remain green at configured concurrency 3. Shared `.singular-state` is
+  expected to change; fixture-leakage tests use a unique nonce, private hostile state, and exact
+  protected paths. `gate-check.sh` remains authoritative for complete tracked-source integrity.
 - The serial `rel-01`..`rel-06` lane intentionally chains the `l1-drive.sh`-owning tasks;
   `rel-07`..`rel-10` and the S2 extraction tasks run in parallel lanes.

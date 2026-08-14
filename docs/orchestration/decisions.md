@@ -2,6 +2,77 @@
 
 ## Decision Log
 
+### 2026-08-14T01:47:45Z — first-wave contract correction — operator-proxy
+
+- Runs: `RUN-20260814T010432Z-76912`, `RUN-20260814T010432Z-76911`, and
+  `RUN-20260814T010432Z-76945`.
+- Authority: `operator-proxy:codex`, delegated by the operator's instruction to resolve questions
+  autonomously through independent sub-agents.
+- Decision: keep STOP and reject all three first-wave outcomes as integration inputs. TASK-0110's
+  two gates were red only because the promoted rel-01 fixture compared the entire concurrently
+  mutable shared state; rel-02 now owns a nonce-attributed, parallel-safe repair and must run
+  fresh. TASK-0115's path hiding cannot enforce host-only authority against a same-UID child;
+  rel-07 now requires externally signed, run-bound, monotonic controls and a clean test-first
+  implementation. TASK-0116's filename fix is valid artifact alignment, but enabled-routing
+  final-audit freshness is an intentional independence pin—not the bug claimed by the original
+  task/DAG—while master-off behavior remains legacy-identical.
+- Evidence preservation: inventory-verified snapshots and SHA-256 inventories are under
+  `.singular-state/recovery-snapshots/RUN-20260814T010432Z-{76912,76911,76945}/20260814T014300Z/`.
+  TASK-0115 candidate `68c48b4a...` and TASK-0116 candidate `98628d0d...` are pinned beneath
+  `refs/singular/operator-candidates/`; TASK-0110 produced no commit and is evidence-only.
+- Budget truth: TASK-0116 parked after accepted audit at 101,302/100,000 fresh auditor input;
+  TASK-0115 parked after needs-fix at 178,060/100,000. Neither is transient infrastructure and
+  neither may be blindly unparked or represented as having passed its source canary.
+
+### 2026-08-14T01:41:57Z — TASK-0115 — escalate-infra
+
+- Run: `RUN-20260814T010432Z-76911`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0115`.
+
+### 2026-08-14T01:41:57Z — TASK-0115 — decide:escalate-infra
+
+- Run: `RUN-20260814T010432Z-76911`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
+### 2026-08-14T01:28:46Z — TASK-0110 — escalate-parked
+
+- Run: `RUN-20260814T010432Z-76912`
+- Branch: `agent/session/TASK-0110-try-hygiene`
+- Authority: l1
+- Rationale: no progress: attempt 2 reproduced attempt 1 exactly — same head (no commit), same uncommitted changes, same gate-red failure. A further retry cannot differ; unpark once the environment or the task changes.
+
+### 2026-08-14T01:23:02Z — TASK-0110 — decide:retry
+
+- Run: `RUN-20260814T010432Z-76912`
+- Branch: `agent/session/TASK-0110-try-hygiene`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
+### 2026-08-14T01:22:44Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260814T010432Z-76911`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
+### 2026-08-14T01:15:49Z — TASK-0116 — escalate-infra
+
+- Run: `RUN-20260814T010432Z-76945`
+- Branch: `agent/routing/TASK-0116-route-transcript-fix`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0116`.
+
+### 2026-08-14T01:15:48Z — TASK-0116 — decide:escalate-infra
+
+- Run: `RUN-20260814T010432Z-76945`
+- Branch: `agent/routing/TASK-0116-route-transcript-fix`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
 ### 2026-08-14T01:11:45Z — TASK-0115 — decide:retry
 
 - Run: `RUN-20260814T010432Z-76911`

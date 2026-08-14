@@ -27,6 +27,11 @@
   bundle verified behind STOP
 - Successor runtime overlay activated by environment: 2026-08-14T01:00:43Z; clean status/health/DAG
   preflight completed, with no install, symlink, or default-version change
+- First successor-runtime autonomous wave: `ORIGIN-20260814T010413Z-73798`; exact frontier tasks
+  TASK-0110/TASK-0115/TASK-0116 launched in parallel, STOP restored at the contract hold, and no packet was
+  imported or integrated
+- Operator-proxy contract correction: 2026-08-14T01:47:45Z; all three wave results rejected as integration
+  inputs, evidence snapshots and candidate refs retained, and rel-99 kept blocked
 
 ## Operator boundaries
 
@@ -108,6 +113,13 @@
 | 2026-08-13T23:57:54Z–2026-08-14T00:47:13Z | `ORIGIN-20260813T235754Z-8483` | Native `rel-01-per-try-logs` promotion completed under STOP | Exact checkpoint head `9c1f2e7b`/tree `af2f0cce` remained frozen while the fresh suite passed 195/195 in 2,959s; `test-per-try-artifacts.sh` consumed about 26m25s. Gate-result SHA-256 is `a2a13d96c0735b441bc46ecd8f2498968eead794098b0f0fe641fc1ec8da74d8`, strict report SHA-256 `eab36f165117de1518bf7f9aadd60d9a0445cd7f7f94847d718d4c3b107fe0ab`, and log SHA-256 `8646d137c1b11a96a89bd34bcb897ebcd55bc279a95cec190a9f34cb9310d4c1`. Independent source/task-set/command/log/report/evidence-binding hashes passed; `singular gate validate` and both rel-00/rel-01 `area-gate` checks passed. | `docs/orchestration/gates/rel-01-per-try-logs.gate-result.json`, its three evidence files, promotion events, launch/terminal identity snapshots |
 | 2026-08-14T00:52:43Z–00:56:27Z | operator overlay `singular-0.18.0-canary-rel01-v2-b874a874` | Verified successor runtime prepared; activation not performed | Built at exact path `/Users/alejandro/Desktop/999. PROJECTS/pmgo-orchestration-engine/.singular-state/operator-engine-overlays/singular-0.18.0-canary-rel01-v2-b874a874` from the prior Codex-cache overlay. The type/mode/hash diff contains exactly `engine/l1-drive.sh` (`65a8d761f20ab9073bf839d936f3e4f794f65cc36ef26462f216567a39beb069`), `engine/lib.sh` (`54eb097871a0750adae372d767f22a185ed006a373562d67cb5f55a5b9076476`), and `engine/reconcile.sh` (`8e9989bc154416dc5f7f1f95dee27279ad63c9d92e64f4339b8c43bd62eb7e4b`); preserved `engine/evidence-manifest.sh` is `aabfd6d9b868cbeb12816b25a12477761b95b862f4be245e0c8311a3ee3ce25d`. Bundle-manifest SHA-256 is `eb42e919a61232473f28a97c3370fa3925d589988fd8ae3023698e112cfcf25c`, metadata SHA-256 is `df2a56ffa8ae99fe260046dd6ed94a3cb02d205ec5a4492f52a472cc3398f80c`, and delta-record SHA-256 is `c3a1ea4ce94400b67b5f97e30173afb9a4ffe1cdccf3257077c583c90558ffc1`. The focused five-command gate passed in 58s with log SHA-256 `d3a7ec08539ef0b0df46377456d8606259c5e90b955629c9a38e72c7af58d49f`; binding SHA-256 `a37fb394c5f79a0e9cc4acde2266d232f5ca802858c27bf60d43d794870ef637` ties it to worker `b874a87466e118eef167190a66e048d944ab7544`/tree `3efce762d9018fdf73b0b550db9e83941dc82e59`. Full-suite binding SHA-256 `71959703760326110695a514c064440f05e71e8e1ed0616a0fd51c335a849e98` ties the bundle to the prior 195/195 integration and passed promotion. All 301 filesystem objects, including the root, carry `uchg`. STOP stayed present; the predecessor overlay is superseded for the next activation but retained intact rather than deleted. | `.singular-state/operator-engine-overlay-records/singular-0.18.0-canary-rel01-v2-b874a874/{overlay-metadata.json,overlay-bundle.type-mode-sha256.tsv,predecessor-to-overlay.diff.tsv,focused-gate.log,focused-gate-binding.tsv,full-suite-promotion-binding.tsv}` |
 | 2026-08-14T01:00:43Z | environment-only runtime activation | Successor overlay active behind STOP | Pinned `SINGULAR_ENGINE_HOME` to the verified successor's absolute path without installing a bundle or changing any symlink/current/default version. `singular status`, `singular health`, and DAG inspection resolved the new runtime cleanly and preserved tracked scaffold metadata; health reported 3 configured/effective slots and 34.3 GB free. Activation record SHA-256 is `b4eb1d08e1e7ecf06fff1082b0fdd809dc32f53d8f66c52d8bf941c258b55588`. The predecessor overlay remains intact as the superseded rollback artifact, and STOP prevented dispatch during the handoff. | `.singular-state/operator-engine-overlay-records/singular-0.18.0-canary-rel01-v2-b874a874/activation-20260814T010043Z.json`, clean Git status apart from this report, both immutable overlay paths |
+| 2026-08-14T01:04:13Z–01:04:33Z | `ORIGIN-20260814T010413Z-73798` | First autonomous successor-runtime wave; exact tasks TASK-0110/TASK-0115/TASK-0116 | Removed STOP for the bounded wave. At checkpoint head `81f67e00183da8bbed298dfe3c313060fdcab86c`, configured/effective/available capacity was 3/3/3 and all three tasks dispatched under the activated `singular-0.18.0-canary-rel01-v2-b874a874` overlay with Codex `gpt-5.6-sol`. The completion event nevertheless reported `workersRunning=0`; no packet was imported or integrated. | Origin snapshot/events; worker runs `RUN-20260814T010432Z-76912`, `RUN-20260814T010432Z-76911`, and `RUN-20260814T010432Z-76945` |
+| 2026-08-14T01:08:01Z–01:15:49Z | `RUN-20260814T010432Z-76945` | TASK-0116 attempts 1–2 | Attempt 1 gate passed but audit returned `needs-fix`: its mandatory RED stopped on a structural spy assertion before exercising live routing under window pressure. Attempt 2 corrected the RED and was accepted at candidate `98628d0d24474953980c43ad9416702ac7e66600`, then final refresh rejected cumulative fresh auditor input `101302 >= 100000`; no packet followed. | Attempt archives, final audit, final-refresh log, stale manifest, candidate ref |
+| 2026-08-14T01:14:19Z | autonomous-loop hold | Contract review hold while all three detached workers continued | Restored STOP; `singular auto` exited after iteration 17. Across the 16 completed reconcile iterations, no import or integration occurred; the first iteration dispatched three workers and the next 15 observed them at full capacity. | STOP, auto log, origin completion events |
+| 2026-08-14T01:16:55Z–01:41:57Z | `RUN-20260814T010432Z-76911` | TASK-0115 attempts 2–3 after an initial gate-red | Attempt 2 audit rejected unenforced same-UID host authority, no-control drift, and an inadequate RED. Attempt 3 strengthened the fixture but still used path hiding rather than an authority boundary; the second audit remained `needs-fix`. Final refresh then rejected cumulative fresh auditor input `178060 >= 100000`; candidate `68c48b4a209297db4778ad47095758ff52ec2fa6` was retained for evidence only. | Attempts index, both audits, final-refresh log, stale manifest, candidate ref |
+| 2026-08-14T01:23:02Z–01:28:46Z | `RUN-20260814T010432Z-76912` | TASK-0110 deterministic gate-red retry and no-progress park | Both host gates failed only because TASK-0110's literal inventory of shared `.singular-state` observed concurrent TASK-0115 writes; both source-integrity reports remained verified with `changedPaths=[]`. Neither attempt was committed or assigned a `headSha`; the viable three-file attempt-2 diff survived only as a dirty base worktree, and the second identical terminal class triggered `escalate-parked`. No audit, packet, or candidate ref exists. | Attempt gate reports/logs, source-integrity bindings, worker RED/GREEN/regression logs, run status, worktree diff SHA-256 `e35b4160...` |
+| 2026-08-14T01:43:00Z–01:47:45Z | operator evidence preservation and contract correction | Three wave tasks blocked; no integration | Preserved inventory-verified recovery snapshots for all three runs. With authority `operator-proxy:codex`, rejected every wave result as an integration input, amended TASK-0110 to require concurrency-safe causal leakage proof, TASK-0115 to require externally signed Ed25519 v1 control, and TASK-0116 to distinguish artifact routing from intentionally fresh final/paired audits. The amendments and candidate refs are operator evidence, not acceptance or promotion. | Recovery snapshot inventories, decision/task/DAG amendments, `refs/singular/operator-candidates/TASK-011{5,6}/...` |
+| 2026-08-14T02:06:49Z | restart preflight | No controller or worker live; STOP immediately restored | A read-only syntax probe invoked `singular resume --help`; the CLI forwarded the unused argument and executed resume, removing STOP and appending one event. The sentinel was recreated immediately before any controller existed, so no reconcile, dispatch, import, integration, or tracked write occurred. | `operator.resume_requested` event, restored STOP, empty locks/inbox/process scan |
 
 ## Finding ledger
 
@@ -274,7 +286,7 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-010 — every cycle rescans and prints all 107 already-integrated historical packets
 
-- First seen: 2026-08-13T17:08:15Z; frequency: 10 full-history scans through bootstrap recovery.
+- First seen: 2026-08-13T17:08:15Z; frequency: 26 full-history scans through the first autonomous wave.
 - Classification: new; severity: medium; impact: degraded latency and operator signal; non-blocking.
 - Symptom: pre-dispatch integration emits 107 `integration.skipped` events and 107 console lines for
   TASK-0001..TASK-0107 on every cycle, even though every packet branch head is already an ancestor of
@@ -285,7 +297,11 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Code anchor (0.18.0): pre-dispatch auto-integration in `engine/reconcile.sh` and packet enumeration/ancestor
   checks in `engine/integrate.sh`.
 - Evidence: exactly 107 `integration.skipped` events for each of the nine 17:08–17:15 reconcile cycles and
-  again for `ORIGIN-20260813T182615Z-70987`: 1,070 redundant events/lines in total. Explicit `--task`
+  again for `ORIGIN-20260813T182615Z-70987`, then 107 more in each of 16 distinct first-wave origins from
+  `ORIGIN-20260814T010413Z-73798` through `ORIGIN-20260814T011342Z-62886`: 2,782 redundant events/lines
+  in total. The current corpus contains 109
+  product packets plus 109 audit sidecars; TASK-0108 and TASK-0109 are integrated terminal packets and did
+  not emit the historical branch-already-merged line in those automatic iterations. Explicit `--task`
   integration retries correctly skipped the historical scan.
 - Operator cost/action: roughly 17 seconds and 107 lines/events per general cycle at current history size;
   no state deletion was attempted because the packets are tracked provenance.
@@ -293,7 +309,8 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-011 — running-worker telemetry is phase-skewed at both launch and terminal handoff
 
-- First seen: 2026-08-13T17:08:35Z; frequency: both launch and first terminal handoff.
+- First seen: 2026-08-13T17:08:35Z; frequency: both launch and first terminal handoff, plus the first successor
+  launch completion (1/16; all 16 expose that the field has pre-dispatch semantics).
 - Classification: new; severity: low; impact: degraded observability / near-miss; non-blocking.
 - Symptom: the first actuated cycle successfully launched PID 93704 and reported `dispatched_this_run=1`, but
   its final summary/event recorded `workers_running=0`. At the other edge, the 17:14:23 cycle still reported
@@ -304,14 +321,18 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Code anchor (0.18.0): `workers_running` is populated by the pre-dispatch reap in `engine/reconcile.sh`, then
   emitted unchanged after detached dispatch.
 - Evidence: completion events for `ORIGIN-20260813T170815Z-90711` and
-  `ORIGIN-20260813T171401Z-29802`, the 17:14:44 `origin.dispatch_reaped` event, and TASK-0108 lifecycle events.
+  `ORIGIN-20260813T171401Z-29802`, the 17:14:44 `origin.dispatch_reaped` event, TASK-0108 lifecycle events,
+  and the 16-origin completion-event slice from `ORIGIN-20260814T010413Z-73798` through
+  `ORIGIN-20260814T011342Z-62886`. The first successor completion recorded
+  `workersRunning=0` immediately after launching three detached workers; the next 15 recorded
+  `workersRunning=3`.
 - Operator cost/action: one manual PID and health check before starting auto.
 - Resolution: open for a future sprint.
 
 ### FR-012 — host audit reruns a passing gate three times because strict observations are absent
 
-- First seen: 2026-08-13T17:11:36Z; frequency: 24/24 disposable verification tries across eight audited
-  attempts (TASK-0108 once and TASK-0109 seven times). Every three-try group was entirely green and still
+- First seen: 2026-08-13T17:11:36Z; frequency: 36/36 disposable verification tries across twelve audited
+  attempts (TASK-0108 once, TASK-0109 seven times, TASK-0115 twice, and TASK-0116 twice). Every three-try group was entirely green and still
   fell back to evidence-only verification.
 - Classification: new; severity: high for expensive gates; impact: degraded cost and audit evidence; did not
   itself block this task.
@@ -328,12 +349,16 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   `RUN-20260813T203430Z-96335/audit-verification-{1,2}-{0,1,2}.log` and
   `RUN-20260813T211009Z-78320/audit-verification-{1,2}-{0,1,2}.log` and
   `RUN-20260813T213939Z-24911/audit-verification-{1,2}-{0,1,2}.log` and
-  `RUN-20260813T221358Z-8581/audit-verification-2-{0,1,2}.log`; matching normalization errors.
+  `RUN-20260813T221358Z-8581/audit-verification-2-{0,1,2}.log`; TASK-0115 attempts 2/3 and TASK-0116
+  attempts 1/2 under the first-wave run roots; matching normalization errors. Every first-wave error has
+  SHA-256 `c5938eec90b6280613edebc25b0b10ae3b6f11b9496107005173635435798a7f`.
 - Operator cost/action: about six seconds for TASK-0108, then roughly 39 seconds on TASK-0109 attempt 1 and
   66 seconds on its strengthened attempt 2. The amended retry added about 40 and 43 seconds for attempts 1
   and 2. The seed-restored run added about 75 and 77 seconds for attempts 1 and 2. All three TASK-0109 host
   executions in every group were redundant with the already-green worker gate. The literal-contract run added
-  about 417 seconds for one three-try group, and reviewer input remained only evidence-verified.
+  about 417 seconds for one three-try group, and reviewer input remained only evidence-verified. The
+  successor-runtime wave added about 146 seconds from already-green worker gates to evidence-only verification:
+  TASK-0116 attempts 1/2 took 18s/16s and TASK-0115 attempts 2/3 took 48s/64s.
 - Resolution: open for a future sprint.
 
 ### FR-013 — the prescribed bounded evidence reader is unusable in the Codex auditor sandbox
@@ -374,10 +399,11 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   than mutating user-level Codex state during a live run.
 - Resolution: tolerated; open compatibility friction.
 
-### FR-015 — accepted audit is terminalized as infrastructure failure by hard token-canary accounting
+### FR-015 — completed audit is terminalized as infrastructure failure by hard token-canary accounting
 
-- First seen: 2026-08-13T17:14:03Z; frequency: 3/4 audits that returned `accepted` at a task-final handoff;
-  classification: new reproduction of the terminal handoff/budget failure family targeted by this sprint.
+- First seen: 2026-08-13T17:14:03Z; frequency: 5 final-refresh failures—4/6 audits that returned
+  `accepted` at a task-final handoff plus one `needs-fix` handoff; classification: new reproduction of the
+  terminal handoff/budget failure family targeted by this sprint.
 - Severity: critical; impact: blocked the entire DAG first at `rel-00-contract`, then blocked TASK-0109 after
   the bootstrap recovery had advanced the serial lane.
 - Symptom: TASK-0108's worker committed the correct owned file, its gate passed, and the Codex auditor returned
@@ -395,6 +421,12 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   and 364,627/318,976/45,651/7,266 raw/cached/fresh/output. Their cumulative 93,476 stayed below 100,000,
   final refresh succeeded, and the engine accepted the packet normally. Independent product review—not the
   canary—later caused its quarantine.
+- The first successor-runtime wave added both terminal shapes. TASK-0116's two reviewers used 52,782 and
+  48,520 fresh input; the second accepted the corrected artifact-routing candidate, but final refresh rejected
+  `101302 >= 100000` and terminalized it as `audit-infra`. TASK-0115's attempt-2 and attempt-3 reviewers used
+  83,297 and 94,763 fresh input; the second correctly returned `needs-fix`, yet final refresh still rejected
+  `178060 >= 100000` and replaced the product disposition with `audit-infra`. Reviewer output—TASK-0116's
+  7,697 + 6,217 and TASK-0115's 14,109 + 10,905—remains separate from the input canary.
 - Expected: durable accounting cannot reverse an accepted verdict into a terminal infrastructure park.
   Budget enforcement must use the intended quantity and provide a supported recovery/remedy path.
 - Code anchor (0.18.0): hard defaults/max and bounded config in `engine/evidence-manifest.sh:55-87`; cumulative
@@ -415,9 +447,10 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   2,441,469/2,312,448/129,021/25,596. Its four primary calls totaled
   4,721,394/4,429,824/291,570/58,555. The sampled paired auditor separately used
   397,886/315,392/82,494/8,150.
-- Evidence: all three run roots' `audit.json`, `attempts/index.json`, `run-status.json`,
+- Evidence: the five affected run roots' `audit.json`, `attempts/index.json`, `run-status.json`,
   `evidence-manifest-final-refresh.log`, and per-role runner-result JSON files. TASK-0109's final refresh states
-  the corrected cumulative values exactly: `139516 >= 100000` and `151702 >= 100000`.
+  the corrected cumulative values exactly: `139516 >= 100000` and `151702 >= 100000`; the first-wave logs
+  state `101302 >= 100000` and `178060 >= 100000`.
 - Operator cost/action: diagnosed before any unpark and stopped auto. A provenance-bound recovery copied the
   original run byte-for-byte, reran its successful commands at exact head `3fffc636`, and accepted/imported
   `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256` without a new model call. Imported packet/audit hashes are
@@ -433,7 +466,7 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-016 — failed final refresh leaves a stale, apparently valid evidence manifest
 
-- First seen: 2026-08-13T17:14:03Z; frequency: 3/3 final-refresh failures.
+- First seen: 2026-08-13T17:14:03Z; frequency: 5/5 final-refresh failures.
 - Classification: new; severity: high; impact: degraded/misleading evidence; blocking recovery.
 - Symptom: `evidence-manifest.json` remains the pre-audit snapshot with `actualAuditInputTokens: 0`, only
   implementer usage, no audit/auditor artifacts, and the hash of the earlier 5,011-byte packet. The current
@@ -445,12 +478,17 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - The amended retry repeats the stale shape: its surviving manifest reports 82,896 actual audit input and
   provider usage only through the resumed implementer, omitting the accepted second auditor that raised the
   true cumulative charge to 151,702.
+- TASK-0116's surviving manifest likewise omits the second accepted reviewer that raised the true charge to
+  101,302. TASK-0115's surviving 01:37 manifest reports only 83,297 fresh audit input and binds the superseded
+  attempt-2 audit, while the current attempt-3 `needs-fix` audit and the true 178,060 cumulative charge exist
+  only in the later role result, audit, and failed-refresh log.
 - Expected: a failed final refresh either atomically invalidates/removes the pre-audit manifest or leaves an
   explicit status that no consumer can mistake for final evidence.
 - Code anchor (0.18.0): pre-audit/final-refresh lifecycle in `engine/l1-drive.sh:1677-1687` and manifest write
   sequence in `engine/evidence-manifest.sh`.
 - Evidence: current `packet.json`, `evidence-manifest.json`, `audit.json`, and final-refresh log in
-  `RUN-20260813T170836Z-93780`, `RUN-20260813T203430Z-96335`, and `RUN-20260813T211009Z-78320`.
+  `RUN-20260813T170836Z-93780`, `RUN-20260813T203430Z-96335`, `RUN-20260813T211009Z-78320`,
+  `RUN-20260814T010432Z-76945`, and `RUN-20260814T010432Z-76911`.
 - Operator cost/action: consumers must cross-check terminal state and refresh log rather than trusting the
   manifest alone. Before recovery, all 76 source-run files were preserved in
   `.singular-state/recovery-snapshots/RUN-20260813T170836Z-93780/20260813T182550Z/`. Key original hashes are
@@ -956,8 +994,100 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 - Evidence/cost: live process timing observation plus integration and promotion timestamps/reports/logs. Both
   runs stayed correct and passed 195/195; the integration gate verified source integrity, while read-only
   supervision froze all rel-01 promotion identities. Each run occupied its only control path for about 50 minutes.
-  Resolution: open; optimize the exact inventory proof or isolate it behind a bounded fixture without weakening
-  literal incoming-path assertions.
+  Resolution: assigned to amended TASK-0110 as a descendant harness repair. Replace whole-tree equality with
+  nonce-attributed leakage, private decoy state, and fixed protected caller files; do not serialize the lanes or
+  weaken `gate-check` source integrity.
+
+### FR-042 — whole shared-state equality makes the promoted rel-01 fixture incompatible with concurrency three
+
+- First seen: 2026-08-14T01:23:01Z; frequency: 2/2 TASK-0110 host gates while TASK-0115 was live.
+- Classification: promoted test-harness concurrency defect; severity: critical; impact: deterministically
+  blocked an otherwise green rel-02 candidate and consumed both product attempts before any audit.
+- Symptom: the promoted `test-per-try-artifacts.sh` recursively fingerprints the literal incoming
+  `.singular-state` tree and requires byte equality after each fixture archive. During both TASK-0110 host
+  gates, TASK-0115 legitimately updated its own run artifacts in that shared tree. The first gate ran 68,402ms;
+  the second ran 72,420ms and observed only TASK-0115's `worker-attempt-3-try-0.log` changing. Both TASK-0110
+  source-integrity reports were `verified` with `changedPaths=[]`, yet both gates returned product red.
+- Expected: a test intended to run at `maxConcurrent=3` attributes leakage causally—using a private hostile
+  state tree, unique run/event nonce, exact protected caller files, and targeted absence from the authoritative
+  namespace—without requiring unrelated shared control state to stop changing.
+- Evidence/cost: `RUN-20260814T010432Z-76912` attempts 1/2, gate logs/reports, and concurrent TASK-0115 event
+  timestamps. The second log is `cd18177aa1e4c708eb8d1e454d75b997265b8d3e118f57ed2b5b6d445200e93e`;
+  its binding is `de8e8130...`. Resolution: assigned as a descendant repair in amended TASK-0110/rel-02. The
+  promoted rel-01 result remains historical; serialization and shared-tree exclusions are explicitly rejected.
+
+### FR-043 — a gate-red candidate has no durable commit identity before retry cleanup
+
+- First seen: 2026-08-14T01:23:02Z; frequency: 2/2 TASK-0110 gate-red attempts.
+- Classification: evidence-preservation/recovery defect; severity: high; impact: degraded recovery and risk of
+  losing valid product work for an unrelated gate failure.
+- Symptom: both workers produced the intended two-line production fix and green focused evidence, but host-gate
+  failure occurred before a commit or packet. `attempts/index.json` records `headSha: ""` for both attempts.
+  After terminal park the task branch still points to base `81f67e00`; the exact 137-insertion/2-deletion
+  three-file attempt-2 result exists only as a dirty worktree plus runner logs, not as an immutable candidate.
+- Expected: before destructive retry/reset, L1 creates a content-bound candidate commit or complete immutable
+  diff snapshot and records that identity in the attempt archive, even when the gate is red.
+- Evidence/cost: worktree diff SHA-256
+  `e35b4160be8164285dc39509aad1065642ae01084c018584e90e95820f9acd0b`, attempt index, RED/GREEN/regression
+  logs, and the 54-file recovery snapshot whose inventory SHA is
+  `b018356be73ce3b3b5b23d8e8a63e64076ac36fe2cd2cdc067337116602e12fd`. Resolution: open as engine work;
+  TASK-0110 must reconstruct test-first in a new run, and the old dirty diff is evidence only—not approval.
+
+### FR-044 — rel-08's authored causal claim contradicted the independence-pinned reviewer policy
+
+- First seen: 2026-08-14T01:08:01Z; frequency: 1/1 rel-08 contracts inspected against the live route order.
+- Classification: task/DAG specification defect plus audit-quality escape; severity: high; impact: an accepted
+  candidate could not satisfy the outcome its task claimed to repair.
+- Symptom: TASK-0116 said the stale `audit-codex.log` adapter path structurally forced live final reviewers
+  fresh. With context routing enabled, `final-audit` and `paired-audit` are deliberately pinned to
+  `fresh tainted` before the transcript-window gate; they never consume either transcript filename. Candidate `98628d0d` correctly aligns
+  the latent adapter and proves an unpinned reviewer route, but attempt-2 audit accepted it without identifying
+  the false live-resume causal claim.
+- Expected: task, DAG, plan, tests, and auditor distinguish admissible non-independence reviewer routing from the
+  enabled-routing safety policy that intentionally keeps final/paired audits fresh, while preserving the
+  legacy-identical master-off path.
+- Code/evidence: route ordering in `engine/ctx-route.sh`, independence assertions in
+  `tests/test-ctx-route-taint.sh`, run `RUN-20260814T010432Z-76945`, accepted audit, and candidate ref
+  `refs/singular/operator-candidates/TASK-0116/RUN-20260814T010432Z-76945-attempt-2`. Resolution: contract
+  corrected under operator-proxy authority; preserve the pin, rebind the candidate only as a recovery seed, and
+  require a fresh run/audit against the amended artifact-alignment objective.
+
+### FR-045 — same-UID path hiding cannot enforce host-only run-control authority
+
+- First seen: 2026-08-14T01:16:55Z; frequency: 2/2 TASK-0115 auditors rejected the attempted boundary.
+- Classification: task-contract/authority design defect; severity: critical; impact: blocked rel-07 and would
+  allow a supervised child to grant itself time under the attempted design.
+- Symptom: candidate `68c48b4a` moves observation bytes and removes several environment hints, but arbitrary
+  gate/provider children still run as the same UID from a linked worktree. They can derive the repository/common
+  directory from `PWD`, enumerate writable `.singular-state/runs`, and create or replace `run-control.json`.
+  The adversarial tests attacked only disclosed report-adjacent or environment paths; no-control runs also lost
+  five inherited `SINGULAR_*` variables, so parity was not byte-identical.
+- Expected: authorization is cryptographic rather than positional. A v1 record binds exact `runId`, increasing
+  `generation`, bounded extension/cancel fields, signer key, and a canonical domain-separated Ed25519 signature.
+  The supervised UID receives only a pinned public key; the private signer remains outside its filesystem,
+  environment, argv, and authority. Invalid, modified, replayed, wrong-run/key, negative, and oversized records
+  are absent; extension is monotonic, cancel sticky, and no-control execution byte-identical.
+- Evidence/cost: both TASK-0115 audits, same-UID path derivation, failed nested `sandbox-exec` probe, candidate
+  ref `refs/singular/operator-candidates/TASK-0115/RUN-20260814T010432Z-76911-attempt-3`, and 132-file snapshot
+  inventory `0aa2e4b4166d42c528c0d11982a22a38a8772c16c5706f02d08967501236e3e2`. Final audit correctly remained
+  `needs-fix`; cumulative fresh auditor input was 178,060. Resolution: TASK-0115/DAG/plan amended for signed
+  authority and a fresh RED-first implementation; the path-hiding candidate is retained as evidence only.
+
+### FR-046 — `singular resume --help` performs the destructive resume action
+
+- First seen: 2026-08-14T02:06:49Z; frequency: 1/1 syntax probes.
+- Classification: CLI argument-validation defect; severity: high; impact: removed a safety sentinel during
+  stopped-state preflight, but caused no actuation because no controller existed and STOP was restored at once.
+- Symptom: `cli/singular` forwards all trailing arguments for `resume`; `ops_resume` ignores them, removes STOP,
+  appends `operator.resume_requested`, and only then reports that autonomate is not running. A conventional
+  `--help` request is therefore indistinguishable from explicit authorization to resume.
+- Expected: mutating verbs reject unknown arguments and implement non-mutating `--help`; no help, version, or
+  syntax query may remove STOP or append an operational event.
+- Code anchor: `cli/singular:2341` forwards `resume "$@"`; `engine/ops.sh:279-292` does not parse or reject
+  arguments before deleting the sentinel.
+- Evidence/cost: the single 02:06:49Z event, empty process/lock/inbox checks, and restored empty STOP sentinel.
+  Resolution: open for a later CLI-safety task; every remaining operator procedure uses bare `singular resume`
+  only after an explicit preflight.
 
 ## Known-issue observation log
 
@@ -965,7 +1095,7 @@ These are cost/frequency measurements, not new discoveries.
 
 | Known issue | Occurrences | Time/token/evidence cost | Run/attempt evidence |
 |---|---:|---|---|
-| Context-route reviewer transcript mismatch causes fresh reviewer sessions | 3/3 reviewer resume opportunities | All TASK-0109 attempt-2 reviews selected `fresh/tainted` despite valid attempt-1 reviewer sessions. The fresh reviews charged 62,600, 68,806, and 45,651 input; the first two pushed their cumulative canaries over 100,000, while the third remained under at 93,476. | Context events and reviewer results in all three TASK-0109 run roots |
+| Enabled-routing final-audit independence pin forces a fresh reviewer on every product retry | 3/3 TASK-0109 attempt-2 final reviews | All three correctly selected `fresh/tainted` despite valid prior reviewer sessions. The fresh reviews charged 62,600, 68,806, and 45,651 input; the first two pushed cumulative canaries over 100,000, while the third pair remained under at 93,476. The stale transcript filename was not causal; this is the measured cost of the intentional advocate/skeptic pin. | Context events, route ordering, and reviewer results in all three TASK-0109 run roots |
 | Worker per-try logs overwritten on infra retry | 0 worker-infra retries; 4 adjacent policy retries | No infra retry fired. All four TASK-0109 attempt-2 policy retries used the old controller's compatibility-log lifecycle; the latest gate-red archive again ran before TASK-0109's product fix could become active. | All four TASK-0109 `attempts/1/` directories versus run roots |
 | 240-minute stale hard cap reclaims live work | 0 occurrences | No worker approached 240 minutes; the cap did not fire | TASK-0108 and all three TASK-0109 run-status/event slices |
 
@@ -973,10 +1103,10 @@ These are cost/frequency measurements, not new discoveries.
 
 | Question | Evidence to collect | Current answer |
 |---|---|---|
-| Does self-hosted audit catch weak worker output before integration? | Worker packet, audit verdict/findings, gate result, integration event | Mixed. Three earlier final auditors accepted packets later revoked by exact-contract review. In the fourth run, the native auditor accepted `b874a874` only after the authored gate and independent contract checks agreed on the direct parent, exact six-file tree, literal two-iteration hostile-state proof, and no ninth event. That exact candidate then passed native staged integration 195/195 and became `9d9c41f2`; this is one clean end-to-end acceptance, not enough to erase the prior audit escapes. |
-| Are role budgets realistic; were mid-run raises needed and honored? | Session/run-control files, timeout events, operator actions, elapsed time | Variable. The first two TASK-0109 reviewer pairs charged 139,516 and 151,702 and terminalized accepted results. The seed-restored pair fit at 93,476. The terminal native auditor used 562,461 input / 476,160 cached / 7,496 output for a canary charge of 86,301, so no raise was needed. No deadline raise was requested; the hard canary has no supported raise. |
-| Is dispatch fair across parallel lanes at concurrency 3? | Ready time, dispatch time, start time, completion time per node | Not yet evaluable: recovery has advanced the serial lane through authoritative rel-01 promotion, but the updated immutable runtime has not been activated and autonomous dispatch has not resumed. Parallel-lane measurement begins after that quiescent handoff. |
-| What manual operator work should the engine perform or surface? | Every intervention and missing/ambiguous status signal | In addition to launch work, deterministic packet recovery, immutable snapshotting, exact-tree integration, status-mutation attribution, flaky-test isolation, proof cross-binding, long-job polling, cumulative-token reconstruction, false-event attribution, staged-tree identity reconstruction, and per-test timeout-margin monitoring all required manual operator work. |
+| Does self-hosted audit catch weak worker output before integration? | Worker packet, audit verdict/findings, gate result, integration event | Mixed. TASK-0115's two auditors correctly rejected the no-control drift and the same-UID path-hiding “authority” boundary, preventing integration. TASK-0116's attempt-2 auditor accepted a valid two-file artifact-mapping fix but missed that the authored task falsely attributed live final-audit freshness to that filename; operator contract review blocked it. TASK-0110 never reached audit because its promoted parallel-unsafe fixture consumed both attempts. Earlier TASK-0109 remains the one clean end-to-end accepted/integrated/promoted example after several audit escapes. |
+| Are role budgets realistic; were mid-run raises needed and honored? | Session/run-control files, timeout events, operator actions, elapsed time | No. TASK-0116's two reviews totaled 101,302 fresh input and terminalized an accepted result; TASK-0115's totaled 178,060 and replaced a valid `needs-fix` disposition with `audit-infra`. TASK-0110's two implementers alone used 4,187,515 raw / 4,031,232 cached input plus 19,903 output without reaching audit. The hard cumulative canary has no supported raise, so no blind retry was attempted. |
+| Is dispatch fair across parallel lanes at concurrency 3? | Ready time, dispatch time, start time, completion time per node | Dispatch itself was exact and simultaneous: the greedy frontier launched TASK-0110, TASK-0115, and TASK-0116 from the same checkpoint at the configured 3/3 capacity. Completion was not fairly observable because the rel-01 harness required the shared state tree to stop changing; legitimate TASK-0115 progress deterministically failed both TASK-0110 gates. The amended rel-02 retry must prove the causal harness while sibling lanes remain active. |
+| What manual operator work should the engine perform or surface? | Every intervention and missing/ambiguous status signal | In addition to earlier launch/recovery work, the first wave required STOP-at-contract-boundary control, three inventory-verified run snapshots, two candidate refs, preservation of one uncommitted diff, reconstruction of true cumulative audit usage behind stale manifests, same-UID threat modeling, task/DAG/plan correction, and separation of parallel test failure from product failure. These should be first-class quarantine, candidate-snapshot, and contract-amendment workflows. |
 
 ## Task outcomes and attempts
 
@@ -986,13 +1116,13 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 |---|---|---|---:|---:|---|---|
 | TASK-0108 | rel-00-contract | integrated as `41380c1b`; authoritative gate passed at 20:27:09Z | 1 | 4 / 2 / 4 | `RUN-20260813T170836Z-93780`; recovery `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256` | Immutable source snapshot; accepted imported packet/audit; final exact-tree 194/194; `rel-00-contract.gate-result.json` |
 | TASK-0109 | rel-01-per-try-logs | integrated as `9d9c41f2`; authoritative gate passed at 00:47:13Z under STOP | 8 | 7 / 3 / 1 (+1 promotion) | Prior three run IDs plus terminal `RUN-20260813T221358Z-8581`; accepted recoveries `...210341...`, `...212941...`; integration `ORIGIN-20260813T230100Z-TASK0109-NATIVE`; promotion `ORIGIN-20260813T235754Z-8483` | Exact six-file `b874a874` accepted with no findings and charge 86,301; native staged integration and exact-head promotion each passed 195/195; v1 gate/hash bindings validate, fake events still eight |
-| TASK-0110 | rel-02-try-hygiene | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
+| TASK-0110 | rel-02-try-hygiene | blocked after two parallel-state false gate reds; contract amended for a fresh causal-proof retry | 2 | 0 / 0 / 0 | `RUN-20260814T010432Z-76912` | No commit/packet; exact evidence-only worktree diff `e35b4160...`; both host gates source-integrity verified; 54-file snapshot + uncommitted-diff snapshot retained |
 | TASK-0111 | rel-03-integrity-reclass | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0112 | rel-04-evidence-remedy | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0113 | rel-05-manifest-remedy-bound | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0114 | rel-06-terminal-handoff | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
-| TASK-0115 | rel-07-run-control | ready; frontier-eligible after rel-00 promotion | 0 | 0 / 0 / 0 | — | — |
-| TASK-0116 | rel-08-route-transcript | ready; frontier-eligible after rel-00 promotion | 0 | 0 / 0 / 0 | — | — |
+| TASK-0115 | rel-07-run-control | blocked; both audits rejected path hiding; contract amended for externally signed v1 authority and a fresh implementation | 3 | 2 / 0 / 0 | `RUN-20260814T010432Z-76911` | Evidence-only ref at `68c48b4a`; final audit `needs-fix`; true fresh audit input 178,060; 132-file inventory-verified snapshot retained |
+| TASK-0116 | rel-08-route-transcript | blocked; candidate retained only as seed after operator corrected the false live-resume causal claim | 2 | 2 / 0 / 0 | `RUN-20260814T010432Z-76945` | Evidence-only ref at `98628d0d`; attempt-2 audit accepted under superseded contract; true fresh audit input 101,302; 117-file inventory-verified snapshot retained |
 | TASK-0117 | rel-09-l1-lease-liveness | ready; frontier-eligible after rel-00 promotion | 0 | 0 / 0 / 0 | — | — |
 | TASK-0118 | rel-10-failure-domains | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0119 | rel-11-supervised-job | ready; frontier-eligible after rel-00 promotion | 0 | 0 / 0 / 0 | — | — |
@@ -1019,6 +1149,10 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | 2026-08-13T22:50:44Z | TASK-0109 / rel-01-per-try-logs | accepted hold | Native audit accepted exact candidate `b874a874` with no findings; provider-correct charge 86,301 remained below the hard bound | Wrote STOP before import/integration so control state can be checkpointed and the exact-tree adapter/runtime overlay handoff remain quiescent | Terminal run audit, final manifest, inbox packet, STOP |
 | 2026-08-13T23:50:12Z | TASK-0109 / rel-01-per-try-logs | integration resolved | Imported native packet and staged exact candidate passed 195/195 with verified source integrity; merge `9d9c41f2` has the expected parents/tree | Kept STOP after integration; did not publish the rel-01 gate or activate a new runtime until the evidence checkpoint is committed | Integration run, gate report/log SHA, merge object, lease/task status |
 | 2026-08-14T00:47:13Z | TASK-0109 / rel-01-per-try-logs | promotion resolved | Fresh 2,959s proof passed 195/195 at exact head `9c1f2e7b`; every v1 evidence hash/binding, gate validation, and rel-01 `area-gate` passed | Retained STOP; deferred activation of TASK-0109's controller bytes until a new immutable overlay is built and verified | `ORIGIN-20260813T235754Z-8483`, rel-01 gate result/evidence, launch/terminal identity snapshots |
+| 2026-08-14T01:15:49Z | TASK-0116 / rel-08-route-transcript | `escalate-infra` | Attempt-2 audit accepted `98628d0d`, then final refresh failed cumulative fresh input `101302 >= 100000`; source contract also falsely claimed the filename controlled live final-review resume | Deterministic budget/contract failure, not transient infra. Kept STOP, preserved candidate as evidence-only seed, corrected task/DAG/plan for enabled-routing artifact alignment, and required a fresh run/audit. | Run, accepted audit, failed-refresh log, 117-file snapshot inventory, private candidate ref |
+| 2026-08-14T01:28:46Z | TASK-0110 / rel-02-try-hygiene | `escalate-parked` | Both product gates observed only legitimate concurrent TASK-0115 state writes; source integrity stayed verified and no audit ran | Classified as a promoted parallel-test defect, not a product failure. Preserved the exact uncommitted diff, amended rel-02 for causal nonce proof at concurrency three, and required a fresh RED-first run. | Two gate reports/logs, attempts index, 54-file snapshot inventory, uncommitted-diff manifest `8ba10933...` |
+| 2026-08-14T01:41:57Z | TASK-0115 / rel-07-run-control | `escalate-infra` | Attempt-3 auditor correctly returned `needs-fix` for same-UID path hiding and no-control drift; final refresh then failed `178060 >= 100000` and obscured that disposition | Did not recover or reuse the candidate. Preserved it as threat-model evidence, amended rel-07 for externally signed run-bound v1 records, and required a clean test-first implementation. | Both audits, failed-refresh log, 132-file snapshot inventory, private candidate ref |
+| 2026-08-14T01:47:45Z | TASK-0110/TASK-0115/TASK-0116 | operator contract hold | Three terminal runs represented three distinct causes: parallel-unsafe promoted test, unimplementable path-authority contract, and false reviewer-routing causal claim | With `operator-proxy:codex` authority, rejected all three as integration inputs, retained STOP, corrected task/DAG/plan/report, and prepared supported unpark only after a clean control checkpoint. | Top decision entry, seven-file amendment diff, validated DAG, snapshots and candidate refs |
 
 ## Evidence capture checklist
 
@@ -1029,41 +1163,34 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 
 ## Current active-state snapshot
 
-- `agent/integration` contains promotion-evidence commit `6b102c54d464a27085913a19becafe4b9ee85bdd`,
-  tree `b043797894233fd7d413fe19407494eaa692be98`; the field-report checkpoint descends from it.
-  The gate itself binds exact launch checkpoint
-  `9c1f2e7b5703d00f476b2115442938c57779f813`/tree-index `af2f0cce5c9df22524a7297a8fa03013e62fa4a8`,
-  whose committed field-report blob matched the launch checkout. Ancestor merge `9d9c41f2` has the exact
-  TASK-0109 tree, expected parents, and six owned paths.
-- STOP remains present after TASK-0109's native promotion handoff; origin and Git-operation
-  locks are absent and no worker process remains. The general autonomous loop has not yet been restarted.
-- Gates: 2/18. `rel-00-contract` and `rel-01-per-try-logs` are authoritative/passed; TASK-0108 and
-  TASK-0109 are `integrated`. The other 16 task files remain `ready`: 15 non-release tasks plus rel-99.
-- Packets: the imported corpus is 109 product packets—the historical 107 plus TASK-0108 and TASK-0109—with
-  their audit sidecars; the active inbox is empty. Three earlier TASK-0109 packets remain recoverably
-  quarantined. The terminal packet, native audit, 195/195 integration log, and exact merge object are retained;
-  the authoritative event log still contains exactly the original eight `resume-run` fixture events.
-- Resources: configured/effective slots are 3/3; current filesystem headroom is about 39 GiB with no capacity
-  pressure.
-- Provider/runtime proof: the predecessor immutable 0.18.0 overlay changes only
-  `engine/evidence-manifest.sh`, keeps raw provider usage, charges coherent Codex cached replay correctly,
-  and was active for all twelve primary earlier TASK-0109 role calls plus the sampled paired review.
-  Effective runner/model were Codex and `gpt-5.6-sol`; the terminal native auditor's corrected charge was
-  86,301. Verified successor `singular-0.18.0-canary-rel01-v2-b874a874` exists at the exact ignored overlay
-  path, differs from that predecessor in exactly the three promoted rel-01 controller paths, preserves the
-  evidence-manifest fix, and has 300 manifest entries / 301 recursively immutable (`uchg`) filesystem objects.
-  Its bundle manifest is `eb42e919a61232473f28a97c3370fa3925d589988fd8ae3023698e112cfcf25c`
-  and metadata file is `df2a56ffa8ae99fe260046dd6ed94a3cb02d205ec5a4492f52a472cc3398f80c`;
-  its 58-second focused gate and the existing 195/195 full-suite/promotion proof are hash-bound in the overlay
-  record. The successor is now selected through `SINGULAR_ENGINE_HOME` only. Its immutable metadata retains
-  the pre-activation build status `verified-not-activated`; the later environment activation passed status,
-  health, and DAG preflight without altering tracked scaffolds. Its activation record is hash-bound as
-  `b4eb1d08e1e7ecf06fff1082b0fdd809dc32f53d8f66c52d8bf941c258b55588`. STOP remains present,
-  health reports 3/3 slots and 34.3 GB free, and the predecessor is retained intact as a superseded rollback
-  artifact rather than deleted. No install, symlink/current pointer, default-version, or push change occurred.
-- No push, tag, publish, install, current-symlink/default flip, blind unpark, cherry-pick, or tracked driver
-  engine patch occurred. All exceptional recovery and exact-tree proof actions are preserved in ignored,
-  hash-indexed operator evidence.
+- This checkpoint descends from first-wave control head
+  `9f460e09bcca91ec9ee3446896edc5340a0ed1ae`/tree
+  `6969b1ea7015d7de2be0349aadc41f84e0e9822d` on `agent/integration`. Ancestor merge `9d9c41f2`
+  has the exact TASK-0109 tree, expected parents, and six owned paths; rel-01 promotion remains bound to
+  exact launch checkpoint `9c1f2e7b`/tree-index `af2f0cce`.
+- STOP is present for the first-wave contract hold. No Singular auto/reconcile/drive/worker process, origin
+  lock, Git-operation lock, or inbox packet remains. A preflight `resume --help` probe briefly removed the
+  sentinel at 02:06:49Z, but it was restored before any controller existed and caused no actuation.
+- Gates remain 2/18. TASK-0108/TASK-0109 are `integrated`; TASK-0110/TASK-0115/TASK-0116 are `blocked`
+  under explicit amended contracts; the other 13 sprint tasks are `ready`—12 non-release tasks plus rel-99.
+- The imported corpus is 109 product packets plus 109 audit sidecars; the active inbox is empty. Three earlier
+  TASK-0109 packets remain recoverably quarantined. TASK-0115/TASK-0116 candidates are pinned under private
+  evidence refs only. TASK-0110's exact uncommitted diff and all three run roots are retained in inventory-bound
+  ignored snapshots; none is acceptance, packet, integration, or promotion authority. The authoritative event
+  log still contains exactly the original eight `resume-run` fixture events.
+- Configured/effective capacity remains 3/3 with about 31.4 GiB free. The first successor wave launched the
+  exact greedy batch TASK-0110/TASK-0115/TASK-0116, then stopped before any packet import or integration.
+- Runtime remains the absolute, recursively `uchg` overlay
+  `singular-0.18.0-canary-rel01-v2-b874a874`, selected only through `SINGULAR_ENGINE_HOME`. It differs from
+  the prior verified overlay in exactly the three promoted rel-01 controller paths and preserves the
+  provider-correct `evidence-manifest.sh` patch. Its 300-entry manifest is
+  `eb42e919a61232473f28a97c3370fa3925d589988fd8ae3023698e112cfcf25c`; activation record is
+  `b4eb1d08e1e7ecf06fff1082b0fdd809dc32f53d8f66c52d8bf941c258b55588`. The first wave verified that
+  Codex cached-input charging is correct, while also reproducing the fixed cumulative canary's terminal-handoff
+  defect at 101,302 and 178,060 fresh reviewer input.
+- No push, tag, publish, install, current-symlink/default flip, blind unpark, old-candidate cherry-pick, or
+  tracked driver engine patch occurred. All exceptional recovery and exact-tree proof actions remain in
+  ignored, hash-indexed operator evidence.
 
 ## `rel-99-release` readiness and operator handoff
 
@@ -1075,12 +1202,13 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 - [ ] Operator has reviewed the exact release diff and evidence.
 
 Recommendation: **not yet ready for rel-99 promotion**. Bootstrap recovery is complete and rel-00/rel-01 are
-green, but 16 tasks remain (15 non-release tasks plus rel-99) and no release-candidate evidence exists. Three superseded TASK-0109 packets remain
-quarantined; the fourth candidate `b874a874` is natively accepted and integrated as exact merge `9d9c41f2`
-after a 195/195 staged-tree gate, then promoted by a fresh 195/195 exact-head proof at `9c1f2e7b`. Its literal contract includes two same-process archive invocations against
-distinct roots, recursive literal caller checkout/state/event guards after each and final drain, and no ninth
-fake event. The immutable successor runtime is fully verified and activated by environment behind STOP; it is
-ready for resumed frontier dispatch—not for release promotion. Rel-99 must remain pending until every non-release gate is
+green, but 16 sprint tasks remain unfinished: TASK-0110/TASK-0115/TASK-0116 are blocked under corrected
+contracts, 12 other non-release tasks are ready/dependency-blocked, and rel-99 is ready but operator-gated.
+No release-candidate evidence exists. Three superseded TASK-0109 packets remain quarantined; exact candidate
+`b874a874` is integrated as merge `9d9c41f2` after a 195/195 staged-tree gate and promoted by a fresh 195/195
+exact-head proof at `9c1f2e7b`. The immutable successor runtime is verified and active by environment behind
+STOP. The first three-lane wave produced no import or integration; its three runs are preserved, explicitly
+disposed, and amended for fresh retries. Rel-99 must remain pending until every non-release gate is
 authoritative/passed, every park and material finding has explicit disposition, the exact release diff and
 synchronized version surfaces are green, the field-report canary and fresh-consumer proof pass, and the
 hash-bound human-gate request is reviewed. No push, tag, publish, install, default flip, or release promotion
