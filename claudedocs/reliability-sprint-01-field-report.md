@@ -1,7 +1,8 @@
 # Reliability Sprint 01 — dogfood field report
 
-- Status: active; `rel-00-contract` integrated/promoted; TASK-0109 is integrated as merge
-  `9d9c41f2223cd35b634a7c722ee4cb5ed9ca620a`; authoritative `rel-01-per-try-logs` promotion is pending
+- Status: active; `rel-00-contract` and `rel-01-per-try-logs` are integrated/promoted; TASK-0109 is
+  integrated as merge `9d9c41f2223cd35b634a7c722ee4cb5ed9ca620a`, and its authoritative gate was
+  recorded at exact checkpoint head `9c1f2e7b5703d00f476b2115442938c57779f813`
 - Engine under test: Singular 0.18.0 (self-hosted)
 - Target release: 0.19.0
 - Program: `rel-*` in `docs/orchestration/dag.v0.json`
@@ -20,6 +21,8 @@
   STOP restored before import/integration
 - Native TASK-0109 import/integration: 2026-08-13T22:58:43Z–23:50:12Z; exact staged merge passed
   195/195 and was committed; STOP retained before `rel-01-per-try-logs` promotion
+- Native `rel-01-per-try-logs` promotion: 2026-08-13T23:57:54Z–2026-08-14T00:47:13Z; fresh
+  195/195 proof passed and the v1 gate was recorded; STOP retained before runtime-overlay activation
 
 ## Operator boundaries
 
@@ -98,6 +101,7 @@
 | 2026-08-13T22:50:44Z | operator quiescence | Accepted packet awaiting import/integration | STOP was written after native acceptance and before any import, exact-tree integration, rel-01 promotion, or runtime activation | `.singular-state/STOP`, inbox packet, event slice |
 | 2026-08-13T22:58:43Z | `ORIGIN-20260813T225843Z-71671` | Accepted TASK-0109 packet imported under STOP | Reconcile imported the sole active packet, committed its packet/audit and control state as `de7e9d52`, dispatched nothing, and left the exact worker head unchanged | Imported packet/audit, commits `8c99e896` and `de7e9d52`, reconcile event slice |
 | 2026-08-13T23:00:00Z–23:50:12Z | `ORIGIN-20260813T230100Z-TASK0109-NATIVE` | Native TASK-0109 integration completed; rel-01 not yet promoted | The staged merge changed exactly `engine/l1-drive.sh`, `engine/lib.sh`, `engine/reconcile.sh`, `tests/test-executable-resolution.sh`, `tests/test-per-try-artifacts.sh`, and `tests/test-reconcile-low-disk.sh`. The full suite passed 195/195 in 3,010,561ms with `sourceIntegrity.status=verified`, `changedPaths=[]`, log SHA-256 `8646d137c1b11a96a89bd34bcb897ebcd55bc279a95cec190a9f34cb9310d4c1`, and the authoritative fake-event count still exactly eight. Merge `9d9c41f2` has parents `de7e9d52` then `b874a874` and tree `bf6553eb58227f1ae86fcdeb0728fc6fc6512cef`. | Integration run/gate report and log, merge object, event slice |
+| 2026-08-13T23:57:54Z–2026-08-14T00:47:13Z | `ORIGIN-20260813T235754Z-8483` | Native `rel-01-per-try-logs` promotion completed under STOP | Exact checkpoint head `9c1f2e7b`/tree `af2f0cce` remained frozen while the fresh suite passed 195/195 in 2,959s; `test-per-try-artifacts.sh` consumed about 26m25s. Gate-result SHA-256 is `a2a13d96c0735b441bc46ecd8f2498968eead794098b0f0fe641fc1ec8da74d8`, strict report SHA-256 `eab36f165117de1518bf7f9aadd60d9a0445cd7f7f94847d718d4c3b107fe0ab`, and log SHA-256 `8646d137c1b11a96a89bd34bcb897ebcd55bc279a95cec190a9f34cb9310d4c1`. Independent source/task-set/command/log/report/evidence-binding hashes passed; `singular gate validate` and both rel-00/rel-01 `area-gate` checks passed. | `docs/orchestration/gates/rel-01-per-try-logs.gate-result.json`, its three evidence files, promotion events, launch/terminal identity snapshots |
 
 ## Finding ledger
 
@@ -622,8 +626,8 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   merge with both parents, verifies tree/path identity, runs in a disposable linked worktree, permits only the
   proven 37-path metadata set, verifies every terminal blob/mode and Git-clean state, and leaves the outer
   driver-integrity guard active.
-- Resolution: bootstrap mitigated and integrated. The permanent read-only status fix is authored and
-  audit-accepted at TASK-0109 head `08bcb2b0`, but is not yet integrated because TASK-0109 parked after audit.
+- Resolution: fixed by exact TASK-0109 candidate `b874a874`, integrated in merge `9d9c41f2`, and exercised
+  by both green 195/195 integration and promotion suites.
 
 ### FR-026 — low-disk recovery regression races detached dispatch completion
 
@@ -642,26 +646,30 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
   `.singular-state/operator-probes/low-disk-race-20260813T1936Z/{manifest.json,summary.md,raw-results.log}`.
 - Operator cost/action: another 1,404,144ms full suite, a Codex decider call (20,276 input / 11,008 cached /
   162 output), ten detached and three synchronous focused reruns, and one bounded full-suite retry.
-- Resolution: diagnosis and permanent acceptance criteria committed in `e0c15c9f`. TASK-0109's repeated
-  ten-cycle bounded-drain fix is authored and audit-accepted at `08bcb2b0`, but not yet integrated.
+- Resolution: diagnosis and permanent acceptance criteria were committed in `e0c15c9f`; the repeated
+  ten-cycle bounded-drain fix landed in exact TASK-0109 merge `9d9c41f2` and passed both 195/195 suites.
 
-### FR-027 — promotion gate report drops the wrapper's duration, integrity, and manifest binding
+### FR-027 — promotion gate report drops duration, integrity, and wrapper-manifest binding
 
-- First seen: 2026-08-13T20:27:09Z; frequency: 1/1 `rel-*` promotions.
+- First seen: 2026-08-13T20:27:09Z; frequency: 2/2 `rel-*` promotions.
 - Classification: new evidence near-miss; severity: high; impact: degraded proof fidelity; promotion itself
   remained independently inspectable and exact-head green.
 - Symptom: the promotion wrapper ran from 20:04:59Z to 20:27:07Z, verified candidate-clean source integrity,
   and wrote a detailed operator manifest at head `41380c1b`/tree `4915b69a`. The authoritative gate report,
   however, records `durationMs: 0` and `sourceIntegrity.status: not-checked`. The gate result hash-binds the
   suite log and gate report but neither references nor hashes the operator manifest that contains the missing
-  facts.
+  facts. The native rel-01 promoter repeated the telemetry loss: promotion events prove 2,959s elapsed at
+  exact head `9c1f2e7b`, while its strict report again records `durationMs: 0` and
+  `sourceIntegrity.status: not-checked`; read-only supervision independently froze HEAD/tree/index/STOP.
 - Expected: the normalized report carries real elapsed duration and terminal integrity, and the authoritative
   gate evidence binds the wrapper manifest (including exact head/tree, start/end, summary, and exception).
-- Code anchor: local promoter/adapter boundary in `.singular-state/operator-promotion-gate.sh` and strict
-  report normalization in installed `engine/gate-report.sh`/promoter flow.
+- Code anchor: local promoter/adapter boundary in `.singular-state/operator-promotion-gate.sh`, direct command
+  execution in `.singular-state/reliability-promoter.sh:1831-1854`, and strict normalization without duration
+  or integrity arguments at `:221-280`.
 - Evidence: `.singular-state/operator-promotion-proofs/rel-00-contract/20260813T200459Z-26026/manifest.json`,
   `docs/orchestration/gates/evidence/rel-00-contract.gate-report.json`, and
-  `docs/orchestration/gates/rel-00-contract.gate-result.json`.
+  `docs/orchestration/gates/rel-00-contract.gate-result.json`; rel-01 promotion events and
+  `docs/orchestration/gates/evidence/rel-01-per-try-logs.gate-report.json`.
 - Operator cost/action: manually cross-bound the manifest, suite log, gate report, gate result, head, and tree
   before treating rel-00 as promoted.
 - Resolution: open; exact identity/attach work in TASK-0120/TASK-0121 is the natural permanent home.
@@ -926,21 +934,24 @@ trust was reduced; **annoyed** means avoidable manual or cognitive cost without 
 
 ### FR-041 — literal caller inventory makes one focused test consume almost half the gate deadline
 
-- First seen: 2026-08-13T23:50:11Z; frequency: 1/1 full integration executions of the terminal TASK-0109 test.
+- First seen: 2026-08-13T23:50:11Z; frequency: 2/2 full-suite executions of the terminal TASK-0109 test.
 - Classification: new test-scaling/timeout near-miss; severity: high; impact: degraded integration latency and
   almost blocked the gate; the run completed green.
-- Symptom: `test-per-try-artifacts.sh` took about 26m40s during a 3,010,561ms (50m10.561s) full suite. The
-  default gate deadline is 3,600s, leaving only about 9m49s for host variance or future suite growth. The test
+- Symptom: `test-per-try-artifacts.sh` took about 26m40s during a 3,010,561ms (50m10.561s) integration suite,
+  then about 26m25s during the 2,959s (49m19s) native promotion suite. The default gate deadline is 3,600s,
+  leaving only about 9m49s and 10m41s respectively for host variance or future suite growth when this command
+  runs through the bounded gate path. The test
   recursively enumerates and byte-hashes the literal caller checkout before the fixture, after each of two archive
   iterations, and after final drain, so cost scales with unrelated ignored/generated checkout content.
 - Expected: hostile-state proof remains byte- and path-exact while its cost is bounded independently of total
   checkout size, and test/gate telemetry exposes per-test elapsed time before the overall deadline is at risk.
 - Code anchor: recursive hashing at `tests/test-per-try-artifacts.sh:13-35`, repeated checkout/state comparison
   at `:46-60,64-66,336,366`; default deadline at `engine/gate-check.sh:61`.
-- Evidence/cost: live process timing observation plus integration gate timestamps/report/log. The test stayed
-  correct, all 195 tests passed, and source integrity was verified, but integration occupied the only control path
-  for 50 minutes. Resolution: open; optimize the exact inventory proof or isolate it behind a bounded fixture
-  without weakening literal incoming-path assertions.
+- Evidence/cost: live process timing observation plus integration and promotion timestamps/reports/logs. Both
+  runs stayed correct and passed 195/195; the integration gate verified source integrity, while read-only
+  supervision froze all rel-01 promotion identities. Each run occupied its only control path for about 50 minutes.
+  Resolution: open; optimize the exact inventory proof or isolate it behind a bounded fixture without weakening
+  literal incoming-path assertions.
 
 ## Known-issue observation log
 
@@ -958,7 +969,7 @@ These are cost/frequency measurements, not new discoveries.
 |---|---|---|
 | Does self-hosted audit catch weak worker output before integration? | Worker packet, audit verdict/findings, gate result, integration event | Mixed. Three earlier final auditors accepted packets later revoked by exact-contract review. In the fourth run, the native auditor accepted `b874a874` only after the authored gate and independent contract checks agreed on the direct parent, exact six-file tree, literal two-iteration hostile-state proof, and no ninth event. That exact candidate then passed native staged integration 195/195 and became `9d9c41f2`; this is one clean end-to-end acceptance, not enough to erase the prior audit escapes. |
 | Are role budgets realistic; were mid-run raises needed and honored? | Session/run-control files, timeout events, operator actions, elapsed time | Variable. The first two TASK-0109 reviewer pairs charged 139,516 and 151,702 and terminalized accepted results. The seed-restored pair fit at 93,476. The terminal native auditor used 562,461 input / 476,160 cached / 7,496 output for a canary charge of 86,301, so no raise was needed. No deadline raise was requested; the hard canary has no supported raise. |
-| Is dispatch fair across parallel lanes at concurrency 3? | Ready time, dispatch time, start time, completion time per node | Not yet evaluable: recovery has only advanced the serial lane through native TASK-0109 integration, and rel-01 promotion is still pending. Parallel-lane measurement begins after the authoritative gate/runtime handoff. |
+| Is dispatch fair across parallel lanes at concurrency 3? | Ready time, dispatch time, start time, completion time per node | Not yet evaluable: recovery has advanced the serial lane through authoritative rel-01 promotion, but the updated immutable runtime has not been activated and autonomous dispatch has not resumed. Parallel-lane measurement begins after that quiescent handoff. |
 | What manual operator work should the engine perform or surface? | Every intervention and missing/ambiguous status signal | In addition to launch work, deterministic packet recovery, immutable snapshotting, exact-tree integration, status-mutation attribution, flaky-test isolation, proof cross-binding, long-job polling, cumulative-token reconstruction, false-event attribution, staged-tree identity reconstruction, and per-test timeout-margin monitoring all required manual operator work. |
 
 ## Task outcomes and attempts
@@ -968,7 +979,7 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | Task | Node | Outcome | Product attempts | Audit / recovery / integration tries | Worker run IDs | Gate / packet evidence |
 |---|---|---|---:|---:|---|---|
 | TASK-0108 | rel-00-contract | integrated as `41380c1b`; authoritative gate passed at 20:27:09Z | 1 | 4 / 2 / 4 | `RUN-20260813T170836Z-93780`; recovery `RUN-20260813T182550Z-RECOVERY-TASK-0108-12256` | Immutable source snapshot; accepted imported packet/audit; final exact-tree 194/194; `rel-00-contract.gate-result.json` |
-| TASK-0109 | rel-01-per-try-logs | integrated as `9d9c41f2`; authoritative node promotion pending under STOP | 8 | 7 / 3 / 1 | Prior three run IDs plus terminal `RUN-20260813T221358Z-8581`; accepted recoveries `...210341...`, `...212941...`; integration `ORIGIN-20260813T230100Z-TASK0109-NATIVE` | Exact six-file `b874a874` accepted with no findings and charge 86,301; native staged integration passed 195/195 in 3,010,561ms, source integrity verified, merge tree/parents cross-bound, fake events still eight |
+| TASK-0109 | rel-01-per-try-logs | integrated as `9d9c41f2`; authoritative gate passed at 00:47:13Z under STOP | 8 | 7 / 3 / 1 (+1 promotion) | Prior three run IDs plus terminal `RUN-20260813T221358Z-8581`; accepted recoveries `...210341...`, `...212941...`; integration `ORIGIN-20260813T230100Z-TASK0109-NATIVE`; promotion `ORIGIN-20260813T235754Z-8483` | Exact six-file `b874a874` accepted with no findings and charge 86,301; native staged integration and exact-head promotion each passed 195/195; v1 gate/hash bindings validate, fake events still eight |
 | TASK-0110 | rel-02-try-hygiene | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0111 | rel-03-integrity-reclass | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
 | TASK-0112 | rel-04-evidence-remedy | ready; not dispatched, dependency-blocked | 0 | 0 | — | — |
@@ -1001,6 +1012,7 @@ Product attempts and audit/recovery/integration tries are recorded separately. A
 | 2026-08-13T22:05:49Z | TASK-0109 / rel-01-per-try-logs | operator quarantine | Primary and paired accepted audits both missed explicit in-process fixture repetition `>=2` and literal incoming caller checkout/state/event identity | Retained STOP, revoked the third accepted result, preserved exact candidate `ede05b0e`, and quarantined its inbox packet before import/integration | Clarified third quarantine manifest `c01d6384...`, paired audit, exact-contract review |
 | 2026-08-13T22:50:44Z | TASK-0109 / rel-01-per-try-logs | accepted hold | Native audit accepted exact candidate `b874a874` with no findings; provider-correct charge 86,301 remained below the hard bound | Wrote STOP before import/integration so control state can be checkpointed and the exact-tree adapter/runtime overlay handoff remain quiescent | Terminal run audit, final manifest, inbox packet, STOP |
 | 2026-08-13T23:50:12Z | TASK-0109 / rel-01-per-try-logs | integration resolved | Imported native packet and staged exact candidate passed 195/195 with verified source integrity; merge `9d9c41f2` has the expected parents/tree | Kept STOP after integration; did not publish the rel-01 gate or activate a new runtime until the evidence checkpoint is committed | Integration run, gate report/log SHA, merge object, lease/task status |
+| 2026-08-14T00:47:13Z | TASK-0109 / rel-01-per-try-logs | promotion resolved | Fresh 2,959s proof passed 195/195 at exact head `9c1f2e7b`; every v1 evidence hash/binding, gate validation, and rel-01 `area-gate` passed | Retained STOP; deferred activation of TASK-0109's controller bytes until a new immutable overlay is built and verified | `ORIGIN-20260813T235754Z-8483`, rel-01 gate result/evidence, launch/terminal identity snapshots |
 
 ## Evidence capture checklist
 
@@ -1011,14 +1023,15 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 
 ## Current active-state snapshot
 
-- `agent/integration` is at TASK-0109 merge `9d9c41f2223cd35b634a7c722ee4cb5ed9ca620a`, tree
-  `bf6553eb58227f1ae86fcdeb0728fc6fc6512cef`. Its parents are pre-integration control target
-  `de7e9d52d98b3dd54f98215c61bdbc3ef19bb3b0` then audited worker
-  `b874a87466e118eef167190a66e048d944ab7544`; the merge changes exactly the task's six owned paths.
-- STOP remains present after TASK-0109's native integration handoff; origin and Git-operation
+- `agent/integration` is at promotion-evidence commit `6b102c54d464a27085913a19becafe4b9ee85bdd`,
+  tree `b043797894233fd7d413fe19407494eaa692be98`. The gate itself binds exact launch checkpoint
+  `9c1f2e7b5703d00f476b2115442938c57779f813`/tree-index `af2f0cce5c9df22524a7297a8fa03013e62fa4a8`,
+  whose committed field-report blob matched the launch checkout. Ancestor merge `9d9c41f2` has the exact
+  TASK-0109 tree, expected parents, and six owned paths.
+- STOP remains present after TASK-0109's native promotion handoff; origin and Git-operation
   locks are absent and no worker process remains. The general autonomous loop has not yet been restarted.
-- Gates: 1/18. `rel-00-contract` is authoritative/passed; TASK-0108 and TASK-0109 are `integrated`.
-  `rel-01-per-try-logs` has not yet been promoted, and the other 16 task files remain `ready`.
+- Gates: 2/18. `rel-00-contract` and `rel-01-per-try-logs` are authoritative/passed; TASK-0108 and
+  TASK-0109 are `integrated`. The other 16 task files remain `ready`: 15 non-release tasks plus rel-99.
 - Packets: the imported corpus is 109 product packets—the historical 107 plus TASK-0108 and TASK-0109—with
   their audit sidecars; the active inbox is empty. Three earlier TASK-0109 packets remain recoverably
   quarantined. The terminal packet, native audit, 195/195 integration log, and exact merge object are retained;
@@ -1029,7 +1042,7 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
   provider usage, charges coherent Codex cached replay correctly, and was active for all twelve primary
   earlier TASK-0109 role calls plus the sampled paired review. Effective runner/model were Codex and
   `gpt-5.6-sol`; the terminal native auditor's corrected charge was 86,301. TASK-0109's engine changes are
-  integrated in source but have not yet been activated as the controller runtime. Push remains disabled.
+  integrated and promoted in source but have not yet been activated as the controller runtime. Push remains disabled.
 - No push, tag, publish, install, current-symlink/default flip, blind unpark, cherry-pick, or tracked driver
   engine patch occurred. All exceptional recovery and exact-tree proof actions are preserved in ignored,
   hash-indexed operator evidence.
@@ -1043,13 +1056,13 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 - [ ] No unresolved finding makes promotion unsafe.
 - [ ] Operator has reviewed the exact release diff and evidence.
 
-Recommendation: **not yet ready for rel-99 promotion**. Bootstrap recovery is complete and rel-00 is green,
-but 16 tasks remain and no release-candidate evidence exists. Three superseded TASK-0109 packets remain
+Recommendation: **not yet ready for rel-99 promotion**. Bootstrap recovery is complete and rel-00/rel-01 are
+green, but 16 tasks remain (15 non-release tasks plus rel-99) and no release-candidate evidence exists. Three superseded TASK-0109 packets remain
 quarantined; the fourth candidate `b874a874` is natively accepted and integrated as exact merge `9d9c41f2`
-after a 195/195 staged-tree gate. Its literal contract includes two same-process archive invocations against
+after a 195/195 staged-tree gate, then promoted by a fresh 195/195 exact-head proof at `9c1f2e7b`. Its literal contract includes two same-process archive invocations against
 distinct roots, recursive literal caller checkout/state/event guards after each and final drain, and no ninth
-fake event. It is ready for authoritative rel-01 promotion proof and a quiescent immutable runtime-overlay
-handoff—not for release promotion. Rel-99 must remain pending until every non-release gate is
+fake event. It is ready for a quiescent immutable runtime-overlay handoff and resumed frontier dispatch—not
+for release promotion. Rel-99 must remain pending until every non-release gate is
 authoritative/passed, every park and material finding has explicit disposition, the exact release diff and
 synchronized version surfaces are green, the field-report canary and fresh-consumer proof pass, and the
 hash-bound human-gate request is reviewed. No push, tag, publish, install, default flip, or release promotion
