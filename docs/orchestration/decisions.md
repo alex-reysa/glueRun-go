@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-08-14T15:34:40Z — TASK-0115 — unpark
+
+- Run: `ORIGIN-20260814T153440Z-8694`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: R3 signed-control candidate and evidence are preserved; amended recovery requires one immutable fresh RED and hermetic verifier proof before seed inspection
+
+### 2026-08-14T15:34:40Z — TASK-0111 — unpark
+
+- Run: `ORIGIN-20260814T153440Z-8695`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: R3 candidate and evidence are preserved; amended recovery requires a fresh exact-base RED before first-attempt seed inspection
+
 ### 2026-08-14T15:09:52Z — TASK-0115 — escalate-parked
 
 - Run: `RUN-20260814T144110Z-64875`
