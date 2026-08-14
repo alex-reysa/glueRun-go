@@ -2,6 +2,20 @@
 
 ## Decision Log
 
+### 2026-08-14T13:26:24Z — TASK-0116 — unpark
+
+- Run: `ORIGIN-20260814T132624Z-91939`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: amended rel-08 requires literal unpinned probe to resume SID-reviewer from a fresh exact-base reset; quarantined acceptance remains evidence only
+
+### 2026-08-14T13:26:24Z — TASK-0115 — unpark
+
+- Run: `ORIGIN-20260814T132624Z-91893`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: amended rel-07 requires a fresh exact-base behavioral RED and valid-control timeout-0 parity; rejected candidate remains evidence only
+
 ### 2026-08-14T05:55:27Z — TASK-0110 — integrate
 
 - Run: `ORIGIN-20260814T053240Z-TASK0110-NATIVE-R2`
