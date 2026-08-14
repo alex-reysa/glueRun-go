@@ -2,6 +2,41 @@
 
 ## Decision Log
 
+### 2026-08-14T15:09:52Z — TASK-0115 — escalate-parked
+
+- Run: `RUN-20260814T144110Z-64875`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: l1
+- Rationale: no progress: attempt 2 reproduced attempt 1 exactly — same head (no commit), same uncommitted changes, same gate-red failure. A further retry cannot differ; unpark once the environment or the task changes.
+
+### 2026-08-14T15:05:37Z — TASK-0111 — escalate-infra
+
+- Run: `RUN-20260814T144108Z-64620`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0111`.
+
+### 2026-08-14T15:05:37Z — TASK-0111 — decide:escalate-infra
+
+- Run: `RUN-20260814T144108Z-64620`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
+### 2026-08-14T15:03:31Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260814T144110Z-64875`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
+### 2026-08-14T14:54:56Z — TASK-0111 — decide:retry
+
+- Run: `RUN-20260814T144108Z-64620`
+- Branch: `agent/foundation/TASK-0111-integrity-reclass`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
 ### 2026-08-14T14:39:33Z — TASK-0115 — unpark
 
 - Run: `ORIGIN-20260814T143933Z-64396`

@@ -118,11 +118,11 @@ carries its own strict-test-first RED before behavior changes.
 |---|---|---|
 | TASK-0109 | rel-01-per-try-logs | Per-try evidence/archive parity + truly read-only status bootstrap fix + deterministic detached low-disk regression |
 | TASK-0110 | rel-02-try-hygiene | Clear stale `last-message.json` between tries (including rc86 fresh fallback); test the try>0-fresh invariant; repair the rel-01 hermeticity fixture with deterministic sibling-overlap and nonce-separated parallel proof |
-| TASK-0111 | rel-03-integrity-reclass | Source-integrity violation gets its own class + parked-for-human routing |
+| TASK-0111 | rel-03-integrity-reclass | Source-integrity violation gets its own mandatory pre-model class + parked-for-human routing, exact verification-artifact context, and unchanged retry count |
 | TASK-0112 | rel-04-evidence-remedy | `revalidate-evidence` gets a real evidence-only handler (zero implementer calls) |
 | TASK-0113 | rel-05-manifest-remedy-bound | Exact-base finalization/recovery REDs; bounded evidence-manifest/binding retries; provider-correct Codex charging; one quiet fail-closed root/manifest/inbox finalizer for native and accept-existing publication |
 | TASK-0114 | rel-06-terminal-handoff | Durable terminal-pending handoff; accept-finalizing revalidates rel-05 secret/binding evidence before publication; STOP-safe exact-task reset-only cleanup |
-| TASK-0115 | rel-07-run-control | Authenticated signed exact-run control inside every bounded poll loop; expiry-before-poll and bounded no-follow snapshots; host-pinned verifier; schema mirror/sync; frozen-target no-control golden; signed control inert at timeout zero |
+| TASK-0115 | rel-07-run-control | Authenticated signed exact-run control inside every bounded poll loop; preserved strict RED; expiry-before-control without Codex completion/grace drift; bounded no-follow snapshots and strict JSON/time parsing; host-pinned verifier origins + RFC8032 vectors; hermetic runner identity; schema mirror/sync; child-proven frozen-target golden; signed control inert at timeout zero |
 | TASK-0116 | rel-08-route-transcript | Literal reviewer `probe` flips to exact resume on the corrected transcript mapping while final/paired audit independence pins remain intact |
 | TASK-0117 | rel-09-l1-lease-liveness | L1 planning-lease liveness probe before wall-clock reclaim |
 | TASK-0118 | rel-10-failure-domains | Additive `failureDomain` + formalized attempts-index schema |
@@ -165,8 +165,9 @@ fresh-consumer and migration compatibility green. Operator-authority release gat
 - Budget heuristics derived from history.
 - Automatic disk-pressure reclamation and the engine-owned temporary-root registry are deferred
   to the dedicated 0.20 backlog contract `TASK-0126` / `rel-17-storage-hygiene`; see
-  `claudedocs/storage-hygiene-0.20-plan.md`. Version 0.19 retains the fail-closed operator disk
-  hold and exact manifest-based cleanup only; checkpoint GC remains separately deferred.
+  `claudedocs/storage-hygiene-0.20-plan.md`. Version 0.19 relies on an operator-maintained STOP
+  plus exact recorded manual cleanup; it does not yet provide an engine-wide pre-expansion hard
+  stop. Checkpoint GC remains separately deferred.
 
 ## Success metrics (per release)
 
