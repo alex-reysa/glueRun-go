@@ -1272,12 +1272,12 @@ run_audit_phase() {
           "The independently rerun gate attempted to mutate committed source; the disposable worktree was discarded and evidence-only substitution is forbidden."
         verdict="blocked"
         append_audit_evidence
+        attempt_failure="integrity-violation"
+        attempt_ctx="$run_dir/audit-verification.json"
         singular_append_event "audit.source_integrity_violation" \
           "audit gate attempted source mutation; task parked without evidence-only fallback" \
-          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$verification_try}" \
+          "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"try\":$verification_try,\"contextRef\":\"$(basename "$attempt_ctx")\"}" \
           || true
-        attempt_failure="audit-infra"
-        attempt_ctx="$run_dir/audit-verification.json"
         return 1
       fi
       case "$verification_outcome" in

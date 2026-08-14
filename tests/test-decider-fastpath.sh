@@ -22,6 +22,8 @@ set -euo pipefail
 #   - a worker that exits 124 (timeout) every try: a worker.infra_retry event
 #     fires, NO decider-prompt is created (worker-infra parks via the fast-path),
 #     and the attempt is archived/parked as worker-infra.
+#   - a disposable audit gate that mutates committed source parks immediately as
+#     integrity-violation, without consulting the model or bumping retryCount.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
@@ -72,7 +74,9 @@ with_fixture() {
   export SINGULAR_ENGINE_HOME="$ENGINE_HOME"
   unset SINGULAR_MODULES SINGULAR_WORKER_RED_LOG SINGULAR_WORKER_CONTRACT_EXTRA SINGULAR_RUNNER \
     SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE SINGULAR_ATTEMPT_TASK_ID SINGULAR_ATTEMPT_STARTED_AT \
-    SINGULAR_DECIDER_FAST SINGULAR_WORKER_INFRA_MAX SINGULAR_AUDIT_INFRA_MAX 2>/dev/null || true
+    SINGULAR_DECIDER_FAST SINGULAR_WORKER_INFRA_MAX SINGULAR_AUDIT_INFRA_MAX \
+    SINGULAR_LOCAL_CONFIG_FILE SINGULAR_BASE_REF SINGULAR_DISPATCH_BASE_SHA \
+    SINGULAR_DISPATCH_BATCH_ID SINGULAR_PAIRED_AUDIT_PCT 2>/dev/null || true
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib.sh"
 }
@@ -143,6 +147,16 @@ test_fast_action_table() {
   out="$(singular_decider_fast_action audit-infra 3 3 "$prev")"
   assert_eq "$out" "escalate-infra" "fast table audit-infra no-budget"
 
+  # A committed-source mutation is a deterministic containment event, not an
+  # infrastructure failure. Human judgment is mandatory even with retry budget,
+  # and the repeat guard must never hand this class to the model decider.
+  out="$(singular_decider_fast_action integrity-violation 0 3 "$prev")"
+  assert_eq "$out" "escalate-parked" "fast table integrity-violation budget"
+  out="$(singular_decider_fast_action integrity-violation 3 3 "$prev")"
+  assert_eq "$out" "escalate-parked" "fast table integrity-violation no-budget"
+  out="$(singular_decider_fast_action integrity-violation 0 3 integrity-violation)"
+  assert_eq "$out" "escalate-parked" "fast table integrity-violation repeat"
+
   # ...and it is a declared action, not a string the engine invented: the
   # decider-verdict schema has to accept what the fast path emits, or a model
   # decider choosing the same action fails validation.
@@ -186,6 +200,10 @@ test_fast_action_repeat_and_disabled() {
     out="$(SINGULAR_DECIDER_FAST=0 singular_decider_fast_action "$cls" 0 3 "")"
     assert_eq "$out" "" "fast disabled: $cls -> empty"
   done
+  # Integrity containment is mandatory policy, not an optional fast-path. Even
+  # operators disabling ordinary fast actions must never hand it to the model.
+  out="$(SINGULAR_DECIDER_FAST=0 singular_decider_fast_action integrity-violation 0 3 "")"
+  assert_eq "$out" "escalate-parked" "fast disabled: integrity-violation still parks"
   echo "ok: fast-path repeat + disabled"
 }
 
@@ -369,6 +387,61 @@ test_driver_worker_infra_parks() {
   echo "ok: driver worker-infra parks via fast-path (no decider prompt)"
 }
 
+# Audit integrity: the worker gate stays read-only, while the independently
+# rerun gate mutates committed source in its disposable audit worktree. This is
+# terminal human-judgment work, never infrastructure and never an automatic
+# retry, so the lease retryCount remains unchanged.
+test_driver_integrity_violation_parks() {
+  with_fixture
+  write_generic_task
+  python3 - "$SINGULAR_TASKS_DIR/TASK-0001.md" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace(
+    "Gate command: `true`",
+    "Gate command: `if [[ -n \"${SINGULAR_AUDIT_GATE_WORKTREE:-}\" ]]; then printf mutation >> internal/widget/parser.go; fi; true`",
+)
+open(path, "w", encoding="utf-8").write(text)
+PY
+  local stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-integrity"
+  export SINGULAR_MAX_RETRIES=2
+  export SINGULAR_DECIDER_FAST=0
+
+  local out rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "integrity-violation run parks (exit 3) ($out)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "1" "integrity-violation: worker invoked once"
+  assert_no_file "$MOCK_COUNTER_DIR/audit-calls" "integrity-violation: model auditor never invoked"
+  local prompts
+  prompts="$(find "$SINGULAR_RUNS_DIR" -name 'decider-prompt-*.md' 2>/dev/null || true)"
+  assert_eq "$prompts" "" "integrity-violation: no decider prompt"
+  local events
+  events="$(cat "$SINGULAR_EVENTS_FILE")"
+  assert_contains "$events" '"audit.source_integrity_violation"' "integrity-violation: audit event emitted"
+  assert_contains "$events" '"contextRef":"audit-verification.json"' "integrity-violation: failure context bound to verification artifact"
+  assert_contains "$events" '"failureClass":"integrity-violation"' "integrity-violation: fast-path class"
+  assert_contains "$events" '"action":"escalate-parked"' "integrity-violation: human-judgment park"
+  assert_not_contains "$events" '"action":"escalate-infra"' "integrity-violation: not parked as infrastructure"
+  local verification
+  verification="$(find "$SINGULAR_RUNS_DIR" -name audit-verification.json | head -1)"
+  assert_file "$verification" "integrity-violation: referenced verification artifact"
+  assert_eq "$(singular_json_field "$verification" sourceIntegrity.status)" "violation" \
+    "integrity-violation: referenced artifact records source mutation"
+  local idx
+  idx="$(find "$SINGULAR_RUNS_DIR" -name index.json -path '*/attempts/*' | head -1)"
+  assert_file "$idx" "integrity-violation: attempts index"
+  assert_contains "$(cat "$idx")" '"failureClass": "integrity-violation"' "integrity-violation: archived failureClass"
+  assert_contains "$(cat "$idx")" '"deciderAction": "escalate-parked"' "integrity-violation: archived action"
+  assert_contains "$(cat "$idx")" '"deciderAuthority": "policy"' "integrity-violation: archived authority policy"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "0" "integrity-violation: retryCount unchanged"
+  unset SINGULAR_MAX_RETRIES SINGULAR_DECIDER_FAST
+  echo "ok: driver integrity violation parks for human judgment (retryCount=0)"
+}
+
 # rc==0 but empty/prose worker output must classify as worker-no-packet (a real
 # model run that produced no packet) and flow through the MAIN retry loop — NOT
 # the worker-infra fast-path. Guards the rc==0 empty-output downgrade.
@@ -402,6 +475,7 @@ test_driver_fastpath_provenance
 test_driver_decider_when_fast_disabled
 test_driver_audit_infra_retry
 test_driver_worker_infra_parks
+test_driver_integrity_violation_parks
 test_driver_empty_output_is_no_packet_not_infra
 
 echo "decider-fastpath tests passed"
