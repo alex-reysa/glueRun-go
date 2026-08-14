@@ -626,12 +626,20 @@ singular_terminal_blocker_rationale() { printf ''; }
 # retry_count/max_retries are evaluated as the CALLER's budget accounting (the
 # loop's 0-based attempt vs max_retries) so "retries remaining" (left) matches
 # exactly when the existing loop decides to retry-vs-park. Logic, in order:
-#   1. SINGULAR_DECIDER_FAST != 1            -> empty (force the model path).
-#   2. failure_class == prev (repeat)    -> empty (a same-class repeat may be
+#   1. integrity-violation              -> escalate-parked (human judgment is
+#      mandatory; never retry or consult the model).
+#   2. SINGULAR_DECIDER_FAST != 1        -> empty (force the model path).
+#   3. failure_class == prev (repeat)    -> empty (a same-class repeat may be
 #      systemic; escalate to the model for judgment).
-#   3. table on left = max_retries - retry_count (>0 => budget remains).
+#   4. table on left = max_retries - retry_count (>0 => budget remains).
 singular_decider_fast_action() {
   local failure_class="$1" retry_count="${2:-0}" max_retries="${3:-0}" prev="${4:-}"
+  # Deterministic containment event: a human must judge the work. This precedes
+  # both the disable and repeat guards so the class can never reach the model.
+  if [[ "$failure_class" == "integrity-violation" ]]; then
+    printf 'escalate-parked'
+    return 0
+  fi
   [[ "${SINGULAR_DECIDER_FAST:-1}" == "1" ]] || return 0
   [[ "$retry_count" =~ ^[0-9]+$ ]] || retry_count=0
   [[ "$max_retries" =~ ^[0-9]+$ ]] || max_retries=0
