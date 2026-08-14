@@ -163,6 +163,10 @@ fresh-consumer and migration compatibility green. Operator-authority release gat
 - Generic job progress as a consumer-facing interface.
 - At-most-once effect ledger/wrapper/receipts (consumer product layer today).
 - Budget heuristics derived from history.
+- Automatic disk-pressure reclamation and the engine-owned temporary-root registry are deferred
+  to the dedicated 0.20 backlog contract `TASK-0126` / `rel-17-storage-hygiene`; see
+  `claudedocs/storage-hygiene-0.20-plan.md`. Version 0.19 retains the fail-closed operator disk
+  hold and exact manifest-based cleanup only; checkpoint GC remains separately deferred.
 
 ## Success metrics (per release)
 
