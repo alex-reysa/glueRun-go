@@ -2,6 +2,22 @@
 
 ## Decision Log
 
+### 2026-08-14T04:13:28Z — FR-050/FR-052 — frozen overlay selected per process
+
+- Authority: `operator-proxy:codex`; bounded runtime selection only.
+- Decision: select the exact frozen v3 overlay for subsequent native L1 processes using only
+  `SINGULAR_ENGINE_HOME`, `BASH_COMPAT=52`, `SINGULAR_PUSH=0`, and
+  `SINGULAR_AUTO_ACCEPT_EXISTING=0`. Do not alter installed/default/current symlinks or either
+  repository/local config.
+- Preflight: `verify-overlay.py --require-frozen`, `bash -n`, `singular version`,
+  `singular validate-dag`, and read-only `singular status` all passed at clean control head
+  `2f0d5e62b3a975399d9d8e4cd9893c9eeb0dfbe6`. HEAD, tracked status, STOP hash, inbox count,
+  and authoritative event SHA remained byte-identical.
+- Record: ignored activation record
+  `.singular-state/operator-engine-overlay-records/singular-0.18.0-canary-rel01-v3-manifest-bind-fr050-20260814t025814z/activation-20260814t041328z.json`,
+  SHA-256 `4da4846e778e4ca62292e9a464b0d248741da033628d7bd32df6c40a2e611ca4`.
+  No task was unparked or run, and no import/integration/promotion occurred.
+
 ### 2026-08-14T04:06:12Z — FR-050/FR-052 — immutable acceptance-finalization overlay verified and frozen
 
 - Authority: `operator-proxy:codex`, independently reviewed; no release/default-install authority exercised.
