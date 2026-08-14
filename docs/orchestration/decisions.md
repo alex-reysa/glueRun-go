@@ -2,6 +2,103 @@
 
 ## Decision Log
 
+### 2026-08-14T04:06:12Z — FR-050/FR-052 — immutable acceptance-finalization overlay verified and frozen
+
+- Authority: `operator-proxy:codex`, independently reviewed; no release/default-install authority exercised.
+- Decision: approve the ignored per-process overlay
+  `.singular-state/operator-engine-overlays/singular-0.18.0-canary-rel01-v3-manifest-bind-fr050-20260814t025814z`
+  as the runtime precondition for fresh native L1 reruns only. It is not installed or activated
+  globally. Every process must select it by exact `SINGULAR_ENGINE_HOME`, set `BASH_COMPAT=52`,
+  and keep `SINGULAR_AUTO_ACCEPT_EXISTING=0` until TASK-0113 permanently converges deterministic
+  recovery on the same finalizer.
+- Binding: all 301 overlay filesystem objects are `uchg`; its 300-entry bundle differs from the
+  frozen rel-01-v2 predecessor only at executable `engine/l1-drive.sh`. Candidate SHA-256 is
+  `ebec05d725779350ba80df1ef71901c7a069dd7fd3d3182cb745a4f1f1ab8dd9`; bundle is
+  `79d255df9976ad8f8283b3e8137d06d0cdc7cd40135be159e0092bfb7a612468`; preserved
+  `engine/evidence-manifest.sh` is `aabfd6d9b868cbeb12816b25a12477761b95b862f4be245e0c8311a3ee3ce25d`.
+- Evidence: V10's 14/14 acceptance/secret/failure canaries passed with summary
+  `cf1cd004abedd298a97e75647ab66fedc4ae896c33f4b0718a98bbf57b0e731c`; the exact-byte six-suite
+  regression log is `d3cea0f70fff0c2557dd1cd6181d26a8ecc4a6fbc5eac7d98ff881d016fb03a1`.
+  Canonical metadata is `71c08fd0c6825ca28d0959eaeb49d2770fcd056651e8d11ca141c57ec5e2da68`,
+  and independent post-freeze verification is
+  `53cd28747ac25bd5d54f5f88f39961d34bd8102a16074f9f12e0694ea976f0cc`.
+- Containment: packet hits and scanner-source failures remain manifest-bound `needs-review`,
+  block controls, emit no matched bytes, and dry/actuated reconcile import zero; post-stamp
+  failures retain an inert evidence-only root with no inbox. A clean packet accompanied by a
+  secret-bearing non-packet artifact accepts normally, then the unchanged later hook quarantines
+  only that artifact. Installed defaults, symlinks, config, tracked files, and predecessor overlay
+  remain unchanged; no activation record or rerun exists at this checkpoint.
+
+### 2026-08-14T03:15:00Z — first successor rerun — acceptance revoked before integration
+
+- Authority: `operator-proxy:codex`, acting within the sprint contract and the STOP boundary.
+- Decision: keep STOP and reject all three fresh-run outputs as integration inputs. TASK-0110
+  primary audit accepted `fa95b8dc...`, but its independent paired audit returned `needs-fix`
+  for unproven sibling overlap, archive-nonce reuse in decoys, an untested rc86 fallback cleanup,
+  and a stale accepted-packet manifest binding. TASK-0116 primary audit accepted `c5a2842a...`
+  while its fixture used `review` instead of the contract's literal `probe`. TASK-0115's second
+  audit accepted `032a32c0...`, but its RED chronology was not strict, its no-control golden was
+  candidate-vs-candidate, and a valid signed control still altered Codex timeout-zero behavior.
+- Budget truth: TASK-0115 final refresh independently failed closed at `147124 >= 100000`
+  cumulative fresh auditor input. That deterministic canary breach is evidence preservation,
+  not authority to waive the product-proof defects or retry the same run blindly.
+- Generated-rationale correction: the 03:10:54 policy text below says the workspace could not
+  run the gate. In fact the exact 11-file candidate gate passed in 78,562ms with verified source
+  integrity; `audit-infra` came only from the cumulative final-manifest auditor-input canary.
+  Preserve the generated entry as history, but do not use its environment diagnosis to justify
+  an unpark.
+- Preservation: TASK-0110 and TASK-0116 accepted packets are recoverably quarantined outside
+  inbox/imported paths. Exact candidates are pinned at
+  `refs/singular/operator-candidates/TASK-0110/RUN-20260814T022422Z-15250-attempt-1`,
+  `refs/singular/operator-candidates/TASK-0116/RUN-20260814T022422Z-15254-attempt-1`, and
+  `refs/singular/operator-candidates/TASK-0115/RUN-20260814T022422Z-15249-attempt-2`; all source
+  runs remain untouched.
+- Runtime precondition: the manifest's pre-accept packet binding reproduced on every inspected
+  accepted native run. The enabled artifact scanner could also quarantine only the canonical
+  root after acceptance while leaving the secret-bearing inbox importable. A new per-process
+  immutable overlay is being independently verified to fail closed on packet secret preflight,
+  stamp/refresh/binding/interruption before any rerun. TASK-0113/rel-05 now owns the permanent
+  accepted-root/manifest/inbox transaction. No packet is imported, integrated, promoted, or
+  released until that precondition and the fresh task proofs pass. The alternate deterministic
+  `accept-existing-packet.sh` publisher remains outside the temporary one-file overlay, so every
+  pre-rel-05 operator-overlay drive sets `SINGULAR_AUTO_ACCEPT_EXISTING=0`; TASK-0113 now owns
+  converging native and recovered acceptance on the same secret/binding finalizer.
+
+### 2026-08-14T03:10:54Z — TASK-0115 — escalate-infra
+
+- Run: `RUN-20260814T022422Z-15249`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0115`.
+
+### 2026-08-14T03:10:54Z — TASK-0115 — decide:escalate-infra
+
+- Run: `RUN-20260814T022422Z-15249`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
+### 2026-08-14T02:39:40Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260814T022422Z-15249`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
+### 2026-08-14T02:38:07Z — TASK-0110 — accept
+
+- Run: `RUN-20260814T022422Z-15250`
+- Branch: `agent/session/TASK-0110-try-hygiene`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-08-14T02:31:07Z — TASK-0116 — accept
+
+- Run: `RUN-20260814T022422Z-15254`
+- Branch: `agent/routing/TASK-0116-route-transcript-fix`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
 ### 2026-08-14T02:21:34Z — TASK-0116 — unpark
 
 - Run: `ORIGIN-20260814T022134Z-14058`

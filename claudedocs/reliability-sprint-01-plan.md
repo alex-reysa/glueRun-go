@@ -75,6 +75,19 @@ Unclaimed defects found by the audit, added to this sprint:
   Under the authored three-lane scheduler, legitimate sibling evidence writes made unrelated
   gates red. Rel-02 repairs the test with nonce-attributed leakage, private hostile state, and
   fixed protected caller paths; shared state is expected to change concurrently.
+- The acceptance path refreshed the evidence manifest before stamping root `packet.json`
+  accepted, then changed and published the packet without another refresh; the live packet
+  artifact-scan hook could subsequently quarantine only the root while leaving a secret-bearing
+  accepted inbox importable. Rel-05 makes packet-only secret preflight, the accepted stamp,
+  post-stamp manifest refresh, exact root/manifest/inbox verification, and publication one
+  fail-closed transaction with interruption-safe terminal handling.
+- A retained evidence worktree cannot currently be cleaned while STOP is present because reset
+  sits behind the drive STOP check. Rel-06 adds a frozen reset-only cleanup that proves the exact
+  task process dead and removes only its worktree/worker branch without creating control state or
+  dispatching a provider.
+- Paired audit remains sampled post-accept observability in this sprint, not acceptance authority.
+  Rel-99 enumerates every paired result and operator disposition and refuses human approval if a
+  rejection/disagreement is unresolved or a paired-rejected packet entered integration history.
 
 ## Safety invariants (release blockers, carried over and trimmed)
 
@@ -104,13 +117,13 @@ carries its own strict-test-first RED before behavior changes.
 | Task | Node | Fix |
 |---|---|---|
 | TASK-0109 | rel-01-per-try-logs | Per-try evidence/archive parity + truly read-only status bootstrap fix + deterministic detached low-disk regression |
-| TASK-0110 | rel-02-try-hygiene | Clear stale `last-message.json` between tries; test the try>0-fresh invariant; repair the rel-01 hermeticity fixture for parallel execution |
+| TASK-0110 | rel-02-try-hygiene | Clear stale `last-message.json` between tries (including rc86 fresh fallback); test the try>0-fresh invariant; repair the rel-01 hermeticity fixture with deterministic sibling-overlap and nonce-separated parallel proof |
 | TASK-0111 | rel-03-integrity-reclass | Source-integrity violation gets its own class + parked-for-human routing |
 | TASK-0112 | rel-04-evidence-remedy | `revalidate-evidence` gets a real evidence-only handler (zero implementer calls) |
-| TASK-0113 | rel-05-manifest-remedy-bound | Bounded retry at the four one-shot evidence-manifest `audit-infra` emitters; provider-correct Codex canary charging discovered by the bootstrap dogfood run |
-| TASK-0114 | rel-06-terminal-handoff | Durable terminal-pending handoff; double success can never park as infra |
-| TASK-0115 | rel-07-run-control | Authenticated read-only run-control: signed exact-run deadline/cancel records re-read inside every poll loop |
-| TASK-0116 | rel-08-route-transcript | Align the reviewer transcript artifact mapping while preserving final-audit independence pins |
+| TASK-0113 | rel-05-manifest-remedy-bound | Exact-base finalization/recovery REDs; bounded evidence-manifest/binding retries; provider-correct Codex charging; one quiet fail-closed root/manifest/inbox finalizer for native and accept-existing publication |
+| TASK-0114 | rel-06-terminal-handoff | Durable terminal-pending handoff; accept-finalizing revalidates rel-05 secret/binding evidence before publication; STOP-safe exact-task reset-only cleanup |
+| TASK-0115 | rel-07-run-control | Authenticated signed exact-run control inside every bounded poll loop; frozen-target no-control golden; signed control inert at timeout zero |
+| TASK-0116 | rel-08-route-transcript | Literal reviewer `probe` flips to exact resume on the corrected transcript mapping while final/paired audit independence pins remain intact |
 | TASK-0117 | rel-09-l1-lease-liveness | L1 planning-lease liveness probe before wall-clock reclaim |
 | TASK-0118 | rel-10-failure-domains | Additive `failureDomain` + formalized attempts-index schema |
 

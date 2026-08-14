@@ -29,7 +29,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-01-per-try-logs"],
-      "requiredCompletion": "stale worker output cannot mask a later try's failure classification; the try>0-fresh resume invariant is pinned by a driver-level regression test for both roles; the inherited-state archive proof is safe at maxConcurrent=3: two nonce-bound same-process archives use distinct fixture roots, source-time decoy hostile state/event/config paths and fixed literal caller-checkout protected paths remain unchanged, and nonce-bearing event emission appears only in each active fixture event log, never the literal caller event path or caller-state namespace; the nonce may otherwise appear only in deliberate fixture run IDs/markers; no whole shared-tree equality is used"
+      "requiredCompletion": "stale worker output cannot mask a later try's failure classification, including the rc86 resume-refusal/fresh-fallback path; the try>0-fresh resume invariant is pinned by a driver-level regression test for both roles; the inherited-state archive proof is safe at maxConcurrent=3: a PID-bound sibling writer proves ready, acknowledged overlap with both nonce-bound same-process archive calls, an acknowledged final write, an exact write count, and zero exit; distinct fixture roots, independent nonce-free source-time decoy canaries, and fixed literal caller-checkout protected paths remain unchanged; nonce-bearing event emission appears only in each active fixture event log, never the literal caller event path or caller-state namespace; the archive nonce may otherwise appear only in deliberate fixture run IDs/markers; no whole shared-tree equality is used"
     },
     {
       "id": "rel-03-integrity-reclass",
@@ -56,7 +56,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-04-evidence-remedy"],
-      "requiredCompletion": "a single transient evidence-manifest or binding failure is retried within its own bound; Codex cached replay is not charged as fresh audit input; a completed auditor verdict is never discarded as an infrastructure park"
+      "requiredCompletion": "a single transient evidence-manifest or binding failure is retried within its own bound; Codex cached replay is not charged as fresh audit input; a completed auditor verdict is never discarded as an infrastructure park; exact-base REDs reproduce transient finalization, stale pre-accept packet binding, secret-bearing inbox import, catchable interruption, and unsafe accept-existing auto-heal before production edits; packet-only quiet secret preflight never persists matched bytes; native and deterministic existing-packet acceptance share one fail-closed stamp, post-stamp manifest, exact root/manifest/inbox binding, and publication transaction whose hit, failure, or interruption leaves no inbox, no running controls, and no published-acceptance ambiguity; a post-stamp accepted root is explicitly evidence-only and non-publishable unless bound root+manifest, accepted task+lease, and byte-identical inbox coexist"
     },
     {
       "id": "rel-06-terminal-handoff",
@@ -65,7 +65,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-05-manifest-remedy-bound"],
-      "requiredCompletion": "a driver killed at any point after terminal resolution, including SIGKILL, reconciles the lease and run status to the recorded outcome in one recovery cycle"
+      "requiredCompletion": "a driver killed at any point after terminal resolution, including SIGKILL, reconciles the lease and run status to the recorded outcome in one recovery cycle; native and waiver acceptance record accept-finalizing only after rel-05 packet secret preflight plus accepted root/manifest binding, and recovery revalidates that exact evidence before publishing accepted controls/inbox, while missing, tampered, secret-bearing, or mismatched evidence blocks and imports zero; under STOP, reset-only removes exactly one verified dead blocked/failed/superseded/cancelled task worktree and worker branch without creating a run, mutating control state, or dispatching a provider, and refuses every live, accepted, ambiguous, mismatched, or unfrozen case"
     },
     {
       "id": "rel-07-run-control",
@@ -74,7 +74,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-00-contract"],
-      "requiredCompletion": "an externally signed, exact-run, monotonic deadline extension or sticky cancel takes effect within one poll interval in every provider runner and gate loop; unsigned, modified, wrong-run/key, malformed, oversized, or replayed/lower-generation records within a bounded invocation fail closed; a same-UID child cannot author an honored extension; no-control child behavior is byte-identical"
+      "requiredCompletion": "an externally signed, exact-run, monotonic deadline extension or sticky cancel takes effect within one poll interval in every bounded provider runner and gate loop; unsigned, modified, wrong-run/key, malformed, oversized, or replayed/lower-generation records within a bounded invocation fail closed; a same-UID child cannot author an honored extension; a frozen-target behavioral golden proves no-valid-control child environment/output/exit/capture-state parity across all six providers and both gate loops, and valid signed extension or cancel records remain inert when timeout is zero"
     },
     {
       "id": "rel-08-route-transcript",
@@ -83,7 +83,7 @@
       "layer": "engine_runtime",
       "kind": "runtime",
       "dependsOn": ["rel-00-contract"],
-      "requiredCompletion": "the reviewer routing adapter matches the driver-written auditor transcript for admissible non-independence reviewer routing; with context routing enabled, final-audit and paired-audit remain intentionally fresh-pinned under every subordinate routing knob, while master-off behavior remains legacy-identical"
+      "requiredCompletion": "the literal unpinned reviewer probe fixture flips from fresh window-pressure on the exact base to exactly resume SID-reviewer after the reviewer routing adapter matches the driver-written auditor transcript; with context routing enabled, final-audit and paired-audit remain intentionally fresh-pinned under every subordinate routing knob, while master-off behavior remains legacy-identical"
     },
     {
       "id": "rel-09-l1-lease-liveness",
@@ -177,7 +177,7 @@
         "rel-15-snapshot-checkpoint",
         "rel-16-infra-try-resume"
       ],
-      "requiredCompletion": "0.19.0 changelog and contract docs shipped; all version pins synchronized; full suite, field-report canary, and fresh-consumer checks green; exact release artifacts receive operator approval; schemaVersion stays v2 with a nothing-required migration note"
+      "requiredCompletion": "0.19.0 changelog and contract docs shipped; all version pins synchronized; full suite, field-report canary, and fresh-consumer checks green; every sampled paired audit and its operator disposition are enumerated, no unresolved rejection/disagreement/finding remains, and no paired-rejected packet was imported or integrated; exact release artifacts receive operator approval; schemaVersion stays v2 with a nothing-required migration note"
     }
   ]
 }
