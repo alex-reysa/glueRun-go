@@ -8,13 +8,12 @@ singular self-hosted context-evolution build — COMPLETE (0.4.0, 2026-07-13). S
 Durable semantic state (cycle heartbeat and process telemetry live under `.singular-state`).
 
 Target branch: `agent/integration`
-Imported packets: 110
+Imported packets: 112
 Tasks: 125
-Gates passed: 24/24
+Gates passed: 25/25
 
 Task statuses:
-- accepted: 1
-- blocked: 2
-- integrated: 109
+- accepted: 2
+- integrated: 110
 - ready: 13
 <!-- singular:reconcile-snapshot:end -->
