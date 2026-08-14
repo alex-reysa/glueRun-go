@@ -1023,8 +1023,9 @@ Capture failing worker traces before any 0.18.0 infra retry can overwrite them.
 
 ## Current active-state snapshot
 
-- `agent/integration` is at promotion-evidence commit `6b102c54d464a27085913a19becafe4b9ee85bdd`,
-  tree `b043797894233fd7d413fe19407494eaa692be98`. The gate itself binds exact launch checkpoint
+- `agent/integration` contains promotion-evidence commit `6b102c54d464a27085913a19becafe4b9ee85bdd`,
+  tree `b043797894233fd7d413fe19407494eaa692be98`; the field-report checkpoint descends from it.
+  The gate itself binds exact launch checkpoint
   `9c1f2e7b5703d00f476b2115442938c57779f813`/tree-index `af2f0cce5c9df22524a7297a8fa03013e62fa4a8`,
   whose committed field-report blob matched the launch checkout. Ancestor merge `9d9c41f2` has the exact
   TASK-0109 tree, expected parents, and six owned paths.
