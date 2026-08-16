@@ -117,7 +117,10 @@ fi
 
 singular_require_target_branch
 
-cursor_bin="$(command -v cursor-agent 2>/dev/null || true)"
+# Provider facts (binary, update pin) come from engine/providers.json.
+singular_provider_spec_load cursor || exit $?
+
+cursor_bin="$(command -v "$SINGULAR_SPEC_BINARY" 2>/dev/null || true)"
 
 # --output-schema is accepted for contract parity; cursor-agent cannot enforce a
 # caller-supplied JSON schema headlessly, so we capture + validate downstream.
@@ -173,17 +176,26 @@ if [[ "$capture_packet" == "yes" ]]; then
 fi
 
 # --- Model selection ------------------------------------------------------------
-# When SINGULAR_CURSOR_MODEL is unset, OMIT --model entirely so cursor-agent uses
-# its own default/auto routing (spec 0.9.0). No per-role/effort mapping in v1.
+# The fallback is the spec's model.default, empty today: with nothing configured
+# --model is OMITTED entirely so cursor-agent uses its own default/auto routing
+# (spec 0.9.0). No per-role/effort mapping in v1.
 cursor_model() {
-  printf '%s\n' "${SINGULAR_CURSOR_MODEL:-}"
+  printf '%s\n' "${SINGULAR_CURSOR_MODEL:-$SINGULAR_SPEC_MODEL_DEFAULT}"
 }
 cur_model="$(cursor_model)"
 
 # --- Assemble the cursor-agent invocation ---------------------------------------
 # Prompt travels on STDIN (--print mode, no positional prompt). --trust trusts the
 # worktree so a headless run never blocks on a workspace-trust prompt.
-cmd=("$cursor_bin" -p --output-format json --workspace "$worktree" --trust)
+# The update pin goes FIRST and unconditionally: cursor-agent can install a new
+# version of itself, which would swap the executable under a containment-critical
+# invocation mid-run. The flag is the spec's, so the pin and the doctor probe
+# that uses it cannot disagree.
+cmd=("$cursor_bin")
+if [[ ${#SINGULAR_SPEC_UPDATE_ARGS[@]} -gt 0 ]]; then
+  cmd+=("${SINGULAR_SPEC_UPDATE_ARGS[@]}")
+fi
+cmd+=(-p --output-format json --workspace "$worktree" --trust)
 if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
   cmd+=("${profile_provider_args[@]}")
 fi

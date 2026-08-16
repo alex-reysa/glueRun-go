@@ -2483,6 +2483,52 @@ singular_runner_reject_strict_legacy_extra_args() {
   return 0
 }
 
+# Load one provider's row from engine/providers.json into the caller's shell.
+#
+# Sets, for <provider>:
+#   SINGULAR_SPEC_BINARY        executable name the adapter dispatches
+#   SINGULAR_SPEC_MODEL_ENV     the SINGULAR_<P>_MODEL variable name
+#   SINGULAR_SPEC_MODEL_DEFAULT the model id used when nothing is configured
+#   SINGULAR_SPEC_UPDATE_ARGS[] update-pin flags, to be passed FIRST
+#
+# and EXPORTS the row's update-pin environment. Applying the pin on load is
+# deliberate: a spec row saying a provider must not replace its own executable
+# mid-run is not advice an adapter may decline, and six adapters each
+# remembering to do it is six chances to forget -- which is the state the five
+# unpinned adapters were in.
+#
+# Reads through a NUL-delimited pipe rather than eval: no quoting rules to get
+# wrong on data that ends up in an argv. Returns 78 (configuration error, same
+# as the capability preflight) when the spec cannot be read, because dispatching
+# with an empty model default and no pin is worse than not dispatching.
+singular_provider_spec_load() {
+  local provider="$1" reader="$SINGULAR_ENGINE_DIR/provider_spec.py"
+  SINGULAR_SPEC_BINARY=""
+  SINGULAR_SPEC_MODEL_ENV=""
+  SINGULAR_SPEC_MODEL_DEFAULT=""
+  SINGULAR_SPEC_UPDATE_ARGS=()
+  if [[ ! -f "$reader" ]]; then
+    echo "singular: provider spec reader is missing: $reader" >&2
+    return 78
+  fi
+  local key value loaded="no"
+  while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+    loaded="yes"
+    case "$key" in
+      binary) SINGULAR_SPEC_BINARY="$value" ;;
+      modelEnv) SINGULAR_SPEC_MODEL_ENV="$value" ;;
+      modelDefault) SINGULAR_SPEC_MODEL_DEFAULT="$value" ;;
+      updateArg) SINGULAR_SPEC_UPDATE_ARGS+=("$value") ;;
+      updateEnv) export "${value?}" ;;
+    esac
+  done < <(python3 "$reader" --shell "$provider" 2>/dev/null)
+  if [[ "$loaded" != "yes" || -z "$SINGULAR_SPEC_BINARY" ]]; then
+    echo "singular: provider spec has no usable row for $provider ($reader)" >&2
+    return 78
+  fi
+  return 0
+}
+
 singular_runner_describe_contract() {
   local provider="$1"
   python3 - "$provider" <<'PY'

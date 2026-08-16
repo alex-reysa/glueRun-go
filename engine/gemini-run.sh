@@ -116,7 +116,13 @@ fi
 
 singular_require_target_branch
 
-gemini_bin="$(command -v gemini 2>/dev/null || true)"
+# Provider facts (binary, model default, update pin) come from
+# engine/providers.json. Gemini's row declares no pin and says why: its
+# auto-update path is reached only from the interactive UI startup, which a
+# headless run never enters.
+singular_provider_spec_load gemini || exit $?
+
+gemini_bin="$(command -v "$SINGULAR_SPEC_BINARY" 2>/dev/null || true)"
 
 # --output-schema is accepted for contract parity; the Gemini CLI cannot enforce
 # a caller-supplied JSON schema headlessly, so we capture + validate downstream.
@@ -180,10 +186,12 @@ if [[ "$capture_packet" == "yes" ]]; then
 fi
 
 # --- Model selection ------------------------------------------------------------
-# When SINGULAR_GEMINI_MODEL is unset, OMIT -m entirely so the CLI uses its own
-# default/auto routing (spec 0.9.0). No per-role/effort mapping in v1.
+# The fallback is the spec's model.default, empty today: with nothing configured
+# -m is OMITTED entirely so the CLI uses its own default/auto routing (spec
+# 0.9.0). Giving gemini a default later is a spec edit, not an adapter edit.
+# No per-role/effort mapping in v1.
 gemini_model() {
-  printf '%s\n' "${SINGULAR_GEMINI_MODEL:-}"
+  printf '%s\n' "${SINGULAR_GEMINI_MODEL:-$SINGULAR_SPEC_MODEL_DEFAULT}"
 }
 gem_model="$(gemini_model)"
 

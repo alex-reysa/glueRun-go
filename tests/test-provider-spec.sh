@@ -210,7 +210,22 @@ for provider, entry in spec.providers(spec_path).items():
             f"{entry['adapter']}: model default '{found}' != spec '{expected}'",
         )
 
-# 8. Schema enums are generated from the spec, in spec order: a provider the
+# 8. Every adapter takes its provider facts from the spec rather than carrying
+#    them. tests/test-provider-update-pin.sh proves the pin reaches the provider
+#    process; this asserts the adapter asks for it at all, so a new adapter
+#    copied from a sibling cannot quietly drop the call.
+for provider, entry in spec.providers(spec_path).items():
+    adapter = root / "engine" / entry["adapter"]
+    if not adapter.is_file():
+        continue
+    text = adapter.read_text(encoding="utf-8")
+    check(
+        f"singular_provider_spec_load {provider}" in text,
+        f"{entry['adapter']}: must load its spec row "
+        f"(singular_provider_spec_load {provider})",
+    )
+
+# 9. Schema enums are generated from the spec, in spec order: a provider the
 #    engine can dispatch but the result schema rejects fails at write time,
 #    after the work is done.
 for schema_path in sorted((root / "schemas").rglob("*.json")):

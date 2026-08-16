@@ -120,7 +120,12 @@ fi
 
 singular_require_target_branch
 
-opencode_bin="$(command -v opencode 2>/dev/null || true)"
+# Provider facts (binary, update pin) come from engine/providers.json. The pin --
+# OPENCODE_DISABLE_AUTOUPDATE -- is exported by this call: opencode can upgrade
+# itself, which would swap the executable a run is using.
+singular_provider_spec_load opencode || exit $?
+
+opencode_bin="$(command -v "$SINGULAR_SPEC_BINARY" 2>/dev/null || true)"
 
 # --output-schema is accepted for contract parity; OpenCode cannot enforce a
 # caller-supplied JSON schema headlessly, so we capture + validate downstream.
@@ -180,10 +185,11 @@ if [[ "$capture_packet" == "yes" ]]; then
 fi
 
 # --- Model selection ------------------------------------------------------------
-# When SINGULAR_OPENCODE_MODEL is unset, OMIT -m entirely so OpenCode uses its own
-# configured default model (spec 0.9.0). Model refs are `provider/model` strings.
+# The fallback is the spec's model.default, empty today: with nothing configured
+# -m is OMITTED entirely so OpenCode uses its own configured default model (spec
+# 0.9.0). Model refs are `provider/model` strings.
 opencode_model() {
-  printf '%s\n' "${SINGULAR_OPENCODE_MODEL:-}"
+  printf '%s\n' "${SINGULAR_OPENCODE_MODEL:-$SINGULAR_SPEC_MODEL_DEFAULT}"
 }
 oc_model="$(opencode_model)"
 

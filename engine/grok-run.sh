@@ -104,7 +104,12 @@ fi
 
 singular_require_target_branch
 
-grok_bin="$(command -v grok 2>/dev/null || true)"
+# Provider facts (binary, default model, update pin) come from
+# engine/providers.json -- the default that shipped as `grok-build` lived in this
+# file and in doctor's table at once, and they were edited apart.
+singular_provider_spec_load grok || exit $?
+
+grok_bin="$(command -v "$SINGULAR_SPEC_BINARY" 2>/dev/null || true)"
 
 readonly_run="no"
 case "$level" in
@@ -158,7 +163,9 @@ fi
 # `grok-build` was the product name, never a model id. The installed CLI serves
 # `grok-4.6` (default) and `grok-4.5` — `grok models` lists exactly those — so
 # every run built with the old default asked for a model that does not exist.
-SINGULAR_GROK_DEFAULT_MODEL="${SINGULAR_GROK_DEFAULT_MODEL:-grok-4.6}"
+# The value now comes from the spec row that doctor's conformance probe checks
+# against that same listing, so a default nothing serves fails preflight.
+SINGULAR_GROK_DEFAULT_MODEL="${SINGULAR_GROK_DEFAULT_MODEL:-$SINGULAR_SPEC_MODEL_DEFAULT}"
 
 singular_grok_model() {
   local level="$1" prompt_file="$2" prompt_name
@@ -200,10 +207,15 @@ grok_effort="$(singular_grok_effort "$level" "$prompt_file")"
 
 grok_system_prompt="${SINGULAR_GROK_SYSTEM_PROMPT:-Your FINAL assistant message MUST be exactly one JSON object and nothing else: no prose, no preamble, no code fences, no trailing commentary. If you cannot comply, still emit a single JSON object describing the problem.}"
 
-# --no-auto-update FIRST and unconditionally: grok's bootstrap can replace the
+# The update pin FIRST and unconditionally: grok's bootstrap can replace the
 # executable mid-run, which would swap the binary under a containment-critical
-# invocation. It is a hidden flag (absent from --help) but accepted by 1.0.4.
-cmd=("$grok_bin" --no-auto-update --output-format json --model "$grok_model" --cwd "$worktree")
+# invocation. It is a hidden flag (absent from --help) but accepted by 1.0.4, and
+# it comes from the spec so this pin and doctor's model listing cannot disagree.
+cmd=("$grok_bin")
+if [[ ${#SINGULAR_SPEC_UPDATE_ARGS[@]} -gt 0 ]]; then
+  cmd+=("${SINGULAR_SPEC_UPDATE_ARGS[@]}")
+fi
+cmd+=(--output-format json --model "$grok_model" --cwd "$worktree")
 if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
   cmd+=("${profile_provider_args[@]}")
 fi

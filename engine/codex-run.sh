@@ -195,6 +195,11 @@ case "$level" in
     ;;
 esac
 
+# Provider facts (default model, update pin) come from engine/providers.json.
+# Codex's row declares no pin and says why: the CLI has no self-update path, and
+# the executable this run uses is the one singular_resolve_codex_bin pinned.
+singular_provider_spec_load codex || exit $?
+
 codex_bin="$(singular_resolve_codex_bin 2>/dev/null || true)"
 profile_rc=0
 singular_runner_capability_prepare codex "$runner_role" "$capability_profile" \
@@ -228,7 +233,7 @@ if [[ "$capture_packet" == "yes" ]]; then
   fi
 fi
 
-codex_model="${SINGULAR_CODEX_MODEL:-gpt-5.5}"
+codex_model="${SINGULAR_CODEX_MODEL:-$SINGULAR_SPEC_MODEL_DEFAULT}"
 codex_service_tier="${SINGULAR_CODEX_SERVICE_TIER:-}"
 codex_reasoning_effort="$(singular_codex_reasoning_effort "$level" "$prompt_file")"
 

@@ -118,7 +118,12 @@ fi
 
 singular_require_target_branch
 
-claude_bin="$(command -v claude 2>/dev/null || true)"
+# Provider facts (default model, update pin) come from engine/providers.json.
+# The pin -- DISABLE_AUTOUPDATER -- is exported by this call: claude's installer
+# can replace the executable while a run is using it.
+singular_provider_spec_load claude || exit $?
+
+claude_bin="$(command -v "$SINGULAR_SPEC_BINARY" 2>/dev/null || true)"
 
 # --- Level -> behavior ----------------------------------------------------------
 readonly_run="no"
@@ -176,20 +181,24 @@ if [[ "$capture_packet" == "yes" ]]; then
 fi
 
 # --- Model selection (mirrors codex reasoning-effort-by-role keying) -------------
+# The default is the spec's, in one variable rather than six literals: six copies
+# of a default is six chances to edit one of them, which is how a model id that
+# no CLI served reached every invocation the engine built for a provider.
+claude_default_model="$SINGULAR_SPEC_MODEL_DEFAULT"
 singular_claude_model() {
   local level="$1" prompt_file="$2" prompt_name
   prompt_name="$(basename "${prompt_file:-}")"
   case "$level" in
     l2)
-      printf '%s\n' "${SINGULAR_CLAUDE_L2_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
+      printf '%s\n' "${SINGULAR_CLAUDE_L2_MODEL:-${SINGULAR_CLAUDE_MODEL:-$claude_default_model}}" ;;
     l0|l1)
-      printf '%s\n' "${SINGULAR_CLAUDE_L1_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
+      printf '%s\n' "${SINGULAR_CLAUDE_L1_MODEL:-${SINGULAR_CLAUDE_MODEL:-$claude_default_model}}" ;;
     readonly|read-only)
       case "$prompt_name" in
-        planner-prompt.md)    printf '%s\n' "${SINGULAR_CLAUDE_PLANNER_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
-        auditor-*.md)    printf '%s\n' "${SINGULAR_CLAUDE_AUDITOR_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
-        decider-prompt-*.md)  printf '%s\n' "${SINGULAR_CLAUDE_DECIDER_MODEL:-${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}}" ;;
-        *)                    printf '%s\n' "${SINGULAR_CLAUDE_MODEL:-claude-opus-4-8}" ;;
+        planner-prompt.md)    printf '%s\n' "${SINGULAR_CLAUDE_PLANNER_MODEL:-${SINGULAR_CLAUDE_MODEL:-$claude_default_model}}" ;;
+        auditor-*.md)    printf '%s\n' "${SINGULAR_CLAUDE_AUDITOR_MODEL:-${SINGULAR_CLAUDE_MODEL:-$claude_default_model}}" ;;
+        decider-prompt-*.md)  printf '%s\n' "${SINGULAR_CLAUDE_DECIDER_MODEL:-${SINGULAR_CLAUDE_MODEL:-$claude_default_model}}" ;;
+        *)                    printf '%s\n' "${SINGULAR_CLAUDE_MODEL:-$claude_default_model}" ;;
       esac ;;
   esac
 }
