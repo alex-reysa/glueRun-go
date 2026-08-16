@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Structured, read-only operator preflight for singular.
 
-The only write-like probe is a disposable detached Git worktree that is removed
-before the check returns. Model-cache mutation is available only through the
-explicit ``--repair-model-cache`` option and always preserves the original as a
+Write-like probes are exactly two, both engine-owned: a disposable detached Git
+worktree that is removed before the check returns, and the model-listing cache
+under ``.singular-state/doctor-cache/`` that keeps the provider model probe to
+one bounded CLI call per executable per day. Neither touches repository or
+provider state. Model-cache mutation is available only through the explicit
+``--repair-model-cache`` option and always preserves the original as a
 timestamped backup.
 """
 
@@ -70,6 +73,24 @@ MODEL_PATTERNS = {
     "cursor": re.compile(r"^(?:auto$|gpt-|cursor-|claude-|sonnet|opus|o[0-9])"),
     "grok": re.compile(r"^grok-"),
 }
+# What each CLI must be asked to enumerate the models it actually serves,
+# appended to the resolved provider executable. Two hard requirements on every
+# entry: the argv is non-mutating, and it begins with that CLI's update pin --
+# doctor runs a provider binary here, and a CLI that can replace its own
+# executable during preflight would swap the binary the run is about to use.
+# A provider whose installed CLI exposes no proven listing is deliberately
+# absent: absence yields "unverified", which is the honest verdict, while a
+# guess would be the grok-build failure again with a different id.
+MODEL_LISTINGS = {
+    "grok": ("--no-auto-update", "models"),
+}
+MODEL_LISTING_TIMEOUT_SEC = 10
+MODEL_LISTING_TTL_SEC = 24 * 60 * 60
+MODEL_LISTING_CACHE_SCHEMA = "singular.doctor.model-listing.v0"
+# Selector aliases resolved by the provider, not model ids: they cannot be
+# looked up in an inventory, so they are reported as unverifiable rather than
+# absent.
+MODEL_ALIASES = {"auto", "default"}
 # Verdict a validated SINGULAR_TEST_PID_PROBE_STATE stands in for. The state
 # names match engine/ops.sh's ops_pid_probe_state so one seam vocabulary covers
 # both PID-probe surfaces; the verdicts are doctor's own.
@@ -151,6 +172,56 @@ def parse_version(text: str) -> tuple[int, ...] | None:
     if not match:
         return None
     return tuple(int(part or 0) for part in match.groups())
+
+
+def parse_model_listing(text: str, pattern: re.Pattern[str] | None = None) -> list[str]:
+    """Model ids out of a CLI's own listing output.
+
+    JSON first (a bare array, or an object carrying one), then the plain-text
+    shape every CLI listing shares: one id per line, bulleted or not, with an
+    optional trailing annotation like `(default)`. Prose is rejected by that
+    line shape, and what survives must still look like a model id -- the
+    provider's own id pattern, or a digit or slash in the token -- because a
+    prose word wrongly kept is a model wrongly believed to exist.
+    """
+    seen: dict[str, None] = {}
+    stripped = text.strip()
+    if stripped.startswith(("{", "[")):
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError:
+            data = None
+        items: Any = None
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            for key in ("models", "data", "items"):
+                if isinstance(data.get(key), list):
+                    items = data[key]
+                    break
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, str) and item.strip():
+                    seen.setdefault(item.strip(), None)
+                elif isinstance(item, dict):
+                    for key in ("id", "slug", "model", "name"):
+                        value = item.get(key)
+                        if isinstance(value, str) and value.strip():
+                            seen.setdefault(value.strip(), None)
+                            break
+            return list(seen)
+    for line in text.splitlines():
+        match = re.match(
+            r"^\s*(?:[-*•>]\s+)?([A-Za-z0-9][A-Za-z0-9._:/@+-]*)\s*(?:\([^()]*\))?\s*$",
+            line,
+        )
+        if not match:
+            continue
+        token = match.group(1)
+        looks_like_id = any(char.isdigit() or char == "/" for char in token)
+        if looks_like_id or (pattern is not None and pattern.search(token)):
+            seen.setdefault(token, None)
+    return list(seen)
 
 
 def safe_slug(value: str) -> str:
@@ -1539,18 +1610,160 @@ singular_json_config_to_env "$2"
                     "" if valid else f"Set {env_name} to a model ID accepted by {provider}."
                 ),
             )
-        if self.provider != "codex":
+        self.model_conformance_check()
+
+    def wanted_models(self, provider: str) -> dict[str, str]:
+        """Model ids this configuration would actually ask <provider> for.
+
+        The configured default plus every SINGULAR_<P>_*_MODEL role override in
+        scope: an override names a model exactly as capable of not existing as
+        the default is, and under role-keyed selection it is the one a given
+        dispatch will use.
+        """
+        env_name, default = MODEL_ENV[provider]
+        prefix = f"SINGULAR_{provider.upper()}_"
+        wanted: dict[str, str] = {}
+        for name, raw in sorted(self.runtime_env.items()):
+            if not name.startswith(prefix):
+                continue
+            if name != env_name and not name.endswith("_MODEL"):
+                continue
+            value = raw.strip()
+            if value:
+                wanted[name] = value
+        if default and env_name not in wanted:
+            wanted[env_name] = default
+        return wanted
+
+    def model_conformance_check(self) -> None:
+        """Is every model this configuration would ask for served by the CLI?
+
+        `model.selection.*` above validates shape, not existence -- which is
+        exactly how `grok-build` shipped: it matched ^grok-, doctor passed it,
+        and every grok invocation ever constructed asked for a model id the
+        installed CLI never served. So the verdict here comes from the
+        installation's own inventory: codex's model cache, or the provider's
+        own `models` listing, run bounded, non-mutating, update-pinned, and
+        cached per CLI version. A configured model absent from that inventory
+        fails and blocks provider runs the way a dead runner does. An inventory
+        that cannot be read is reported as unverified -- never as a pass,
+        because a guessed pass is what let grok-build through.
+        """
+        if not self.provider:
             self.add(
                 "model.availability",
                 "skip",
-                "selected provider exposes no offline model inventory",
-                required_for=("selected-provider",),
+                "custom runner owns model selection",
+                required_for=("custom-runner",),
                 remediation="Confirm the configured model with the provider before a large run.",
             )
             return
-        env_name, default = MODEL_ENV["codex"]
-        wanted = self.runtime_env.get(env_name, default)
+        provider = self.provider
+        label = "Codex" if provider == "codex" else provider
+        models, source, unavailable, details = self.model_inventory(provider)
+        wanted = self.wanted_models(provider)
+        details["wanted"] = wanted
+        if unavailable:
+            self.add(
+                "model.availability",
+                "warn" if self.provider_declares_inventory(provider) else "skip",
+                f"{label} model availability is unverified: {unavailable}",
+                required_for=("provider-runs", "selected-provider"),
+                remediation=(
+                    self.inventory_remediation(provider)
+                    if self.provider_declares_inventory(provider)
+                    else "Confirm the configured model with the provider before a large run."
+                ),
+                details=details,
+                # An unreadable Codex cache is one operator card, shared with
+                # model-cache.compatibility, not two descriptions of one file.
+                dedupe_key=(
+                    "codex:model-cache" if details.pop("cacheUnreadable", False) else None
+                ),
+            )
+            return
+        details["models"] = sorted(models)[:64]
+        details["source"] = source
+        missing = {
+            name: value
+            for name, value in wanted.items()
+            if value not in models and value.lower() not in MODEL_ALIASES
+        }
+        if missing:
+            details["missing"] = missing
+            shown = ", ".join(f"{name}={value}" for name, value in sorted(missing.items()))
+            self.add(
+                "model.availability",
+                "fail",
+                f"configured {label} model is absent from the installed CLI inventory: {shown}",
+                required_for=("provider-runs", "selected-provider"),
+                remediation=(
+                    f"Set it to a model this {label} installation serves "
+                    f"({', '.join(sorted(models)[:8])})."
+                ),
+                details=details,
+            )
+            return
+        served = ", ".join(sorted({value for value in wanted.values()}))
+        self.add(
+            "model.availability",
+            "pass",
+            f"configured {label} models are served by the installed CLI: {served}",
+            required_for=("provider-runs", "selected-provider"),
+            details=details,
+        )
+
+    def provider_declares_inventory(self, provider: str) -> bool:
+        """Does this provider promise an inventory doctor can read at all?
+
+        The distinction is the difference between "the CLI has a listing and it
+        did not answer" (a warning an operator can act on) and "this CLI has no
+        listing" (a fact about the provider, not a defect on this host).
+        """
+        return provider == "codex" or provider in MODEL_LISTINGS
+
+    def inventory_remediation(self, provider: str) -> str:
+        if provider == "codex":
+            return "Run the selected Codex CLI once to refresh its model inventory."
+        listing = " ".join(MODEL_LISTINGS.get(provider, ()))
+        return (
+            f"Run `{PROVIDERS[provider][1]} {listing}` against the selected "
+            "executable and repair whatever it reports."
+        )
+
+    def model_inventory(
+        self, provider: str
+    ) -> tuple[set[str], str, str, dict[str, Any]]:
+        """(model ids, source, unavailable reason, details)."""
+        if provider == "codex":
+            return self.codex_inventory()
+        listing = MODEL_LISTINGS.get(provider)
+        details: dict[str, Any] = {"provider": provider}
+        if not listing:
+            return set(), "", f"the {provider} CLI exposes no model listing", details
+        if not self.provider_bin:
+            return set(), "", "the selected executable was not resolved", details
+        source = " ".join([PROVIDERS[provider][1], *listing])
+        details["listing"] = source
+        cli_key = f"{self.provider_bin}@{first_line(self.provider_version_output)}"
+        cache_path = self.model_listing_cache_path(provider)
+        cached = self.cached_model_listing(cache_path, cli_key)
+        if cached is not None:
+            details["cache"] = "hit"
+            details["cachePath"] = str(cache_path)
+            return set(cached), source, "", details
+        details["cache"] = "miss"
+        models, error = self.probe_model_listing(provider, listing)
+        if error:
+            return set(), source, f"`{source}` did not answer: {error}", details
+        if cache_path is not None:
+            details["cachePath"] = str(cache_path)
+            self.store_model_listing(cache_path, cli_key, models, source)
+        return set(models), source, "", details
+
+    def codex_inventory(self) -> tuple[set[str], str, str, dict[str, Any]]:
         cache = self.codex_cache_path()
+        details: dict[str, Any] = {"provider": "codex", "cachePath": str(cache)}
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
             slugs = {
@@ -1558,38 +1771,106 @@ singular_json_config_to_env "$2"
                 for item in data.get("models", [])
                 if isinstance(item, dict) and item.get("slug")
             }
-            if wanted in slugs:
-                self.add(
-                    "model.availability",
-                    "pass",
-                    f"configured Codex model is present in the local inventory: {wanted}",
-                    required_for=("selected-provider",),
-                )
-            else:
-                self.add(
-                    "model.availability",
-                    "fail",
-                    f"configured Codex model is absent from the local inventory: {wanted}",
-                    required_for=("selected-provider",),
-                    remediation="Choose a model listed by the selected Codex installation.",
-                )
+            if not slugs:
+                return set(), "", "the local Codex inventory names no models", details
+            return slugs, str(cache), "", details
         except FileNotFoundError:
-            self.add(
-                "model.availability",
-                "warn",
-                f"Codex model availability cannot be verified without a local inventory: {wanted}",
-                required_for=("selected-provider",),
-                remediation="Run the selected Codex CLI once to refresh its model inventory.",
-            )
+            return set(), "", "no local Codex inventory has been written yet", details
         except (OSError, json.JSONDecodeError) as exc:
-            self.add(
-                "model.availability",
-                "skip",
-                f"Codex model inventory is unreadable: {exc}",
-                required_for=("selected-provider",),
-                remediation="Run singular doctor --repair-model-cache to preserve and refresh it.",
-                dedupe_key="codex:model-cache",
+            details["cacheUnreadable"] = True
+            return set(), "", f"the local Codex inventory is unreadable: {exc}", details
+
+    def probe_model_listing(
+        self, provider: str, listing: tuple[str, ...]
+    ) -> tuple[list[str], str]:
+        """Ask the installed CLI what it serves. Bounded, pinned, read-only.
+
+        The argv comes from MODEL_LISTINGS, which carries that CLI's update pin
+        as its first arguments: a provider that can replace its own executable
+        during a preflight probe would swap the binary the run is about to use.
+        """
+        argv = [str(self.provider_bin), *listing]
+        result = command(
+            argv,
+            cwd=self.repo,
+            env=self.runtime_env,
+            timeout=MODEL_LISTING_TIMEOUT_SEC,
+        )
+        if result.returncode != 0:
+            detail = first_line(result.stderr or result.stdout)
+            return [], detail or f"exit {result.returncode}"
+        models = parse_model_listing(result.stdout, MODEL_PATTERNS[provider])
+        if not models:
+            models = parse_model_listing(result.stderr, MODEL_PATTERNS[provider])
+        if not models:
+            return [], "its output named no models"
+        return models, ""
+
+    def model_listing_cache_path(self, provider: str) -> Path | None:
+        base = self.runtime_env.get("SINGULAR_STATE_DIR", "")
+        root = Path(base) if base else (self.repo / ".singular-state" if self.repo else None)
+        if root is None:
+            return None
+        return root / "doctor-cache" / f"models-{provider}.json"
+
+    def cached_model_listing(
+        self, path: Path | None, cli_key: str
+    ) -> list[str] | None:
+        """The last listing, if it still describes THIS executable and is fresh.
+
+        Keyed by executable path plus version string, so an upgraded or
+        re-pointed CLI is never validated against the inventory of the one it
+        replaced, and bounded by a TTL so a listing that changed server-side is
+        re-read within a day. A cache from the future is stale, not fresh.
+        """
+        if path is None:
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        if data.get("schema") != MODEL_LISTING_CACHE_SCHEMA:
+            return None
+        if str(data.get("cliKey", "")) != cli_key:
+            return None
+        try:
+            fetched = dt.datetime.fromisoformat(
+                str(data.get("fetchedAt", "")).replace("Z", "+00:00")
             )
+        except ValueError:
+            return None
+        age = (dt.datetime.now(dt.UTC) - fetched).total_seconds()
+        if not 0 <= age <= MODEL_LISTING_TTL_SEC:
+            return None
+        models = data.get("models")
+        if not isinstance(models, list) or not models:
+            return None
+        return [str(model) for model in models]
+
+    def store_model_listing(
+        self, path: Path, cli_key: str, models: list[str], source: str
+    ) -> None:
+        payload = {
+            "schema": MODEL_LISTING_CACHE_SCHEMA,
+            "cliKey": cli_key,
+            "fetchedAt": utc_now(),
+            "source": source,
+            "models": models,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+            tmp.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            os.replace(tmp, path)
+        except OSError:
+            # A cache that cannot be written is a slower probe on the next run,
+            # never a failed preflight: the verdict above already stands on the
+            # listing itself.
+            pass
 
     def codex_cache_path(self) -> Path:
         base = self.runtime_env.get("CODEX_HOME")
