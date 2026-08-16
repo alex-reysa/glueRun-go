@@ -10,6 +10,11 @@ ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 export SINGULAR_ENGINE_HOME="$ENGINE_HOME"
 export SINGULAR_MODULES="storage-proof"
+# Hermetic against operator config: lib.sh sources the repo's
+# .singular-state/config.local.sh AFTER this export, and an operator whose
+# local config sets SINGULAR_MODULES (e.g. grok-implementer) would silently
+# replace the module set this test just chose.
+export SINGULAR_LOCAL_CONFIG_FILE=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }

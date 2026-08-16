@@ -43,6 +43,17 @@ singular_git_source_preflight "$TESTS_DIR/.." || exit 1
 # with a real CLI). Tests set every SINGULAR_* var they need internally.
 while IFS= read -r _v; do unset "$_v"; done < <(compgen -v | grep '^SINGULAR_' || true)
 unset _v
+# NOTE: the env scrub cannot scrub what lib.sh re-reads from DISK. A test that
+# sources lib.sh with the CHECKOUT as its root also sources the operator's
+# .singular-state/config.local.sh, whose exports land after the scrub — and an
+# operator SINGULAR_MODULES there loads module overrides into the test shell
+# at source time, where a later `unset SINGULAR_MODULES` cannot unload the
+# already-defined functions. A global SINGULAR_LOCAL_CONFIG_FILE=/dev/null here
+# is NOT the fix: setup/config tests legitimately author fixture local configs
+# and rely on default path resolution. Tests that source lib.sh at the checkout
+# root and assert GENERIC hook behavior must pin
+# SINGULAR_LOCAL_CONFIG_FILE=/dev/null themselves (see
+# test-storage-proof-redlog.sh and singular-ext/tests/*-selection.sh).
 
 # Positional arguments are a basename filter: `bash tests/run.sh test-a.sh
 # test-b.sh` runs only those two files. Discovery itself is untouched — the

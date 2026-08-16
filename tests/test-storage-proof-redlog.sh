@@ -20,6 +20,12 @@ ENGINE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_DIR="$ENGINE_HOME/engine"
 
 # shellcheck source=/dev/null
+# Hermetic against operator config even when invoked directly (run.sh also
+# pins this for the whole gate): lib.sh sources the repo's config.local.sh at
+# source time, and an operator SINGULAR_MODULES there would load module
+# overrides — this file tests the GENERIC hooks against the module-loaded
+# ones, so a pre-loaded module makes its generic assertions unsatisfiable.
+export SINGULAR_LOCAL_CONFIG_FILE=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
