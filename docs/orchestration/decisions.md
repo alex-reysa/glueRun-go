@@ -2,6 +2,323 @@
 
 ## Decision Log
 
+### 2026-08-16T16:20:00Z — RELEASE-0.19.0 — ship-before-recovery-resume
+
+- Run: `OPERATOR-20260816-RELEASE-0190`
+- Branch: `agent/integration`
+- Authority: operator
+- Rationale: public launch tonight takes precedence over resuming the parked
+  recovery lanes. The V9 boundary was COMPLETED first (14/14 `uchg`, anchored
+  verifier `verified-frozen`), so recovery integrity is sealed, not skipped.
+  The recovery dispatch base stays pinned to `442dd014`; resuming after launch
+  MUST check out that commit in a dedicated worktree rather than the advanced
+  branch tip. Provider routing for the resumed lanes supersedes the 2026-08-16
+  handoff's single-runner instruction: L2 implementer -> grok-4.6@high via
+  singular-ext/grok-implementer, all other roles -> claude-opus-5@high
+  (operator directive). STOP remains present until the release is installed
+  and verified; TASK-0112/0115/0120 stay parked until then.
+
+### 2026-08-15T09:27:39Z — TASK-0112 — escalate-parked
+
+- Run: `RUN-20260815T092035Z-8470`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: decider terminal action after packet-invalid
+
+### 2026-08-15T09:27:39Z — TASK-0112 — decide:escalate-parked
+
+- Run: `RUN-20260815T092035Z-8470`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: packet-invalid -> escalate-parked
+
+### 2026-08-15T09:20:01Z — TASK-0112 — unpark
+
+- Run: `ORIGIN-20260815T092001Z-6747`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: R9 recovery reset under frozen v7; prior R8 evidence-only snapshot dc83b9f9c098c6e91b7b65e29b9581d16716807ca77a6739a1d2609a0da9a0b1 inventory 6cb275cd46618f88c0fd962ba91cf6b8b66b35294fe694314cfc2a7ba6f513f2; v7 manifest 0efa839cfe1c756f215f062231916f88294686ae8afeba230451e814c9150f19; batch ORIGIN-20260815T091056Z-REL04-07-R9-batch
+
+### 2026-08-15T09:13:30Z — TASK-0115 — recovery-reset
+
+- Run: `OPERATOR-20260815T091056Z-R9-RESET-0115`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: operator
+- Rationale: fresh v7 reset after frozen R8 deterministic strict-observation hold; snapshot d9d96d67ec72de094668211be09114c2fb7aeb38dc45ba13413f3469a849d0cf inventory 16bbabd0c6fa83237b8b2a55b95a0be1d50615ab33c61cf0c1929f0cf2563a87 manifest 0efa839cfe1c756f215f062231916f88294686ae8afeba230451e814c9150f19; rejected commit preserved by operator-invalid-run ref
+
+### 2026-08-15T06:16:05Z — TASK-0112 — escalate-parked
+
+- Run: `RUN-20260815T060250Z-5862`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: decider terminal action after gate-red
+
+### 2026-08-15T06:16:05Z — TASK-0112 — decide:escalate-parked
+
+- Run: `RUN-20260815T060250Z-5862`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: gate-red -> escalate-parked
+
+### 2026-08-15T06:02:19Z — TASK-0112 — unpark
+
+- Run: `ORIGIN-20260815T060219Z-5444`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: R7B evidence sequence/grouping violation preserved in frozen snapshot 51794362f56d67c9bd1e8922aa03a4b00ce76313ef7756f31d4262ecaf2af957; v6 global sequence and L1-only host-gate recovery contract 202b0064e9efd95b0620ef9783854a410f3728823f9b4acdaa8bfca1842841b7 frozen
+
+### 2026-08-15T06:00:19Z — TASK-0115 — unpark
+
+- Run: `ORIGIN-20260815T060019Z-4186`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: R7 worker self-gate retry preserved in frozen snapshot 04c61a1104ff7209a5d8b920d10191959dd4b87323639e9c07d75aff50359737; v6 L1-only host-gate recovery contract 202b0064e9efd95b0620ef9783854a410f3728823f9b4acdaa8bfca1842841b7 frozen
+
+### 2026-08-15T05:35:49Z — TASK-0112 — escalate-parked
+
+- Run: `RUN-20260815T052429Z-64574`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: decider terminal action after worker-no-packet
+
+### 2026-08-15T05:35:48Z — TASK-0112 — decide:escalate-parked
+
+- Run: `RUN-20260815T052429Z-64574`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> escalate-parked
+
+### 2026-08-15T05:30:37Z — TASK-0115 — escalate-parked
+
+- Run: `RUN-20260815T051318Z-28378`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: decider terminal action after worker-no-packet
+
+### 2026-08-15T05:30:37Z — TASK-0115 — decide:escalate-parked
+
+- Run: `RUN-20260815T051318Z-28378`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> escalate-parked
+
+### 2026-08-15T05:22:57Z — TASK-0112 — unpark
+
+- Run: `ORIGIN-20260815T052257Z-50813`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v5 retry after frozen R7 provider disconnect before RED; snapshot JSON d9b465e3cc75d8c5789e17b7c066d3195456ed76e8ff7641b08b5991a971a9d7; inventory 722c87c87c23362081b91bed92d56beebdaf482f63359e133b80e7e16a518b6f; v5 manifest 59172fc7495839f40d51eba6f86f3a17cabae553f1a8c4fff68c18cb4a8023fb
+
+### 2026-08-15T05:22:57Z — TASK-0112 — recovery-reset
+
+- Run: `ORIGIN-20260815T052241Z-R7B-control-reset`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v5 retry after frozen R7 provider disconnect before RED; snapshot JSON d9b465e3cc75d8c5789e17b7c066d3195456ed76e8ff7641b08b5991a971a9d7; inventory 722c87c87c23362081b91bed92d56beebdaf482f63359e133b80e7e16a518b6f; v5 manifest 59172fc7495839f40d51eba6f86f3a17cabae553f1a8c4fff68c18cb4a8023fb
+
+### 2026-08-15T05:13:56Z — TASK-0112 — escalate-parked
+
+- Run: `RUN-20260815T051343Z-29200`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: decider terminal action after worker-no-packet
+
+### 2026-08-15T05:13:55Z — TASK-0112 — decide:escalate-parked
+
+- Run: `RUN-20260815T051343Z-29200`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> escalate-parked
+
+### 2026-08-15T05:10:34Z — TASK-0115 — unpark
+
+- Run: `ORIGIN-20260815T051034Z-27381`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v5 recovery after frozen R6B invalid-child-start RED; snapshot JSON 0741efbe9522f025956203900cf60a3107f3428a9bd92a82850dcf46b2c5c9b1; inventory 17e8cdf57d81d0e065f1890e63e70f8f026ab6c9120966f5a1b2245f22b551a5; v5 manifest 59172fc7495839f40d51eba6f86f3a17cabae553f1a8c4fff68c18cb4a8023fb
+
+### 2026-08-15T05:10:10Z — TASK-0115 — recovery-reset
+
+- Run: `ORIGIN-20260815T050945Z-R7-control-reset`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v5 recovery after frozen R6B invalid-child-start RED; snapshot JSON 0741efbe9522f025956203900cf60a3107f3428a9bd92a82850dcf46b2c5c9b1; inventory 17e8cdf57d81d0e065f1890e63e70f8f026ab6c9120966f5a1b2245f22b551a5; v5 manifest 59172fc7495839f40d51eba6f86f3a17cabae553f1a8c4fff68c18cb4a8023fb
+
+### 2026-08-15T05:10:10Z — TASK-0112 — recovery-reset
+
+- Run: `ORIGIN-20260815T050945Z-R7-control-reset`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v5 recovery after frozen R6B invalid-green evidence reuse; snapshot JSON d9b19f69f2f219cfd887207e9f6efeea8ba65afa7b003d499626deeb1f9f192a; inventory d2a28c509f67bfa17fef31d7d15d4d687021f4a5edd13d63e0a5605ceb1f5dcf; v5 manifest 59172fc7495839f40d51eba6f86f3a17cabae553f1a8c4fff68c18cb4a8023fb
+
+### 2026-08-15T04:36:11Z — TASK-0112 — decide:retry
+
+- Run: `RUN-20260815T043105Z-75753`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
+### 2026-08-15T04:32:26Z — TASK-0115 — escalate-parked
+
+- Run: `RUN-20260815T043051Z-74997`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: l1
+- Rationale: no progress: attempt 2 reproduced attempt 1 exactly — same head (no commit), same uncommitted changes, same worker-no-packet failure. A further retry cannot differ; unpark once the environment or the task changes.
+
+### 2026-08-15T04:32:07Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260815T043051Z-74997`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
+### 2026-08-15T04:27:34Z — TASK-0115 — unpark
+
+- Run: `ORIGIN-20260815T042734Z-73191`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: provider DNS recovered; R6 evidence frozen at 3b097d87a4869c536a25ee54ee61911cfa6400ed5b9d2e2726b77f578ad1ad37
+
+### 2026-08-15T04:27:34Z — TASK-0112 — unpark
+
+- Run: `ORIGIN-20260815T042734Z-73229`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: provider DNS recovered; R6 evidence frozen at bf00ce5fa1937b48985f7ccde68a424b51f9f3118de8290bb6e7560f614b3b81
+
+### 2026-08-15T04:27:34Z — TASK-0115 — recovery-reset
+
+- Run: `ORIGIN-20260815T042723Z-R6B-control-reset`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v4 retry after provider DNS outage; frozen snapshot 3b097d87a4869c536a25ee54ee61911cfa6400ed5b9d2e2726b77f578ad1ad37
+
+### 2026-08-15T04:27:34Z — TASK-0112 — recovery-reset
+
+- Run: `ORIGIN-20260815T042723Z-R6B-control-reset`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v4 retry after provider DNS outage; frozen snapshot bf00ce5fa1937b48985f7ccde68a424b51f9f3118de8290bb6e7560f614b3b81
+
+### 2026-08-15T02:38:44Z — TASK-0112 — escalate-parked
+
+- Run: `RUN-20260815T023319Z-44688`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: l1
+- Rationale: no progress: attempt 2 reproduced attempt 1 exactly — same head (no commit), same uncommitted changes, same worker-no-packet failure. A further retry cannot differ; unpark once the environment or the task changes.
+
+### 2026-08-15T02:38:37Z — TASK-0112 — decide:retry
+
+- Run: `RUN-20260815T023319Z-44688`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
+### 2026-08-15T02:33:56Z — TASK-0115 — escalate-parked
+
+- Run: `RUN-20260815T023332Z-45395`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: l1
+- Rationale: no progress: attempt 2 reproduced attempt 1 exactly — same head (no commit), same uncommitted changes, same worker-no-packet failure. A further retry cannot differ; unpark once the environment or the task changes.
+
+### 2026-08-15T02:33:52Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260815T023332Z-45395`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
+### 2026-08-15T02:31:46Z — TASK-0115 — recovery-reset
+
+- Run: `ORIGIN-20260815T023138Z-R6-control-reset`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v4 continuation after frozen R5B seekable-payload hold and exact worktree removal
+
+### 2026-08-15T02:31:46Z — TASK-0112 — recovery-reset
+
+- Run: `ORIGIN-20260815T023138Z-R6-control-reset`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v4 continuation after frozen R5B invalid-setup evidence and exact worktree removal
+
+### 2026-08-15T01:59:54Z — TASK-0112 — decide:retry
+
+- Run: `RUN-20260815T015645Z-10140`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: worker-no-packet -> retry
+
+### 2026-08-15T01:59:31Z — TASK-0112 — decide:retry
+
+- Run: `RUN-20260815T015645Z-10140`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
+### 2026-08-15T01:52:13Z — TASK-0115 — recovery-reset
+
+- Run: `ORIGIN-20260815T015205Z-R5-control-reset`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v3 host-gate continuation after preserved R4 evidence-path containment
+
+### 2026-08-15T01:51:48Z — TASK-0112 — unpark
+
+- Run: `ORIGIN-20260815T015148Z-8650`
+- Branch: `n/a`
+- Authority: operator
+- Rationale: fresh v3 cleanup continuation after preserved needs-fix audit
+
+### 2026-08-15T01:20:19Z — TASK-0112 — escalate-infra
+
+- Run: `RUN-20260815T004543Z-13185`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: environment failure (audit-infra), not a product defect: the workspace could not run the gate. Repair the environment, then `singular unpark TASK-0112`.
+
+### 2026-08-15T01:20:18Z — TASK-0112 — decide:escalate-infra
+
+- Run: `RUN-20260815T004543Z-13185`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: audit-infra -> escalate-infra
+
+### 2026-08-15T01:15:02Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260815T010359Z-92309`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
+### 2026-08-15T01:14:56Z — TASK-0120 — accept
+
+- Run: `RUN-20260815T010411Z-93023`
+- Branch: `agent/foundation/TASK-0120-identity-canonicalizer`
+- Authority: origin
+- Rationale: auditor accepted; regression gate green; scope clean
+
+### 2026-08-15T01:06:06Z — TASK-0112 — decide:retry
+
+- Run: `RUN-20260815T004543Z-13185`
+- Branch: `agent/foundation/TASK-0112-evidence-remedy`
+- Authority: policy
+- Rationale: fast-path: audit-needs-fix -> retry
+
+### 2026-08-15T00:48:46Z — TASK-0120 — decide:retry
+
+- Run: `RUN-20260815T004555Z-13903`
+- Branch: `agent/foundation/TASK-0120-identity-canonicalizer`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
+### 2026-08-15T00:34:36Z — TASK-0115 — decide:retry
+
+- Run: `RUN-20260815T003059Z-2718`
+- Branch: `agent/packets/TASK-0115-run-control-readonly`
+- Authority: policy
+- Rationale: fast-path: gate-red -> retry
+
 ### 2026-08-14T23:16:50Z — TASK-0120 — unpark
 
 - Run: `ORIGIN-20260814T231650Z-55804`
