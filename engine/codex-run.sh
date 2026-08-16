@@ -4,134 +4,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-worktree=""
-prompt_file=""
-level="l2"
-run_id=""
-output_schema=""
-output_last_message=""
-capture_packet="auto"
-allow_prefixes=()
+# Argument vocabulary, traps, capture, scope enforcement and the result write are
+# the shared skeleton in lib.sh (singular_runner_*). What stays here is codex's
+# own, and it is the largest residue of any adapter: sandbox mapping, role-keyed
+# reasoning effort, the resume machinery, and a guard loop that is not just a
+# wall clock -- it also watches the JSONL stream for silence and for semantic
+# completion, and it runs the provider through a tee so that stream doubles as
+# the liveness signal.
+#
 # Session affinity (T-E5): both flags are ADDITIVE. With NEITHER passed, the
-# invocation path below stays byte-identical to HEAD (no tee, no resume).
-session_meta_path=""
-resume_session_id=""
-runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
-capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
-result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
-describe_contract="no"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -C|--worktree)
-      worktree="$2"
-      shift 2
-      ;;
-    --prompt-file)
-      prompt_file="$2"
-      shift 2
-      ;;
-    --level)
-      level="$2"
-      shift 2
-      ;;
-    --run-id)
-      run_id="$2"
-      shift 2
-      ;;
-    --output-schema)
-      output_schema="$2"
-      capture_packet="yes"
-      shift 2
-      ;;
-    --output-last-message)
-      output_last_message="$2"
-      capture_packet="yes"
-      shift 2
-      ;;
-    --no-output-capture)
-      capture_packet="no"
-      shift
-      ;;
-    --allow-prefix)
-      allow_prefixes+=("$2")
-      shift 2
-      ;;
-    --session-meta)
-      session_meta_path="$2"
-      shift 2
-      ;;
-    --resume-session)
-      resume_session_id="$2"
-      shift 2
-      ;;
-    --role)
-      runner_role="$2"
-      shift 2
-      ;;
-    --capability-profile)
-      capability_profile="$2"
-      shift 2
-      ;;
-    --result-file)
-      result_file="$2"
-      shift 2
-      ;;
-    --describe-contract)
-      describe_contract="yes"
-      shift
-      ;;
-    *)
-      echo "unknown option: $1" >&2
-      exit 2
-      ;;
-  esac
-done
+# invocation path below stays byte-identical to the pre-affinity runner.
+singular_runner_parse_args "$@" || exit $?
 
 if [[ "$describe_contract" == "yes" ]]; then
   singular_runner_describe_contract codex
   exit 0
 fi
 
-if [[ -z "$run_id" ]]; then
-  run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-fi
-if [[ -z "$result_file" ]]; then
-  result_file="$(singular_runner_default_result_file "$run_id")"
-fi
-runner_result_written="no"
-# Pid of the backgrounded provider pipeline while it is un-reaped. It is a
-# SESSION LEADER (see singular_codex_spawn_pipeline), which is what licenses the
-# `session` argument to singular_kill_tree below; it is cleared the instant it is
-# waited on, because a reaped pid is no longer a safe kill target.
-child=""
-singular_codex_result_on_exit() {
-  local rc=$?
-  trap - EXIT
-  # An interrupted run leaves codex and its descendants alive, still writing to
-  # the worktree. Kill the whole provider session first, then write the result.
-  if [[ -n "${child:-}" ]]; then
-    singular_kill_tree "$child" 0 session 2>/dev/null || true
-    wait "$child" 2>/dev/null || true
-    child=""
-  fi
-  if [[ "$runner_result_written" != "yes" ]]; then
-    singular_runner_result_write codex "$run_id" "$runner_role" "$capability_profile" \
-      "$result_file" "$rc" "${jsonl_tmp:-}" "" "$output_last_message" || true
-  fi
-  [[ -n "${jsonl_tmp:-}" ]] && rm -f "$jsonl_tmp" 2>/dev/null || true
-  exit "$rc"
-}
-trap singular_codex_result_on_exit EXIT
-# The provider now runs in its OWN session, so it no longer receives the
-# terminal's SIGINT along with this script, and ask/supervise/decide SIGTERM
-# this script on their way to a kill. Exiting from a signal handler runs the
-# EXIT trap above — which is the only thing that still kills the provider
-# session. Without these, the default disposition would tear this script down
-# and leave the session running. Mirrors claude-run.sh.
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
+singular_runner_install_traps codex codex-run
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -352,6 +242,10 @@ exit_code=0
 # written. This is the sole status input; the final assistant message and
 # command output are never scanned for quota prose.
 jsonl_tmp="$(mktemp "${TMPDIR:-/tmp}/singular-codex-jsonl.XXXXXX")"
+# The JSONL IS codex's envelope: it is the sole status input for the normalized
+# result, and handing it to the skeleton is what puts its removal and the result
+# write on every exit path, including the signals.
+SINGULAR_RUNNER_ENVELOPE="$jsonl_tmp"
 # Exported because the tee now lives inside a separate `bash -c` (the session
 # leader): the path cannot be interpolated into that script without quoting the
 # whole provider argv through it.
@@ -448,13 +342,14 @@ run_codex_guarded() {
   else
     singular_codex_spawn_pipeline &
   fi
-  child=$!
+  SINGULAR_RUNNER_CHILD_PID=$!
   # What this spawner knows about the session, recorded ps-free so a crashed
   # runner leaves behind a signalable group instead of an orphan tree.
   if [[ -n "${run_dir:-}" && -d "${run_dir:-}" ]]; then
-    singular_session_record_write "$run_dir/runner-session.json" "$child" 2>/dev/null || true
+    singular_session_record_write "$run_dir/runner-session.json" \
+      "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null || true
   fi
-  while kill -0 "$child" 2>/dev/null; do
+  while kill -0 "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null; do
     sleep 1
     now=$SECONDS
 
@@ -468,9 +363,9 @@ run_codex_guarded() {
       completion_scan_size="$size"
       if [[ "$completion_outcome" == "failed" ]]; then
         echo "codex-run: terminal provider failure observed; terminating process tree" >&2
-        singular_kill_tree "$child" "$(singular_provider_kill_grace_sec)" session
-        wait "$child" 2>/dev/null || true
-        child=""
+        singular_kill_tree "$SINGULAR_RUNNER_CHILD_PID" "$(singular_provider_kill_grace_sec)" session
+        wait "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null || true
+        SINGULAR_RUNNER_CHILD_PID=""
         return 1
       fi
       if [[ "$completion_outcome" == "completed" && "$completion_deadline" -eq 0 ]]; then
@@ -479,11 +374,11 @@ run_codex_guarded() {
       fi
     fi
     if (( completion_deadline > 0 )); then
-      if (( now >= completion_deadline )) && kill -0 "$child" 2>/dev/null; then
+      if (( now >= completion_deadline )) && kill -0 "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null; then
         echo "codex-run: completion grace expired after ${codex_completion_grace}s; terminating process tree" >&2
-        singular_kill_tree "$child" "$(singular_provider_kill_grace_sec)" session
-        wait "$child" 2>/dev/null || true
-        child=""
+        singular_kill_tree "$SINGULAR_RUNNER_CHILD_PID" "$(singular_provider_kill_grace_sec)" session
+        wait "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null || true
+        SINGULAR_RUNNER_CHILD_PID=""
         return 0
       fi
       continue
@@ -491,9 +386,9 @@ run_codex_guarded() {
 
     if (( deadline > 0 && now >= deadline )); then
       echo "codex-run: TIMED OUT after ${codex_timeout}s; killing process tree" >&2
-      singular_kill_tree "$child" "$(singular_provider_kill_grace_sec)" session
-      wait "$child" 2>/dev/null || true
-      child=""
+      singular_kill_tree "$SINGULAR_RUNNER_CHILD_PID" "$(singular_provider_kill_grace_sec)" session
+      wait "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null || true
+      SINGULAR_RUNNER_CHILD_PID=""
       return 124
     fi
     if (( codex_idle > 0 )); then
@@ -502,16 +397,16 @@ run_codex_guarded() {
         idle_deadline=$(( now + codex_idle ))
       elif (( now >= idle_deadline )); then
         echo "codex-run: IDLE (no output for ${codex_idle}s); killing process tree" >&2
-        singular_kill_tree "$child" "$(singular_provider_kill_grace_sec)" session
-        wait "$child" 2>/dev/null || true
-        child=""
+        singular_kill_tree "$SINGULAR_RUNNER_CHILD_PID" "$(singular_provider_kill_grace_sec)" session
+        wait "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null || true
+        SINGULAR_RUNNER_CHILD_PID=""
         return 124
       fi
     fi
   done
   local rc=0
-  wait "$child" || rc=$?
-  child=""
+  wait "$SINGULAR_RUNNER_CHILD_PID" || rc=$?
+  SINGULAR_RUNNER_CHILD_PID=""
   return "$rc"
 }
 
@@ -596,21 +491,12 @@ if [[ -n "$resume_session_id" && "$exit_code" -ne 0 ]]; then
   fi
 fi
 
-if [[ "$level" == "l0" || "$level" == "l1" ]]; then
-  scope_args=(--worktree "$worktree")
-  for prefix in "${allow_prefixes[@]}"; do
-    scope_args+=(--allow-prefix "$prefix")
-  done
-  "$SCRIPT_DIR/scope-check.sh" "${scope_args[@]}"
-fi
+singular_runner_scope_enforce "$level" "$worktree" "${allow_prefixes[@]}"
 
 if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
 fi
 
-if singular_runner_result_write codex "$run_id" "$runner_role" "$capability_profile" \
-  "$result_file" "$exit_code" "$jsonl_tmp" "" "$output_last_message"; then
-  runner_result_written="yes"
-fi
+singular_runner_finish "$exit_code"
 [[ -n "$jsonl_tmp" ]] && rm -f "$jsonl_tmp" 2>/dev/null || true
 exit "$exit_code"

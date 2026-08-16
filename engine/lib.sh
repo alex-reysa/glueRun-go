@@ -2483,6 +2483,267 @@ singular_runner_reject_strict_legacy_extra_args() {
   return 0
 }
 
+# --------------------------------------------------------------------------- #
+# Shared runner skeleton                                                        #
+# --------------------------------------------------------------------------- #
+# The ~60% of every adapter that is identical, in one place: argument parsing,
+# the exit/signal traps, the backgrounded session-leader spawn, the wall-clock
+# timeout and its kill-tree, the envelope capture, the read-only guard ordering
+# and the normalized result write. What stays in each adapter is the part that
+# is genuinely that provider's: model and effort selection, argv construction,
+# sandbox semantics, envelope parsing, session-id extraction.
+#
+# The split is not tidiness. Six hand-copied containment skeletons drift: grok's
+# timeout used a bare `kill -9` on the direct child while its siblings had long
+# since adopted singular_kill_tree, so every timed-out grok run left the
+# provider's descendants alive and writing to a worktree the guard was trying to
+# restore. Lines like these need exactly one copy to review.
+#
+# State the skeleton owns, and the adapters must not write directly:
+SINGULAR_RUNNER_PROVIDER=""        # provider id, for the result record
+SINGULAR_RUNNER_LABEL=""           # message prefix, e.g. "cursor-run"
+SINGULAR_RUNNER_CHILD_PID=""       # provider session leader while un-reaped
+SINGULAR_RUNNER_RO_JOURNAL=""      # read-only guard journal awaiting restore
+SINGULAR_RUNNER_RESULT_WRITTEN="no"
+SINGULAR_RUNNER_ENVELOPE=""        # provider stdout capture
+SINGULAR_RUNNER_ENVELOPE_ERR=""    # provider stderr capture
+SINGULAR_RUNNER_EXIT_CODE=0        # provider exit status after the wait
+# Opt-in extras an adapter sets before spawning. Left empty they cost nothing,
+# which is what keeps the skeleton behaviorally identical for the adapters that
+# never had them: no extra file appears, no extra text is printed.
+SINGULAR_RUNNER_CLEANUP_PATHS=()   # adapter temp dirs, removed by the exit trap
+SINGULAR_RUNNER_SESSION_RECORD=""  # where to record the spawned session, if anywhere
+SINGULAR_RUNNER_TIMEOUT_NOTE=""    # appended to the timeout message
+
+# Parse the runner argument vocabulary. Every adapter accepts exactly the set
+# singular_runner_describe_contract advertises -- a per-adapter copy of this loop
+# is how grok came to reject --session-meta and --resume-session that the generic
+# contract promised, so every host call site passing them died with exit 2
+# before the provider was ever reached.
+#
+# Sets, in the caller's shell: worktree prompt_file level run_id output_schema
+# output_last_message capture_packet allow_prefixes[] session_meta_path
+# resume_session_id runner_role capability_profile result_file describe_contract
+singular_runner_parse_args() {
+  worktree=""
+  prompt_file=""
+  level="l2"
+  run_id=""
+  output_schema=""
+  output_last_message=""
+  capture_packet="auto"
+  allow_prefixes=()
+  session_meta_path=""
+  resume_session_id=""
+  runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
+  capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
+  result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
+  describe_contract="no"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -C|--worktree) worktree="$2"; shift 2 ;;
+      --prompt-file) prompt_file="$2"; shift 2 ;;
+      --level) level="$2"; shift 2 ;;
+      --run-id) run_id="$2"; shift 2 ;;
+      --output-schema) output_schema="$2"; capture_packet="yes"; shift 2 ;;
+      --output-last-message) output_last_message="$2"; capture_packet="yes"; shift 2 ;;
+      --no-output-capture) capture_packet="no"; shift ;;
+      --allow-prefix) allow_prefixes+=("$2"); shift 2 ;;
+      --session-meta) session_meta_path="$2"; shift 2 ;;
+      --resume-session) resume_session_id="$2"; shift 2 ;;
+      --role) runner_role="$2"; shift 2 ;;
+      --capability-profile) capability_profile="$2"; shift 2 ;;
+      --result-file) result_file="$2"; shift 2 ;;
+      --describe-contract) describe_contract="yes"; shift ;;
+      *) echo "unknown option: $1" >&2; return 2 ;;
+    esac
+  done
+  if [[ -z "$run_id" ]]; then
+    run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  fi
+  if [[ -z "$result_file" ]]; then
+    result_file="$(singular_runner_default_result_file "$run_id")"
+  fi
+  return 0
+}
+
+# Kill the provider session, restore the worktree, write the result -- in that
+# order, on every exit path including the signals.
+#
+# The order is the contract. An interrupted run leaves the provider CLI and its
+# descendants alive, still writing to the worktree; restoring first would lose
+# that race. And the guard restore has to live in the trap rather than in
+# straight-line code after the run, because ask/supervise/decide background this
+# runner and SIGTERM it on the way to a kill -- on every one of those paths,
+# straight-line code simply never executes.
+singular_runner_on_exit() {
+  local rc=$?
+  trap - EXIT
+  if [[ -n "$SINGULAR_RUNNER_CHILD_PID" ]]; then
+    singular_kill_tree "$SINGULAR_RUNNER_CHILD_PID" 0 session 2>/dev/null || true
+    wait "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null || true
+    SINGULAR_RUNNER_CHILD_PID=""
+  fi
+  singular_readonly_guard_restore "$SINGULAR_RUNNER_RO_JOURNAL" || true
+  SINGULAR_RUNNER_RO_JOURNAL=""
+  if [[ "$SINGULAR_RUNNER_RESULT_WRITTEN" != "yes" ]]; then
+    singular_runner_result_write "$SINGULAR_RUNNER_PROVIDER" "$run_id" "$runner_role" \
+      "$capability_profile" "$result_file" "$rc" "$SINGULAR_RUNNER_ENVELOPE" \
+      "$SINGULAR_RUNNER_ENVELOPE_ERR" "$output_last_message" || true
+  fi
+  if [[ -n "$SINGULAR_RUNNER_ENVELOPE" ]]; then
+    rm -f "$SINGULAR_RUNNER_ENVELOPE" "$SINGULAR_RUNNER_ENVELOPE_ERR" 2>/dev/null || true
+  fi
+  if [[ ${#SINGULAR_RUNNER_CLEANUP_PATHS[@]} -gt 0 ]]; then
+    rm -rf "${SINGULAR_RUNNER_CLEANUP_PATHS[@]}" 2>/dev/null || true
+  fi
+  exit "$rc"
+}
+
+# args: provider [label]
+# Exiting from a signal handler runs the EXIT trap, which is the only thing that
+# still kills the provider session and restores the worktree. Without these, the
+# default disposition tears the runner down and leaves the session running.
+# SIGKILL itself remains uncoverable; singular_readonly_guard_sweep answers that.
+singular_runner_install_traps() {
+  SINGULAR_RUNNER_PROVIDER="$1"
+  SINGULAR_RUNNER_LABEL="${2:-$1-run}"
+  SINGULAR_RUNNER_RESULT_WRITTEN="no"
+  trap singular_runner_on_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+}
+
+# Temp files for the provider's stdout/stderr, owned by the trap above.
+singular_runner_capture_files() {
+  SINGULAR_RUNNER_ENVELOPE="$(mktemp "${TMPDIR:-/tmp}/singular-${1}-env.XXXXXX")"
+  SINGULAR_RUNNER_ENVELOPE_ERR="$SINGULAR_RUNNER_ENVELOPE.err"
+}
+
+# Take the read-only snapshot the guard restores from, if this is a read-only run.
+# args: readonly_run worktree tag
+singular_runner_guard_capture() {
+  [[ "$1" == "yes" ]] || return 0
+  SINGULAR_RUNNER_RO_JOURNAL="$(singular_readonly_guard_capture "$2" "$3")"
+}
+
+# Restore now rather than at exit, so a later scope check sees the restored tree.
+# The trap still holds the timeout and signal paths; restoring a consumed journal
+# twice is a no-op.
+singular_runner_guard_restore_now() {
+  [[ -n "$SINGULAR_RUNNER_RO_JOURNAL" ]] || return 0
+  singular_readonly_guard_restore "$SINGULAR_RUNNER_RO_JOURNAL" || true
+  SINGULAR_RUNNER_RO_JOURNAL=""
+}
+
+singular_runner_spawn_one() {
+  # cwd is the caller's local, reached by dynamic scope: providers that take a
+  # working directory as a flag pass "" and stay where they are.
+  if [[ -n "$cwd" ]]; then
+    cd "$cwd" || exit 1
+  fi
+  # LAST command, so the `&` at the call site makes $! the session leader itself
+  # (pid == pgid) and singular_kill_tree group-kills the whole tree with one
+  # negative pid, without `ps` -- which is the whole point (PMGO-004: in a
+  # sandbox that denies process enumeration only the direct child was signalled,
+  # and the provider's descendants survived every timeout, invisibly).
+  singular_setsid_exec "$@"
+}
+
+# Run the provider bounded by a wall clock and reap it. Sets
+# SINGULAR_RUNNER_EXIT_CODE (124 on timeout).
+# args: timeout_sec stdin_file cwd -- argv...
+#
+# The provider always runs in the BACKGROUND, even with the timeout disabled:
+# bash defers a trapped signal until the foreground child finishes, so a
+# foreground run would swallow the SIGTERM that ask/supervise/decide send on
+# their way to a kill -- and with it the read-only guard's only chance to run.
+# `wait` is interruptible by a trapped signal; a foreground child is not.
+# Redirections live on the call site so they bind to the job.
+singular_runner_spawn_wait() {
+  local timeout="$1" stdin_file="$2" cwd="$3"
+  shift 3
+  [[ "${1:-}" == "--" ]] && shift
+  local rc=0 timed_out="no" deadline=0
+  if [[ -n "$stdin_file" ]]; then
+    singular_runner_spawn_one "$@" \
+      <"$stdin_file" >"$SINGULAR_RUNNER_ENVELOPE" 2>"$SINGULAR_RUNNER_ENVELOPE_ERR" &
+  else
+    singular_runner_spawn_one "$@" \
+      >"$SINGULAR_RUNNER_ENVELOPE" 2>"$SINGULAR_RUNNER_ENVELOPE_ERR" &
+  fi
+  SINGULAR_RUNNER_CHILD_PID=$!
+  # What this spawner knows about the session, recorded ps-free so a crashed
+  # runner leaves behind a signalable group instead of an orphan tree.
+  if [[ -n "$SINGULAR_RUNNER_SESSION_RECORD" ]]; then
+    singular_session_record_write "$SINGULAR_RUNNER_SESSION_RECORD" \
+      "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null || true
+  fi
+  if [[ "$timeout" =~ ^[0-9]+$ && "$timeout" -gt 0 ]]; then
+    deadline=$((SECONDS + timeout))
+    while kill -0 "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null; do
+      if [[ "$SECONDS" -ge "$deadline" ]]; then
+        timed_out="yes"
+        # TERM the provider session, then KILL what is left.
+        singular_kill_tree "$SINGULAR_RUNNER_CHILD_PID" \
+          "$(singular_provider_kill_grace_sec)" session
+        wait "$SINGULAR_RUNNER_CHILD_PID" 2>/dev/null || true
+        rc=124
+        break
+      fi
+      sleep 2
+    done
+    if [[ "$timed_out" != "yes" ]]; then
+      rc=0; wait "$SINGULAR_RUNNER_CHILD_PID" || rc=$?
+    else
+      echo "$SINGULAR_RUNNER_LABEL: TIMED OUT after ${timeout}s; killed run $run_id$SINGULAR_RUNNER_TIMEOUT_NOTE" >&2
+    fi
+  else
+    rc=0; wait "$SINGULAR_RUNNER_CHILD_PID" || rc=$?
+  fi
+  SINGULAR_RUNNER_CHILD_PID=""
+  SINGULAR_RUNNER_EXIT_CODE="$rc"
+  return 0
+}
+
+# Surface the provider's own output, and keep the envelope beside the run.
+# args: run_dir
+singular_runner_report_envelope() {
+  cat "$SINGULAR_RUNNER_ENVELOPE" >&2 || true
+  if [[ -s "$SINGULAR_RUNNER_ENVELOPE_ERR" ]]; then
+    cat "$SINGULAR_RUNNER_ENVELOPE_ERR" >&2 || true
+  fi
+  if [[ -n "${1:-}" ]]; then
+    cp "$SINGULAR_RUNNER_ENVELOPE" \
+      "$1/$SINGULAR_RUNNER_PROVIDER-envelope.json" 2>/dev/null || true
+  fi
+}
+
+# L0/L1 write scope, verified after the run.
+# args: level worktree allow_prefix...
+singular_runner_scope_enforce() {
+  local level="$1" worktree="$2"
+  shift 2
+  [[ "$level" == "l0" || "$level" == "l1" ]] || return 0
+  local scope_args=(--worktree "$worktree") prefix
+  for prefix in "$@"; do
+    scope_args+=(--allow-prefix "$prefix")
+  done
+  "$SINGULAR_ENGINE_DIR/scope-check.sh" "${scope_args[@]}"
+}
+
+# The normalized runner result, written once. The trap writes it only if this
+# did not.
+# args: exit_code
+singular_runner_finish() {
+  if singular_runner_result_write "$SINGULAR_RUNNER_PROVIDER" "$run_id" "$runner_role" \
+    "$capability_profile" "$result_file" "$1" "$SINGULAR_RUNNER_ENVELOPE" \
+    "$SINGULAR_RUNNER_ENVELOPE_ERR" "$output_last_message"; then
+    SINGULAR_RUNNER_RESULT_WRITTEN="yes"
+  fi
+}
+
 # Load one provider's row from engine/providers.json into the caller's shell.
 #
 # Sets, for <provider>:

@@ -10,92 +10,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-worktree=""
-prompt_file=""
-level="l2"
-run_id=""
-output_schema=""
-output_last_message=""
-capture_packet="auto"
-allow_prefixes=()
-# Session affinity: both accepted for host compatibility, because
-# singular_runner_describe_contract advertises them for every runner and the
-# unconditional call sites would otherwise die on "unknown option" (exit 2).
-# Unlike cursor, grok's headless envelope DOES carry a real `sessionId`, so
-# --session-meta is written with it. --resume-session is still refused (exit 86):
-# grok has `--resume`, but resume-plus-prompt-file is unproven here and a wrong
-# guess would silently continue the wrong conversation.
-session_meta_path=""
-resume_session_id=""
-runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
-capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
-result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
-describe_contract="no"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -C|--worktree) worktree="$2"; shift 2 ;;
-    --prompt-file) prompt_file="$2"; shift 2 ;;
-    --level) level="$2"; shift 2 ;;
-    --run-id) run_id="$2"; shift 2 ;;
-    --output-schema) output_schema="$2"; capture_packet="yes"; shift 2 ;;
-    --output-last-message) output_last_message="$2"; capture_packet="yes"; shift 2 ;;
-    --no-output-capture) capture_packet="no"; shift ;;
-    --allow-prefix) allow_prefixes+=("$2"); shift 2 ;;
-    --session-meta) session_meta_path="$2"; shift 2 ;;
-    --resume-session) resume_session_id="$2"; shift 2 ;;
-    --role) runner_role="$2"; shift 2 ;;
-    --capability-profile) capability_profile="$2"; shift 2 ;;
-    --result-file) result_file="$2"; shift 2 ;;
-    --describe-contract) describe_contract="yes"; shift ;;
-    *) echo "unknown option: $1" >&2; exit 2 ;;
-  esac
-done
+# Argument vocabulary, traps, spawn/timeout/kill, capture, guard ordering and the
+# result write are the shared skeleton in lib.sh (singular_runner_*). What
+# remains below is grok's own: level mapping, model and effort selection, argv,
+# envelope parsing, and the session id its envelope carries.
+#
+# Session affinity: both flags are accepted for host compatibility.
+# Unlike cursor, grok's headless envelope DOES carry a
+# real sessionId, so --session-meta is written with it. --resume-session is
+# still refused (exit 86): grok has `--resume`, but resume-plus-prompt-file is
+# unproven here and a wrong guess would silently continue the wrong conversation.
+singular_runner_parse_args "$@" || exit $?
 
 if [[ "$describe_contract" == "yes" ]]; then
   singular_runner_describe_contract grok
   exit 0
 fi
 
-if [[ -z "$run_id" ]]; then
-  run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-fi
-if [[ -z "$result_file" ]]; then
-  result_file="$(singular_runner_default_result_file "$run_id")"
-fi
-runner_result_written="no"
-ro_journal=""
-singular_grok_result_on_exit() {
-  local rc=$?
-  trap - EXIT
-  # An interrupted run leaves the provider CLI and its descendants alive; they
-  # would keep writing to the worktree while the guard restores it, and the
-  # restore would lose the race. Kill first, then restore.
-  if [[ -n "${grok_pid:-}" ]]; then
-    singular_kill_tree "$grok_pid" 0 session 2>/dev/null || true
-    wait "$grok_pid" 2>/dev/null || true
-    grok_pid=""
-  fi
-  # Before the result write, because a containment failure that outlives the
-  # process is the worse outcome. ask/supervise/decide background this runner
-  # and kill it on timeout; the old guard was straight-line code after the run,
-  # so on every one of those paths it simply never executed.
-  singular_readonly_guard_restore "${ro_journal:-}" || true
-  ro_journal=""
-  if [[ "$runner_result_written" != "yes" ]]; then
-    singular_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
-      "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
-  fi
-  [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
-  exit "$rc"
-}
-trap singular_grok_result_on_exit EXIT
-# Exiting from a signal handler runs the EXIT trap, so these buy the guard a
-# chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
-# itself remains uncoverable; `singular_readonly_guard_sweep` is the answer there.
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
+singular_runner_install_traps grok grok-run
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -246,58 +178,19 @@ fi
 
 cmd+=(--prompt-file "$prompt_file")
 
-if [[ "$readonly_run" == "yes" ]]; then
-  ro_journal="$(singular_readonly_guard_capture "$worktree" "grok-$run_id")"
-fi
+singular_runner_guard_capture "$readonly_run" "$worktree" "grok-$run_id"
 
-envelope="$(mktemp "${TMPDIR:-/tmp}/singular-grok-env.XXXXXX")"
-envelope_err="$envelope.err"
+singular_runner_capture_files grok
+envelope="$SINGULAR_RUNNER_ENVELOPE"
+envelope_err="$SINGULAR_RUNNER_ENVELOPE_ERR"
 
-exit_code=0
 echo "grok-run: level=$level model=$grok_model worktree=$worktree run_id=$run_id" >&2
-grok_timeout="${SINGULAR_GROK_TIMEOUT_SEC:-1200}"
-# The provider always runs in the BACKGROUND, even with the timeout disabled.
-# bash defers a trapped signal until the foreground child finishes, so a
-# foreground run would swallow the SIGTERM that ask/supervise/decide send on
-# their way to a kill -- and with it the read-only guard's only chance to run.
-# `wait` is interruptible by a trapped signal; a foreground child is not.
-# The provider as a SESSION LEADER: singular_setsid_exec is the LAST command of
-# run_grok, so `&` makes $! the leader itself (pid == pgid) and singular_kill_tree
-# group-kills the whole tree with one negative pid, without `ps` (PMGO-004).
-# grok gets its working directory from --cwd, so there is no `cd` here.
-# Redirections live on the call site so they bind to the job.
-run_grok() {
-  singular_setsid_exec "${cmd[@]}"
-}
-run_grok >"$envelope" 2>"$envelope_err" & grok_pid=$!
-if [[ "$grok_timeout" =~ ^[0-9]+$ && "$grok_timeout" -gt 0 ]]; then
-  grok_deadline=$((SECONDS + grok_timeout)); grok_timed_out="no"
-  while kill -0 "$grok_pid" 2>/dev/null; do
-    if [[ "$SECONDS" -ge "$grok_deadline" ]]; then
-      grok_timed_out="yes"
-      # kill -9 on the direct child only left grok's descendants running, which
-      # is exactly what singular_kill_tree exists to prevent; the other runners
-      # already used it. TERM the session first, then KILL what is left.
-      singular_kill_tree "$grok_pid" "$(singular_provider_kill_grace_sec)" session
-      wait "$grok_pid" 2>/dev/null || true
-      exit_code=124
-      break
-    fi
-    sleep 2
-  done
-  if [[ "$grok_timed_out" != "yes" ]]; then
-    grok_ec=0; wait "$grok_pid" || grok_ec=$?; exit_code="$grok_ec"
-  else
-    echo "grok-run: TIMED OUT after ${grok_timeout}s; killed run $run_id" >&2
-  fi
-else
-  grok_ec=0; wait "$grok_pid" || grok_ec=$?; exit_code="$grok_ec"
-fi
-grok_pid=""
+# grok gets its working directory from --cwd and its prompt from --prompt-file,
+# so the spawn needs neither a cd nor stdin.
+singular_runner_spawn_wait "${SINGULAR_GROK_TIMEOUT_SEC:-1200}" "" "" -- "${cmd[@]}"
+exit_code="$SINGULAR_RUNNER_EXIT_CODE"
 
-cat "$envelope" >&2 || true
-[[ -s "$envelope_err" ]] && cat "$envelope_err" >&2 || true
-if [[ -n "$run_dir" ]]; then cp "$envelope" "$run_dir/grok-envelope.json" 2>/dev/null || true; fi
+singular_runner_report_envelope "$run_dir"
 
 # --- Session-meta: the real sessionId out of the envelope ----------------------
 # Best-effort: a missing/unparseable id writes an empty one rather than failing
@@ -348,29 +241,15 @@ PY
 fi
 
 # --- Read-only restore guard: revert anything the run mutated -------------------
-# Explicitly here, and not only from the EXIT trap, because scope-check.sh below
-# must see the restored tree. The trap still holds the timeout and signal paths;
-# a second restore of a consumed journal is a no-op.
-if [[ "$readonly_run" == "yes" ]]; then
-  singular_readonly_guard_restore "$ro_journal" || true
-  ro_journal=""
-fi
+singular_runner_guard_restore_now
 
-if [[ "$level" == "l0" || "$level" == "l1" ]]; then
-  scope_args=(--worktree "$worktree")
-  for prefix in "${allow_prefixes[@]}"; do
-    scope_args+=(--allow-prefix "$prefix")
-  done
-  "$SCRIPT_DIR/scope-check.sh" "${scope_args[@]}"
-fi
+# --- Scope enforcement for L0/L1 (mirrors codex-run.sh) -------------------------
+singular_runner_scope_enforce "$level" "$worktree" "${allow_prefixes[@]}"
 
 if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
 fi
 
-if singular_runner_result_write grok "$run_id" "$runner_role" "$capability_profile" \
-  "$result_file" "$exit_code" "$envelope" "$envelope_err" "$output_last_message"; then
-  runner_result_written="yes"
-fi
+singular_runner_finish "$exit_code"
 
 exit "$exit_code"

@@ -27,87 +27,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
-worktree=""
-prompt_file=""
-level="l2"
-run_id=""
-output_schema=""
-output_last_message=""
-capture_packet="auto"
-allow_prefixes=()
-# Session affinity: both accepted for host compatibility. --session-meta is
-# written best-effort (no sessionId); --resume-session is refused (exit 86).
-session_meta_path=""
-resume_session_id=""
-runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
-capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
-result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
-describe_contract="no"
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -C|--worktree) worktree="$2"; shift 2 ;;
-    --prompt-file) prompt_file="$2"; shift 2 ;;
-    --level) level="$2"; shift 2 ;;
-    --run-id) run_id="$2"; shift 2 ;;
-    --output-schema) output_schema="$2"; capture_packet="yes"; shift 2 ;;
-    --output-last-message) output_last_message="$2"; capture_packet="yes"; shift 2 ;;
-    --no-output-capture) capture_packet="no"; shift ;;
-    --allow-prefix) allow_prefixes+=("$2"); shift 2 ;;
-    --session-meta) session_meta_path="$2"; shift 2 ;;
-    --resume-session) resume_session_id="$2"; shift 2 ;;
-    --role) runner_role="$2"; shift 2 ;;
-    --capability-profile) capability_profile="$2"; shift 2 ;;
-    --result-file) result_file="$2"; shift 2 ;;
-    --describe-contract) describe_contract="yes"; shift ;;
-    *) echo "unknown option: $1" >&2; exit 2 ;;
-  esac
-done
+# Argument vocabulary, traps, spawn/timeout/kill, capture, guard ordering and the
+# result write are the shared skeleton in lib.sh (singular_runner_*). What
+# remains below is gemini's own: level mapping, model selection, argv, and
+# envelope parsing.
+#
+# Session affinity: both flags are accepted for host compatibility.
+# --session-meta is written best-effort (no sessionId); --resume-session is
+# refused (exit 86).
+singular_runner_parse_args "$@" || exit $?
 
 if [[ "$describe_contract" == "yes" ]]; then
   singular_runner_describe_contract gemini
   exit 0
 fi
 
-if [[ -z "$run_id" ]]; then
-  run_id="RUN-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-fi
-if [[ -z "$result_file" ]]; then
-  result_file="$(singular_runner_default_result_file "$run_id")"
-fi
-runner_result_written="no"
-ro_journal=""
-singular_gemini_result_on_exit() {
-  local rc=$?
-  trap - EXIT
-  # An interrupted run leaves the provider CLI and its descendants alive; they
-  # would keep writing to the worktree while the guard restores it, and the
-  # restore would lose the race. Kill first, then restore.
-  if [[ -n "${gem_pid:-}" ]]; then
-    singular_kill_tree "$gem_pid" 0 session 2>/dev/null || true
-    wait "$gem_pid" 2>/dev/null || true
-    gem_pid=""
-  fi
-  # Before the result write, because a containment failure that outlives the
-  # process is the worse outcome. ask/supervise/decide background this runner
-  # and kill it on timeout; the old guard was straight-line code after the run,
-  # so on every one of those paths it simply never executed.
-  singular_readonly_guard_restore "${ro_journal:-}" || true
-  ro_journal=""
-  if [[ "$runner_result_written" != "yes" ]]; then
-    singular_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
-      "$result_file" "$rc" "${envelope:-}" "${envelope_err:-}" "$output_last_message" || true
-  fi
-  [[ -n "${envelope:-}" ]] && rm -f "$envelope" "${envelope_err:-}" 2>/dev/null || true
-  exit "$rc"
-}
-trap singular_gemini_result_on_exit EXIT
-# Exiting from a signal handler runs the EXIT trap, so these buy the guard a
-# chance to run on the SIGTERM that precedes a kill-tree's SIGKILL. SIGKILL
-# itself remains uncoverable; `singular_readonly_guard_sweep` is the answer there.
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
+singular_runner_install_traps gemini gemini-run
 
 if [[ -z "$worktree" ]]; then
   echo "usage: $0 --worktree PATH [--level l1|l2|readonly] [--prompt-file FILE]" >&2
@@ -219,62 +154,21 @@ if [[ -n "${SINGULAR_GEMINI_EXTRA_ARGS:-}" ]]; then
 fi
 
 # --- Read-only snapshot (for restore-after) -------------------------------------
-if [[ "$readonly_run" == "yes" ]]; then
-  ro_journal="$(singular_readonly_guard_capture "$worktree" "gemini-$run_id")"
-fi
+singular_runner_guard_capture "$readonly_run" "$worktree" "gemini-$run_id"
 
-# stdout (the -o json envelope) and stderr (gemini's copious notices) are captured
-# to SEPARATE files so a stray stderr line never corrupts the JSON parse.
-envelope="$(mktemp "${TMPDIR:-/tmp}/singular-gemini-env.XXXXXX")"
-envelope_err="$envelope.err"
+# stdout (the -o json envelope) and stderr (gemini's copious notices) are
+# captured to SEPARATE files so a stray stderr line never corrupts the parse.
+singular_runner_capture_files gemini
+envelope="$SINGULAR_RUNNER_ENVELOPE"
+envelope_err="$SINGULAR_RUNNER_ENVELOPE_ERR"
 
-# The provider as a SESSION LEADER: singular_setsid_exec is the LAST command, so
-# the `&` at the call site makes $! the leader itself (pid == pgid) and
-# singular_kill_tree group-kills the whole tree with one negative pid, without
-# `ps` (PMGO-004). Only ever invoked as a background job, so the `cd` is
-# contained; redirections live on the call site so they bind to the job.
-run_gemini() {
-  cd "$worktree" || exit 1
-  singular_setsid_exec "${cmd[@]}"
-}
-
-exit_code=0
 echo "gemini-run: level=$level model=${gem_model:-<default>} worktree=$worktree run_id=$run_id" >&2
-# Wall-clock guard (default 1200s; 0 disables). Kill the whole process tree on
-# timeout so a stuck run never holds a worker slot; surface exit 124.
-gem_timeout="${SINGULAR_GEMINI_TIMEOUT_SEC:-1200}"
-# The provider always runs in the BACKGROUND, even with the timeout disabled.
-# bash defers a trapped signal until the foreground child finishes, so a
-# foreground run would swallow the SIGTERM that ask/supervise/decide send on
-# their way to a kill -- and with it the read-only guard's only chance to run.
-# `wait` is interruptible by a trapped signal; a foreground child is not.
-run_gemini <"$prompt_file" >"$envelope" 2>"$envelope_err" & gem_pid=$!
-if [[ "$gem_timeout" =~ ^[0-9]+$ && "$gem_timeout" -gt 0 ]]; then
-  gem_deadline=$((SECONDS + gem_timeout)); gem_timed_out="no"
-  while kill -0 "$gem_pid" 2>/dev/null; do
-    if [[ "$SECONDS" -ge "$gem_deadline" ]]; then
-      gem_timed_out="yes"
-      # TERM the provider session, then KILL what is left.
-      singular_kill_tree "$gem_pid" "$(singular_provider_kill_grace_sec)" session
-      wait "$gem_pid" 2>/dev/null || true
-      exit_code=124
-      break
-    fi
-    sleep 2
-  done
-  if [[ "$gem_timed_out" != "yes" ]]; then
-    gem_ec=0; wait "$gem_pid" || gem_ec=$?; exit_code="$gem_ec"
-  else
-    echo "gemini-run: TIMED OUT after ${gem_timeout}s; killed run $run_id" >&2
-  fi
-else
-  gem_ec=0; wait "$gem_pid" || gem_ec=$?; exit_code="$gem_ec"
-fi
-gem_pid=""
+# gemini takes no working-directory flag, so the spawn cds into the worktree.
+singular_runner_spawn_wait "${SINGULAR_GEMINI_TIMEOUT_SEC:-1200}" "$prompt_file" \
+  "$worktree" -- "${cmd[@]}"
+exit_code="$SINGULAR_RUNNER_EXIT_CODE"
 
-cat "$envelope" >&2 || true
-[[ -s "$envelope_err" ]] && cat "$envelope_err" >&2 || true
-if [[ -n "$run_dir" ]]; then cp "$envelope" "$run_dir/gemini-envelope.json" 2>/dev/null || true; fi
+singular_runner_report_envelope "$run_dir"
 
 # --- Session-meta: no resumable id in v1; record provider + empty sessionId ----
 if [[ -n "$session_meta_path" ]]; then
@@ -348,30 +242,15 @@ PY
 fi
 
 # --- Read-only restore guard: revert anything the run mutated -------------------
-# Explicitly here, and not only from the EXIT trap, because scope-check.sh below
-# must see the restored tree. The trap still holds the timeout and signal paths;
-# a second restore of a consumed journal is a no-op.
-if [[ "$readonly_run" == "yes" ]]; then
-  singular_readonly_guard_restore "$ro_journal" || true
-  ro_journal=""
-fi
+singular_runner_guard_restore_now
 
 # --- Scope enforcement for L0/L1 (mirrors codex-run.sh) -------------------------
-if [[ "$level" == "l0" || "$level" == "l1" ]]; then
-  scope_args=(--worktree "$worktree")
-  for prefix in "${allow_prefixes[@]}"; do
-    scope_args+=(--allow-prefix "$prefix")
-  done
-  "$SCRIPT_DIR/scope-check.sh" "${scope_args[@]}"
-fi
+singular_runner_scope_enforce "$level" "$worktree" "${allow_prefixes[@]}"
 
 if [[ "$capture_packet" == "yes" ]]; then
   echo "last_message=$output_last_message" >&2
 fi
 
-if singular_runner_result_write gemini "$run_id" "$runner_role" "$capability_profile" \
-  "$result_file" "$exit_code" "$envelope" "$envelope_err" "$output_last_message"; then
-  runner_result_written="yes"
-fi
+singular_runner_finish "$exit_code"
 
 exit "$exit_code"
