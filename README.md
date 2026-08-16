@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/43bffbc9-8c57-4fe0-aad4-f7a7aea4beb4
+
 # singular
 
 **Autonomous multi-agent orchestration for software repos. One engine, many consumers.**
