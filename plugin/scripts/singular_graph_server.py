@@ -5195,7 +5195,11 @@ _CONFIG_ROLE_KEYS = {
     },
     # 0.9.0 providers: gemini/opencode/cursor/grok expose a single flat model key
     # (no per-role model, no reasoning-effort mapping v1). An empty fallback means
-    # "CLI default" — the runner omits the model flag when the key is unset.
+    # "CLI default" — the runner omits the model flag when the key is unset. Grok
+    # is the exception and its fallback below is grok-4.6: that adapter always
+    # passes --model. Every fallback here is pinned to engine/providers.json by
+    # tests/test-provider-spec.sh, because a card that names a different default
+    # than the one dispatch sends is the operator being told a fiction.
     "gemini":   {r: ("SINGULAR_GEMINI_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
     "opencode": {r: ("SINGULAR_OPENCODE_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
     "cursor":   {r: ("SINGULAR_CURSOR_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
@@ -5206,7 +5210,7 @@ _CONFIG_MODEL_FALLBACK = {"claude": ("SINGULAR_CLAUDE_MODEL", "claude-opus-4-8")
                           "gemini": ("SINGULAR_GEMINI_MODEL", ""),
                           "opencode": ("SINGULAR_OPENCODE_MODEL", ""),
                           "cursor": ("SINGULAR_CURSOR_MODEL", ""),
-                          "grok": ("SINGULAR_GROK_MODEL", "")}
+                          "grok": ("SINGULAR_GROK_MODEL", "grok-4.6")}
 _CONFIG_EFFORT_FALLBACK = {"claude": "SINGULAR_CLAUDE_EFFORT", "codex": None,
                            "gemini": None, "opencode": None, "cursor": None, "grok": None}
 _CONFIG_LIMIT_KEYS = (("maxConcurrent", "SINGULAR_MAX_CONCURRENT"),

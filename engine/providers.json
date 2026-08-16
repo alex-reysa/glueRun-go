@@ -1,0 +1,149 @@
+{
+  "schema": "singular.provider-spec.v0",
+  "providers": {
+    "codex": {
+      "adapter": "codex-run.sh",
+      "binary": "codex",
+      "binaryEnv": "SINGULAR_CODEX_BIN",
+      "model": {
+        "env": "SINGULAR_CODEX_MODEL",
+        "default": "gpt-5.5",
+        "pattern": "^(?:gpt-|o[0-9]|codex-)",
+        "inventory": "codex-cache",
+        "listing": []
+      },
+      "auth": {
+        "probe": ["login", "status"],
+        "env": [],
+        "credentialFiles": [],
+        "hint": "Authenticate the exact selected Codex executable."
+      },
+      "updatePin": {
+        "args": [],
+        "env": {},
+        "evidence": "no self-update path: the CLI updates only through an explicit `codex update`, and the engine resolves one exact executable per run."
+      },
+      "strictIsolation": true
+    },
+    "claude": {
+      "adapter": "claude-run.sh",
+      "binary": "claude",
+      "binaryEnv": "",
+      "model": {
+        "env": "SINGULAR_CLAUDE_MODEL",
+        "default": "claude-opus-4-8",
+        "pattern": "^(?:claude-|sonnet|opus|haiku)",
+        "inventory": "none",
+        "listing": []
+      },
+      "auth": {
+        "probe": ["auth", "status"],
+        "env": [],
+        "credentialFiles": [],
+        "hint": "Authenticate the exact selected claude executable."
+      },
+      "updatePin": {
+        "args": [],
+        "env": {"DISABLE_AUTOUPDATER": "1"},
+        "evidence": "DISABLE_AUTOUPDATER is the CLI's own auto-updater switch (present in the installed 2.x binary)."
+      },
+      "strictIsolation": true
+    },
+    "gemini": {
+      "adapter": "gemini-run.sh",
+      "binary": "gemini",
+      "binaryEnv": "",
+      "model": {
+        "env": "SINGULAR_GEMINI_MODEL",
+        "default": "",
+        "pattern": "^(?:gemini-|auto$)",
+        "inventory": "none",
+        "listing": []
+      },
+      "auth": {
+        "probe": [],
+        "env": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "credentialFiles": [".gemini/oauth_creds.json"],
+        "hint": "set GEMINI_API_KEY/GOOGLE_API_KEY or sign in with Gemini"
+      },
+      "updatePin": {
+        "args": [],
+        "env": {},
+        "evidence": "auto-update is reached only from the interactive UI startup path (handleAutoUpdate is called solely from the interactiveCli bundle); headless runs never take it. Operators who want it off everywhere set general.enableAutoUpdate=false in gemini settings."
+      },
+      "strictIsolation": true
+    },
+    "opencode": {
+      "adapter": "opencode-run.sh",
+      "binary": "opencode",
+      "binaryEnv": "",
+      "model": {
+        "env": "SINGULAR_OPENCODE_MODEL",
+        "default": "",
+        "pattern": "^(?:[^/\\s]+/[^/\\s]+|auto)$",
+        "inventory": "none",
+        "listing": []
+      },
+      "auth": {
+        "probe": ["auth", "list"],
+        "env": [],
+        "credentialFiles": [],
+        "hint": "Authenticate the exact selected opencode executable."
+      },
+      "updatePin": {
+        "args": [],
+        "env": {"OPENCODE_DISABLE_AUTOUPDATE": "1"},
+        "evidence": "OPENCODE_DISABLE_AUTOUPDATE is the CLI's own auto-update switch (present in the installed binary)."
+      },
+      "strictIsolation": true
+    },
+    "cursor": {
+      "adapter": "cursor-run.sh",
+      "binary": "cursor-agent",
+      "binaryEnv": "",
+      "model": {
+        "env": "SINGULAR_CURSOR_MODEL",
+        "default": "",
+        "pattern": "^(?:auto$|gpt-|cursor-|claude-|sonnet|opus|o[0-9])",
+        "inventory": "none",
+        "listing": []
+      },
+      "auth": {
+        "probe": [],
+        "env": ["CURSOR_API_KEY"],
+        "credentialFiles": [".cursor/cli-config.json"],
+        "hint": "set CURSOR_API_KEY or run cursor-agent login"
+      },
+      "updatePin": {
+        "args": ["--disable-auto-update"],
+        "env": {},
+        "evidence": "hidden flag on the installed 2026.07 build; accepted (exit 0) alongside --help."
+      },
+      "strictIsolation": false
+    },
+    "grok": {
+      "adapter": "grok-run.sh",
+      "binary": "grok",
+      "binaryEnv": "",
+      "model": {
+        "env": "SINGULAR_GROK_MODEL",
+        "default": "grok-4.6",
+        "pattern": "^grok-",
+        "inventory": "listing",
+        "listing": ["models"]
+      },
+      "auth": {
+        "probe": [],
+        "env": ["XAI_API_KEY", "GROK_API_KEY"],
+        "credentialFiles": [".grok/auth.json"],
+        "hint": "set XAI_API_KEY/GROK_API_KEY or run grok login"
+      },
+      "updatePin": {
+        "args": ["--no-auto-update"],
+        "env": {},
+        "evidence": "hidden flag (absent from --help) accepted by grok 1.0.4; grok's bootstrap can otherwise replace the executable mid-run."
+      },
+      "strictIsolation": false
+    }
+  }
+}
