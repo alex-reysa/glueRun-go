@@ -7,6 +7,75 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.19.0] — 2026-08-16 — The right hand for each role
+
+Launch release. Grok Build becomes a first-class, proven provider, and the
+engine gains role-split provider routing: one provider implements, another
+plans, audits and decides. No orchestration semantics or schema shape change;
+`schemaVersion` stays **v2**.
+
+### Grok Build is a real provider now
+
+The adapter existed but had never been run against the installed CLI; auditing
+it against Grok 1.0.4 found it was dispatching a model that does not exist.
+
+- **Model correctness.** The default model id was `grok-build` — the product
+  name, never a model id. Every invocation ever constructed had asked for a
+  nonexistent model. The default is now `grok-4.6` (the CLI's own default),
+  overridable via `SINGULAR_GROK_DEFAULT_MODEL` and the existing per-role
+  `SINGULAR_GROK_*_MODEL` envs.
+- **Binary stability.** Every live invocation now pins `--no-auto-update`, so
+  the provider's bootstrap can never swap the executable underneath a
+  containment-critical run.
+- **Session affinity.** The runner contract advertises `--session-meta` and
+  `--resume-session` for every runner; grok-run rejected both with exit 2, so
+  every host call site that passed them died before reaching the provider.
+  Both are accepted now: `--session-meta` records the provider's real
+  `sessionId` from the envelope, and `--resume-session` refuses with the
+  proven resume-refusal code 86 (fresh-run fallback) rather than guessing at
+  an unproven resume path.
+- **Structured failure truth.** Deterministic envelope tests prove the grok
+  path through the shared classifier: HTTP 429 → `usage-limit`/`quota`,
+  503/529 → `provider-overloaded` (asserted *distinct* from quota — conflating
+  them buys a 30-minute quota nap for a blip that clears in seconds), missing
+  quota totals render as `unknown`, never a guessed number.
+- **Doctor honesty.** `provider.authentication` for grok was unconditionally
+  true — an unauthenticated host passed preflight and failed later, mid-run.
+  It now probes reality (auth env vars or credential-file existence; the file
+  is never opened), with a remediation hint. The doctor model default is
+  `grok-4.6`.
+- **Test surface.** The grok contract suite grows from 11 to 16 cases:
+  installed-CLI argv determinism, structured 429/503+529 classification,
+  malformed-envelope failure, session-meta/resume-refusal, all on a mock that
+  emits the real 1.0.4 envelope shape. Two harness defects fixed in the
+  process: the mock drained an inherited stdin (wedging the suite when run
+  from a live pipe), and its success envelope was generated inside an
+  *unquoted* heredoc — a backticked command in a comment there executed
+  through PATH back into the mock itself and fork-bombed the host. The
+  delimiter is quoted now; the comment says why it must stay that way.
+
+### Role-split provider routing (singular-ext/grok-implementer)
+
+A new opt-in module routes the L2 implementer to the Grok adapter while every
+other role — planner, critic, auditor, decider, integrator, supervisor,
+assistant — stays on `SINGULAR_RUNNER`. Under this module `SINGULAR_RUNNER`
+names the *non-implementer* provider; the module deliberately does not let it
+capture L2 (that would silently undo the split). `SINGULAR_GROK_IMPLEMENTER=0`
+is the explicit off switch, and a missing adapter fails at module load, not
+after N tasks have quietly run on a provider the operator did not choose.
+
+Composes with `storage-proof`: durable-proof tasks keep routing to Claude for
+the real-PostgreSQL egress a provider sandbox blocks. Module order matters —
+`grok-implementer` must load after `storage-proof` (both override
+`singular_select_l2_runner`; last one wins) — and the module documents this.
+Covered by `singular-ext/tests/test-grok-implementer-selection.sh`.
+
+### Recovery governance
+
+The V9 recovery contract module is now fully frozen (14/14 objects `uchg`) and
+its anchored verifier reports `verified-frozen`. The paused recovery lanes
+resume against their pinned base under the V9 authority.
+
 ## [0.18.0] — 2026-08-11 — Quiet at full scale
 
 The 68-node, 45-stage AXON plan exposed console problems that small fixtures
