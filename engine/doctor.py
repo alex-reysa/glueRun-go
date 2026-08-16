@@ -60,7 +60,7 @@ MODEL_ENV = {
     "gemini": ("SINGULAR_GEMINI_MODEL", ""),
     "opencode": ("SINGULAR_OPENCODE_MODEL", ""),
     "cursor": ("SINGULAR_CURSOR_MODEL", ""),
-    "grok": ("SINGULAR_GROK_MODEL", "grok-build"),
+    "grok": ("SINGULAR_GROK_MODEL", "grok-4.6"),
 }
 MODEL_PATTERNS = {
     "codex": re.compile(r"^(?:gpt-|o[0-9]|codex-)"),
@@ -1494,7 +1494,16 @@ singular_json_config_to_env "$2"
             )
             hint = "set CURSOR_API_KEY or run cursor-agent login"
         elif self.provider == "grok":
-            authenticated = True
+            # Was unconditionally True: doctor claimed grok authentication for no
+            # reason beyond the provider being named "grok", so an unauthenticated
+            # host passed the gate and failed later, inside a run. Existence and
+            # env presence only -- credential files are never opened or printed.
+            authenticated = bool(
+                self.runtime_env.get("XAI_API_KEY")
+                or self.runtime_env.get("GROK_API_KEY")
+                or (home / ".grok/auth.json").is_file()
+            )
+            hint = "set XAI_API_KEY/GROK_API_KEY or run grok login"
         self.add(
             "provider.authentication",
             "pass" if authenticated else "fail",

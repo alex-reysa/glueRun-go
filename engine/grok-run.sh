@@ -18,6 +18,15 @@ output_schema=""
 output_last_message=""
 capture_packet="auto"
 allow_prefixes=()
+# Session affinity: both accepted for host compatibility, because
+# singular_runner_describe_contract advertises them for every runner and the
+# unconditional call sites would otherwise die on "unknown option" (exit 2).
+# Unlike cursor, grok's headless envelope DOES carry a real `sessionId`, so
+# --session-meta is written with it. --resume-session is still refused (exit 86):
+# grok has `--resume`, but resume-plus-prompt-file is unproven here and a wrong
+# guess would silently continue the wrong conversation.
+session_meta_path=""
+resume_session_id=""
 runner_role="${SINGULAR_RUNNER_ROLE:-unknown}"
 capability_profile="${SINGULAR_RUNNER_CAPABILITY_PROFILE:-default}"
 result_file="${SINGULAR_RUNNER_RESULT_FILE:-}"
@@ -33,6 +42,8 @@ while [[ $# -gt 0 ]]; do
     --output-last-message) output_last_message="$2"; capture_packet="yes"; shift 2 ;;
     --no-output-capture) capture_packet="no"; shift ;;
     --allow-prefix) allow_prefixes+=("$2"); shift 2 ;;
+    --session-meta) session_meta_path="$2"; shift 2 ;;
+    --resume-session) resume_session_id="$2"; shift 2 ;;
     --role) runner_role="$2"; shift 2 ;;
     --capability-profile) capability_profile="$2"; shift 2 ;;
     --result-file) result_file="$2"; shift 2 ;;
@@ -123,6 +134,12 @@ singular_runner_reject_strict_legacy_extra_args \
   grok SINGULAR_GROK_EXTRA_ARGS "${SINGULAR_GROK_EXTRA_ARGS:-}" || exit $?
 [[ -n "$grok_bin" ]] || { echo "grok CLI not found on PATH" >&2; exit 127; }
 
+# ---- Session affinity: resume refusal (exit 86) -----------------------------
+if [[ -n "$resume_session_id" ]]; then
+  echo "grok-run: resume unsupported (unproven with --prompt-file); signalling resume-refusal" >&2
+  exit 86
+fi
+
 if [[ "$capture_packet" == "auto" && "$level" == "l2" ]]; then
   capture_packet="yes"
 elif [[ "$capture_packet" == "auto" ]]; then
@@ -138,20 +155,25 @@ if [[ "$capture_packet" == "yes" ]]; then
   fi
 fi
 
+# `grok-build` was the product name, never a model id. The installed CLI serves
+# `grok-4.6` (default) and `grok-4.5` — `grok models` lists exactly those — so
+# every run built with the old default asked for a model that does not exist.
+SINGULAR_GROK_DEFAULT_MODEL="${SINGULAR_GROK_DEFAULT_MODEL:-grok-4.6}"
+
 singular_grok_model() {
   local level="$1" prompt_file="$2" prompt_name
   prompt_name="$(basename "${prompt_file:-}")"
   case "$level" in
     l2)
-      printf '%s\n' "${SINGULAR_GROK_L2_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
+      printf '%s\n' "${SINGULAR_GROK_L2_MODEL:-${SINGULAR_GROK_MODEL:-$SINGULAR_GROK_DEFAULT_MODEL}}" ;;
     l0|l1)
-      printf '%s\n' "${SINGULAR_GROK_L1_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
+      printf '%s\n' "${SINGULAR_GROK_L1_MODEL:-${SINGULAR_GROK_MODEL:-$SINGULAR_GROK_DEFAULT_MODEL}}" ;;
     readonly|read-only)
       case "$prompt_name" in
-        planner-prompt.md) printf '%s\n' "${SINGULAR_GROK_PLANNER_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
-        auditor-prompt.md) printf '%s\n' "${SINGULAR_GROK_AUDITOR_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
-        decider-prompt-*.md) printf '%s\n' "${SINGULAR_GROK_DECIDER_MODEL:-${SINGULAR_GROK_MODEL:-grok-build}}" ;;
-        *) printf '%s\n' "${SINGULAR_GROK_MODEL:-grok-build}" ;;
+        planner-prompt.md) printf '%s\n' "${SINGULAR_GROK_PLANNER_MODEL:-${SINGULAR_GROK_MODEL:-$SINGULAR_GROK_DEFAULT_MODEL}}" ;;
+        auditor-prompt.md) printf '%s\n' "${SINGULAR_GROK_AUDITOR_MODEL:-${SINGULAR_GROK_MODEL:-$SINGULAR_GROK_DEFAULT_MODEL}}" ;;
+        decider-prompt-*.md) printf '%s\n' "${SINGULAR_GROK_DECIDER_MODEL:-${SINGULAR_GROK_MODEL:-$SINGULAR_GROK_DEFAULT_MODEL}}" ;;
+        *) printf '%s\n' "${SINGULAR_GROK_MODEL:-$SINGULAR_GROK_DEFAULT_MODEL}" ;;
       esac ;;
   esac
 }
@@ -178,7 +200,10 @@ grok_effort="$(singular_grok_effort "$level" "$prompt_file")"
 
 grok_system_prompt="${SINGULAR_GROK_SYSTEM_PROMPT:-Your FINAL assistant message MUST be exactly one JSON object and nothing else: no prose, no preamble, no code fences, no trailing commentary. If you cannot comply, still emit a single JSON object describing the problem.}"
 
-cmd=("$grok_bin" --output-format json --model "$grok_model" --cwd "$worktree")
+# --no-auto-update FIRST and unconditionally: grok's bootstrap can replace the
+# executable mid-run, which would swap the binary under a containment-critical
+# invocation. It is a hidden flag (absent from --help) but accepted by 1.0.4.
+cmd=("$grok_bin" --no-auto-update --output-format json --model "$grok_model" --cwd "$worktree")
 if [[ "$SINGULAR_RESOLVED_PROVIDER_ARGS_COUNT" -gt 0 ]]; then
   cmd+=("${profile_provider_args[@]}")
 fi
@@ -261,6 +286,25 @@ grok_pid=""
 cat "$envelope" >&2 || true
 [[ -s "$envelope_err" ]] && cat "$envelope_err" >&2 || true
 if [[ -n "$run_dir" ]]; then cp "$envelope" "$run_dir/grok-envelope.json" 2>/dev/null || true; fi
+
+# --- Session-meta: the real sessionId out of the envelope ----------------------
+# Best-effort: a missing/unparseable id writes an empty one rather than failing
+# the run, and never fabricates a value.
+if [[ -n "$session_meta_path" ]]; then
+  grok_session_id="$(python3 - "$envelope" <<'PY' || true
+import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        env = json.load(f)
+except Exception:
+    env = {}
+sid = env.get("sessionId") if isinstance(env, dict) else None
+sys.stdout.write(sid if isinstance(sid, str) else "")
+PY
+)"
+  singular_session_meta_write_provider "$session_meta_path" "grok" "$grok_session_id" \
+    "$grok_model" "$grok_effort" "$worktree" "$exit_code" || true
+fi
 
 if [[ "$capture_packet" == "yes" && -n "$output_last_message" ]]; then
   parse_ec=0
