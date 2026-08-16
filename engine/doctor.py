@@ -28,6 +28,7 @@ import tempfile
 import time
 from typing import Any, Iterable
 
+import provider_spec
 from capability_policy import strict_provider_arg_violation
 from provider_resolver import resolve_provider_bin
 
@@ -49,41 +50,39 @@ REQUIRED_RUNNER_ARGUMENTS = {
     "--result-file",
     "--describe-contract",
 }
-PROVIDERS = {
-    "codex": ("codex-run.sh", "codex"),
-    "claude": ("claude-run.sh", "claude"),
-    "gemini": ("gemini-run.sh", "gemini"),
-    "opencode": ("opencode-run.sh", "opencode"),
-    "cursor": ("cursor-run.sh", "cursor-agent"),
-    "grok": ("grok-run.sh", "grok"),
-}
-MODEL_ENV = {
-    "codex": ("SINGULAR_CODEX_MODEL", "gpt-5.5"),
-    "claude": ("SINGULAR_CLAUDE_MODEL", "claude-opus-4-8"),
-    "gemini": ("SINGULAR_GEMINI_MODEL", ""),
-    "opencode": ("SINGULAR_OPENCODE_MODEL", ""),
-    "cursor": ("SINGULAR_CURSOR_MODEL", ""),
-    "grok": ("SINGULAR_GROK_MODEL", "grok-4.6"),
-}
-MODEL_PATTERNS = {
-    "codex": re.compile(r"^(?:gpt-|o[0-9]|codex-)"),
-    "claude": re.compile(r"^(?:claude-|sonnet|opus|haiku)"),
-    "gemini": re.compile(r"^(?:gemini-|auto$)"),
-    "opencode": re.compile(r"^(?:[^/\s]+/[^/\s]+|auto)$"),
-    "cursor": re.compile(r"^(?:auto$|gpt-|cursor-|claude-|sonnet|opus|o[0-9])"),
-    "grok": re.compile(r"^grok-"),
-}
-# What each CLI must be asked to enumerate the models it actually serves,
-# appended to the resolved provider executable. Two hard requirements on every
-# entry: the argv is non-mutating, and it begins with that CLI's update pin --
-# doctor runs a provider binary here, and a CLI that can replace its own
-# executable during preflight would swap the binary the run is about to use.
-# A provider whose installed CLI exposes no proven listing is deliberately
-# absent: absence yields "unverified", which is the honest verdict, while a
-# guess would be the grok-build failure again with a different id.
-MODEL_LISTINGS = {
-    "grok": ("--no-auto-update", "models"),
-}
+# Provider facts come from engine/providers.json, never from a table kept here:
+# doctor's private copy of the default model is half of how `grok-build` shipped
+# (the adapter held the other half, and the two were edited apart). A spec that
+# will not load is a loud failure below, not a silent empty provider list.
+try:
+    PROVIDER_SPEC_ERROR = ""
+    PROVIDERS = {
+        name: (entry["adapter"], entry["binary"])
+        for name, entry in provider_spec.providers().items()
+    }
+    MODEL_ENV = provider_spec.model_env()
+    MODEL_PATTERNS = provider_spec.model_patterns()
+    # What each CLI must be asked to enumerate the models it actually serves,
+    # appended to the resolved provider executable. Two hard requirements the
+    # spec enforces on every entry: the argv is non-mutating, and it begins with
+    # that CLI's update pin -- doctor runs a provider binary here, and a CLI that
+    # can replace its own executable during preflight would swap the binary the
+    # run is about to use. A provider whose installed CLI exposes no proven
+    # listing declares none: absence yields "unverified", which is the honest
+    # verdict, while a guess would be the grok-build failure with a different id.
+    MODEL_LISTINGS = {
+        name: listing
+        for name in provider_spec.names()
+        if (listing := provider_spec.model_listing(name))
+    }
+    STRICT_ISOLATION_PROVIDERS = provider_spec.strict_isolation_providers()
+except provider_spec.SpecError as exc:  # pragma: no cover - reported by run()
+    PROVIDER_SPEC_ERROR = str(exc)
+    PROVIDERS = {}
+    MODEL_ENV = {}
+    MODEL_PATTERNS = {}
+    MODEL_LISTINGS = {}
+    STRICT_ISOLATION_PROVIDERS = set()
 MODEL_LISTING_TIMEOUT_SEC = 10
 MODEL_LISTING_TTL_SEC = 24 * 60 * 60
 MODEL_LISTING_CACHE_SCHEMA = "singular.doctor.model-listing.v0"
@@ -403,6 +402,18 @@ class Doctor:
                 f"engine has no engine/lib.sh: {self.engine}",
                 required_for=("all-runs",),
                 remediation="Install the pinned engine or correct SINGULAR_ENGINE_HOME.",
+            )
+        if PROVIDER_SPEC_ERROR:
+            # Without the spec doctor knows no provider: it would report every
+            # provider check as "custom runner" and pass an engine that cannot
+            # dispatch. Say the real thing once, and block.
+            self.add(
+                "engine.provider-spec",
+                "fail",
+                f"provider spec could not be read: {PROVIDER_SPEC_ERROR}",
+                required_for=("all-runs",),
+                remediation="Repair or reinstall engine/providers.json.",
+                details={"path": str(provider_spec.SPEC_PATH)},
             )
         if self.repo:
             self.add(
@@ -1514,19 +1525,24 @@ singular_json_config_to_env "$2"
             )
 
     def provider_auth(self) -> None:
+        """Is the exact selected executable signed in?
+
+        One generic pass over the spec's auth row, not a branch per provider:
+        the branch is where grok was hardcoded ``authenticated = True``, so an
+        unauthenticated host passed the gate and failed later, inside a run.
+        A row declares either a probe command or an env/credential-file pair --
+        never both, never neither -- and credential files are tested for
+        existence only; they are never opened or printed.
+        """
         if self.blocked("provider.authentication"):
             return
         if not self.provider or not self.provider_bin:
             return
         label = "Codex" if self.provider == "codex" else self.provider
-        argv: list[str] | None = None
-        if self.provider == "codex":
-            argv = [str(self.provider_bin), "login", "status"]
-        elif self.provider == "claude":
-            argv = [str(self.provider_bin), "auth", "status"]
-        elif self.provider == "opencode":
-            argv = [str(self.provider_bin), "auth", "list"]
-        if argv:
+        auth = provider_spec.entry(self.provider)["auth"]
+        probe = list(auth.get("probe", []))
+        if probe:
+            argv = [str(self.provider_bin), *probe]
             result = command(argv, cwd=self.repo, env=self.runtime_env)
             combined = (result.stdout or "") + (result.stderr or "")
             if result.returncode == 0:
@@ -1545,36 +1561,19 @@ singular_json_config_to_env "$2"
                         f"(exit {result.returncode}): {first_line(combined)}"
                     ),
                     required_for=("selected-provider",),
-                    remediation=f"Authenticate the exact selected {label} executable.",
+                    remediation=(
+                        auth.get("hint", "")
+                        or f"Authenticate the exact selected {label} executable."
+                    ),
                 )
             return
         home = Path(self.runtime_env.get("HOME", str(Path.home())))
-        authenticated = False
-        hint = ""
-        if self.provider == "gemini":
-            authenticated = bool(
-                self.runtime_env.get("GEMINI_API_KEY")
-                or self.runtime_env.get("GOOGLE_API_KEY")
-                or (home / ".gemini/oauth_creds.json").is_file()
-            )
-            hint = "set GEMINI_API_KEY/GOOGLE_API_KEY or sign in with Gemini"
-        elif self.provider == "cursor":
-            authenticated = bool(
-                self.runtime_env.get("CURSOR_API_KEY")
-                or (home / ".cursor/cli-config.json").is_file()
-            )
-            hint = "set CURSOR_API_KEY or run cursor-agent login"
-        elif self.provider == "grok":
-            # Was unconditionally True: doctor claimed grok authentication for no
-            # reason beyond the provider being named "grok", so an unauthenticated
-            # host passed the gate and failed later, inside a run. Existence and
-            # env presence only -- credential files are never opened or printed.
-            authenticated = bool(
-                self.runtime_env.get("XAI_API_KEY")
-                or self.runtime_env.get("GROK_API_KEY")
-                or (home / ".grok/auth.json").is_file()
-            )
-            hint = "set XAI_API_KEY/GROK_API_KEY or run grok login"
+        hint = auth.get("hint", "")
+        authenticated = any(
+            self.runtime_env.get(name) for name in auth.get("env", [])
+        ) or any(
+            (home / relative).is_file() for relative in auth.get("credentialFiles", [])
+        )
         self.add(
             "provider.authentication",
             "pass" if authenticated else "fail",
@@ -2304,7 +2303,7 @@ singular_json_config_to_env "$2"
                         strict_unactivated_optional.setdefault(capability, set()).add(
                             role
                         )
-        if self.provider in {"cursor", "grok"}:
+        if self.provider and self.provider not in STRICT_ISOLATION_PROVIDERS:
             for profile_name in sorted(active_profiles):
                 profile = parsed_profiles[profile_name]
                 if profile["strict"] and not profile["providerArgs"]:
