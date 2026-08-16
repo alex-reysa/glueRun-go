@@ -11,7 +11,9 @@ re-copying scripts.
 
 ## Video overview
 
-[Watch the 72-second video overview](docs/assets/singular-orchestration.mp4)
+[![Singular — 60-second overview: Speed is not control](docs/assets/singular-orchestration-poster.jpg)](docs/assets/singular-orchestration.mp4)
+
+*Click the frame to play the 60-second overview (with sound) in GitHub's player.*
 
 The video shows the orchestration loop from source intent through planning, isolated
 worker execution, state packets, review, retry continuity, and integration.
