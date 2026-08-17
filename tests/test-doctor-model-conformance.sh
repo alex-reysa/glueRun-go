@@ -253,4 +253,69 @@ report="$(doctor_json)"
 check_field "$report" model.availability 'check["status"] == "skip"'
 check_field "$report" model.availability '"no model listing" in check["message"]'
 
+# 9. A provider whose catalog does not live in its CLI. OpenRouter serves its own
+#    over HTTP and the engine dispatches its models namespaced (openrouter/<id>),
+#    so the listing is a standalone command and its ids are normalized into that
+#    namespace before the comparison -- never the other way round, which would
+#    mean stripping something off the operator's configured value before
+#    checking it.
+cat >"$doctor_bin/opencode" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "--version") echo "opencode 1.2.3"; exit 0 ;;
+  "auth list") echo "credentials: 1"; exit 0 ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$doctor_bin/opencode"
+cat >"$doctor_bin/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$calls"
+cat <<'JSON'
+{"data":[{"id":"anthropic/claude-sonnet-4.5"},{"id":"openai/gpt-5"}],"total_count":2}
+JSON
+EOF
+chmod +x "$doctor_bin/curl"
+
+or_config() {
+  python3 - "$repo/singular.config.json" "$1" <<'PY'
+import json, sys
+path, model = sys.argv[1:3]
+data = json.load(open(path, encoding="utf-8"))
+data["runner"] = "openrouter-run.sh"
+data["env"] = {"SINGULAR_OPENROUTER_MODEL": model}
+json.dump(data, open(path, "w", encoding="utf-8"), indent=2)
+PY
+}
+
+or_config "openrouter/anthropic/claude-sonnet-4.5"
+report="$(OPENROUTER_API_KEY=test-key doctor_json)"
+check_field "$report" model.availability 'check["status"] == "pass"'
+check_field "$report" model.availability 'check["details"]["listingPrefix"] == "openrouter/"'
+check_field "$report" model.availability \
+  'check["details"]["models"] == ["openrouter/anthropic/claude-sonnet-4.5", "openrouter/openai/gpt-5"]'
+grep -q "openrouter.ai/api/v1/models" "$calls" \
+  || { echo "the catalog command was never run" >&2; exit 1; }
+python3 - "$repo/.singular-state/doctor-cache/models-openrouter.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+# The cache holds the catalog verbatim; the namespace is applied on read, so a
+# spec that renames the namespace does not need the cache invalidated by hand.
+assert data["models"] == ["anthropic/claude-sonnet-4.5", "openai/gpt-5"], data
+assert data["cliKey"].startswith("command:curl "), data
+PY
+
+or_config "openrouter/anthropic/claude-imaginary"
+rc=0
+report="$(OPENROUTER_API_KEY=test-key doctor_json)" || rc=$?
+[[ "$rc" -ne 0 ]] || { echo "a model absent from the catalog must fail doctor" >&2; exit 1; }
+check_field "$report" model.availability 'check["status"] == "fail"'
+check_field "$report" model.availability '"claude-imaginary" in check["message"]'
+check_field "$report" model.availability '"openrouter/openai/gpt-5" in check["remediation"]'
+
+# A router alias is resolved by the provider, not looked up in a catalog.
+or_config "openrouter/auto"
+report="$(OPENROUTER_API_KEY=test-key doctor_json)"
+check_field "$report" model.availability 'check["status"] == "pass"'
+
 echo "PASS: test-doctor-model-conformance"

@@ -289,7 +289,7 @@ SINGULAR_PROVIDER_PRESSURE_MAX_EVENTS="${SINGULAR_PROVIDER_PRESSURE_MAX_EVENTS:-
 # provider-scoped backoff check and the provider-pressure controller resolve
 # identity through singular_runner_provider_identity, which reads this map;
 # nothing else may turn a runner path into a provider name.
-SINGULAR_ADAPTER_PROVIDERS_JSON='{"codex-run.sh":"codex","claude-run.sh":"claude","gemini-run.sh":"gemini","opencode-run.sh":"opencode","cursor-run.sh":"cursor","grok-run.sh":"grok"}'
+SINGULAR_ADAPTER_PROVIDERS_JSON='{"codex-run.sh":"codex","claude-run.sh":"claude","gemini-run.sh":"gemini","opencode-run.sh":"opencode","cursor-run.sh":"cursor","openrouter-run.sh":"openrouter","grok-run.sh":"grok"}'
 # Supervisor briefing + ask (0.10.0). All INERT by default: the autonomate loop
 # only spawns a periodic briefing when the interval knob is >0, and `singular ask`
 # / `singular report` are explicit operator verbs. With INTERVAL_MIN=0 (default) a
@@ -2167,7 +2167,7 @@ emit("PROFILE", profile_name, "strict" if strict else "declared")
 
 provider_args_raw = profile.get("providerArgs", [])
 if isinstance(provider_args_raw, dict):
-    unknown = sorted(set(provider_args_raw) - {"codex", "claude", "gemini", "opencode", "cursor", "grok", "default"})
+    unknown = sorted(set(provider_args_raw) - {"codex", "claude", "gemini", "opencode", "cursor", "openrouter", "grok", "default"})
     if unknown:
         emit("ERROR", profile_name, "providerArgs has unsupported provider keys: " + ", ".join(unknown))
         raise SystemExit(78)
@@ -2211,7 +2211,7 @@ def selected_capability_args(capability):
     if isinstance(raw, dict):
         unknown = sorted(
             set(raw)
-            - {"codex", "claude", "gemini", "opencode", "cursor", "grok", "default"}
+            - {"codex", "claude", "gemini", "opencode", "cursor", "openrouter", "grok", "default"}
         )
         if unknown:
             emit(
@@ -2750,6 +2750,7 @@ singular_runner_finish() {
 #   SINGULAR_SPEC_BINARY        executable name the adapter dispatches
 #   SINGULAR_SPEC_MODEL_ENV     the SINGULAR_<P>_MODEL variable name
 #   SINGULAR_SPEC_MODEL_DEFAULT the model id used when nothing is configured
+#   SINGULAR_SPEC_MODEL_PREFIX  namespace every model ref must carry, if any
 #   SINGULAR_SPEC_UPDATE_ARGS[] update-pin flags, to be passed FIRST
 #
 # and EXPORTS the row's update-pin environment. Applying the pin on load is
@@ -2767,6 +2768,7 @@ singular_provider_spec_load() {
   SINGULAR_SPEC_BINARY=""
   SINGULAR_SPEC_MODEL_ENV=""
   SINGULAR_SPEC_MODEL_DEFAULT=""
+  SINGULAR_SPEC_MODEL_PREFIX=""
   SINGULAR_SPEC_UPDATE_ARGS=()
   if [[ ! -f "$reader" ]]; then
     echo "singular: provider spec reader is missing: $reader" >&2
@@ -2779,6 +2781,7 @@ singular_provider_spec_load() {
       binary) SINGULAR_SPEC_BINARY="$value" ;;
       modelEnv) SINGULAR_SPEC_MODEL_ENV="$value" ;;
       modelDefault) SINGULAR_SPEC_MODEL_DEFAULT="$value" ;;
+      modelPrefix) SINGULAR_SPEC_MODEL_PREFIX="$value" ;;
       updateArg) SINGULAR_SPEC_UPDATE_ARGS+=("$value") ;;
       updateEnv) export "${value?}" ;;
     esac
@@ -3016,7 +3019,9 @@ def is_terminal_error(obj):
         )
     if provider == "gemini":
         return obj.get("error") is not None
-    if provider == "opencode":
+    if provider in {"opencode", "openrouter"}:
+        # openrouter is dispatched through the OpenCode CLI, so its terminal
+        # envelope is OpenCode's own error event.
         return typ == "error" and obj.get("error") is not None
     if provider == "cursor":
         return typ == "error" or obj.get("is_error") is True
@@ -3071,7 +3076,11 @@ def error_scope(obj):
         return {}
     # Only fields of a terminal error envelope enter this scope. Successful
     # result/assistant payloads and item/command events never reach here.
-    if provider in {"gemini", "opencode"} and isinstance(obj.get("error"), (dict, list)):
+    # openrouter is dispatched through the OpenCode CLI, so its terminal
+    # envelope nests the status and code under `error` exactly as OpenCode's
+    # does; without it here the provider-controlled 429/503 would never be
+    # found and every OpenRouter quota window would degrade to provider-exit.
+    if provider in {"gemini", "opencode", "openrouter"} and isinstance(obj.get("error"), (dict, list)):
         return obj["error"]
     return obj
 
@@ -3344,7 +3353,7 @@ required_result = {
     "capabilityProfile", "exitCode", "outcome", "failureClass",
     "providerErrorRef", "outputRef", "recordedAt",
 }
-providers = {"codex", "claude", "gemini", "opencode", "cursor", "grok"}
+providers = {"codex", "claude", "gemini", "opencode", "cursor", "openrouter", "grok"}
 optional_result = {"usage", "providerEnvelopeRef", "providerEnvelopeSha256"}
 if not required_result.issubset(result) or not set(result).issubset(required_result | optional_result):
     sys.exit(1)

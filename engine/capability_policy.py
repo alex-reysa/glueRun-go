@@ -118,6 +118,12 @@ def _matches_option(argument: str, denied: str) -> bool:
     )
 
 
+# openrouter dispatches through the OpenCode CLI, so it has OpenCode's proven
+# `--pure` isolation and exactly OpenCode's boundary to protect. Aliased rather
+# than copied: two lists that must be equal are two lists that can diverge.
+STRICT_PROVIDER_DENIED_OPTIONS["openrouter"] = STRICT_PROVIDER_DENIED_OPTIONS["opencode"]
+
+
 def strict_provider_arg_violation(
     provider: str, arguments: Sequence[str]
 ) -> str | None:

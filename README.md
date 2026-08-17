@@ -93,7 +93,17 @@ Prerequisites:
 
 - Bash >= 4, `python3`, and `git`.
 - At least one supported runner CLI on `PATH` (`claude`, `codex`, or another
-  configured runner).
+  configured runner). The shipped providers are `codex`, `claude`, `gemini`,
+  `opencode`, `cursor`, `openrouter` and `grok`; each is one row in
+  `engine/providers.json` and one `engine/<provider>-run.sh` adapter, and
+  `singular doctor` verifies the selected one's executable, authentication and
+  configured model before a run starts.
+- **OpenRouter** needs no CLI of its own: set
+  `SINGULAR_OPENROUTER_MODEL=openrouter/<vendor>/<model>` (any id from
+  <https://openrouter.ai/api/v1/models>) plus `OPENROUTER_API_KEY`, and select
+  `openrouter-run.sh` as the runner. It dispatches through the installed
+  `opencode` CLI, and doctor checks the configured model against OpenRouter's
+  own catalog rather than a naming convention.
 - macOS users may need `brew install bash`. Set
   `SINGULAR_BASH_BIN=/opt/homebrew/bin/bash` in the shell/service environment to
   select it without reordering `PATH`.

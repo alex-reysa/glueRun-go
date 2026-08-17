@@ -43,7 +43,7 @@ write_result() {
 
 # Every built-in adapter advertises the same v1 additions without requiring its
 # provider binary or a worktree.
-for provider in codex claude gemini opencode cursor grok; do
+for provider in codex claude gemini opencode cursor openrouter grok; do
   contract="$("$ENGINE_HOME/engine/$provider-run.sh" --describe-contract)"
   python3 - "$provider" "$contract" <<'PY' || fail "$provider contract"
 import json, sys
@@ -109,11 +109,16 @@ export SINGULAR_TARGET_BRANCH
 SINGULAR_TARGET_BRANCH="$(git -C "$repo" branch --show-current)"
 prompt="$tmp/preflight-prompt.md"
 printf 'preflight only\n' >"$prompt"
-for provider in codex claude gemini opencode cursor grok; do
+for provider in codex claude gemini opencode cursor openrouter grok; do
   result="$tmp/$provider-preflight-runner-result.json"
   ec=0
   if [[ "$provider" == "codex" ]]; then
     PATH=/usr/bin:/bin SINGULAR_CODEX_BIN="/definitely/missing/singular-codex" \
+      bash "$ENGINE_HOME/engine/$provider-run.sh" -C "$repo" --level l2 \
+        --run-id "RUN-preflight-$provider" --prompt-file "$prompt" \
+        --result-file "$result" >/dev/null 2>&1 || ec=$?
+  elif [[ "$provider" == "openrouter" ]]; then
+    PATH=/usr/bin:/bin SINGULAR_OPENROUTER_MODEL="openrouter/anthropic/claude-sonnet-4.5" \
       bash "$ENGINE_HOME/engine/$provider-run.sh" -C "$repo" --level l2 \
         --run-id "RUN-preflight-$provider" --prompt-file "$prompt" \
         --result-file "$result" >/dev/null 2>&1 || ec=$?
@@ -139,6 +144,7 @@ declare -A envelopes=(
   [gemini]='{"error":{"status":503,"code":"service_unavailable","message":"provider unavailable"}}'
   [opencode]='{"type":"error","error":{"name":"RateLimitError","data":{"statusCode":429,"code":"rate_limit_exceeded","message":"request rejected"}}}'
   [cursor]='{"type":"result","is_error":true,"status":429,"code":"rate_limit_exceeded","result":"request rejected"}'
+  [openrouter]='{"type":"error","error":{"name":"RateLimitError","data":{"statusCode":503,"code":"service_unavailable","message":"provider unavailable"}}}'
   [grok]='{"type":"error","error":{"http_status":429,"code":"rate_limit_exceeded","message":"request rejected"}}'
 )
 # 429 is a usage-limit window (quota); 503/529 is transient capacity
@@ -146,9 +152,9 @@ declare -A envelopes=(
 # neither may satisfy an evidence query for the other.
 declare -A envelope_class=(
   [codex]=quota [claude]=provider-overloaded [gemini]=provider-overloaded
-  [opencode]=quota [cursor]=quota [grok]=quota
+  [opencode]=quota [cursor]=quota [openrouter]=provider-overloaded [grok]=quota
 )
-for provider in codex claude gemini opencode cursor grok; do
+for provider in codex claude gemini opencode cursor openrouter grok; do
   expected="${envelope_class[$provider]}"
   other="quota"; [[ "$expected" == "quota" ]] && other="provider-overloaded"
   result="$(write_result "$provider" "${envelopes[$provider]}")"
@@ -205,13 +211,14 @@ pass "terminal error codes without exact HTTP status cannot arm quota backoff"
 # Successful terminal payloads, assistant prose and command output are not
 # status. Even nested status-like data in a command event must be ignored.
 prose='This repository documents quota exceeded, rate-limit, and overloaded behavior.'
-for provider in codex claude gemini opencode cursor grok; do
+for provider in codex claude gemini opencode cursor openrouter grok; do
   case "$provider" in
     codex) envelope='{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"HTTP 429 quota exceeded"}}' ;;
     claude) envelope="$(python3 -c 'import json,sys; print(json.dumps({"type":"result","subtype":"success","is_error":False,"api_error_status":None,"result":sys.argv[1]}))' "$prose")" ;;
     gemini) envelope="$(python3 -c 'import json,sys; print(json.dumps({"response":sys.argv[1]}))' "$prose")" ;;
     opencode) envelope="$(python3 -c 'import json,sys; print(json.dumps({"type":"message.part.updated","part":{"type":"text","text":sys.argv[1]}}))' "$prose")" ;;
     cursor) envelope="$(python3 -c 'import json,sys; print(json.dumps({"type":"result","is_error":False,"result":sys.argv[1]}))' "$prose")" ;;
+    openrouter) envelope="$(python3 -c 'import json,sys; print(json.dumps({"type":"message.part.updated","part":{"type":"text","text":sys.argv[1]}}))' "$prose")" ;;
     grok) envelope="$(python3 -c 'import json,sys; print(json.dumps({"type":"result","text":sys.argv[1]}))' "$prose")" ;;
   esac
   result="$(write_result "$provider" "$envelope" 0)"

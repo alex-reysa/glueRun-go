@@ -60,8 +60,11 @@ SUBSET_REASONS = {
         "providers with no proven built-in isolation (spec strictIsolation:false)",
     ("engine/lib.sh", frozenset({"cursor", "grok"})):
         "providers with no proven built-in isolation (spec strictIsolation:false)",
-    ("engine/lib.sh", frozenset({"gemini", "opencode"})):
-        "CLIs whose terminal envelope arrives on stderr or as a bare error key",
+    ("engine/lib.sh", frozenset({"gemini", "opencode", "openrouter"})):
+        "CLIs whose terminal envelope nests status and code under an error key",
+    ("engine/lib.sh", frozenset({"opencode", "openrouter"})):
+        "providers dispatched through the OpenCode CLI, so they share its "
+        "terminal event shape",
     ("engine/lib.sh", frozenset({"claude", "cursor"})):
         "CLIs whose result text is the fallback error carrier",
     ("engine/lib.sh", frozenset({"claude", "cursor", "grok"})):
@@ -213,16 +216,32 @@ for provider, entry in spec.providers(spec_path).items():
 # 8. Every adapter takes its provider facts from the spec rather than carrying
 #    them. tests/test-provider-update-pin.sh proves the pin reaches the provider
 #    process; this asserts the adapter asks for it at all, so a new adapter
-#    copied from a sibling cannot quietly drop the call.
+#    copied from a sibling cannot quietly drop the call. An adapter may also
+#    delegate to a shared host (openrouter rides OpenCode's), in which case it
+#    declares its identity and the host loads the row for it.
+host_call = re.compile(r"singular_provider_spec_load\s+\"\$provider\"")
 for provider, entry in spec.providers(spec_path).items():
     adapter = root / "engine" / entry["adapter"]
     if not adapter.is_file():
         continue
     text = adapter.read_text(encoding="utf-8")
+    if f"singular_provider_spec_load {provider}" in text:
+        continue
+    hosts = re.findall(r'source "\$SCRIPT_DIR/([a-z0-9-]+-host\.sh)"', text)
+    delegated = False
+    for host_name in hosts:
+        host = root / "engine" / host_name
+        if not host.is_file():
+            continue
+        if f'provider="{provider}"' in text and host_call.search(
+            host.read_text(encoding="utf-8")
+        ):
+            delegated = True
+            break
     check(
-        f"singular_provider_spec_load {provider}" in text,
-        f"{entry['adapter']}: must load its spec row "
-        f"(singular_provider_spec_load {provider})",
+        delegated,
+        f"{entry['adapter']}: must load its spec row (singular_provider_spec_load "
+        f"{provider}, or declare provider=\"{provider}\" to a host that does)",
     )
 
 # 9. Schema enums are generated from the spec, in spec order: a provider the

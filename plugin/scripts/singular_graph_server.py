@@ -5141,6 +5141,13 @@ PROVIDERS = [
      "envKeys": ["CURSOR_API_KEY"],
      "authProbe": {"args": ["about", "--format", "json"], "parser": "cursor"},
      "inference": "credfile", "credFiles": [".cursor/cli-config.json"]},
+    {"id": "openrouter", "name": "OpenRouter", "binary": "opencode",
+     "runnerScript": "openrouter-run.sh", "loginCommand": None,
+     "envKeys": ["OPENROUTER_API_KEY"],
+     # No probe and no credential-file inference: OPENROUTER_API_KEY is the
+     # signal, and OpenCode's own auth store would report "authenticated" for
+     # any provider the operator has logged into, OpenRouter or not.
+     "authProbe": None, "inference": None},
     {"id": "grok", "name": "Grok CLI", "binary": "grok",
      "runnerScript": "grok-run.sh", "loginCommand": None,
      "envKeys": [],
@@ -5204,15 +5211,18 @@ _CONFIG_ROLE_KEYS = {
     "opencode": {r: ("SINGULAR_OPENCODE_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
     "cursor":   {r: ("SINGULAR_CURSOR_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
     "grok":     {r: ("SINGULAR_GROK_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
+    "openrouter": {r: ("SINGULAR_OPENROUTER_MODEL", None, None) for r in ("planner", "implementer", "auditor", "decider")},
 }
 _CONFIG_MODEL_FALLBACK = {"claude": ("SINGULAR_CLAUDE_MODEL", "claude-opus-4-8"),
                           "codex": ("SINGULAR_CODEX_MODEL", "gpt-5.5"),
                           "gemini": ("SINGULAR_GEMINI_MODEL", ""),
                           "opencode": ("SINGULAR_OPENCODE_MODEL", ""),
                           "cursor": ("SINGULAR_CURSOR_MODEL", ""),
+                          "openrouter": ("SINGULAR_OPENROUTER_MODEL", ""),
                           "grok": ("SINGULAR_GROK_MODEL", "grok-4.6")}
 _CONFIG_EFFORT_FALLBACK = {"claude": "SINGULAR_CLAUDE_EFFORT", "codex": None,
-                           "gemini": None, "opencode": None, "cursor": None, "grok": None}
+                           "gemini": None, "opencode": None, "cursor": None,
+                           "openrouter": None, "grok": None}
 _CONFIG_LIMIT_KEYS = (("maxConcurrent", "SINGULAR_MAX_CONCURRENT"),
                       ("maxDispatch", "SINGULAR_MAX_DISPATCH"),
                       ("l1Parallel", "SINGULAR_ENABLE_L1_PARALLEL"),

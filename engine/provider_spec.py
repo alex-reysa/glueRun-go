@@ -35,11 +35,20 @@ SPEC_SCHEMA = "singular.provider-spec.v0"
 SPEC_PATH = Path(__file__).resolve().with_name("providers.json")
 
 # Where a provider's model inventory comes from, for the doctor conformance
-# probe: its own listing command, codex's on-disk cache, or nothing provable.
+# probe: the provider binary's own listing subcommand, a standalone command
+# (a catalog that does not live in the CLI -- OpenRouter serves its own over
+# HTTP), codex's on-disk cache, or nothing provable.
 INVENTORY_LISTING = "listing"
+INVENTORY_COMMAND = "command"
 INVENTORY_CODEX_CACHE = "codex-cache"
 INVENTORY_NONE = "none"
-INVENTORIES = {INVENTORY_LISTING, INVENTORY_CODEX_CACHE, INVENTORY_NONE}
+INVENTORIES = {
+    INVENTORY_LISTING,
+    INVENTORY_COMMAND,
+    INVENTORY_CODEX_CACHE,
+    INVENTORY_NONE,
+}
+INVENTORIES_WITH_ARGV = {INVENTORY_LISTING, INVENTORY_COMMAND}
 
 _CACHE: dict[str, dict[str, Any]] = {}
 
@@ -115,9 +124,13 @@ def _validate(data: Any, source: str) -> dict[str, Any]:
         )
         listing = _string_list(model.get("listing", []), f"{label}.model.listing")
         _require(
-            bool(listing) == (inventory == INVENTORY_LISTING),
-            f"{label}.model.listing is required by, and only by, "
-            f'inventory "{INVENTORY_LISTING}"',
+            bool(listing) == (inventory in INVENTORIES_WITH_ARGV),
+            f"{label}.model.listing is required by, and only by, inventories "
+            f"{sorted(INVENTORIES_WITH_ARGV)}",
+        )
+        _require(
+            isinstance(model.get("listingPrefix", ""), str),
+            f"{label}.model.listingPrefix must be a string",
         )
         auth = entry.get("auth")
         _require(isinstance(auth, dict), f"{label}.auth must be an object")
@@ -221,17 +234,38 @@ def model_patterns(path: Path | str | None = None) -> dict[str, re.Pattern[str]]
     }
 
 
-def model_listing(provider: str, path: Path | str | None = None) -> tuple[str, ...]:
-    """The full argv tail that lists models, update pin included.
+def model_inventory(provider: str, path: Path | str | None = None) -> str:
+    """Where this provider's model catalog is read from (INVENTORY_*)."""
+    return str(entry(provider, path)["model"].get("inventory", INVENTORY_NONE))
 
-    The pin is prepended here rather than written into the listing itself so it
-    cannot be forgotten: doctor runs this against a real provider binary during
-    preflight, and a CLI that can replace its own executable while answering
-    would swap the binary the run is about to use.
+
+def model_listing_prefix(provider: str, path: Path | str | None = None) -> str:
+    """Namespace the listing's ids are relative to.
+
+    OpenRouter's catalog serves `anthropic/claude-x` while the engine dispatches
+    `openrouter/anthropic/claude-x`, so the comparison needs one of the two
+    normalized. Normalizing the LISTING is the safe direction: nothing is
+    stripped off the operator's configured value before it is checked.
+    """
+    return str(entry(provider, path)["model"].get("listingPrefix", ""))
+
+
+def model_listing(provider: str, path: Path | str | None = None) -> tuple[str, ...]:
+    """The argv that lists models -- update pin included where one applies.
+
+    For a listing served by the provider binary the pin is prepended here rather
+    than written into the listing itself, so it cannot be forgotten: doctor runs
+    that argv against a real provider binary during preflight, and a CLI that
+    can replace its own executable while answering would swap the binary the run
+    is about to use. A standalone catalog command runs no provider binary, so
+    there is nothing to pin.
     """
     item = entry(provider, path)
     model = item["model"]
-    if model.get("inventory") != INVENTORY_LISTING:
+    inventory = model.get("inventory")
+    if inventory == INVENTORY_COMMAND:
+        return tuple(model["listing"])
+    if inventory != INVENTORY_LISTING:
         return ()
     return tuple(item["updatePin"].get("args", [])) + tuple(model["listing"])
 
@@ -267,6 +301,7 @@ def shell_pairs(provider: str, path: Path | str | None = None) -> list[tuple[str
         ("binaryEnv", item.get("binaryEnv", "")),
         ("modelEnv", model["env"]),
         ("modelDefault", model.get("default", "")),
+        ("modelPrefix", model.get("listingPrefix", "")),
     ]
     pairs += [("updateArg", value) for value in pin_args]
     pairs += [("updateEnv", f"{name}={value}") for name, value in pin_env.items()]

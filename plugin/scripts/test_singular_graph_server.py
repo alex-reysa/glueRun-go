@@ -3087,11 +3087,16 @@ class CollectProvidersTests(unittest.TestCase):
         # opencode: 0 credentials -> unauthenticated -> error
         self.assertEqual((by["opencode"]["status"], by["opencode"]["authStatus"]),
                          ("error", "unauthenticated"))
+        # openrouter: rides the installed opencode CLI, but OPENROUTER_API_KEY is
+        # its own signal and it is unset here -> installed, auth unknown.
+        orr = by["openrouter"]
+        self.assertEqual((orr["status"], orr["installed"], orr["authStatus"]),
+                         ("warning", True, "unknown"))
         # grok: not on PATH -> missing, no version, no subprocess
         self.assertEqual((by["grok"]["status"], by["grok"]["installed"], by["grok"]["version"]),
                          ("missing", False, None))
         self.assertEqual(payload["summary"]["ready"], 3)
-        self.assertEqual(payload["summary"]["message"], "3 ready · 3 attention")
+        self.assertEqual(payload["summary"]["message"], "3 ready · 4 attention")
 
     def test_glue_fields_roles_default_runner_sessions(self) -> None:
         _payload, by = self._providers()
@@ -3248,7 +3253,10 @@ class ProvidersRouteTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["schema"], "singular.providers.v0")
         ids = [p["id"] for p in data["providers"]]
-        self.assertEqual(ids, ["claude", "codex", "gemini", "opencode", "cursor", "grok"])
+        self.assertEqual(
+            ids,
+            ["claude", "codex", "gemini", "opencode", "cursor", "openrouter", "grok"],
+        )
         for p in data["providers"]:
             self.assertEqual(p["status"], "missing")     # empty PATH
             self.assertIn("runnerScript", p)

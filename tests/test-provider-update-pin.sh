@@ -60,12 +60,16 @@ import provider_spec as spec
 for name in spec.names():
     entry = spec.entry(name)
     args, env = spec.update_pin(name)
+    # A provider whose models are namespaced refuses to dispatch without a ref
+    # in that namespace, so the case list carries a syntactically valid one.
+    prefix = spec.model_listing_prefix(name)
     print("|".join([
         name,
         entry["binary"],
         entry["adapter"],
         " ".join(args),
         " ".join(f"{k}={v}" for k, v in env.items()),
+        f"{entry['model']['env']}={prefix}vendor/model" if prefix else "",
     ]))
 PY
 )
@@ -91,7 +95,7 @@ if [[ "${#pin_env_names[@]}" -gt 0 ]]; then
 fi
 
 for row in "${rows[@]}"; do
-  IFS="|" read -r provider binary adapter pin_args pin_env <<<"$row"
+  IFS="|" read -r provider binary adapter pin_args pin_env model_env <<<"$row"
   repo="$workroot/$provider"
   new_repo "$repo"
   make_mock "$binary"
@@ -101,6 +105,9 @@ for row in "${rows[@]}"; do
   rm -f "$args_out" "$env_out"
   (
     cd "$repo"
+    # An expanded NAME=value is a command word, not an assignment, so a
+    # namespaced provider's model ref is exported rather than prefixed.
+    [[ -z "$model_env" ]] || export "${model_env?}"
     PATH="$bindir:$PATH" SINGULAR_ROOT="$repo" SINGULAR_STATE_DIR="$repo/.singular-state" \
       MOCK_ARGS_OUT="$args_out" MOCK_ENV_OUT="$env_out" \
       "$ROOT/engine/$adapter" --level l2 -C "$repo" --prompt-file "$prompt" \

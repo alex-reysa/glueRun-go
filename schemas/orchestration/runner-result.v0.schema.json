@@ -23,7 +23,7 @@
     "contractVersion": { "const": 1 },
     "provider": {
       "type": "string",
-      "enum": ["codex", "claude", "gemini", "opencode", "cursor", "grok"]
+      "enum": ["codex", "claude", "gemini", "opencode", "cursor", "openrouter", "grok"]
     },
     "runId": { "type": "string", "minLength": 1 },
     "role": { "type": "string", "minLength": 1 },

@@ -121,6 +121,31 @@
       },
       "strictIsolation": false
     },
+    "openrouter": {
+      "adapter": "openrouter-run.sh",
+      "binary": "opencode",
+      "binaryEnv": "",
+      "model": {
+        "env": "SINGULAR_OPENROUTER_MODEL",
+        "default": "",
+        "pattern": "^openrouter/[^\\s]+$",
+        "inventory": "command",
+        "listing": ["curl", "-sS", "--max-time", "10", "https://openrouter.ai/api/v1/models"],
+        "listingPrefix": "openrouter/"
+      },
+      "auth": {
+        "probe": [],
+        "env": ["OPENROUTER_API_KEY"],
+        "credentialFiles": [".local/share/opencode/auth.json"],
+        "hint": "set OPENROUTER_API_KEY (https://openrouter.ai/keys), or run `opencode auth login` and pick OpenRouter"
+      },
+      "updatePin": {
+        "args": [],
+        "env": {"OPENCODE_DISABLE_AUTOUPDATE": "1"},
+        "evidence": "dispatched through the OpenCode CLI, so it carries OpenCode's own auto-update switch (present in the installed binary)."
+      },
+      "strictIsolation": true
+    },
     "grok": {
       "adapter": "grok-run.sh",
       "binary": "grok",

@@ -223,6 +223,16 @@ def parse_model_listing(text: str, pattern: re.Pattern[str] | None = None) -> li
     return list(seen)
 
 
+def model_is_alias(value: str) -> bool:
+    """Is this a selector the provider resolves, rather than a model id?
+
+    `auto` cannot be looked up in a catalog, and neither can `openrouter/auto`:
+    the namespace says which router will resolve it, the last segment says it is
+    a selector. Reported as unverifiable rather than absent.
+    """
+    return value.rsplit("/", 1)[-1].strip().lower() in MODEL_ALIASES
+
+
 def safe_slug(value: str) -> str:
     slug = re.sub(r"[^a-z0-9._-]+", "-", value.lower()).strip("-")
     return slug[:80] or hashlib.sha256(value.encode()).hexdigest()[:12]
@@ -1686,7 +1696,7 @@ singular_json_config_to_env "$2"
         missing = {
             name: value
             for name, value in wanted.items()
-            if value not in models and value.lower() not in MODEL_ALIASES
+            if value not in models and not model_is_alias(value)
         }
         if missing:
             details["missing"] = missing
@@ -1694,7 +1704,7 @@ singular_json_config_to_env "$2"
             self.add(
                 "model.availability",
                 "fail",
-                f"configured {label} model is absent from the installed CLI inventory: {shown}",
+                f"configured {label} model is absent from the inventory: {shown}",
                 required_for=("provider-runs", "selected-provider"),
                 remediation=(
                     f"Set it to a model this {label} installation serves "
@@ -1704,10 +1714,15 @@ singular_json_config_to_env "$2"
             )
             return
         served = ", ".join(sorted({value for value in wanted.values()}))
+        where = (
+            f"the {label} catalog"
+            if provider_spec.model_inventory(provider) == provider_spec.INVENTORY_COMMAND
+            else "the installed CLI"
+        )
         self.add(
             "model.availability",
             "pass",
-            f"configured {label} models are served by the installed CLI: {served}",
+            f"configured {label} models are served by {where}: {served}",
             required_for=("provider-runs", "selected-provider"),
             details=details,
         )
@@ -1740,25 +1755,39 @@ singular_json_config_to_env "$2"
         details: dict[str, Any] = {"provider": provider}
         if not listing:
             return set(), "", f"the {provider} CLI exposes no model listing", details
-        if not self.provider_bin:
-            return set(), "", "the selected executable was not resolved", details
-        source = " ".join([PROVIDERS[provider][1], *listing])
+        # Two shapes: the provider binary answers for itself, or the catalog is
+        # a standalone command because it does not live in the CLI at all
+        # (OpenRouter serves its own over HTTP, and it is the same catalog no
+        # matter which host CLI dispatches the model).
+        standalone = provider_spec.model_inventory(provider) == provider_spec.INVENTORY_COMMAND
+        if standalone:
+            argv = list(listing)
+            source = " ".join(argv)
+            cache_key = f"command:{source}"
+        else:
+            if not self.provider_bin:
+                return set(), "", "the selected executable was not resolved", details
+            argv = [str(self.provider_bin), *listing]
+            source = " ".join([PROVIDERS[provider][1], *listing])
+            cache_key = f"{self.provider_bin}@{first_line(self.provider_version_output)}"
         details["listing"] = source
-        cli_key = f"{self.provider_bin}@{first_line(self.provider_version_output)}"
+        prefix = provider_spec.model_listing_prefix(provider)
+        if prefix:
+            details["listingPrefix"] = prefix
         cache_path = self.model_listing_cache_path(provider)
-        cached = self.cached_model_listing(cache_path, cli_key)
+        cached = self.cached_model_listing(cache_path, cache_key)
         if cached is not None:
             details["cache"] = "hit"
             details["cachePath"] = str(cache_path)
-            return set(cached), source, "", details
+            return {prefix + model for model in cached}, source, "", details
         details["cache"] = "miss"
-        models, error = self.probe_model_listing(provider, listing)
+        models, error = self.probe_model_listing(provider, argv)
         if error:
             return set(), source, f"`{source}` did not answer: {error}", details
         if cache_path is not None:
             details["cachePath"] = str(cache_path)
-            self.store_model_listing(cache_path, cli_key, models, source)
-        return set(models), source, "", details
+            self.store_model_listing(cache_path, cache_key, models, source)
+        return {prefix + model for model in models}, source, "", details
 
     def codex_inventory(self) -> tuple[set[str], str, str, dict[str, Any]]:
         cache = self.codex_cache_path()
@@ -1780,15 +1809,14 @@ singular_json_config_to_env "$2"
             return set(), "", f"the local Codex inventory is unreadable: {exc}", details
 
     def probe_model_listing(
-        self, provider: str, listing: tuple[str, ...]
+        self, provider: str, argv: list[str]
     ) -> tuple[list[str], str]:
-        """Ask the installed CLI what it serves. Bounded, pinned, read-only.
+        """Ask for the catalog. Bounded, pinned, read-only.
 
-        The argv comes from MODEL_LISTINGS, which carries that CLI's update pin
+        Where the argv runs the provider binary it carries that CLI's update pin
         as its first arguments: a provider that can replace its own executable
         during a preflight probe would swap the binary the run is about to use.
         """
-        argv = [str(self.provider_bin), *listing]
         result = command(
             argv,
             cwd=self.repo,
