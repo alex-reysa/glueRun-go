@@ -41,8 +41,19 @@ fi
 
 # A path matches a prefix only if it equals the prefix or sits beneath it as a
 # path segment (so "internal/artifact" does NOT match "internal/artifact-x.go").
+#
+# The trailing slash is normalized first, because a directory prefix is
+# naturally written with one -- it is how every adapter writes its own l0/l1
+# default, `docs/orchestration/`. Unnormalized, the segment test expanded to
+# `docs/orchestration//*`, which matches nothing: an allow prefix in that form
+# admitted no file at all (so a direct l0/l1 dispatch failed its scope check the
+# moment the run touched anything), and a FORBID prefix in that form denied
+# nothing, which is the direction that matters.
 _path_matches() {
   local path="$1" prefix="$2"
+  while [[ "$prefix" == */ && "${#prefix}" -gt 1 ]]; do
+    prefix="${prefix%/}"
+  done
   [[ "$path" == "$prefix" || "$path" == "$prefix"/* ]]
 }
 

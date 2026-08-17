@@ -50,7 +50,71 @@ test_forbidden_prefix_still_fails_under_system_bash() {
   assert_contains "$out" "forbidden paths touched" "forbidden prefix failure"
 }
 
+# A directory prefix is naturally written with a trailing slash -- it is the form
+# every adapter uses for its own l0/l1 default. Both forms must mean the same
+# thing in both directions: the allow form used to admit nothing (so any direct
+# l0/l1 dispatch failed the moment the run touched a file), and the forbid form
+# used to deny nothing at all.
+test_directory_prefix_admits_its_contents_in_both_forms() {
+  local prefix
+  for prefix in docs/orchestration docs/orchestration/; do
+    with_fixture
+    mkdir -p "$SINGULAR_ROOT/docs/orchestration"
+    printf 'plan\n' >"$SINGULAR_ROOT/docs/orchestration/plan.md"
+    local out rc=0
+    out="$(/bin/bash "$SCRIPT_DIR/scope-check.sh" --worktree "$SINGULAR_ROOT" \
+      --allow-prefix "$prefix" 2>&1)" || rc=$?
+    [[ "$rc" -eq 0 ]] || fail "allow-prefix '$prefix' should admit its own directory: $out"
+    assert_contains "$out" "all allowed" "allow-prefix '$prefix' result"
+  done
+}
+
+test_directory_prefix_still_rejects_outside_writes_in_both_forms() {
+  local prefix
+  for prefix in docs/orchestration docs/orchestration/; do
+    with_fixture
+    mkdir -p "$SINGULAR_ROOT/docs/orchestration"
+    printf 'plan\n' >"$SINGULAR_ROOT/docs/orchestration/plan.md"
+    printf 'stray\n' >"$SINGULAR_ROOT/outside.txt"
+    local out rc=0
+    out="$(/bin/bash "$SCRIPT_DIR/scope-check.sh" --worktree "$SINGULAR_ROOT" \
+      --allow-prefix "$prefix" 2>&1)" || rc=$?
+    [[ "$rc" -ne 0 ]] || fail "allow-prefix '$prefix' must still reject outside.txt: $out"
+    assert_contains "$out" "outside.txt" "allow-prefix '$prefix' violation list"
+  done
+}
+
+# The sibling-name rule survives normalization: a prefix is a path segment, not
+# a string prefix.
+test_directory_prefix_does_not_match_sibling_names() {
+  with_fixture
+  mkdir -p "$SINGULAR_ROOT/docs"
+  printf 'x\n' >"$SINGULAR_ROOT/docs/orchestration-notes.md"
+  local out rc=0
+  out="$(/bin/bash "$SCRIPT_DIR/scope-check.sh" --worktree "$SINGULAR_ROOT" \
+    --allow-prefix "docs/orchestration/" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "docs/orchestration/ must not admit docs/orchestration-notes.md: $out"
+  assert_contains "$out" "orchestration-notes.md" "sibling-name violation"
+}
+
+test_forbidden_directory_prefix_denies_in_both_forms() {
+  local prefix
+  for prefix in internal/dispatch internal/dispatch/; do
+    with_fixture
+    printf '\nconst started = true\n' >>"$SINGULAR_ROOT/internal/dispatch/runtime.go"
+    local out rc=0
+    out="$(/bin/bash "$SCRIPT_DIR/scope-check.sh" --worktree "$SINGULAR_ROOT" \
+      --allow-prefix internal --forbid-prefix "$prefix" 2>&1)" || rc=$?
+    [[ "$rc" -ne 0 ]] || fail "forbid-prefix '$prefix' must deny its contents: $out"
+    assert_contains "$out" "forbidden paths touched" "forbid-prefix '$prefix' failure"
+  done
+}
+
 test_empty_forbid_prefixes_are_safe_under_system_bash
 test_forbidden_prefix_still_fails_under_system_bash
+test_directory_prefix_admits_its_contents_in_both_forms
+test_directory_prefix_still_rejects_outside_writes_in_both_forms
+test_directory_prefix_does_not_match_sibling_names
+test_forbidden_directory_prefix_denies_in_both_forms
 
 echo "test-scope-check.sh: ok"
