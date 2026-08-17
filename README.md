@@ -4,14 +4,77 @@ https://github.com/user-attachments/assets/43bffbc9-8c57-4fe0-aad4-f7a7aea4beb4
 
 # singular
 
-**Autonomous multi-agent orchestration for software repos. One engine, many consumers.**
+**One repo. Multiple coding-agent subscriptions. One controlled delivery system.**
 
-singular is a bash + Python orchestration engine that drives autonomous AI coding agents
-in parallel against a repository. It implements a three-tier scheduling model
-(L0 origin loop → L1 area planners → L2 worker agents) with durable leases, state packets,
-gate/audit pipelines, and git-worktree isolation. The engine is installed once per machine
-and pinned per consumer repo — improvements propagate by bumping a version pin, not by
-re-copying scripts.
+singular is a local, open-source control plane for autonomous AI coding agents. It
+coordinates Claude Code, Codex, Grok, Gemini, OpenCode, and Cursor against the same
+repository, so the subscriptions and CLI tools already on your machine can participate
+in one evidence-driven delivery workflow.
+
+Instead of asking one agent to plan, implement, and approve its own work, singular
+separates responsibilities across planners, implementers, critics, auditors, and
+deciders. Every provider still operates under the same host-side controls: isolated Git
+worktrees, durable leases, state packets, repository-defined gates, bounded retries, and
+controlled integration.
+
+The engine is written in Bash + Python, installed once per machine, and pinned per
+consumer repo. Improvements propagate by bumping a version pin rather than re-copying
+scripts.
+
+## Use the subscriptions already on your machine
+
+singular sits above the coding-agent CLIs you already use. It does not resell model
+access, proxy credentials, or combine provider billing. Each provider remains
+authenticated through its own local CLI; singular coordinates those CLIs and presents
+the operational information they expose.
+
+| Provider | Local CLI | Runner adapter |
+| --- | --- | --- |
+| Anthropic Claude Code | `claude` | `claude-run.sh` |
+| OpenAI Codex | `codex` | `codex-run.sh` |
+| xAI Grok | `grok` | `grok-run.sh` |
+| Google Gemini | `gemini` | `gemini-run.sh` |
+| OpenCode | `opencode` | `opencode-run.sh` |
+| Cursor | `cursor-agent` | `cursor-run.sh` |
+
+The Providers surface reports what can be proved locally: installation and version,
+authentication/account and plan status where the CLI exposes them, configured models,
+the selected default runner, recent usage, and subscription quota when a headless source
+exists. Credential values are never returned. When a provider does not expose a fact,
+singular reports that honestly instead of guessing.
+
+## Route work to the right provider
+
+Choose a default runner for the workflow, tune model and reasoning/effort settings by
+role where the adapter supports them, and optionally split implementation from planning
+and review.
+
+The current first-class split is the opt-in `grok-implementer` module. It routes L2
+implementation to Grok while the selected default runner continues to handle planning,
+plan criticism, auditing, decisions, integration, supervision, and assistant work.
+
+```json
+{
+  "runner": "codex-run.sh",
+  "modules": ["grok-implementer"],
+  "env": {
+    "SINGULAR_CODEX_MODEL": "gpt-5.6-sol",
+    "SINGULAR_CODEX_PLANNER_REASONING_EFFORT": "high",
+    "SINGULAR_CODEX_AUDITOR_REASONING_EFFORT": "high",
+    "SINGULAR_GROK_L2_MODEL": "grok-4.6"
+  }
+}
+```
+
+In that configuration, Codex plans and reviews while Grok implements. Set
+`SINGULAR_GROK_IMPLEMENTER=0` to disable the split. If `storage-proof` is also
+loaded, list it before `grok-implementer`; the latter preserves the Claude route for tasks
+that require real-PostgreSQL egress.
+
+> **Current routing boundary:** singular proves one provider split today—Grok for L2
+> implementation and the selected default runner for the remaining roles. A fully generic
+> provider-per-role matrix is the next abstraction, not yet the public configuration
+> contract.
 
 ## Video overview
 
@@ -96,8 +159,8 @@ Set `SINGULAR_DETACHED_DISPATCH=0` to restore the legacy synchronous batch path,
 Prerequisites:
 
 - Bash >= 4, `python3`, and `git`.
-- At least one supported runner CLI on `PATH` (`claude`, `codex`, or another
-  configured runner).
+- At least one supported runner CLI on `PATH`: `claude`, `codex`, `grok`, `gemini`,
+  `opencode`, or `cursor-agent`.
 - macOS users may need `brew install bash`. Set
   `SINGULAR_BASH_BIN=/opt/homebrew/bin/bash` in the shell/service environment to
   select it without reordering `PATH`.
@@ -451,18 +514,20 @@ revision batches are never published through sequential direct-file moves.
 ## Modules
 
 The generic `engine/` references **zero** project-specific symbols — enforced by
-`tests/test-engine-clean.sh` (the abstraction gate test). All per-project logic lives in
-opt-in modules:
+`tests/test-engine-clean.sh` (the abstraction gate test). All per-project and opt-in
+routing logic lives in modules:
 
 ```
 singular-ext/
+  grok-implementer.sh # route L2 implementation to Grok
   storage-proof.sh    # example: durable-proof regime
   promote-gate.sh     # example: gate promoter
 ```
 
 Modules are listed in `singular.config.json` → `modules[]`. A repo that doesn't list them
 never loads them. The `SINGULAR_MODULES` env var is the runtime list (set by the JSON
-config loader).
+config loader). Module order matters when two modules override the same hook; load
+`storage-proof` before `grok-implementer` when both are enabled.
 
 ## Versioning and schema
 
