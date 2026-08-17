@@ -172,40 +172,24 @@ Two invariants remain fixed:
 
 ## Provider support
 
-Provider support is a useful execution capability, not the organizing principle of
-Singular. The orchestration, evidence, recovery, and integration contracts remain host-side
-regardless of which runner performs a role.
+Singular can use several local coding-agent CLIs behind the same runner contract. This is
+an execution option within the orchestration system—not the core product thesis. Provider
+choice never replaces the host-side controls for ownership, evidence, recovery, and
+integration.
 
-Singular includes adapters for the local CLIs of **Claude Code, Codex, Grok, Gemini,
-OpenCode, and Cursor**. A repository selects a default runner, and provider-specific model,
-reasoning, effort, timeout, and sandbox controls are available where supported.
+Adapters are included for **Claude Code, Codex, Grok, Gemini, OpenCode, and Cursor**. A
+repository selects a default runner, and provider-specific model, reasoning, effort,
+timeout, and sandbox controls are available where supported.
 
 The Providers surface reports locally provable status such as CLI installation/version,
 authentication or account information exposed by the CLI, configured model, selected
 default runner, recent usage, and quota data when a safe headless source exists. Singular
 does not proxy credentials, resell access, or combine provider billing.
 
-### Current split-provider routing
-
-Version 0.19.0 includes one proven opt-in split: `grok-implementer` routes L2 implementation
-to Grok while the selected default runner continues to handle planning, criticism, audit,
-decisions, integration, supervision, and assistant work.
-
-```json
-{
-  "runner": "codex-run.sh",
-  "modules": ["grok-implementer"],
-  "env": {
-    "SINGULAR_CODEX_PLANNER_REASONING_EFFORT": "high",
-    "SINGULAR_CODEX_AUDITOR_REASONING_EFFORT": "high",
-    "SINGULAR_GROK_L2_MODEL": "grok-4.6"
-  }
-}
-```
-
-This is intentionally narrower than an arbitrary provider-per-role matrix. Generic
-role-level provider assignment is a natural extension of the runner seam, but it is not the
-current public configuration contract.
+Version 0.19.0 also includes one proven opt-in split: `grok-implementer` routes L2
+implementation to Grok while the selected default runner continues to handle the remaining
+roles. This is narrower than an arbitrary provider-per-role matrix, which is not yet the
+public configuration contract.
 
 ## Install
 
