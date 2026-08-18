@@ -1,3 +1,5 @@
+https://github.com/user-attachments/assets/826bf112-645b-4293-8b63-cf1c8ad6038b
+
 # singular
 
 **Autonomous multi-agent orchestration for software repos. One engine, many consumers.**
@@ -8,15 +10,6 @@ in parallel against a repository. It implements a three-tier scheduling model
 gate/audit pipelines, and git-worktree isolation. The engine is installed once per machine
 and pinned per consumer repo — improvements propagate by bumping a version pin, not by
 re-copying scripts.
-
-## Video overview
-
-[![Singular — 81-second overview: Fast agents. Safe merges.](docs/assets/singular-orchestration-poster.jpg)](docs/assets/singular-orchestration.mp4)
-
-*Click the frame to play the 60-second overview (with sound) in GitHub's player.*
-
-The video shows the orchestration loop from source intent through planning, isolated
-worker execution, state packets, review, retry continuity, and integration.
 
 ## How it works
 
