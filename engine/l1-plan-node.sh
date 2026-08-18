@@ -138,7 +138,7 @@ if SINGULAR_PLANNING_RUN_ID="$run_id" \
     echo "planned-empty:$node"
     exit 0
   fi
-  # --- plan-revision-loop hook (default-OFF; SINGULAR_PLAN_CRITIQUE=1) ----------
+  # --- plan-revision-loop hook (default ON; SINGULAR_PLAN_CRITIQUE=1) -----------
   # The single sanctioned call-site of the integrated bounded revise -> (resume|
   # fresh) -> re-critique -> approve/park orchestrator (engine/ctx-plan-revise-
   # loop.sh, auto-sourced via lib.sh). It fires ONLY here — the existing staging-

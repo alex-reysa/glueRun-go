@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ctx-planner-resume.sh — the planner-role resume decision behind the default-OFF
-# SINGULAR_PLANNER_SESSION knob.
+# ctx-planner-resume.sh — the planner-role resume decision behind the
+# SINGULAR_PLANNER_SESSION knob (default 1 as of 0.20.0).
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines new
 # functions only; NO existing engine path invokes them, so with this file
@@ -19,7 +19,7 @@
 # `node` field; all task-role fields remain valid).
 #
 # Gate order (first failure wins):
-#   1. disabled              SINGULAR_PLANNER_SESSION unset/!=1 (default 0 = OFF)
+#   1. disabled              SINGULAR_PLANNER_SESSION set to 0 (default 1 = ON)
 #   2. no-session            meta missing / unparseable
 #   3. no-session-id         empty provider or sessionId
 #   4. role-mismatch         role is not exactly "planner"
@@ -30,7 +30,30 @@
 #   9. expired               age > SINGULAR_SESSION_MAX_AGE_SEC
 #  10. worktree-moved        meta.cwd != worktree
 #  11. leased                a LIVE lease held at the canonical planner lease path
+#  12. window-pressure       planner transcript over the provider window threshold
 #   -> resume <sessionId>    when every gate passes
+#
+# WHY GATE 12, AND WHY NO CHURN GATE. The planner is the longest-lived session in
+# the engine by design: gate 5 replaces the task-role runId equality with NODE
+# lineage precisely so one planner session can decompose a multi-slice node across
+# consecutive runs. That makes it the session most likely to approach its context
+# limit, and until gate 12 it was the one role with no context-size gate at all --
+# the inverse of the risk profile, since the shortest-lived sessions carried the
+# most gates.
+#
+# It deliberately does NOT get the composed router's diff-volume gate. For a task
+# role, churn under a session means the ground moved beneath work already in
+# progress. For a planner, churn is the JOB: it plans against a tree that advances
+# while it works, and refusing to resume after 400 churned lines would neuter the
+# node-decomposition the persisted planner session exists to perform. The correct
+# churn guard for a planner is the one it already has -- gate 6's ancestry check,
+# which proves the tree was EXTENDED and not REWRITTEN. Volume of extension is not
+# staleness; a rewritten base is, and gate 6 refuses that. This is a decision on
+# the record, not an omission.
+#
+# For the same reason the planner is NOT routed through singular_ctx_route: that
+# spine's gate set is calibrated for task roles, and forcing one router over two
+# different risk profiles would buy uniformity at the cost of correctness.
 #
 # Evidence invariance: every gate fails closed. Any ambiguity — missing/unparseable
 # meta, unreadable template, indeterminate ancestry, empty/absent fields, a lease
@@ -97,9 +120,20 @@ PY
 # Decide whether the next planner run may resume the recorded session. Prints
 # EXACTLY one line: `resume <sessionId>` or `fresh <reason>`. Never exits non-zero.
 #   singular_planner_resume_decide <meta_path> <node> <runner_basename> \
-#                                 <worktree> <lineage_head>
+#                                 <worktree> <lineage_head> [transcript]
+#
+# <transcript> is the planner's persisted provider-run log, the deterministic
+# session-size proxy gate 12 estimates from. It is a TRAILING OPTIONAL argument so
+# every existing 5-argument caller keeps its exact contract. A call path that
+# supplies no transcript SKIPS gate 12 rather than failing it closed: refusing
+# every such caller would silently disable the persisted planner session for the
+# in-lineage revise path (engine/ctx-plan-revise-resume.sh forwards "$@"), which
+# is a worse outcome than the gate not applying there. Both live planner call
+# sites supply it. When a transcript IS supplied, the gate is fail-closed as
+# everywhere else: a missing or unreadable file refuses.
 singular_planner_resume_decide() {
   local meta_path="$1" node="$2" runner="$3" worktree="$4" lineage_head="$5"
+  local transcript="${6:-}"
 
   # Gate 1: feature-flag disabled (default 0 = OFF).
   if [[ "${SINGULAR_PLANNER_SESSION:-0}" != "1" ]]; then
@@ -212,6 +246,13 @@ PY
   lease_path="$(singular_planner_resume_lease_path "$node")"
   if singular_planner_resume_lease_live "$lease_path"; then
     printf 'fresh leased\n'; return 0
+  fi
+  # Gate 12: window pressure. Applied only when the caller supplied a transcript
+  # (see the signature note above). The budget is resolved per PROVIDER from the
+  # runner, not from one global constant.
+  if [[ -n "$transcript" ]] \
+     && [[ "$(singular_ctx_route_window_gate planner "$transcript" "$runner")" != "pass" ]]; then
+    printf 'fresh window-pressure\n'; return 0
   fi
 
   printf 'resume %s\n' "$m_sid"

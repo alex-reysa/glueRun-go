@@ -33,19 +33,47 @@ singular_ctx_route_strategy_tainted() {
 
 # singular_ctx_route_independence_admit <strategy> <role> <step>
 #
-# Pins the independence-required steps (the fixed documented set: final-audit,
-# paired-audit) to `fresh`. For those steps:
+# Pins the independence-required steps to `fresh`. For those steps:
 #   fresh                -> admit
 #   resume | rehydrate   -> refuse tainted
 #   any other non-fresh  -> refuse pinned-fresh
 # For any non-independence-required step -> admit. The <role> is accepted for the
 # call shape and future per-role pins; the current independence set is role-generic.
+#
+# THE INDEPENDENCE SET (the single source of truth; four steps):
+#
+#   final-audit     the implementation auditor's verdict on a diff. LIVE — routed
+#                   from l1-drive.sh. Without this pin the reviewer resumes the
+#                   session that rejected the previous attempt and grades the fix
+#                   from inside the opinion it already formed.
+#   paired-audit    the sampled post-acceptance paired audit. Also structurally
+#                   fresh at its call site (engine/ctx-paired-audit.sh invokes the
+#                   runner with NO --session-meta and NO --resume-session), so this
+#                   arm is defense-in-depth rather than load-bearing today.
+#   re-critique     the in-loop re-critique of REVISED plan candidates
+#                   (engine/ctx-plan-recritic-resume.sh).
+#   critic-recheck  the post-acceptance recheck over an ACCEPTED diff
+#                   (engine/ctx-critic-recheck-resume.sh).
+#
+# The last two are pinned BEFORE their consult hooks are wired, deliberately. Both
+# resume authorities are already written and both are inert (no engine path calls
+# them). A skeptic re-entering its own prior session to judge work is the exact
+# anchoring the pin exists to prevent, and the fact that a step happens not to be
+# wired yet is not a reason to leave its independence undecided: the asymmetry
+# would otherwise be an emergent consequence of a hard-coded set rather than a
+# decision on the record. Whichever hook lands first is born pinned. The cost is
+# bounded — a fresh critic invocation per revise cycle, itself bounded by
+# SINGULAR_PLAN_REVISE_MAX (default 1).
+#
+# No SINGULAR_* knob is consulted anywhere in this function, and the caller
+# (engine/ctx-route.sh) evaluates it ABOVE its SINGULAR_CTX_ROUTING check, so the
+# pin binds in every configuration. Adding a step here is the ONLY way to pin one.
 singular_ctx_route_independence_admit() {
   local strategy="$1" role="$2" step="$3"
   : "$role"  # accepted for call shape; the documented independence set is role-generic
 
   case "$step" in
-    final-audit|paired-audit) ;;
+    final-audit|paired-audit|re-critique|critic-recheck) ;;
     *) printf 'admit\n'; return 0 ;;
   esac
 

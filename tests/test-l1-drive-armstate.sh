@@ -202,18 +202,25 @@ assert_accepted "$run_dir"
 pass "(a) default-OFF (=0): accepted, no arm-knob-state.json"
 
 # ---------------------------------------------------------------------------
-# (b) ON (=1), control arm (no continuity knobs): arm-knob-state.json written and
-#     byte-identical to the emitter for the M0 control env; outcome unchanged.
+# (b) ON (=1), control arm: arm-knob-state.json written and byte-identical to the
+#     emitter for the M0 control env; outcome unchanged.
+#
+# As of 0.20.0 the M0 control arm is NOT "the environment with nothing set":
+# SINGULAR_CTX_PACKET and SINGULAR_CTX_ROUTING default to 1 in engine/lib.sh, so a
+# control arm must zero them EXPLICITLY. An arm is defined by its knob-state, and
+# the engine's baseline moved; leaving these unset would silently compare a
+# 2-knob-active run against a control snapshot.
 # ---------------------------------------------------------------------------
+M0_CONTROL=(SINGULAR_CTX_PACKET=0 SINGULAR_CTX_ROUTING=0)
 reset_state
 ec=0
-out="$(run_drive SINGULAR_CTX_ARMSTATE=1 2>&1)" || ec=$?
+out="$(run_drive SINGULAR_CTX_ARMSTATE=1 "${M0_CONTROL[@]}" 2>&1)" || ec=$?
 assert_eq "$ec" "0" "ON control: drive exit status unchanged (accepted)"
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "ON control: no run dir"
 assert_accepted "$run_dir"
 armfile="$(armstate_file "$run_dir")"
 [[ -f "$armfile" ]] || fail "ON control: arm-knob-state.json must be written"
-gen_expected "$workroot/expected-control.json"
+gen_expected "$workroot/expected-control.json" "${M0_CONTROL[@]}"
 diff "$workroot/expected-control.json" "$armfile" \
   || fail "ON control: arm-knob-state.json must be byte-identical to the emitter (M0 control)"
 # The control snapshot is the M0 knob-state: zero active continuity knobs.
@@ -233,13 +240,13 @@ pass "(b) ON control: arm-knob-state.json == emitter (M0 control), outcome uncha
 # ---------------------------------------------------------------------------
 reset_state
 ec=0
-out="$(run_drive SINGULAR_CTX_ARMSTATE=1 SINGULAR_CTX_MANIFEST=1 2>&1)" || ec=$?
+out="$(run_drive SINGULAR_CTX_ARMSTATE=1 "${M0_CONTROL[@]}" SINGULAR_CTX_MANIFEST=1 2>&1)" || ec=$?
 assert_eq "$ec" "0" "ON treatment: drive exit status unchanged (accepted)"
 run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "ON treatment: no run dir"
 assert_accepted "$run_dir"
 armfile="$(armstate_file "$run_dir")"
 [[ -f "$armfile" ]] || fail "ON treatment: arm-knob-state.json must be written"
-gen_expected "$workroot/expected-treatment.json" SINGULAR_CTX_MANIFEST=1
+gen_expected "$workroot/expected-treatment.json" "${M0_CONTROL[@]}" SINGULAR_CTX_MANIFEST=1
 diff "$workroot/expected-treatment.json" "$armfile" \
   || fail "ON treatment: arm-knob-state.json must be byte-identical to the emitter (treatment env)"
 assert_eq "$(json_field "$armfile" activeCount)" "1" "ON treatment: activeCount reflects the active knob"

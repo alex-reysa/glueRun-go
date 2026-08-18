@@ -443,10 +443,19 @@ grep -q -- "--resume-session WORKER-SID" <(sed -n '1p' "$workroot/worker-argv.lo
   || fail "worker try 0 must receive its resumable session"
 grep -q -- "--resume-session" <(sed -n '2p' "$workroot/worker-argv.log") \
   && fail "worker try 1 must be fresh after infra failure"
-grep -q -- "--resume-session REVIEWER-SID" <(sed -n '1p' "$workroot/auditor-argv.log") \
-  || fail "auditor try 0 must receive its resumable session"
+# The AUDITOR never resumes — on any try. Until 0.20.0 this file asserted the
+# opposite ("auditor try 0 must receive its resumable session"), which is the
+# defect stated as an expectation: the reviewer's session-meta IS resumable here
+# (the fixture forges REVIEWER-SID and the step-blind decider returns
+# `resume REVIEWER-SID`), and the driver handed it straight to the auditor. That
+# is an auditor grading a diff from inside the session that formed its previous
+# verdict. `final-audit` is now an independence-pinned step, so the routing spine
+# refuses it as `fresh tainted` in EVERY configuration, and no auditor invocation
+# on any attempt may carry --resume-session.
+grep -q -- "--resume-session" <(sed -n '1p' "$workroot/auditor-argv.log") \
+  && fail "auditor try 0 must be fresh: final-audit is independence-pinned"
 grep -q -- "--resume-session" <(sed -n '2p' "$workroot/auditor-argv.log") \
   && fail "auditor try 1 must be fresh after infra failure"
-pass "infra retries: worker and auditor try 0 resume; both try 1 invocations are fresh"
+pass "infra retries: worker try 0 resumes; EVERY auditor invocation is fresh (independence pin)"
 
 echo "ALL SESSION-AFFINITY TESTS PASSED"

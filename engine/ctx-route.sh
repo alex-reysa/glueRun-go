@@ -72,20 +72,26 @@ singular_ctx_route() {
   esac
   strategy="${baseline%% *}"
 
-  # --- OFF-parity: byte-identical to the legacy decide path --------------------
-  # With the flag unset or != 1 the router emits the decider's line VERBATIM — no
-  # gate, no independence pin, no strategy outside {resume,fresh}.
-  if [[ "${SINGULAR_CTX_ROUTING:-0}" != "1" ]]; then
-    printf '%s\n' "$baseline"
-    return 0
-  fi
-
-  # --- 1. Independence pin FIRST (structural; no knob reroutes it) -------------
+  # --- 1. Independence pin FIRST — ABOVE the routing flag (structural) ---------
+  # The pin is a CORRECTNESS INVARIANT, not a routing feature, so it is evaluated
+  # before the SINGULAR_CTX_ROUTING check and binds in EVERY configuration
+  # (routing unset, 0, or 1). A safety property that holds only when a flag is set
+  # is not a safety property: with the pin below the OFF-parity return, a default
+  # install let the reviewer resume the very session that rejected the previous
+  # attempt, because the wrapped decider is step-BLIND (it takes no <step> and no
+  # gate in its ladder names final-audit) and SINGULAR_SESSION_AFFINITY is ON by
+  # default. The pin is the only thing in this file that knows the step, so it is
+  # the only thing that can refuse it.
+  #
+  # This is the ONE deliberate departure from OFF-parity: with routing OFF the
+  # router is byte-identical to the legacy decider for every step EXCEPT an
+  # independence-required one, which is pinned to fresh unconditionally. No knob
+  # reroutes it — there is no escape hatch for independence, by design.
   local admit
   admit="$(singular_ctx_route_independence_admit "$strategy" "$role" "$step")"
   case "$admit" in
     admit)
-      : # step admissible for this strategy; fall through to the resume gates
+      : # step admissible for this strategy; fall through
       ;;
     "refuse tainted")
       # A would-be resume/rehydrate at an independence-required step.
@@ -96,6 +102,16 @@ singular_ctx_route() {
       printf 'fresh pinned-fresh\n'; return 0
       ;;
   esac
+
+  # --- OFF-parity: byte-identical to the legacy decide path --------------------
+  # With the flag unset or != 1 the router emits the decider's line VERBATIM — no
+  # lease/window/diff gate and no strategy outside {resume,fresh}. The
+  # independence pin above has ALREADY bound; only the additive resume gates are
+  # behind the flag.
+  if [[ "${SINGULAR_CTX_ROUTING:-1}" != "1" ]]; then
+    printf '%s\n' "$baseline"
+    return 0
+  fi
 
   # --- 2. Only a would-be `resume` is subject to the additional gates ----------
   # Any other baseline strategy (fresh, and the reserved continue/fork/rehydrate)
@@ -117,7 +133,10 @@ singular_ctx_route() {
     _singular_ctx_route_refuse_resume session-lease "$role" "$step" "$meta" "$key"; return 0
   fi
   # (b) window pressure: the session transcript is over the usage threshold.
-  if [[ "$(singular_ctx_route_window_gate "$role" "$transcript")" != "pass" ]]; then
+  # The runner basename is threaded so the gate resolves the window budget from
+  # the PROVIDER actually selected for this role (engine/providers.json), instead
+  # of assuming one global constant for every provider the engine can drive.
+  if [[ "$(singular_ctx_route_window_gate "$role" "$transcript" "$runner")" != "pass" ]]; then
     _singular_ctx_route_refuse_resume window-pressure "$role" "$step" "$meta" "$key"; return 0
   fi
   # (c) diff volume: role-relevant churn since headShaAtCreate is over the limit.

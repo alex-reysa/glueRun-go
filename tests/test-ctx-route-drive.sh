@@ -145,8 +145,16 @@ want="$(legacy_decide "$m" implementer "$HEAD2")"
 assert_eq "$want" "resume SID-T" "sanity: legacy decider resumes on a good meta"
 got="$(SINGULAR_CTX_ROUTING=0 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "$want" "OFF-parity: implementer resume byte-for-byte (flag=0)"
-got="$(decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
-assert_eq "$got" "$want" "OFF-parity: implementer resume with flag unset (default 0)"
+# With the flag UNSET the router is ON (SINGULAR_CTX_ROUTING defaults to 1 as of
+# 0.20.0), so an unset flag must behave like an explicit 1, not like an explicit
+# 0. Asserting equality against the explicit-1 result keeps this a real parity
+# check rather than a restatement of whichever gate happens to fire first.
+# Subshell + unset, NOT `env -u`: `decide` is a shell FUNCTION.
+got_unset="$(unset SINGULAR_CTX_ROUTING; decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+got_on="$(SINGULAR_CTX_ROUTING=1 decide implementer implement "$m" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+assert_eq "$got_unset" "$got_on" "default-ON: flag unset behaves as flag=1"
+[[ "$got_unset" != "$want" ]] \
+  || fail "default-ON: unset flag must not reproduce the ungoverned OFF result [$want]"
 
 # A fresh decider verdict passes through verbatim too (runner changed -> fresh).
 mf="$rd/session-implementer-fresh.json"; mk_meta "$mf" implementer SID-T "runner=other-run.sh"
@@ -155,14 +163,22 @@ assert_eq "$want" "fresh runner-changed" "sanity: legacy decider fresh reason"
 got="$(SINGULAR_CTX_ROUTING=0 decide implementer implement "$mf" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
 assert_eq "$got" "$want" "OFF-parity: implementer fresh reason byte-for-byte"
 
-# OFF ignores the independence pin: a would-be resume at final-audit (reviewer)
-# still passes through as the decider's resume (OFF is byte-identical to legacy).
+# The independence pin is the ONE deliberate exception to OFF-parity (0.20.0). It
+# is evaluated ABOVE the routing flag, so the reviewer's final-audit is refused in
+# EVERY configuration. This is the driver-level proof of the defect this release
+# closes: `want` below is what the step-BLIND legacy decider returns — a resume of
+# the session that already audited this task — and the router must refuse it even
+# with routing explicitly OFF.
 mr="$tmp/run-off-rev"; mkdir -p "$mr"
 rev="$mr/session-reviewer.json"; mk_meta "$rev" reviewer SID-R "role=reviewer"
 want="$(legacy_decide "$rev" reviewer "$HEAD2")"
 assert_eq "$want" "resume SID-R" "sanity: legacy decider resumes reviewer meta"
-got="$(SINGULAR_CTX_ROUTING=0 decide reviewer final-audit "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
-assert_eq "$got" "$want" "OFF-parity: reviewer independence pin NOT applied when flag off"
+for _routing in 0 1; do
+  got="$(SINGULAR_CTX_ROUTING="$_routing" decide reviewer final-audit "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+  assert_eq "$got" "fresh tainted" "reviewer final-audit pinned fresh (SINGULAR_CTX_ROUTING=$_routing)"
+done
+got="$(unset SINGULAR_CTX_ROUTING; decide reviewer final-audit "$rev" TASK-1 RUN-1 codex-run.sh "$PSHA" "$wt" "$HEAD2")"
+assert_eq "$got" "fresh tainted" "reviewer final-audit pinned fresh (routing unset)"
 pass "OFF-parity: adapter == legacy decider byte-for-byte (implementer+reviewer), no gate/pin"
 
 # =============================================================================

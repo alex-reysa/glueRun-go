@@ -30,7 +30,7 @@
 # auditor; the ON path only ever records a rejection and fails the lease — it
 # never fabricates an approval, and a missing record ON fails CLOSED to reject.
 #
-# Disposition semantics, gated on SINGULAR_PLAN_CRITIQUE (default 0):
+# Disposition semantics, gated on SINGULAR_PLAN_CRITIQUE (default 1):
 #   OFF (unset or "0"): observe-only — return the `import` disposition with ZERO
 #     side effects (no event, no lease change, staged files untouched), so an OFF
 #     flow is byte-identical to today (the recorded verdict is not enforced).

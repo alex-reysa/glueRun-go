@@ -290,6 +290,39 @@ SINGULAR_PROVIDER_PRESSURE_MAX_EVENTS="${SINGULAR_PROVIDER_PRESSURE_MAX_EVENTS:-
 # identity through singular_runner_provider_identity, which reads this map;
 # nothing else may turn a runner path into a provider name.
 SINGULAR_ADAPTER_PROVIDERS_JSON='{"codex-run.sh":"codex","claude-run.sh":"claude","gemini-run.sh":"gemini","opencode-run.sh":"opencode","cursor-run.sh":"cursor","openrouter-run.sh":"openrouter","grok-run.sh":"grok"}'
+# ---- Governance posture: the context subsystem ships ON (0.20.0) -------------
+# Singular's promise is governed autonomy, so a default install must RUN the
+# procedure, not merely contain it. Through 0.19.0 these four shipped `0` and the
+# README's "Recommended" column was the only thing steering an operator to the
+# governed configuration -- which meant the out-of-box experience was the one with
+# the fewest guarantees, and every external description of how Singular manages
+# context described a configuration nobody was running by default.
+#
+# Defaulting here (rather than at each read site) keeps ONE place to read the
+# posture from and preserves every escape hatch. Each assignment is
+# `${VAR:-<default>}`, and BOTH configuration layers are applied earlier in this
+# same file -- singular.config.json's env{} at ~line 131 and
+# .singular-state/config.local.sh at ~line 141 -- so an operator value set by
+# either one survives untouched. A plain environment export survives too, EXCEPT
+# where singular.config.json's env{} names the same key: that block is eval'd over
+# the process environment, so in a repo that pins a knob there, `VAR=0 singular ...`
+# does not override it and the config must be edited instead.
+# Setting any of them to 0 restores the 0.19.0 behavior for that feature.
+#
+# NOT promoted, and deliberately: SINGULAR_REHYDRATE and SINGULAR_CTX_GRAPH stay
+# opt-in. Rehydration's per-section cap (SINGULAR_CONTEXT_SECTION_MAX_CHARS)
+# truncates within a section content-blind, so the line that mattered can be cut
+# from a section selected precisely because it mattered. That is fixed before
+# rehydrate is promoted, not after.
+#
+# The independence pin is NOT in this list and never will be: it binds above the
+# routing flag in engine/ctx-route.sh and has no knob at all.
+SINGULAR_CTX_ROUTING="${SINGULAR_CTX_ROUTING:-1}"        # 5-strategy routing + lease/window/diff gates
+SINGULAR_PLANNER_SESSION="${SINGULAR_PLANNER_SESSION:-1}" # per-node planner session persistence + resume
+SINGULAR_CTX_PACKET="${SINGULAR_CTX_PACKET:-1}"          # planner context packets into worker/fix/audit prompts
+SINGULAR_PLAN_CRITIQUE="${SINGULAR_PLAN_CRITIQUE:-1}"    # skeptic critic over staged plan batches before import
+export SINGULAR_CTX_ROUTING SINGULAR_PLANNER_SESSION SINGULAR_CTX_PACKET SINGULAR_PLAN_CRITIQUE
+
 # Supervisor briefing + ask (0.10.0). All INERT by default: the autonomate loop
 # only spawns a periodic briefing when the interval knob is >0, and `singular ask`
 # / `singular report` are explicit operator verbs. With INTERVAL_MIN=0 (default) a

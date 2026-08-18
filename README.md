@@ -358,27 +358,53 @@ patterns ending in `*`; allowed values are written to
 | `SINGULAR_CONTEXT_SECTION_MAX_CHARS` | `4000` | Per-section cap on continuity content appended to prompts. |
 | `SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE` | `1` | Preflight requires non-empty `acceptanceCriteria` on a task. |
 
-### Context knobs (0.4.0)
+### Context knobs (0.20.0)
 
-Raw engine defaults stay `0` (OFF-parity is test-pinned); the **recommended
-production values** below follow the per-knob decisions in
-`docs/context-build-plan/experiment-report.md` and ship in this repo's own
-dock config. Raw-default flips land in 0.5 with a test-migration slice.
+**The context subsystem ships ON.** Through 0.19.0 these defaulted to `0` and this
+table's "Recommended" column was the only thing steering an operator to the
+governed configuration — which meant a default install ran the *least*-governed
+setup, and every description of how singular manages context described a
+configuration nobody was running by default. As of 0.20.0 the shipped defaults
+ARE the recommended values, so the two columns agree. Setting any of them to `0`
+is a supported rollback.
 
-| Env knob | Raw default | Recommended | Effect |
-| --- | --- | --- | --- |
-| `SINGULAR_PLANNER_SESSION` | `0` | **`1`** | Per-node planner session persistence + resume behind fail-closed lineage/template/lease gates. |
-| `SINGULAR_PLAN_CRITIQUE` | `0` | **`1`** | Fresh read-only skeptic critic over staged planner batches before L0 import. |
-| `SINGULAR_PLAN_REVISE_MAX` | `0` | `2` | Bounded revise→re-critique loop for `revise` verdicts. |
-| `SINGULAR_CTX_PACKET` | `0` | **`1`** | Planner context packets (decisions/assumptions/rejected alternatives) flow into worker, fix, and audit prompts; per-run assumption ledger. |
-| `SINGULAR_CTX_ROUTING` | `0` | **`1`** | Explicit 5-strategy routing (`continue/resume/fork/fresh/rehydrate`) with reason codes, window-pressure + diff-volume gates, and structural taint on resumed sessions. |
-| `SINGULAR_CTX_ARTIFACT_SCAN` | `0` | **`1`** | Secret scan over durable artifacts; hits quarantine (`.quarantined`) and drop out of all prompt assembly. |
-| `SINGULAR_PAIRED_AUDIT_PCT` | `0` | `25` | Sampled post-acceptance paired fresh audits (bias measurement + independence spine). |
-| `SINGULAR_REHYDRATE` | `0` | opt-in | Inject deterministic durable-artifact packets on refused-resume lineage steps. |
-| `SINGULAR_CTX_MANIFEST` | `0` | opt-in | Authored-knowledge manifest ingestion into rehydration packets (`contextManifest` config field; fixture contract). |
-| `SINGULAR_CTX_GRAPH` | `0` | opt-in | Context-graph projector/sync/query + subgraph-selected rehydration. |
-| `SINGULAR_CTX_EXPERIMENT` | `0` | opt-in | Experiment aggregators, delta, renderers, and `singular experiment-report`. |
-| `SINGULAR_CTX_ARMSTATE` | `0` | opt-in | Per-run knob-state provenance recording for arm-integrity audits. |
+Some governance is not on this table at all, because it has no knob:
+
+- **The independence pin.** `final-audit`, `paired-audit`, `re-critique`, and
+  `critic-recheck` always run fresh. It is evaluated above the routing flag, so it
+  binds even with `SINGULAR_CTX_ROUTING=0`. There is no configuration in which an
+  auditor grades work from inside a session that already formed an opinion on it.
+- **Per-provider context windows.** The window-pressure gate resolves its budget
+  from the runner’s provider via `engine/providers.json` (`contextWindowTokens`)
+  rather than one global constant. Derived, not configured.
+
+Run `singular doctor` to see the effective posture — it reports which gates are
+live and warns when a dependent feature is enabled without its dependency.
+
+| Env knob | Default | Effect |
+| --- | --- | --- |
+| `SINGULAR_CTX_ROUTING` | **`1`** | Explicit 5-strategy routing (`continue/resume/fork/fresh/rehydrate`) with reason codes, session-lease + window-pressure + diff-volume gates, and structural taint on resumed sessions. |
+| `SINGULAR_PLANNER_SESSION` | **`1`** | Per-node planner session persistence + resume behind fail-closed lineage/template/lease/window gates. |
+| `SINGULAR_CTX_PACKET` | **`1`** | Planner context packets (decisions/assumptions/rejected alternatives) flow into worker, fix, and audit prompts; per-run assumption ledger. |
+| `SINGULAR_PLAN_CRITIQUE` | **`1`** | Read-only skeptic critic over staged planner batches before L0 import; a reject disposition parks the batch. |
+| `SINGULAR_PLAN_REVISE_MAX` | `1` | Bounded revise→re-critique loop for `revise` verdicts. |
+| `SINGULAR_CTX_ARTIFACT_SCAN` | `0` | Secret scan over durable artifacts; hits quarantine (`.quarantined`) and drop out of all prompt assembly. |
+| `SINGULAR_PAIRED_AUDIT_PCT` | `0` | Sampled post-acceptance paired fresh audits (bias measurement + independence spine). |
+| `SINGULAR_REHYDRATE` | `0` | Inject deterministic durable-artifact packets on refused-resume lineage steps. Opt-in until the per-section truncation issue below is fixed. |
+| `SINGULAR_CTX_MANIFEST` | `0` | Authored-knowledge manifest ingestion into rehydration packets (`contextManifest` config field; fixture contract). |
+| `SINGULAR_CTX_GRAPH` | `0` | Context-graph projector/sync/query + subgraph-selected rehydration. |
+| `SINGULAR_CTX_EXPERIMENT` | `0` | Experiment aggregators, delta, renderers, and `singular experiment-report`. |
+| `SINGULAR_CTX_ARMSTATE` | `0` | Per-run knob-state provenance recording for arm-integrity audits. |
+
+`SINGULAR_REHYDRATE` and `SINGULAR_CTX_GRAPH` stay opt-in deliberately.
+Rehydration orders node selection contradictions-first, but the per-section cap
+(`SINGULAR_CONTEXT_SECTION_MAX_CHARS`, default 4000) truncates *within* a section
+content-blind — the line that mattered can be cut from a section chosen precisely
+because it mattered. That is fixed before rehydrate is promoted, not after.
+
+**Note on overrides.** `singular.config.json`’s `env{}` block is applied over the
+process environment, so in a repo that pins a knob there, `VAR=0 singular …` will
+*not* override it — edit the config (or `.singular-state/config.local.sh`) instead.
 
 Key context event types (all in `.singular-state/events.ndjson`, countable via
 `singular metrics`): `context.strategy_selected`, `context.resume_failed`,

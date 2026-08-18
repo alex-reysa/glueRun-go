@@ -194,16 +194,19 @@ by={a.get("id"):a.get("status") for a in o.get("assumptions",[])}
 print(by.get("A1",""))' "$1"; }
 
 # ---------------------------------------------------------------------------
-# (a) OFF byte-identical (unset), task DECLARES assumptions.
+# (a) OFF byte-identical, task DECLARES assumptions.
+# SINGULAR_CTX_PACKET is set to 0 EXPLICITLY: as of 0.20.0 it defaults to 1, so an
+# unset knob is ON and injects the assumption block. The escape hatch is the thing
+# under test here, not the default.
 # ---------------------------------------------------------------------------
 reset_state
-out="$(run_drive 2>&1)" || { echo "$out" | tail -20; fail "OFF (unset): drive failed"; }
-run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "OFF (unset): no run dir"
+out="$(run_drive SINGULAR_CTX_PACKET=0 2>&1)" || { echo "$out" | tail -20; fail "OFF: drive failed"; }
+run_dir="$(run_dir_of)"; [[ -n "$run_dir" ]] || fail "OFF: no run dir"
 assert_accepted "$run_dir"
 # The active implementer prompt is byte-identical to the base l2 prompt (attempt 1 is a
 # plain copy; no fix section injected).
 cmp -s "$run_dir/l2-active-prompt.md" "$run_dir/l2-prompt.md" \
-  || fail "OFF (unset): l2 active prompt not byte-identical to base (assumptions injected?)"
+  || fail "OFF: l2 active prompt not byte-identical to base (assumptions injected?)"
 # The active auditor prompt is byte-identical to the base auditor prompt.
 cmp -s "$run_dir/auditor-active-prompt.md" "$run_dir/auditor-prompt.md" \
   || fail "OFF (unset): auditor active prompt not byte-identical to base"

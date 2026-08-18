@@ -305,6 +305,10 @@ ch_make_stub() {
 #!/usr/bin/env bash
 set -euo pipefail
 { printf 'INVOCATION\n'; printf '%s\n' "$@"; } >>"${STUB_ARGS_FILE:?}"
+# Emit on STDOUT so the caller's planner-codex.log is non-empty, as a real runner's
+# would be. The canonical planner transcript is built by appending that log, so a
+# silent stub would make any assertion about transcript growth vacuous.
+printf 'stub planner run\n'
 out=""; smeta=""; resume=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -422,14 +426,37 @@ PY
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # --- Feature-flag discipline: knob OFF consults/emits/leases nothing ----------
+# SINGULAR_PLANNER_SESSION is EXPLICITLY 0 here. As of 0.20.0 it defaults to 1, so
+# an unset knob no longer means OFF; the escape hatch is what is under test.
 ch_with_fixture
-out="$(SINGULAR_RUNNER="$CH_STUB" STUB_NOW="$NOW" "$GT" --node "$CH_NODE" --count 1 2>&1 || true)"
+out="$(SINGULAR_PLANNER_SESSION=0 SINGULAR_RUNNER="$CH_STUB" STUB_NOW="$NOW" "$GT" --node "$CH_NODE" --count 1 2>&1 || true)"
 assert_contains "$out" "generated:" "OFF: batch accepted"
 [[ "$(ch_ev_count context.strategy_selected)" == "0" ]] || fail "OFF: strategy_selected emitted while knob off"
 ! ch_stub_has_resume || fail "OFF: --resume-session added while knob off"
 [[ ! -e "$CH_LEASE" ]] || fail "OFF: planner session-lease acquired while knob off"
 ch_cleanup
-pass "consult: knob OFF consults no decider, adds no --resume-session, emits no strategy event, acquires no lease"
+pass "consult: explicit knob 0 consults no decider, adds no --resume-session, emits no strategy event, acquires no lease"
+
+# --- Default posture: the knob is ON when unset (0.20.0) ----------------------
+# The planner session is part of the governed default, so an UNSET knob must
+# consult the decider and emit exactly one planner strategy event. Without this
+# assertion the flip could silently regress to the old default-OFF behavior.
+ch_with_fixture
+out="$(unset SINGULAR_PLANNER_SESSION; SINGULAR_RUNNER="$CH_STUB" STUB_NOW="$NOW" "$GT" --node "$CH_NODE" --count 1 2>&1 || true)"
+assert_contains "$out" "generated:" "default-ON: batch accepted"
+[[ "$(ch_ev_count context.strategy_selected)" == "1" ]] \
+  || fail "default-ON: expected exactly one context.strategy_selected with the knob unset, got $(ch_ev_count context.strategy_selected)"
+assert_eq "$(ch_field "$(ch_last_event_data context.strategy_selected)" role)" "planner" "default-ON: role"
+# The canonical per-node planner transcript (gate 12's size proxy) is maintained
+# across runs: truncated on a fresh decision, extended after a successful run.
+# If this regresses, gate 12 either measures nothing or fails closed forever and
+# the persisted planner session silently stops resuming.
+_ptx="$SINGULAR_STATE_DIR/sessions/planner/$CH_NODE.log"
+[[ -f "$_ptx" ]] || fail "default-ON: canonical planner transcript not created at $_ptx"
+[[ -s "$_ptx" ]] || fail "default-ON: canonical planner transcript is empty after a successful run"
+ch_cleanup
+pass "consult: knob UNSET is ON by default — decider consulted, one planner strategy event emitted"
+pass "transcript: canonical per-node planner transcript created and extended by a successful run"
 
 # --- Fresh path: every gate reason reachable with the knob ON is event-visible
 # via context.strategy_selected(role=planner, strategy=fresh) and adds no resume.

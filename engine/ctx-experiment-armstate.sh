@@ -33,7 +33,10 @@
 #              SINGULAR_CRITIC_RECHECK_PCT (mirrors ctx-paired-audit.sh /
 #              ctx-critic-recheck-resume.sh: unset / 0 / non-numeric garbage = OFF).
 # With NO continuity knobs set the snapshot IS the M0 control knob-state (every
-# knob inactive); with the treatment knobs set it is the treatment knob-state —
+# knob inactive). NOTE (0.20.0): a default DRIVE run no longer produces that
+# state, because engine/lib.sh now defaults SINGULAR_CTX_PACKET and
+# SINGULAR_CTX_ROUTING to 1 — a control arm must set them to 0 explicitly.
+# With the treatment knobs set it is the treatment knob-state —
 # one emitter documents either arm by reading the environment.
 #
 # Fail-safe: a partial or non-enabling value (non-numeric percent, empty string)
@@ -62,6 +65,18 @@ import json, os, re
 # Canonical continuity knobs distinguishing treatment from the M0 control
 # baseline: (env name, documented default, active interpretation). Order is the
 # discovery order; the emitter sorts keys for deterministic output.
+# The third column is the M0 CONTROL-BASELINE value, not "whatever the engine
+# currently defaults to". It is what the research baseline is DEFINED as — the
+# engine before continuity features — so it stays 0 even though engine/lib.sh
+# promoted SINGULAR_CTX_PACKET and SINGULAR_CTX_ROUTING to default-ON in 0.20.0.
+#
+# The column is only consulted when a knob is ABSENT from the environment, which
+# never happens on the production path: l1-drive.sh sources engine/lib.sh, so the
+# emitter always reads the run's REAL values and records them faithfully. What did
+# change in 0.20.0 is that a default drive run is no longer an M0 control arm — an
+# experiment that wants the control baseline must now set these to 0 explicitly
+# (see tests/test-l1-drive-armstate.sh). Nothing here silently reinterprets a
+# recorded run.
 KNOBS = (
     ("SINGULAR_CTX_PACKET", "0", "truthy"),
     ("SINGULAR_CTX_ROUTING", "0", "flag1"),

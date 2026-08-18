@@ -2769,6 +2769,98 @@ singular_json_config_to_env "$2"
                 required_for=("schema-v2-runs",),
             )
 
+    # Governance posture (P13) + dependent-flag diagnosis (P12).
+    #
+    # An operator running an unattended engine should be able to see, at a glance,
+    # WHICH guarantees are live -- not infer them from a table of knobs. Before
+    # 0.20.0 the shipped defaults ran the least-governed configuration and the
+    # README's "Recommended" column was the only thing pointing anywhere else, so
+    # "am I governed?" had no answer short of reading the source.
+    #
+    # Reads the EFFECTIVE environment captured by effective_environment(), which
+    # is what the engine itself sees after singular.config.json env{} and
+    # config.local.sh have been applied -- not this process's environment.
+    GOVERNANCE_POSTURE = (
+        ("SINGULAR_CTX_ROUTING", "1", "resume routing: lease + window + diff gates"),
+        ("SINGULAR_PLANNER_SESSION", "1", "planner session persistence + resume gates"),
+        ("SINGULAR_CTX_PACKET", "1", "planner context packets into worker/audit prompts"),
+        ("SINGULAR_PLAN_CRITIQUE", "1", "skeptic critique of plan batches before import"),
+    )
+
+    def governance_posture(self) -> None:
+        if self.blocked("runtime.config-load"):
+            return
+        if not self.runtime_env:
+            return
+
+        live, off = [], []
+        for key, want, label in self.GOVERNANCE_POSTURE:
+            if self.runtime_env.get(key, "") == want:
+                live.append(label)
+            else:
+                off.append((key, label))
+
+        detail = {
+            "live": live,
+            "disabled": [k for k, _ in off],
+            # The independence pin is deliberately absent from the knob list: it
+            # binds above the routing flag and has no knob at all.
+            "structural": ["independence pin: audits always run fresh (no knob)"],
+        }
+        if not off:
+            self.add(
+                "governance.posture",
+                "pass",
+                f"governed posture: all {len(live)} context-governance gates are live",
+                required_for=("governed-runs",),
+                details=detail,
+            )
+        else:
+            disabled = ", ".join(k for k, _ in off)
+            self.add(
+                "governance.posture",
+                "warn",
+                f"reduced governance posture: {len(off)} of "
+                f"{len(self.GOVERNANCE_POSTURE)} gates disabled ({disabled})",
+                required_for=("governed-runs",),
+                remediation=(
+                    "These ship enabled. Something set them to 0 -- check "
+                    "singular.config.json env{} and .singular-state/config.local.sh. "
+                    "Remove the override to restore the governed default."
+                ),
+                details=detail,
+            )
+
+        # P12: a dependent feature enabled without the feature it depends on is a
+        # silent no-op. Say so rather than degrading quietly.
+        rehydrate_on = self.runtime_env.get("SINGULAR_REHYDRATE", "0") == "1"
+        graph_on = self.runtime_env.get("SINGULAR_CTX_GRAPH", "0") == "1"
+        subgraph_on = self.runtime_env.get("SINGULAR_CTX_SUBGRAPH_REHYDRATE", "0") == "1"
+        unmet = []
+        if subgraph_on and not graph_on:
+            unmet.append("SINGULAR_CTX_SUBGRAPH_REHYDRATE needs SINGULAR_CTX_GRAPH=1")
+        if subgraph_on and not rehydrate_on:
+            unmet.append("SINGULAR_CTX_SUBGRAPH_REHYDRATE needs SINGULAR_REHYDRATE=1")
+        if unmet:
+            self.add(
+                "governance.flag-dependencies",
+                "warn",
+                "; ".join(unmet),
+                required_for=("governed-runs",),
+                remediation=(
+                    "Enable the dependency or unset the dependent flag; as "
+                    "configured the dependent feature silently does nothing."
+                ),
+                details={"unmet": unmet},
+            )
+        else:
+            self.add(
+                "governance.flag-dependencies",
+                "pass",
+                "every enabled context feature has its dependencies satisfied",
+                required_for=("governed-runs",),
+            )
+
     def _dag_frontier_probe(self):
         """Run `dag.sh next-areas` once; both DAG checks read the same result.
 
@@ -3104,6 +3196,7 @@ singular_json_config_to_env "$2"
         self.readonly_guard_check()
         self.resource_check()
         self.governance_checks()
+        self.governance_posture()
         self.dag_evaluation()
         self.graph_promotability()
         self.deployment_credentials()

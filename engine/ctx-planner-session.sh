@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ctx-planner-session.sh — per-node planner session-meta persistence behind the
-# default-OFF SINGULAR_PLANNER_SESSION knob.
+# SINGULAR_PLANNER_SESSION knob (default 1 as of 0.20.0; set 0 to disable).
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines new
 # functions only; NO existing engine path invokes them, so with this file
@@ -17,7 +17,7 @@
 # reusing the singular.orchestration.session-meta.v0 shape with role "planner"
 # and a new optional additive `node` field.
 #
-# Knob: SINGULAR_PLANNER_SESSION (default 0 = OFF). When OFF the finalize wrapper
+# Knob: SINGULAR_PLANNER_SESSION (default 1 = ON). When OFF the finalize wrapper
 # is a no-op (no file written) independent of rc, so the flow is byte-identical.
 #
 # Evidence invariance: a failed/invalid planner run (non-zero rc) NEVER finalizes
@@ -43,6 +43,26 @@ singular_ctx_planner_session_path() {
   [[ -n "$node" ]] || { printf '%s' ""; return 0; }
   local state_dir="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}"
   printf '%s/sessions/planner/%s.json' "$state_dir" "$node"
+}
+
+# Pure path helper: the canonical per-node planner TRANSCRIPT, beside the meta.
+#
+# The window gate (planner ladder gate 12) needs the accumulated size of the
+# session it is deciding about. The per-RUN planner log is the wrong file: a
+# planner session persists ACROSS runs by design (gate 5 keys on node lineage, not
+# runId), so at decide time the current run's log does not exist yet — measuring
+# it would fail closed on every fresh run and disable planner resume entirely.
+#
+# This file is the session's own accumulated record instead. Its lifetime matches
+# the session's: the caller appends each successful run's planner log to it, and
+# TRUNCATES it whenever the decision is `fresh`, because a fresh session starts
+# with no carried context and its size must reset with it. Empty node -> empty
+# (caller skips), mirroring singular_ctx_planner_session_path.
+singular_ctx_planner_session_transcript_path() {
+  local node="$1"
+  [[ -n "$node" ]] || { printf '%s' ""; return 0; }
+  local state_dir="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}"
+  printf '%s/sessions/planner/%s.log' "$state_dir" "$node"
 }
 
 # Guarded finalize wrapper. No-op unless the knob is ON and the planner run

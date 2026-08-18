@@ -198,7 +198,10 @@ test_off_no_meta_no_flag() {
   local stub="$SINGULAR_ROOT/success-stub.sh"
   make_success_stub "$stub"
   local out
-  out="$(SINGULAR_RUNNER="$stub" \
+  # SINGULAR_PLANNER_SESSION explicit 0: as of 0.20.0 it defaults to 1, so an
+  # unset knob writes the meta and adds --session-meta. The escape hatch is what
+  # this case tests, not the default.
+  out="$(SINGULAR_PLANNER_SESSION=0 SINGULAR_RUNNER="$stub" \
     "$SCRIPT_DIR/generate-tasks.sh" --node "$NODE" --count 1 2>&1 || true)"
   [[ "$out" == *"generated:"* || "$out" == *"staged:"* ]] \
     || fail "OFF: planner did not accept the batch: $out"

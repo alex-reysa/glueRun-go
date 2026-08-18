@@ -28,10 +28,11 @@
 #     `fresh <refusal-reason>` — byte-identical to the reason line
 #     engine/ctx-route.sh emits today.
 #   - Independence guard (evidence invariance): for an independence-pinned step
-#     (final-audit, paired-audit) it NEVER prints `rehydrate`; it falls back to
+#     it NEVER prints `rehydrate`; it falls back to
 #     `fresh <refusal-reason>`, reusing singular_ctx_route_independence_admit
 #     rehydrate <role> <step> (any non-`admit` verdict => no rehydrate) so the
-#     independence set stays single-sourced.
+#     independence set stays single-sourced — engine/ctx-route-taint.sh is the
+#     only place that enumerates it, and this guard tracks it automatically.
 #   - Empty-packet guard: when the supplied manifest carries zero surviving
 #     sources (an empty `sources` array, or an unparseable/absent one), it prints
 #     `fresh <refusal-reason>` — there is nothing to inject.

@@ -191,12 +191,25 @@ got="$(SINGULAR_CTX_ROUTING=0 SINGULAR_PLANNER_SESSION=1 route planner plan "$m"
   "$PSHA" "$wt" "$HEAD2" "$TRANSCRIPT" node-1 "$HEAD1")"
 assert_eq "$got" "$want" "OFF-parity: planner resume byte-for-byte"
 
-# OFF ignores the independence pin: a would-be resume at final-audit still
-# passes through as the decider's resume (OFF is byte-identical to legacy).
+# The independence pin is the ONE deliberate exception to OFF-parity (0.20.0): it
+# is evaluated ABOVE the SINGULAR_CTX_ROUTING check, so a would-be resume at an
+# independence-required step is refused in EVERY configuration. Before 0.20.0 this
+# assertion expected `resume SID-T` — which is exactly the defect it documented:
+# with the flag at its old default the reviewer resumed the session that had
+# already rejected the previous attempt, because the wrapped decider is step-blind.
+# Independence is a correctness invariant, not a routing feature, so it has no
+# knob. Everything else about the OFF path stays byte-identical (asserted above).
 m="$tmp/off-indep.json"; mk_task "$m"
-got="$(SINGULAR_CTX_ROUTING=0 route implementer final-audit "$m" TASK-1 RUN-1 codex-run.sh \
+for _routing in 0 1; do
+  got="$(SINGULAR_CTX_ROUTING="$_routing" route implementer final-audit "$m" TASK-1 RUN-1 codex-run.sh \
+    "$PSHA" "$wt" "$HEAD2" "$TRANSCRIPT" TASK-1 "$HEAD1")"
+  assert_eq "$got" "fresh tainted" "independence pin binds at final-audit (SINGULAR_CTX_ROUTING=$_routing)"
+done
+# NOTE: a subshell with `unset`, NOT `env -u` — `route` is a shell FUNCTION here
+# and env would silently execute /sbin/route instead.
+got="$(unset SINGULAR_CTX_ROUTING; route implementer final-audit "$m" TASK-1 RUN-1 codex-run.sh \
   "$PSHA" "$wt" "$HEAD2" "$TRANSCRIPT" TASK-1 "$HEAD1")"
-assert_eq "$got" "resume SID-T" "OFF-parity: independence pin NOT applied when flag off"
+assert_eq "$got" "fresh tainted" "independence pin binds at final-audit (routing unset)"
 pass "OFF-parity: router == decider byte-for-byte (task+planner), no gate/pin applied"
 
 # =============================================================================

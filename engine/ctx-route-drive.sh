@@ -6,16 +6,18 @@
 # routing hook chaining behind the paired-audit hook), wiring the integrated
 # singular_ctx_route strategy dispatcher (engine/ctx-route.sh, composing the
 # window-pressure and diff-volume gates, the generalized session lease, and the
-# taint independence pin) into the driver behind SINGULAR_CTX_ROUTING (default 0).
+# taint independence pin) into the driver behind SINGULAR_CTX_ROUTING (default 1
+# as of 0.20.0). The independence pin inside the spine is NOT behind that flag.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). It adds NO new
 # decision logic: the OFF/ON gating and the wrapped legacy decider already live
 # inside singular_ctx_route. Its ONLY job is to assemble, from what each call-site
 # already holds, the per-role routing context the spine needs — the session
 # transcript path (window gate), the generalized session-lease key (lease gate),
-# and the diff base sha (diff gate) — and delegate. So with SINGULAR_CTX_ROUTING
-# unset or != 1 (default 0) it returns the legacy decider's line verbatim and the
-# driver is byte-identical to before this wire-in at both decision sites.
+# and the diff base sha (diff gate) — and delegate. With SINGULAR_CTX_ROUTING set
+# to 0 it returns the legacy decider's line verbatim at both decision sites, with
+# ONE exception: an independence-required step is pinned to fresh in every
+# configuration (engine/ctx-route.sh evaluates the pin above the flag).
 #
 # singular_ctx_route_decide <role> <step> <meta> <key> <run_id> <runner> \
 #                          <prompt_sha> <worktree> <lineage_head>

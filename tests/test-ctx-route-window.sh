@@ -62,32 +62,52 @@ PY
 # Estimate divisor is fixed & documented (chars-per-token). Pin it here so the
 # arithmetic below is reproducible regardless of the default.
 export SINGULAR_SESSION_WINDOW_CHARS_PER_TOKEN=4
-# Small window so the fixtures are tiny: threshold = 1000 * 70% = 700 tokens =
-# 2800 bytes at 4 bytes/token.
-export SINGULAR_SESSION_WINDOW_TOKENS=1000
+# As of 0.20.0 the estimate is  bytes/cpt + _SINGULAR_WINDOW_OVERHEAD_TOKENS,
+# where the overhead is the engine's fixed allowance for the system prompt, tool
+# schemas, and injected packet -- context the provider holds but the transcript
+# file never contains. It is hard-wired, not a knob, so the boundary fixtures
+# below are sized around it rather than around bytes alone.
+OVERHEAD="${_SINGULAR_WINDOW_OVERHEAD_TOKENS:?overhead constant must be defined by the gate}"
+assert_eq "$OVERHEAD" "12000" "overhead allowance constant is pinned"
+# Window chosen so the overhead is a realistic fraction of it (the smallest
+# window any shipped provider declares is 200000):
+#   threshold = 100000 * 70% = 70000 tokens
+#   est       = bytes/4 + 12000
+#   est == threshold  <=>  bytes = (70000 - 12000) * 4 = 232000
+export SINGULAR_SESSION_WINDOW_TOKENS=100000
 export SINGULAR_SESSION_WINDOW_MAX_PCT=70
+AT_BYTES=$(( (70000 - OVERHEAD) * 4 ))
 
 # --- At threshold -> pass ----------------------------------------------------
-t="$tmp/at.jsonl"; mk_transcript "$t" 2800   # est = 700 == threshold
+t="$tmp/at.jsonl"; mk_transcript "$t" "$AT_BYTES"     # est = 70000 == threshold
 out="$(singular_ctx_route_window_gate "$ROLE" "$t")"
 assert_eq "$out" "pass" "estimate exactly at threshold"
 
 # --- Under threshold -> pass -------------------------------------------------
-t="$tmp/under.jsonl"; mk_transcript "$t" 1200   # est = 300 < 700
+t="$tmp/under.jsonl"; mk_transcript "$t" 1200          # est = 300 + 12000 << 70000
 out="$(singular_ctx_route_window_gate "$ROLE" "$t")"
 assert_eq "$out" "pass" "estimate under threshold"
 pass "gate: estimate at/under SINGULAR_SESSION_WINDOW_MAX_PCT of window -> pass"
 
 # --- Just over threshold -> refuse window-pressure ---------------------------
-t="$tmp/over1.jsonl"; mk_transcript "$t" 2804   # est = 701 > 700
+t="$tmp/over1.jsonl"; mk_transcript "$t" $(( AT_BYTES + 4 ))   # est = 70001 > 70000
 out="$(singular_ctx_route_window_gate "$ROLE" "$t")"
 assert_eq "$out" "refuse window-pressure" "estimate just over threshold"
 
 # --- Far over threshold -> refuse window-pressure ----------------------------
-t="$tmp/over2.jsonl"; mk_transcript "$t" 40000  # est = 10000 >> 700
+t="$tmp/over2.jsonl"; mk_transcript "$t" 400000        # est = 112000 >> 70000
 out="$(singular_ctx_route_window_gate "$ROLE" "$t")"
 assert_eq "$out" "refuse window-pressure" "estimate far over threshold"
 pass "gate: estimate over threshold -> refuse window-pressure"
+
+# --- The overhead is genuinely IN the arithmetic -----------------------------
+# A transcript whose BYTES alone sit just under the threshold must still refuse,
+# because the overhead pushes the estimate over. This is the assertion that would
+# fail if the allowance were ever dropped from the estimate.
+t="$tmp/overhead.jsonl"; mk_transcript "$t" $(( 70000 * 4 - 4 ))   # bytes/4 = 69999 < 70000
+out="$(singular_ctx_route_window_gate "$ROLE" "$t")"
+assert_eq "$out" "refuse window-pressure" "overhead allowance is applied to the estimate"
+pass "gate: unmeasured-overhead allowance is included in the estimate"
 
 # --- Fail closed: missing / unreadable / empty-path transcript ---------------
 out="$(singular_ctx_route_window_gate "$ROLE" "$tmp/does-not-exist.jsonl")"

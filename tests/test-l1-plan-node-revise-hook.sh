@@ -199,7 +199,9 @@ run_plan_node() {
 # ---------------------------------------------------------------------------
 sd_off="$tmp/stage-off"
 marker_off="$tmp/critic-off"
-run_plan_node "$sd_off" SINGULAR_RUNNER="$CRITIC" CRITIC_MARKER="$marker_off" CRITIC_VERDICT=park
+# SINGULAR_PLAN_CRITIQUE explicit 0: as of 0.20.0 it defaults to 1, so an unset
+# knob runs the critique/revise hook and this stops being the OFF path.
+run_plan_node "$sd_off" SINGULAR_PLAN_CRITIQUE=0 SINGULAR_RUNNER="$CRITIC" CRITIC_MARKER="$marker_off" CRITIC_VERDICT=park
 assert_eq "$RC" "0" "OFF: staging-success path exits 0"
 assert_eq "$OUT" "planned:$NODE" "OFF: prints planned:<node>"
 assert_eq "$(lease_status)" "active" "OFF: node lease left active"

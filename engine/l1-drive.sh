@@ -742,8 +742,8 @@ run_worker_phase() {
   l2_runner_basename="$(basename "$l2_runner")"
   worker_prompt_sha="$(singular_prompt_sha "$l2_prompt" 2>/dev/null || true)"
   local worktree_head; worktree_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
-  # Routed through the ctx-* adapter (SINGULAR_CTX_ROUTING; default 0 -> OFF-parity,
-  # byte-identical to the direct decider call). Step `implement` is not an
+  # Routed through the ctx-* adapter (SINGULAR_CTX_ROUTING; default 1. Set 0 for
+  # OFF-parity with the direct decider call). Step `implement` is not an
   # independence-required step, so the routing gates (window/diff/lease) may apply.
   worker_decision="$(singular_ctx_route_decide implementer implement "$session_meta_implementer" \
     "$task_id" "$run_id" "$l2_runner_basename" "$worker_prompt_sha" "$worktree" "$worktree_head" 2>/dev/null || echo "fresh decide-error")"
@@ -1412,10 +1412,11 @@ PY
   local audit_runner_basename reviewer_prompt_sha reviewer_resume_id="" reviewer_decision
   audit_runner_basename="$(basename "$SINGULAR_RUNNER_BIN")"
   reviewer_prompt_sha="$(singular_prompt_sha "$audit_prompt" 2>/dev/null || true)"
-  # Routed through the ctx-* adapter (SINGULAR_CTX_ROUTING; default 0 -> OFF-parity,
-  # byte-identical to the direct decider call). Step `final-audit` is an
-  # independence-required step, so ON the taint pin binds here: a would-be resume
-  # is refused as `fresh tainted` regardless of routing knob values.
+  # Routed through the ctx-* adapter (SINGULAR_CTX_ROUTING; default 1). Step
+  # `final-audit` is an independence-required step, so the taint pin binds here in
+  # EVERY configuration — including SINGULAR_CTX_ROUTING=0 — and a would-be resume
+  # is refused as `fresh tainted`. This is the one step the routing flag cannot
+  # reach; the auditor never grades a diff from inside its own prior verdict.
   reviewer_decision="$(singular_ctx_route_decide reviewer final-audit "$session_meta_reviewer" \
     "$task_id" "$run_id" "$audit_runner_basename" "$reviewer_prompt_sha" "$worktree" "$head_sha" 2>/dev/null || echo "fresh decide-error")"
   reviewer_strategy="${reviewer_decision%% *}"

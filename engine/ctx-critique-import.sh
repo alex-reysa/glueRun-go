@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ctx-critique-import.sh — the critique-import gate: the pure, read-only DECISION
 # the L0 importer will consult to honor plan-critique verdicts behind the
-# default-OFF SINGULAR_PLAN_CRITIQUE knob.
+# SINGULAR_PLAN_CRITIQUE knob (default 1 as of 0.20.0; set 0 to disable).
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
 # functions only; NO existing engine path invokes them, so with this file
@@ -23,7 +23,7 @@
 # auditor, and on the fail-closed ON path it only ever refuses import — it never
 # fabricates an approval.
 #
-# Decision semantics, gated on SINGULAR_PLAN_CRITIQUE (default 0):
+# Decision semantics, gated on SINGULAR_PLAN_CRITIQUE (default 1):
 #   OFF (unset or "0"): observe-only — the decision is ALWAYS `import`,
 #     regardless of the recorded verdict or a missing record, so wiring it OFF
 #     leaves the import path byte-identical to today.

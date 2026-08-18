@@ -179,8 +179,11 @@ pass "OFF-parity(SINGULAR_REHYDRATE): refusals stay fresh <reason> byte-for-byte
 want="$(task_decide "$META_FULL" "$HEAD2")"
 got="$(SINGULAR_CTX_ROUTING=0 SINGULAR_REHYDRATE=1 route_full "$NOTRANS")"
 assert_eq "$got" "$want" "OFF-parity(CTX_ROUTING=0): decider verbatim even with REHYDRATE=1"
-got="$(SINGULAR_REHYDRATE=1 route_full "$NOTRANS")"   # flag unset -> default 0
-assert_eq "$got" "$want" "OFF-parity(CTX_ROUTING unset): decider verbatim even with REHYDRATE=1"
+# As of 0.20.0 SINGULAR_CTX_ROUTING defaults to 1, so an UNSET flag is ON and the
+# resume gates apply — it must match the explicit-1 result, not the OFF one.
+got_unset="$(unset SINGULAR_CTX_ROUTING; SINGULAR_REHYDRATE=1 route_full "$NOTRANS")"
+got_on="$(SINGULAR_CTX_ROUTING=1 SINGULAR_REHYDRATE=1 route_full "$NOTRANS")"
+assert_eq "$got_unset" "$got_on" "default-ON(CTX_ROUTING unset): behaves as flag=1"
 pass "OFF-parity(SINGULAR_CTX_ROUTING): spine returns the wrapped decider line verbatim"
 
 # =============================================================================

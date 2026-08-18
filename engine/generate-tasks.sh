@@ -61,7 +61,7 @@ singular_require_target_branch
 
 # Planner session-meta lineage anchor: resolve the target-branch head at planning
 # time (the head a resumable planner session would be anchored to). Used only by
-# the default-OFF SINGULAR_PLANNER_SESSION finalize hook below; unused otherwise.
+# the SINGULAR_PLANNER_SESSION finalize hook below (default 1); unused otherwise.
 planner_head_sha="$(git -C "$SINGULAR_ROOT" rev-parse "$SINGULAR_TARGET_BRANCH" 2>/dev/null || true)"
 
 # Pick the first eligible ungated DAG node from the manifest and authoritative
@@ -300,7 +300,7 @@ codex_log="$run_dir/planner-codex.log"
 runner_result="$run_dir/planner-runner-result.json"
 codex_runner="${SINGULAR_RUNNER:-${SINGULAR_CODEX_RUNNER:-$SCRIPT_DIR/codex-run.sh}}"
 codex_exit=0
-# Planner session-meta hook (default-OFF): when SINGULAR_PLANNER_SESSION=1, offer
+# Planner session-meta hook (default ON): when SINGULAR_PLANNER_SESSION=1, offer
 # the runner the canonical per-node planner session-meta path — mirroring the
 # worker/reviewer --session-meta wiring in l1-drive.sh. With the knob unset/0 no
 # --session-meta arg is added, so the invocation is byte-identical to prior.
@@ -312,7 +312,7 @@ if [[ "${SINGULAR_PLANNER_SESSION:-0}" == "1" ]]; then
   [[ -n "$planner_session_meta" ]] && planner_runner_args+=(--session-meta "$planner_session_meta")
 fi
 
-# Planner session-resume consult hook (default-OFF): when SINGULAR_PLANNER_SESSION=1,
+# Planner session-resume consult hook (default ON): when SINGULAR_PLANNER_SESSION=1,
 # consult the already-integrated ordered fail-closed decider before invoking the
 # runner — mirroring the implementer/reviewer resume path in l1-drive.sh. The
 # lineage head is the current target-branch head (planner_head_sha), the same
@@ -328,10 +328,17 @@ fi
 # is added, no strategy event is emitted, and no lease is acquired.
 planner_resume_id=""
 planner_lease_path=""
+planner_transcript=""
 planner_base_args=("${planner_runner_args[@]}")
 if [[ "${SINGULAR_PLANNER_SESSION:-0}" == "1" ]]; then
+  # Gate 12 (window-pressure) measures the CANONICAL per-node planner transcript,
+  # not this run's $codex_log: a planner session persists across runs, so the
+  # current run's log does not exist yet at decide time and would fail the gate
+  # closed on every fresh run. The canonical file accumulates across runs and is
+  # truncated whenever the decision is fresh (see below).
+  planner_transcript="$(singular_ctx_planner_session_transcript_path "$active_node")"
   planner_decision="$(singular_planner_resume_decide "$planner_session_meta" "$active_node" \
-    "$(basename "$codex_runner")" "$SINGULAR_ROOT" "$planner_head_sha" 2>/dev/null || echo "fresh decide-error")"
+    "$(basename "$codex_runner")" "$SINGULAR_ROOT" "$planner_head_sha" "$planner_transcript" 2>/dev/null || echo "fresh decide-error")"
   planner_strategy="${planner_decision%% *}"
   planner_strategy_reason="${planner_decision#* }"
   if [[ "$planner_strategy" == "resume" ]]; then
@@ -347,6 +354,13 @@ if [[ "${SINGULAR_PLANNER_SESSION:-0}" == "1" ]]; then
     singular_append_event "context.strategy_selected" "planner session resume strategy selected" \
       "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"strategy\":\"resume\",\"reason\":\"resume\",\"sessionId\":\"$planner_resume_id\"}" || true
   else
+    # A fresh planner run starts a NEW session carrying no prior context, so the
+    # accumulated transcript resets with it. Without this the file would grow
+    # forever and, once past the threshold, permanently pin the planner to fresh.
+    if [[ -n "$planner_transcript" ]]; then
+      mkdir -p "$(dirname "$planner_transcript")" 2>/dev/null || true
+      : >"$planner_transcript" 2>/dev/null || true
+    fi
     singular_append_event "context.strategy_selected" "planner fresh-run strategy selected" \
       "{\"node\":\"$active_node\",\"runId\":\"$run_id\",\"role\":\"planner\",\"strategy\":\"fresh\",\"reason\":\"$planner_strategy_reason\"}" || true
   fi
@@ -386,6 +400,16 @@ fi
 # rc-86 fresh fallback and on runner error (subsequent failure paths exit below).
 if [[ -n "$planner_lease_path" ]]; then
   rm -f "$planner_lease_path"
+fi
+
+# Extend the canonical per-node planner transcript with this run's log, so gate 12
+# measures what the SESSION has accumulated rather than what one run produced.
+# Only on success: a failed run is not a lineage the decider will extend either
+# (singular_ctx_planner_session_finalize skips a non-zero rc for the same reason).
+# Never fatal — the transcript is a size proxy, not evidence.
+if [[ "$codex_exit" -eq 0 && -n "$planner_transcript" && -f "$codex_log" ]]; then
+  mkdir -p "$(dirname "$planner_transcript")" 2>/dev/null || true
+  cat "$codex_log" >>"$planner_transcript" 2>/dev/null || true
 fi
 
 if [[ "$codex_exit" -ne 0 ]]; then
@@ -533,8 +557,8 @@ PY
       echo "generated:$tid"
     fi
   done
-  # Accepted batch: persist the finalized planner session-meta (default-OFF; a
-  # no-op unless SINGULAR_PLANNER_SESSION=1). Never fatal.
+  # Accepted batch: persist the finalized planner session-meta (a no-op unless
+  # SINGULAR_PLANNER_SESSION=1, which is the default). Never fatal.
   singular_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
     "$(basename "$codex_runner")" "$(singular_prompt_sha "$prompt_file" 2>/dev/null || true)" \
     "$planner_head_sha" 1 >/dev/null 2>&1 || true
@@ -593,8 +617,8 @@ if [[ -z "$stage_dir" ]]; then
 fi
 
 mv "$tmp" "$dest"
-# Accepted single task: persist the finalized planner session-meta (default-OFF;
-# a no-op unless SINGULAR_PLANNER_SESSION=1). Never fatal.
+# Accepted single task: persist the finalized planner session-meta (a no-op
+# unless SINGULAR_PLANNER_SESSION=1, which is the default). Never fatal.
 singular_ctx_planner_session_finalize "$active_node" 0 "$next_id" "$run_id" \
   "$(basename "$codex_runner")" "$(singular_prompt_sha "$prompt_file" 2>/dev/null || true)" \
   "$planner_head_sha" 1 >/dev/null 2>&1 || true
