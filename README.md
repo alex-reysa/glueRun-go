@@ -11,7 +11,7 @@ re-copying scripts.
 
 ## Video overview
 
-[![Singular — 60-second overview: Speed is not control](docs/assets/singular-orchestration-poster.jpg)](docs/assets/singular-orchestration.mp4)
+[![Singular — 81-second overview: Fast agents. Safe merges.](docs/assets/singular-orchestration-poster.jpg)](docs/assets/singular-orchestration.mp4)
 
 *Click the frame to play the 60-second overview (with sound) in GitHub's player.*
 
