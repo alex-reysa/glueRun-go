@@ -7,6 +7,135 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.20.0] — 2026-08-18 — Governed by default
+
+The context subsystem was built, tested, and shipped switched off. This release
+turns it on, and makes the one guarantee that should never have had a switch
+structural. `schemaVersion` stays **v2**.
+
+**Read the upgrade note below before running an existing repo.** Two behaviors
+change in opposite directions: runs that previously never resumed will begin
+resuming, and runs that previously resumed freely will begin being refused.
+
+### The independence pin is no longer behind a flag
+
+The guarantee that an auditor never grades work it already has an opinion about
+lived *below* the `SINGULAR_CTX_ROUTING` early return, and that flag defaulted to
+`0`. So it did not hold in a default install.
+
+This was not theoretical. `SINGULAR_SESSION_AFFINITY` defaults to `1`, the run id
+is fixed once per driver invocation, and the reviewer session-meta is finalized
+after every audit specifically "so a later audit try (this run) can resume it".
+The wrapped decider takes no `<step>` argument and no gate in its ladder names
+`final-audit`, so it could not tell an audit from an implementation step. On a
+retry, the reviewer resumed the very session that had rejected the previous
+attempt and graded the fix from inside its own prior verdict.
+
+- **The pin is now evaluated above the routing flag.** It binds with
+  `SINGULAR_CTX_ROUTING` unset, `0`, or `1`. There is no knob, and no combination
+  of knobs, that reaches it. This is the one deliberate departure from OFF-parity:
+  with routing off the router is still byte-identical to the legacy decider for
+  every step *except* an independence-required one.
+- **The independence set grew from two steps to four.** `final-audit` and
+  `paired-audit` are joined by `re-critique` and `critic-recheck`. Both skeptic
+  resume authorities were already written and both are inert; pinning them now
+  means whichever consult hook lands first is born correct, rather than inheriting
+  independence by accident of a hard-coded set.
+- `paired-audit` was already structurally fresh — its call site passes no
+  `--session-meta` and no `--resume-session` — so that arm is defense-in-depth.
+  The live guarantee rested entirely on `final-audit`, which is exactly the arm
+  that was disabled.
+
+### The context subsystem ships ON
+
+`SINGULAR_CTX_ROUTING`, `SINGULAR_PLANNER_SESSION`, `SINGULAR_CTX_PACKET`, and
+`SINGULAR_PLAN_CRITIQUE` now default to `1`. The defaults live in one place in
+`engine/lib.sh`; every escape hatch is intact, and setting any of them to `0`
+restores the 0.19.0 behavior for that feature.
+
+`SINGULAR_REHYDRATE` and `SINGULAR_CTX_GRAPH` stay opt-in on purpose: rehydration
+selects nodes contradictions-first but then truncates *within* a section
+content-blind, so the line that mattered can be cut from a section chosen
+precisely because it mattered. That is fixed before rehydrate is promoted.
+
+### The planner is no longer the least-governed role
+
+The planner is the longest-lived session in the engine by design — its gates key
+on node lineage rather than run id specifically so one session can decompose a
+multi-slice node across runs — and it was the one role with no context-size gate.
+The shortest-lived sessions carried the most gates and the longest-lived carried
+the fewest.
+
+- **Gate 12, window-pressure**, added to the planner ladder. Earlier gates keep
+  their reason ordering.
+- **A canonical per-node planner transcript** (`sessions/planner/<node>.log`) now
+  accumulates across runs beside the session meta, truncated whenever the decision
+  is fresh. The per-run planner log could not serve: a planner session outlives
+  the run, so at decide time the current run's log does not exist yet and
+  measuring it would fail closed on every fresh run.
+- **No diff-volume gate for the planner, deliberately.** For a task role, churn
+  means the ground moved under work in progress. For a planner, churn is the job.
+  The correct churn guard is the ancestry check it already has, which proves the
+  tree was extended rather than rewritten. Recorded as a decision, not left as an
+  omission.
+
+### Context windows come from the provider
+
+The window-pressure gate assumed a 200 000-token window for every provider while
+the engine can drive seven, and it never asked which one was running.
+
+- **`contextWindowTokens` per provider in `engine/providers.json`**, resolved
+  through the runner via `singular_runner_provider_identity`. No new env knob: a
+  deployment that changes provider changes its budget. `SINGULAR_SESSION_WINDOW_TOKENS`
+  remains as an explicit override.
+- Values ship seeded uniformly at the 200 000 the gate already assumed, so no
+  deployment's arithmetic changes. They are a conservative engine budget, not a
+  vendor specification — guessing high is the unsafe direction, and three shipped
+  providers proxy an arbitrary operator-selected model, so for those the window is
+  not a property of the provider at all. Raising one is a deliberate act.
+- **The estimate now accounts for unmeasured overhead.** `bytes/4` measured the
+  transcript file and silently assumed the system prompt, tool schemas, and
+  injected packet were free. A fixed allowance is added before comparison —
+  hard-wired rather than exposed, because a knob defaulted to `0` would
+  reintroduce the error it exists to correct.
+
+### `singular doctor` reports the governance posture
+
+- Which gates are live, as one line, plus the structural guarantees that have no
+  knob.
+- A dependent feature enabled without its dependency (`SINGULAR_CTX_SUBGRAPH_REHYDRATE`
+  without the graph, for example) now warns instead of silently doing nothing.
+
+### Upgrade note
+
+The risk in this release is behavioral, not structural.
+
+- **Audits that used to resume now start fresh.** Any repo running defaults was
+  resuming the reviewer session at `final-audit` on retry attempts. Those now
+  return `fresh tainted`. Expect more auditor invocations and, on tasks that
+  retry, audit verdicts that no longer carry the previous attempt's reasoning —
+  which is the point. There is no opt-out.
+- **Runs that never resumed will begin resuming.** `SINGULAR_PLANNER_SESSION=1`
+  means planner sessions now persist and resume across runs where their gates
+  allow.
+- **Plan batches can now be parked.** `SINGULAR_PLAN_CRITIQUE=1` turns the critic
+  from observe-only into an enforcement layer: a `revise` or `park` verdict is now
+  acted on before L0 import, at the cost of one critic run per batch.
+  `SINGULAR_PLAN_REVISE_MAX` defaults to `1`, so a `revise` verdict gets one
+  revision round and then parks — no batch is stranded.
+- **An A/B control arm must now be explicit.** The M0 control baseline is defined
+  by knob-state, and the engine's baseline moved: a default drive run now has
+  `SINGULAR_CTX_PACKET` and `SINGULAR_CTX_ROUTING` active. Anyone running the
+  experiment harness must set both to `0` to get a control arm. The recorded
+  `arm-knob-state.json` is unaffected — it always captures the run's real values.
+- **Rollback** is per-feature: set the specific knob to `0`. The independence pin
+  has no rollback by design.
+- Note that `singular.config.json`'s `env{}` block is applied *over* the process
+  environment, so in a repo that pins a knob there, `VAR=0 singular …` does not
+  override it — edit the config instead.
+
+---
+
 ## [0.19.0] — 2026-08-16 — The right hand for each role
 
 Launch release. Grok Build becomes a first-class, proven provider, and the
