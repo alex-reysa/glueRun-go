@@ -323,19 +323,19 @@ out="$(run_drive env WRITE_MODE=never SINGULAR_MAX_RETRIES=5)" || rc=$?
 events="$(cat "$root/.singular-state/events.ndjson")"
 assert_contains "$events" 'no-changes' "no-changes failure recorded"
 
-# 5. ...and it stops after the SECOND identical attempt instead of spending the
-# whole retry budget. A worker that writes nothing produces the same head, the
-# same (empty) uncommitted diff and the same failure every time, so every
-# further attempt is a full worker + gate + decider cycle that cannot differ.
-# TASK-0006 burned attempts 2 through 6 exactly this way — 25 minutes on reruns
-# at a byte-identical head SHA.
-assert_contains "$events" '"type":"l1.no_progress_parked"' "no-progress guard fired"
-# maxRetries=5 means up to 6 attempts; the guard must stop at 2. Counted from
-# the archived attempt directories, which is what the loop actually produced.
+# 5. ...and it now stops after the FIRST unchanged candidate, before spending
+# either a second worker/gate pass or a decider round-trip. SINGULAR_MAX_RETRIES
+# may lower a risk ceiling but cannot raise the ordinary one-repair ceiling.
+assert_contains "$events" '"type":"l1.unchanged_candidate_parked"' \
+  "unchanged-candidate guard fired"
+assert_contains "$events" '"productRepairMax":1' \
+  "ordinary task kept its hard one-repair ceiling"
+# Counted from the archived attempt directories, which is what the loop
+# actually produced.
 attempts="$(find "$root/.singular-state/runs" -type f -path '*/attempts/*/failure.txt' 2>/dev/null | wc -l | tr -d ' ')"
-[[ "$attempts" -le 2 && "$attempts" -ge 1 ]] \
-  || fail "no-progress guard did not stop the loop: $attempts attempts archived (expected <= 2)"
-assert_contains "$out" "parking (no progress since the previous attempt)" \
-  "no-progress parking is reported with its own reason"
+[[ "$attempts" -eq 1 ]] \
+  || fail "unchanged-candidate guard did not stop immediately: $attempts attempts archived"
+assert_contains "$out" "NOT ACCEPTED (escalate-parked)" \
+  "unchanged-candidate parking is reported as a bounded terminal outcome"
 
 echo "PASS: test-no-changes-prior-commit"

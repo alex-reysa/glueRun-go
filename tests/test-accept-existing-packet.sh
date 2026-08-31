@@ -73,6 +73,7 @@ make_repo() {
 with_fixture() {
   local tmp
   tmp="$(mktemp -d)"
+  FIXTURE_TMP="$tmp"
   make_repo "$tmp/repo"
   export SINGULAR_ROOT="$tmp/repo"
   export SINGULAR_ORCH_DIR="$SINGULAR_ROOT/docs/orchestration"
@@ -262,25 +263,49 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(packet, f, indent=2)
     f.write("\n")
 PY
-  cat >"$SINGULAR_RUNS_DIR/$run_id/audit.json" <<'EOF'
-{
-  "schema": "singular.orchestration.audit-verdict.v0",
-  "taskId": "TASK-9001",
-  "runId": "RUN-TEST-9001",
-  "branch": "agent/artifact/TASK-9001-test",
-  "verdict": "needs-fix",
-  "evidenceReviewed": [],
-  "commandsRun": [],
-  "findings": ["red evidence passed because behavior already existed"],
-  "requiredFixes": ["record an explicit waiver"],
-  "rationale": "needs waiver"
+  python3 - "$SINGULAR_LEASES_DIR/TASK-9001.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    lease = json.load(handle)
+lease["status"] = "accepted"
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(lease, handle, indent=2)
+    handle.write("\n")
+PY
+  python3 - "$SINGULAR_RUNS_DIR/$run_id/packet.json" \
+    "$SINGULAR_RUNS_DIR/$run_id/audit.json" <<'PY'
+import json
+import sys
+
+packet_path, audit_path = sys.argv[1:3]
+with open(packet_path, encoding="utf-8") as handle:
+    packet = json.load(handle)
+audit = {
+    "schema": "singular.orchestration.audit-verdict.v0",
+    "taskId": "TASK-9001",
+    "runId": "RUN-TEST-9001",
+    "branch": "agent/artifact/TASK-9001-test",
+    "verdict": "needs-fix",
+    "evidenceReviewed": ["reviewed-head-sha:" + packet["headSha"]],
+    "commandsRun": [],
+    "findings": ["red evidence passed because behavior already existed"],
+    "requiredFixes": ["record an explicit waiver"],
+    "rationale": "needs waiver",
 }
-EOF
+with open(audit_path, "w", encoding="utf-8") as handle:
+    json.dump(audit, handle, indent=2)
+    handle.write("\n")
+PY
   cat >"$SINGULAR_RUNS_DIR/$run_id/decision-audit-needs-fix.json" <<'EOF'
 {
   "schema": "singular.orchestration.decider-verdict.v0",
   "failureClass": "audit-needs-fix",
   "taskId": "TASK-9001",
+  "runId": "RUN-TEST-9001",
+  "campaignBinding": "legacy",
   "action": "accept-waiver",
   "rationale": "Accept already-built coverage with explicit waiver.",
   "params": {
@@ -307,6 +332,50 @@ EOF
 - Authority: decider
 - Rationale: audit-needs-fix -> accept-waiver
 EOF
+}
+
+mark_packet_and_lease_accepted() {
+  python3 - "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" \
+    "$SINGULAR_LEASES_DIR/TASK-9001.json" <<'PY'
+import json
+import sys
+
+for path in sys.argv[1:3]:
+    with open(path, encoding="utf-8") as handle:
+        value = json.load(handle)
+    value["status"] = "accepted"
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, indent=2)
+        handle.write("\n")
+PY
+}
+
+write_accepted_audit() {
+  local audit_run_id="${1:-RUN-TEST-9001}"
+  python3 - "$SINGULAR_RUNS_DIR/RUN-TEST-9001/audit.json" "$audit_run_id" \
+    "$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json" <<'PY'
+import json
+import sys
+
+path, run_id, packet_path = sys.argv[1:4]
+with open(packet_path, encoding="utf-8") as handle:
+    packet = json.load(handle)
+audit = {
+    "schema": "singular.orchestration.audit-verdict.v0",
+    "taskId": "TASK-9001",
+    "runId": run_id,
+    "branch": "agent/artifact/TASK-9001-test",
+    "verdict": "accepted",
+    "evidenceReviewed": ["reviewed-head-sha:" + packet["headSha"]],
+    "commandsRun": [],
+    "findings": [],
+    "requiredFixes": [],
+    "rationale": "accepted import fixture",
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(audit, handle, indent=2)
+    handle.write("\n")
+PY
 }
 
 test_accepts_existing_packet_and_imports_afterward() {
@@ -713,6 +782,368 @@ test_import_rejects_storage_proof_without_marked_red_guard() {
   assert_contains "$out" "logRef ending in -skip-guard-red" "storage proof import guard rejection reason"
 }
 
+test_import_rejects_obsolete_campaign_binding() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  local packet lease epoch out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  lease="$SINGULAR_LEASES_DIR/TASK-9001.json"
+  epoch="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  mkdir -p "$SINGULAR_STATE_DIR/campaign"
+  printf '%s\n' "$epoch" >"$SINGULAR_STATE_DIR/campaign/EPOCH"
+  python3 - "$packet" "$lease" <<'PY'
+import json
+import sys
+
+packet_path, lease_path = sys.argv[1:3]
+with open(packet_path, encoding="utf-8") as handle:
+    packet = json.load(handle)
+packet.setdefault("evidence", []).append({
+    "kind": "campaign-binding",
+    "ref": "campaign:obsolete:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:epoch:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+})
+packet["status"] = "accepted"
+with open(packet_path, "w", encoding="utf-8") as handle:
+    json.dump(packet, handle, indent=2)
+    handle.write("\n")
+
+with open(lease_path, encoding="utf-8") as handle:
+    lease = json.load(handle)
+lease["campaignBinding"] = packet["evidence"][-1]["ref"]
+lease["status"] = "accepted"
+with open(lease_path, "w", encoding="utf-8") as handle:
+    json.dump(lease, handle, indent=2)
+    handle.write("\n")
+PY
+
+  out="$("$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "obsolete campaign packet must not import"
+  assert_contains "$out" "campaign binding does not match" \
+    "obsolete campaign import rejection reason"
+  [[ ! -e "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] \
+    || fail "obsolete campaign packet became authoritative"
+  [[ ! -e "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.audit.json" ]] \
+    || fail "obsolete campaign audit sidecar was published"
+  [[ ! -f "$SINGULAR_EVENTS_FILE" ]] \
+    || [[ "$(cat "$SINGULAR_EVENTS_FILE")" != *'"packet.imported"'* ]] \
+    || fail "obsolete campaign import emitted a success event"
+}
+
+test_import_rejects_nonaccepted_packet() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  local packet out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  out="$(SINGULAR_REQUIRE_AUDIT=0 "$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "needs-review packet must not import"
+  assert_contains "$out" "packet status must be accepted" \
+    "nonaccepted packet import rejection reason"
+  [[ ! -e "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] \
+    || fail "nonaccepted packet became authoritative"
+}
+
+test_import_rejects_unsafe_run_id() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  local packet lease out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  lease="$SINGULAR_LEASES_DIR/TASK-9001.json"
+  mark_packet_and_lease_accepted
+  python3 - "$packet" "$lease" <<'PY'
+import json
+import sys
+
+for path in sys.argv[1:3]:
+    with open(path, encoding="utf-8") as handle:
+        value = json.load(handle)
+    value["runId"] = "../ESCAPE"
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, indent=2)
+        handle.write("\n")
+PY
+  out="$(SINGULAR_REQUIRE_AUDIT=0 "$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "path-traversing runId must not import"
+  assert_contains "$out" "one safe path component" "unsafe runId rejection reason"
+  [[ ! -e "$SINGULAR_ORCH_DIR/packets/imported/ESCAPE.json" ]] \
+    || fail "unsafe runId escaped the task import directory"
+}
+
+test_import_rejects_cross_run_lease() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  local packet lease out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  lease="$SINGULAR_LEASES_DIR/TASK-9001.json"
+  python3 - "$lease" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    lease = json.load(handle)
+lease["runId"] = "RUN-OTHER"
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(lease, handle, indent=2)
+    handle.write("\n")
+PY
+  out="$(SINGULAR_REQUIRE_AUDIT=0 "$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "cross-run lease must not authorize packet import"
+  assert_contains "$out" "lease runId does not match packet" \
+    "cross-run lease rejection reason"
+}
+
+test_import_rejects_cross_run_audit() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  write_accepted_audit RUN-OTHER
+  local packet out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  out="$("$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "cross-run audit must not authorize packet import"
+  assert_contains "$out" "audit runId does not match packet" \
+    "cross-run audit rejection reason"
+  [[ ! -e "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] \
+    || fail "cross-run audit authorized a packet"
+}
+
+test_import_rejects_invalid_audit_policy_value() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  local packet out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  out="$(SINGULAR_REQUIRE_AUDIT=true "$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "invalid audit policy value must fail closed"
+  assert_contains "$out" "must be exactly 0 or 1" \
+    "invalid audit policy rejection reason"
+}
+
+test_import_idempotence_requires_complete_sidecar() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  write_accepted_audit
+  local packet dest out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  dest="$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json"
+  mkdir -p "$(dirname "$dest")"
+  cp "$packet" "$dest"
+  out="$("$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "packet-only import must not be idempotent success"
+  assert_contains "$out" "incomplete or has different packet/audit content" \
+    "incomplete idempotent publication rejection reason"
+}
+
+test_import_rejects_audit_for_stale_head() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  write_accepted_audit
+  local packet workspace new_head out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  workspace="$(json_field "$packet" workspace)"
+  printf 'package artifact\n\nconst secondRevision = true\n' >"$workspace/internal/artifact/a.go"
+  git -C "$workspace" add internal/artifact/a.go
+  git -C "$workspace" -c user.name=test -c user.email=test@example.local \
+    commit -q -m "TASK-9001 second revision"
+  new_head="$(git -C "$workspace" rev-parse HEAD)"
+  python3 - "$packet" "$new_head" <<'PY'
+import json
+import sys
+
+path, head = sys.argv[1:3]
+with open(path, encoding="utf-8") as handle:
+    packet = json.load(handle)
+packet["headSha"] = head
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(packet, handle, indent=2)
+    handle.write("\n")
+PY
+  out="$("$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "audit for an earlier branch head must not authorize import"
+  assert_contains "$out" "exactly one reviewed-head-sha marker matching" \
+    "stale reviewed head rejection reason"
+  [[ ! -e "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] \
+    || fail "stale audit authorized a newer packet head"
+}
+
+test_import_rejects_revision_expression_head() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  local packet out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  python3 - "$packet" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    packet = json.load(handle)
+packet["headSha"] += "^{commit}"
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(packet, handle, indent=2)
+    handle.write("\n")
+PY
+  out="$(SINGULAR_REQUIRE_AUDIT=0 "$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "Git revision expressions must not be accepted as packet head identity"
+  assert_contains "$out" "does not match branch head" "revision-expression head rejection"
+}
+
+test_import_rejects_symlinked_run_directory() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  local packet real_run out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  real_run="$FIXTURE_TMP/escaped-run"
+  mv "$SINGULAR_RUNS_DIR/RUN-TEST-9001" "$real_run"
+  ln -s "$real_run" "$SINGULAR_RUNS_DIR/RUN-TEST-9001"
+  out="$(SINGULAR_REQUIRE_AUDIT=0 "$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "symlinked run directory must not be imported"
+  assert_contains "$out" "run directory must be a real directory" \
+    "symlinked run directory rejection reason"
+}
+
+test_import_rejects_symlinked_destination_paths() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  write_accepted_audit
+  local packet task_dest dest audit_dest outside out rc=0
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  task_dest="$SINGULAR_ORCH_DIR/packets/imported/TASK-9001"
+  dest="$task_dest/RUN-TEST-9001.json"
+  audit_dest="$task_dest/RUN-TEST-9001.audit.json"
+  outside="$FIXTURE_TMP/outside-import"
+  mkdir -p "$outside"
+  ln -s "$outside" "$task_dest"
+  out="$("$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "symlinked task destination must not be imported"
+  assert_contains "$out" "unsafe import destination" "symlinked destination directory rejection"
+  [[ ! -e "$outside/RUN-TEST-9001.json" ]] || fail "packet escaped through destination symlink"
+
+  rm "$task_dest"
+  mkdir -p "$task_dest"
+  ln -s "$packet" "$dest"
+  ln -s "$SINGULAR_RUNS_DIR/RUN-TEST-9001/audit.json" "$audit_dest"
+  rc=0
+  out="$("$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "symlinked packet destination must not be idempotent success"
+  assert_contains "$out" "packet destination must be a regular non-symlink file" \
+    "symlinked packet destination rejection"
+  rm "$dest"
+  rc=0
+  out="$("$SCRIPT_DIR/import-packet.sh" "$packet" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "symlinked audit destination must not be accepted"
+  assert_contains "$out" "audit destination must be a regular non-symlink file" \
+    "symlinked audit destination rejection"
+}
+
+test_import_rejects_waiver_decision_change_during_validation() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  write_accept_waiver_records
+  local packet holder_ready holder_release holder_pid import_pid out_file git_lock rc=0 i
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  holder_ready="$FIXTURE_TMP/waiver-holder-ready"
+  holder_release="$FIXTURE_TMP/waiver-holder-release"
+  out_file="$FIXTURE_TMP/import-waiver-race.out"
+  git_lock="$SINGULAR_STATE_DIR/locks/git-op.lock"
+  (
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/lib.sh"
+    singular_campaign_lock_acquire
+    : >"$holder_ready"
+    while [[ ! -e "$holder_release" ]]; do sleep 0.01; done
+    singular_campaign_lock_release
+  ) &
+  holder_pid=$!
+  i=0
+  while [[ "$i" -lt 500 && ! -e "$holder_ready" ]]; do
+    sleep 0.01
+    i=$((i + 1))
+  done
+  [[ -e "$holder_ready" ]] || fail "waiver campaign lock holder did not start"
+  "$SCRIPT_DIR/import-packet.sh" "$packet" >"$out_file" 2>&1 &
+  import_pid=$!
+  i=0
+  while [[ "$i" -lt 500 && ! -d "$git_lock" ]]; do
+    sleep 0.01
+    i=$((i + 1))
+  done
+  [[ -d "$git_lock" ]] || fail "waiver import did not reach final publication lock"
+  rm "$SINGULAR_RUNS_DIR/RUN-TEST-9001/decision-audit-needs-fix.json"
+  : >"$holder_release"
+  wait "$holder_pid"
+  wait "$import_pid" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "deleted accept-waiver decision must fail publication CAS"
+  assert_contains "$(cat "$out_file")" \
+    "accept-waiver decision changed while packet import was being validated" \
+    "waiver-decision CAS rejection reason"
+  [[ ! -e "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] \
+    || fail "packet imported after its waiver authority disappeared"
+}
+
+test_import_rejects_audit_appearing_during_validation() {
+  with_fixture
+  write_task
+  write_worker_branch_and_packet
+  mark_packet_and_lease_accepted
+  local packet holder_ready holder_release holder_pid import_pid out_file git_lock rc=0 i
+  packet="$SINGULAR_RUNS_DIR/RUN-TEST-9001/packet.json"
+  holder_ready="$FIXTURE_TMP/campaign-holder-ready"
+  holder_release="$FIXTURE_TMP/campaign-holder-release"
+  out_file="$FIXTURE_TMP/import-race.out"
+  git_lock="$SINGULAR_STATE_DIR/locks/git-op.lock"
+  (
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/lib.sh"
+    singular_campaign_lock_acquire
+    : >"$holder_ready"
+    while [[ ! -e "$holder_release" ]]; do sleep 0.01; done
+    singular_campaign_lock_release
+  ) &
+  holder_pid=$!
+  i=0
+  while [[ "$i" -lt 500 && ! -e "$holder_ready" ]]; do
+    sleep 0.01
+    i=$((i + 1))
+  done
+  [[ -e "$holder_ready" ]] || fail "campaign lock holder did not start"
+  SINGULAR_REQUIRE_AUDIT=0 "$SCRIPT_DIR/import-packet.sh" "$packet" >"$out_file" 2>&1 &
+  import_pid=$!
+  i=0
+  while [[ "$i" -lt 500 && ! -d "$git_lock" ]]; do
+    sleep 0.01
+    i=$((i + 1))
+  done
+  [[ -d "$git_lock" ]] || fail "import did not reach final publication lock"
+  printf '{}\n' >"$SINGULAR_RUNS_DIR/RUN-TEST-9001/audit.json"
+  : >"$holder_release"
+  wait "$holder_pid"
+  wait "$import_pid" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "audit appearing after validation must fail publication"
+  assert_contains "$(cat "$out_file")" "audit appeared while packet import was being validated" \
+    "late audit appearance rejection reason"
+  [[ ! -e "$SINGULAR_ORCH_DIR/packets/imported/TASK-9001/RUN-TEST-9001.json" ]] \
+    || fail "late unvalidated audit accompanied an authoritative packet"
+}
+
 test_accepts_existing_packet_and_imports_afterward
 test_rejects_source_mutation_and_preserves_original_workspace
 test_rejects_failed_rerun_in_disposable_worktree
@@ -726,5 +1157,18 @@ test_rejects_head_mismatch
 test_rejects_scope_violation
 test_accept_existing_rejects_storage_proof_without_marked_red_guard
 test_import_rejects_storage_proof_without_marked_red_guard
+test_import_rejects_obsolete_campaign_binding
+test_import_rejects_nonaccepted_packet
+test_import_rejects_unsafe_run_id
+test_import_rejects_cross_run_lease
+test_import_rejects_cross_run_audit
+test_import_rejects_invalid_audit_policy_value
+test_import_idempotence_requires_complete_sidecar
+test_import_rejects_audit_for_stale_head
+test_import_rejects_revision_expression_head
+test_import_rejects_symlinked_run_directory
+test_import_rejects_symlinked_destination_paths
+test_import_rejects_waiver_decision_change_during_validation
+test_import_rejects_audit_appearing_during_validation
 
 echo "accept-existing-packet tests passed"

@@ -329,6 +329,191 @@ EOF
   assert_contains "$out" "failed_dispatches=1" "failed-child reconcile counted one failure"
 }
 
+test_reconcile_scrubs_origin_capability_from_dispatch_child() {
+  with_fixture
+  write_task TASK-0001 ready internal/artifact/a.go "[]"
+  local stub="$SINGULAR_ROOT/stub-l1-capability-probe.sh"
+  local leaked="$SINGULAR_STATE_DIR/dispatch-origin-capability.leaked"
+  cat >"$stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${SINGULAR_ORIGIN_LOCK_CAPABILITY:-}" ]]; then
+  printf 'origin capability reached dispatch child\n' \
+    >"$SINGULAR_STATE_DIR/dispatch-origin-capability.leaked"
+fi
+exit 0
+EOF
+  chmod +x "$stub"
+
+  local out rc=0
+  out="$(SINGULAR_L1_DRIVER="$stub" SINGULAR_GENERATE=0 \
+    SINGULAR_AUTO_INTEGRATE=0 SINGULAR_MAX_CONCURRENT=1 \
+    SINGULAR_MAX_DISPATCH=1 SINGULAR_DETACHED_DISPATCH=0 \
+    "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)" || rc=$?
+  assert_eq "0" "$rc" "capability-confinement reconcile completes ($out)"
+  [[ ! -e "$leaked" ]] \
+    || fail "origin lock capability reached an untrusted dispatch child"
+}
+
+test_reconcile_refills_when_only_ready_task_is_leased() {
+  with_fixture
+  write_task TASK-0099 ready internal/artifact/leased.go "[]"
+  singular_lease_write TASK-0099 agent/artifact/TASK-0099 artifact l2 \
+    "internal/artifact/leased.go" planned RUN-LEASE \
+    "$SINGULAR_WORKTREES_DIR/TASK-0099" target-sha "" \
+    '["internal/artifact/leased.go"]' "[]"
+
+  local planner_stub="$SINGULAR_ROOT/planner-refill-stub.sh"
+  cat >"$planner_stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+touch "$SINGULAR_STATE_DIR/planner-refill-called"
+exit 91
+EOF
+  chmod +x "$planner_stub"
+
+  local out
+  out="$(SINGULAR_CODEX_RUNNER="$planner_stub" \
+    SINGULAR_AUTO_PROMOTE_GATES=0 SINGULAR_AUTO_INTEGRATE=0 \
+    SINGULAR_MAX_CONCURRENT=2 SINGULAR_MAX_DISPATCH=2 \
+    SINGULAR_DETACHED_DISPATCH=0 \
+    "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"
+
+  [[ -f "$SINGULAR_STATE_DIR/planner-refill-called" ]] \
+    || fail "a leased lifecycle-ready task suppressed planning despite a free slot"
+  assert_contains "$out" "dispatchable queue empty; invoking task generator" \
+    "reconcile refills from the dispatchable, not raw-ready, queue"
+  assert_contains "$out" "ready=1 dispatchable=0 frontier=0 active_leases=1" \
+    "reconcile reports raw-ready and dispatchable counts independently"
+  grep -q '^Status: ready$' "$SINGULAR_TASKS_DIR/TASK-0099.md" \
+    || fail "lease metadata must not rewrite the task lifecycle status"
+  assert_eq "planned" "$(singular_lease_status TASK-0099)" \
+    "refill leaves the in-flight lease independently owned"
+}
+
+test_reconcile_partial_frontier_requests_and_fills_remaining_capacity() {
+  with_fixture
+  write_task TASK-0001 ready internal/artifact/ready.go "[]"
+  write_task TASK-0099 ready internal/artifact/already-active.go "[]"
+  singular_lease_write TASK-0099 agent/artifact/TASK-0099 artifact l2 \
+    "internal/artifact/already-active.go" planned RUN-ACTIVE \
+    "$SINGULAR_WORKTREES_DIR/TASK-0099" target-sha "" \
+    '["internal/artifact/already-active.go"]' "[]"
+
+  local worker_stub="$SINGULAR_ROOT/worker-hold-stub.sh"
+  cat >"$worker_stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$1" >>"$SINGULAR_STATE_DIR/refill-dispatch.log"
+while [[ ! -f "$SINGULAR_STATE_DIR/release-workers" ]]; do
+  sleep 0.05
+done
+EOF
+  chmod +x "$worker_stub"
+
+  local planner_stub="$SINGULAR_ROOT/planner-one-refill-stub.sh"
+  cat >"$planner_stub" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-last-message|-o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -n "$out" ]] || exit 2
+touch "$SINGULAR_STATE_DIR/partial-refill-planner-called"
+python3 - "$out" <<'PY'
+import json
+import sys
+
+out = sys.argv[1]
+task_id = "TASK-0100"
+markdown = f"""# {task_id}: Refill remaining capacity
+
+Status: ready
+Area: artifact
+Target branch: `target`
+Worker branch: `agent/artifact/{task_id}-refill`
+Test policy: `strict_test_first`
+Gate command: `true`
+Dispatch mode: canonical
+Depends on: []
+
+## Objective
+
+Fill the remaining scheduler slot.
+
+## Scope
+
+Owned files:
+
+- `internal/artifact/refill.go`
+
+Forbidden files:
+
+- Any file outside the owned scope unless an L1 scope amendment is recorded.
+
+## Prerequisites
+
+- D0.
+
+## Acceptance Criteria
+
+- Pass.
+"""
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump({
+        "schema": "singular.orchestration.task-batch.v0",
+        "tasks": [{"taskId": task_id, "markdown": markdown}],
+    }, handle, indent=2)
+    handle.write("\n")
+PY
+EOF
+  chmod +x "$planner_stub"
+
+  local first_out second_out
+  first_out="$(SINGULAR_L1_DRIVER="$worker_stub" SINGULAR_CODEX_RUNNER="$planner_stub" \
+    SINGULAR_AUTO_PROMOTE_GATES=0 SINGULAR_AUTO_INTEGRATE=0 \
+    SINGULAR_MAX_CONCURRENT=3 SINGULAR_MAX_DISPATCH=3 \
+    SINGULAR_DETACHED_DISPATCH=1 \
+    "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
+
+  assert_contains "$first_out" "dispatched_this_run=1" \
+    "partial frontier dispatches already-ready work without waiting for planning"
+  assert_contains "$first_out" "refill_requested_this_run=1" \
+    "partial frontier requests an immediate event-driven refill"
+  [[ -f "$(singular_wake_file)" ]] || fail "partial frontier did not write WAKE"
+  [[ ! -f "$SINGULAR_STATE_DIR/partial-refill-planner-called" ]] \
+    || fail "planner delayed an already-ready task in the first cycle"
+
+  # Model autonomate consuming WAKE, then running the requested cycle. Both the
+  # pre-existing and newly launched tasks are active, so exactly one of three
+  # slots remains and the planner must receive/fill only that capacity.
+  rm -f "$(singular_wake_file)"
+  second_out="$(SINGULAR_L1_DRIVER="$worker_stub" SINGULAR_CODEX_RUNNER="$planner_stub" \
+    SINGULAR_AUTO_PROMOTE_GATES=0 SINGULAR_AUTO_INTEGRATE=0 \
+    SINGULAR_MAX_CONCURRENT=3 SINGULAR_MAX_DISPATCH=3 \
+    SINGULAR_DETACHED_DISPATCH=1 \
+    "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
+
+  [[ -f "$SINGULAR_STATE_DIR/partial-refill-planner-called" ]] \
+    || fail "event-driven refill cycle did not invoke the planner"
+  assert_contains "$second_out" "invoking task generator for up to 1 task(s)" \
+    "refill planning is bounded by exact remaining capacity"
+  assert_contains "$second_out" "dispatched_this_run=1" \
+    "refill cycle dispatched exactly the remaining slot"
+  assert_eq "3" "$(singular_active_lease_count)" \
+    "partial refill reaches but never exceeds configured concurrency"
+  assert_eq "2" "$(wc -l <"$SINGULAR_STATE_DIR/refill-dispatch.log" | tr -d ' ')" \
+    "only the existing ready task and one generated task were launched"
+
+  touch "$SINGULAR_STATE_DIR/release-workers"
+  SINGULAR_DRAIN_POLL_SECS=0.05 SINGULAR_DRAIN_TIMEOUT_SECS=10 \
+    "$SCRIPT_DIR/reconcile.sh" --drain >/dev/null 2>&1
+}
+
 make_codex_arg_stub() {
   local dir="$SINGULAR_STATE_DIR/fake-bin"
   mkdir -p "$dir"
@@ -929,6 +1114,9 @@ test_frontier_selection_allows_requeued_task_with_failed_lease
 test_reconcile_parallel_batch_with_stub
 test_reconcile_parallel_batch_with_shared_forbidden_file
 test_reconcile_counts_failed_child
+test_reconcile_scrubs_origin_capability_from_dispatch_child
+test_reconcile_refills_when_only_ready_task_is_leased
+test_reconcile_partial_frontier_requests_and_fills_remaining_capacity
 test_codex_run_l2_defaults_to_workspace_write_sandbox
 test_codex_run_l2_uses_medium_reasoning_without_service_tier
 test_codex_run_readonly_planner_uses_high_reasoning

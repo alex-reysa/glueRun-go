@@ -276,6 +276,8 @@ Depends on: []
 
 Prior candidate $index.
 
+Scenario identity: $1.
+
 ## Scope
 
 Owned files:
@@ -315,6 +317,7 @@ PY
 # (A) critique -> revise -> approve -> import, RESUME path, all dispositions.
 # =============================================================================
 export SINGULAR_PLANNER_SESSION=1
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-A
 forge_meta
 : > "$SINGULAR_EVENTS_FILE"
 export CRITIC_SEQ_FILE="$tmp/seqA"; printf 'revise\napprove\n' > "$CRITIC_SEQ_FILE"
@@ -343,6 +346,7 @@ done
 # (B) rc-86 resume-refused -> fresh fallback recorded -> re-stage -> import.
 # =============================================================================
 forge_meta
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-B
 : > "$SINGULAR_EVENTS_FILE"
 export CRITIC_SEQ_FILE="$tmp/seqB"; printf 'revise\napprove\n' > "$CRITIC_SEQ_FILE"
 export PLANNER_FAIL_ON_RESUME=1
@@ -357,9 +361,11 @@ grep -q '"strategy":"resume"' "$SINGULAR_EVENTS_FILE" || fail "B: expected a res
 [[ -e "$PLANNER_INVOKED_FILE" ]] || fail "B: fresh fallback re-run must invoke the planner runner"
 
 # =============================================================================
-# (C) budget exhaustion -> park revise-budget-exhausted (recorded), FRESH path.
+# (C) unchanged findings after the one revision -> park repeated-findings
+# before another product revision can be attempted.
 # =============================================================================
 unset SINGULAR_PLANNER_SESSION  # -> resume decider returns `fresh disabled`
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-C
 : > "$SINGULAR_EVENTS_FILE"
 export CRITIC_SEQ_FILE="$tmp/seqC"; printf 'revise\nrevise\n' > "$CRITIC_SEQ_FILE"
 export PLANNER_FAIL_ON_RESUME=0
@@ -367,8 +373,8 @@ export PLANNER_INVOKED_FILE="$tmp/planner-C"
 sdC="$(new_stage C)"
 outC="$(singular_plan_revise_loop "$NODE" "RUN-C" "$sdC" "$REPO")" \
   || fail "C: loop must exit 0 on the budget-exhaustion walk"
-[[ "$outC" == "park revise-budget-exhausted" ]] \
-  || fail "C: terminal outcome must be 'park revise-budget-exhausted' (got '$outC')"
+[[ "$outC" == "park repeated-findings" ]] \
+  || fail "C: terminal outcome must be 'park repeated-findings' (got '$outC')"
 [[ "$(ev_count plan.revise_parked)" -ge 1 ]] || fail "C: budget-exhaustion park must be recorded"
 grep -q '"strategy":"fresh"' "$SINGULAR_EVENTS_FILE" || fail "C: expected a fresh strategy event"
 # Exactly one bounded revision round ran (SINGULAR_PLAN_REVISE_MAX=1).
@@ -378,6 +384,7 @@ grep -q '"strategy":"fresh"' "$SINGULAR_EVENTS_FILE" || fail "C: expected a fres
 # (D) approve at round 0 -> import with NO revision attempted.
 # =============================================================================
 : > "$SINGULAR_EVENTS_FILE"
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-D
 export CRITIC_SEQ_FILE="$tmp/seqD"; printf 'approve\n' > "$CRITIC_SEQ_FILE"
 export PLANNER_INVOKED_FILE="$tmp/planner-D"
 sdD="$(new_stage D)"
@@ -396,6 +403,7 @@ assert_revision_failure() { # <label> <planner-mode> <failure-class>
   local label="$1" mode="$2" failure_class="$3" stage before after result
   : >"$SINGULAR_EVENTS_FILE"
   export CRITIC_SEQ_FILE="$tmp/seq-$label"
+  export SINGULAR_PLAN_CRITIC_MODEL_VERSION="stub-$label"
   printf 'revise\n' >"$CRITIC_SEQ_FILE"
   export PLANNER_MODE="$mode"
   export PLANNER_FAIL_ON_RESUME=0
@@ -415,7 +423,23 @@ assert_revision_failure() { # <label> <planner-mode> <failure-class>
     || fail "$label: missing failureClass=$failure_class"
 }
 
+export SINGULAR_PLAN_REVISION_INFRA_MAX=99
 assert_revision_failure E runner-fail runner-failed
+[[ "$(ev_count ctx.plan_revision_infra_retry)" -eq 1 ]] \
+  || fail "E: large retry knob must still permit only one retry before terminal park"
+python3 - "$SINGULAR_STATE_DIR" "$tmp/stage/E" <<'PY' \
+  || fail "E: infrastructure attempts contaminated the product revision budget"
+import glob, json, os, sys
+state, stage = sys.argv[1:3]
+side = json.load(open(os.path.join(stage, ".plan-attempt-identity.json")))
+paths = glob.glob(os.path.join(state, "planning-attempts", "*", side["identity"], "attempt.json"))
+assert len(paths) == 1, paths
+doc = json.load(open(paths[0]))
+assert doc["revisionsDone"] == 0, doc
+assert doc["infraAttempts"] == 2, doc
+assert doc["status"] == "park", doc
+PY
+unset SINGULAR_PLAN_REVISION_INFRA_MAX
 assert_revision_failure F malformed batch-malformed
 assert_revision_failure G empty batch-empty
 assert_revision_failure H id-drift batch-invalid
@@ -483,6 +507,7 @@ CEO
 chmod +x "$FAKE_CODEX"
 
 : >"$SINGULAR_EVENTS_FILE"
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-I
 export CRITIC_SEQ_FILE="$tmp/seqI"; printf 'revise\napprove\n' >"$CRITIC_SEQ_FILE"
 export SINGULAR_PLAN_REVISE_PLANNER="$ENGINE_HOME/engine/codex-run.sh"
 export SINGULAR_CODEX_BIN="$FAKE_CODEX"

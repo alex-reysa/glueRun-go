@@ -224,6 +224,10 @@ test_detached_reap_attributes_ok_and_failed() {
   out="$(actuate "$stub" 2 1)"
   assert_eq "2" "$(field_of "$out" dispatched_this_run)" "both fast stubs dispatched"
   wait_for_exit_files 2
+  [[ -f "$(singular_wake_file)" ]] \
+    || fail "detached worker completion did not request an immediate scheduler wake"
+  assert_contains "$(cat "$SINGULAR_STATE_DIR/events.ndjson")" \
+    '"type":"origin.capacity_released"' "capacity release wake was not recorded"
 
   # Next cycle (no new dispatch): the reaper attributes one ok + one failure.
   local out2

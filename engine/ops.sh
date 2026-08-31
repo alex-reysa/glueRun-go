@@ -49,11 +49,10 @@ shift || true
 # could park a task for a missing dependency and offered no way to say the
 # dependency is there now.
 #
-# Resetting retryCount is the part that is easy to miss. Nothing in the engine
-# ever resets it, and decide.sh reads it from the lease to decide whether any
-# budget remains — so a task unparked at retryCount == maxRetries would park
-# again on its first failure, with no attempt left to spend. Same for the
-# refusals counter, which is only cleared on a successful dispatch.
+# Resetting the durable product-pass marker and retryCount is the part that is
+# easy to miss. Without both, the driver treats the task as a continuation and
+# can park before the operator-authorized fresh pass. The refusals counter is
+# likewise only cleared on a successful dispatch.
 ops_unpark() {
   local task_id="" reason=""
   while [[ $# -gt 0 ]]; do
@@ -74,9 +73,43 @@ ops_unpark() {
     echo "unpark: no task file $task_file" >&2
     return 2
   fi
-  local current
+  local current lease_file lease_status lease_retry lease_started
   current="$(singular_task_status "$task_file" 2>/dev/null || true)"
+  lease_file="$(singular_lease_path "$task_id")"
+  lease_status=""
+  if [[ -f "$lease_file" ]]; then
+    lease_status="$(singular_lease_status "$task_id" 2>/dev/null || true)"
+  fi
   if [[ "$current" == "ready" ]]; then
+    # A previous partial unpark could leave the task ready while its failed or
+    # exhausted lease still carries a started pass.  Reconcile that durable
+    # budget instead of reporting a false idempotent success.  Never rewrite a
+    # live/accepted lease merely because the task surface is inconsistent.
+    case "$lease_status" in
+      planned|running|needs-review)
+        echo "unpark: $task_id is already ready with active lease '$lease_status' (idempotent no-op)"
+        return 0 ;;
+      accepted|integrated|cancelled|superseded)
+        echo "unpark: $task_id is ready but lease is '$lease_status'; refusing to reset terminal work" >&2
+        return 2 ;;
+    esac
+    if [[ -f "$lease_file" ]]; then
+      lease_retry="$(singular_lease_field "$task_id" retryCount 2>/dev/null || true)"
+      lease_started="$(singular_lease_field "$task_id" productPassStarted 2>/dev/null || true)"
+      if [[ "$lease_status" != "ready" || "$lease_retry" != "0" \
+          || "$lease_started" == "True" || "$lease_started" == "true" ]]; then
+        if ! singular_lease_unpark "$task_id" 2>/dev/null; then
+          echo "unpark: lease budget reconciliation FAILED; refusing false success" >&2
+          return 2
+        fi
+        rm -f "$SINGULAR_DISPATCH_DIR/$task_id.refusals" 2>/dev/null || true
+        singular_append_event "task.unpark_reconciled" \
+          "ready task had stale lease budget reconciled" \
+          "{\"taskId\":\"$task_id\",\"previousLeaseStatus\":\"$lease_status\"}"
+        echo "unpark: $task_id is already ready; stale lease budget reconciled"
+        return 0
+      fi
+    fi
     echo "unpark: $task_id is already ready (idempotent no-op)"
     return 0
   fi
@@ -98,16 +131,30 @@ ops_unpark() {
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision unpark \
     --rationale "$rationale" --run "$run_id" --authority operator 2>/dev/null \
     && echo "unpark: decision recorded" || echo "unpark: decision record FAILED (continuing)" >&2
-  # Surface 2 — task file.
-  singular_task_set_status "$task_file" "ready" \
-    && echo "unpark: task -> ready" \
-    || { echo "unpark: task status update FAILED" >&2; return 2; }
-  # Surface 3 — lease: status plus the retry budget it carries.
-  if singular_lease_unpark "$task_id" 2>/dev/null; then
-    echo "unpark: lease -> ready, retryCount reset"
+  # Surface 2 — lease: reset the durable budget before exposing the task as
+  # ready.  An existing lease that cannot be rewritten is an error, not "no
+  # lease (ok)"; otherwise unpark can appear successful while re-entry remains
+  # exhausted.
+  if [[ -f "$lease_file" ]]; then
+    case "$lease_status" in
+      planned|running|needs-review|accepted|integrated)
+        echo "unpark: refusing to override lease status '$lease_status'" >&2
+        return 2 ;;
+    esac
+    if singular_lease_unpark "$task_id" 2>/dev/null; then
+      echo "unpark: lease -> ready, product-pass budget reset"
+    else
+      echo "unpark: lease budget reset FAILED; task remains $current" >&2
+      return 2
+    fi
   else
     echo "unpark: no lease (ok)"
   fi
+  # Surface 3 — task file.  Lease-first ordering is fail-safe: if this write
+  # fails, the task remains non-ready and a repeated unpark can finish safely.
+  singular_task_set_status "$task_file" "ready" \
+    && echo "unpark: task -> ready" \
+    || { echo "unpark: task status update FAILED" >&2; return 2; }
   # Surface 4 — refusals counter.
   if [[ -f "$SINGULAR_DISPATCH_DIR/$task_id.refusals" ]]; then
     rm -f "$SINGULAR_DISPATCH_DIR/$task_id.refusals"
@@ -714,16 +761,13 @@ ops_gc() {
     return 2
   }
 
-  local run_id lock_run_id lock_pid
+  local run_id
   run_id="${inherited_run_id:-$(singular_run_id)}"
   if [[ -n "$inherited_run_id" ]]; then
-    # Reconcile already owns the sole origin lock. Reuse it only for its direct
-    # child and exact run id; this avoids weakening the ordinary gc lock rule.
-    lock_run_id="$(singular_json_field "$SINGULAR_LOCK_FILE" runId 2>/dev/null || true)"
-    lock_pid="$(singular_json_field "$SINGULAR_LOCK_FILE" pid 2>/dev/null || true)"
-    if [[ "$lock_run_id" != "$inherited_run_id" || "$lock_pid" != "$PPID" ]] \
-      || ! singular_pid_alive "$lock_pid"; then
-      echo "gc: reconcile lock ownership did not verify" >&2
+    # Reconcile already owns the sole origin lock. A public flag and run id are
+    # not sufficient authority; require the per-acquisition child capability.
+    if ! singular_require_inherited_origin_lock "$inherited_run_id"; then
+      echo "gc: reconcile lock capability did not verify" >&2
       return 2
     fi
   elif [[ "$dry" == "no" ]]; then

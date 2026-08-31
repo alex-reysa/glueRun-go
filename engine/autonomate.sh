@@ -27,6 +27,11 @@ export SINGULAR_TARGET_BRANCH="${SINGULAR_TARGET_BRANCH:-}"
 export SINGULAR_AUTO_INTEGRATE="${SINGULAR_AUTO_INTEGRATE:-1}"
 export SINGULAR_PUSH="${SINGULAR_PUSH:-1}"
 export SINGULAR_GENERATE="${SINGULAR_GENERATE:-1}"
+# A configured reconcile script is a child process, so it must receive the
+# canonical paths resolved by lib.sh. Relying on whether the caller happened
+# to export these variables made custom reconcilers observe an empty state
+# directory (or a differently-spelled /var versus /private/var path).
+export SINGULAR_ROOT SINGULAR_STATE_DIR SINGULAR_JSON_CONFIG_FILE
 sleep_secs="${SINGULAR_SLEEP:-20}"
 quota_sleep_cap="${SINGULAR_QUOTA_SLEEP_CAP:-300}"       # max seconds per quota-window poll nap
 quota_wait_budget="${SINGULAR_QUOTA_WAIT_BUDGET:-10800}" # total quota-wait before escalating to STOP (3h)
@@ -48,6 +53,25 @@ done
 
 singular_ensure_state_dirs
 singular_require_target_branch
+
+# A manifest exists only after `singular campaign start`; legacy callers remain
+# compatible, while an explicit campaign cannot silently continue after its
+# engine, configuration, shell, runner, gate, evidence or prompt-policy surface
+# changes. Verification is repeated at EVERY actuation boundary below: a
+# process that stays alive across a hot patch must not keep dispatching simply
+# because its startup preflight was once green.
+autonomate_campaign_verify() {
+  local phase="$1" cycle="${2:-0}"
+  "$SCRIPT_DIR/campaign.sh" verify --quiet && return 0
+  singular_append_event "campaign.drift_detected" "autonomate refused runtime drift" \
+    "{\"manifest\":\"${SINGULAR_CAMPAIGN_MANIFEST:-$SINGULAR_STATE_DIR/campaign/manifest.json}\",\"phase\":\"$phase\",\"iteration\":$cycle}" || true
+  singular_write_status "$cycle" "stopped (campaign runtime drift at $phase)" || true
+  echo "[autonomate] campaign runtime drift at $phase; refusing further actuation. Review 'singular campaign verify', end the campaign, and start a replacement." >&2
+  return 1
+}
+if ! autonomate_campaign_verify startup 0; then
+  exit 2
+fi
 
 pidfile="$SINGULAR_STATE_DIR/autonomate.pid"
 # The process identity lives BESIDE the pidfile, not inside it. ops.sh, doctor
@@ -215,8 +239,8 @@ fi
 start_ts="$(date +%s)"
 max_hours_int="${SINGULAR_MAX_HOURS%%.*}"; [[ "$max_hours_int" =~ ^[0-9]+$ ]] || max_hours_int=20
 deadline=$(( start_ts + max_hours_int * 3600 ))
-singular_breaker_reset
 iteration=0
+campaign_drifted="no"
 
 singular_append_event "autonomate.started" "autonomous loop started" \
   "{\"pid\":$$,\"maxHours\":\"$SINGULAR_MAX_HOURS\",\"autoIntegrate\":\"$SINGULAR_AUTO_INTEGRATE\",\"push\":\"$SINGULAR_PUSH\"}"
@@ -242,6 +266,16 @@ while true; do
     echo "[autonomate] circuit breaker open ($breaker/$SINGULAR_MAX_CONSEC_FAILS); halting"
     singular_write_status "$iteration" "stopped (circuit breaker $breaker/$SINGULAR_MAX_CONSEC_FAILS)"
     singular_append_event "autonomate.stopped" "stopped by circuit breaker" "{\"iteration\":$iteration,\"consecFails\":$breaker}"
+    break
+  fi
+
+  # This is the transaction boundary for autonomous work. reconcile --actuate
+  # owns planning, dispatch, packet import, integration and promotion, so no
+  # such operation can begin in this cycle until the immutable campaign still
+  # matches. A drift discovered after the preceding cycle therefore stops here
+  # before any additional mutation.
+  if ! autonomate_campaign_verify cycle-boundary "$iteration"; then
+    campaign_drifted="yes"
     break
   fi
 
@@ -309,6 +343,23 @@ PY
       fi
       [[ "$nap_rc" -eq 2 ]] && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
       singular_stop_requested && { echo "[autonomate] STOP during $window_label wait; halting"; break; }
+      # WAKE means useful completion/control state may be waiting even though
+      # the planner provider is still unavailable. Run exactly one control-
+      # plane reconcile: import/reap/integrate/promote stay live, while both
+      # planner generation and worker dispatch are hard-disabled. Then return
+      # to the same backoff window; this path never increments the breaker.
+      if [[ "$nap_rc" -eq 1 ]] \
+          && bo_after_wake="$(singular_planner_backoff_active_json 2>/dev/null)"; then
+        echo "[autonomate] WAKE during active $window_label window; running one control-plane-only reconcile"
+        singular_append_event "autonomate.backoff_control_reconcile" \
+          "wake during active provider window; running control-plane-only reconcile" \
+          "{\"iteration\":$iteration,\"failureClass\":\"$bo_class\",\"backoff\":$bo_after_wake}"
+        control_out="$(SINGULAR_GENERATE=0 SINGULAR_MAX_DISPATCH=0 \
+          "$reconcile_script" --actuate 2>&1)" || true
+        printf '%s\n' "$control_out" | sed 's/^/  control: /'
+        singular_stop_requested \
+          && { echo "[autonomate] STOP after control-plane reconcile; halting"; break; }
+      fi
       iteration=$((iteration - 1))
       continue
     fi
@@ -320,6 +371,7 @@ PY
 
   field() { printf '%s\n' "$cycle_out" | sed -n "s/^$1=//p" | tail -1; }
   dispatched="$(field dispatched_this_run)"; integrated="$(field integrated_this_run)"
+  accepted="$(field imported_this_run)"
   faild="$(field failed_dispatches)"; faili="$(field failed_integrations)"
   planner_failures="$(field planner_failures_this_run)"
   planner_backoff_deferred="$(field planner_backoff_active_this_run)"
@@ -327,7 +379,7 @@ PY
   reaped_ok="$(field reaped_ok)"; reaped_failures="$(field reaped_failures)"
   workers_running="$(field workers_running)"
   promoted="$(field gates_promoted_this_run)"
-  for v in dispatched integrated faild faili planner_failures planner_backoff_deferred l1_import_rejections reaped_ok reaped_failures workers_running promoted; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
+  for v in dispatched integrated accepted faild faili planner_failures planner_backoff_deferred l1_import_rejections reaped_ok reaped_failures workers_running promoted; do [[ "${!v}" =~ ^[0-9]+$ ]] || printf -v "$v" 0; done
   if [[ "$planner_backoff_at_cycle_start" -eq 1 && "$planner_failures" -gt 0 ]]; then
     echo "  [autonomate] active planner backoff made planner refusal neutral; ignoring $planner_failures planner failure(s) for breaker accounting"
     singular_append_event "autonomate.planner_backoff_neutral" \
@@ -344,16 +396,19 @@ PY
   ready_now="$(singular_list_status_ready_tasks | wc -l | tr -d ' ')"
   active_now="$(singular_active_lease_count)"
 
+  # Only durable campaign advancement resets the breaker. Generating a new
+  # candidate, launching a worker, or reaping an exit-zero process is activity,
+  # not proof that the orchestration made useful progress: all three happened
+  # repeatedly in the field while the same node/finding tuple spun forever.
+  #
+  # imported_this_run is an accepted packet (import-packet.sh refuses anything
+  # without an accepted exact-head audit or an explicit waiver); integration and
+  # gate promotion are the other two monotone DAG transitions. A process restart
+  # deliberately preserves the counter — operators can still use the explicit
+  # `singular breaker reset` command after changing the blocking condition.
   progress="no"
-  if [[ "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" ]]; then
-    # Detached: a dispatch returns immediately and proves nothing, so it is NOT
-    # progress (otherwise every failure cycle would re-dispatch the freed slot
-    # and reset the breaker, which could then never trip). Progress is an
-    # observed completion, an integration, or new planned work; reap failures
-    # join the failure side below.
-    { [[ "$reaped_ok" -gt 0 ]] || [[ "$integrated" -gt 0 ]] || [[ "$gen_made" == "yes" ]] || [[ "$promoted" -gt 0 ]]; } && progress="yes"
-  else
-    { [[ "$dispatched" -gt 0 && "$faild" -eq 0 ]] || [[ "$integrated" -gt 0 ]] || [[ "$gen_made" == "yes" ]] || [[ "$promoted" -gt 0 ]]; } && progress="yes"
+  if [[ "$accepted" -gt 0 || "$integrated" -gt 0 || "$promoted" -gt 0 ]]; then
+    progress="yes"
   fi
 
   if [[ "$progress" == "yes" ]]; then
@@ -426,7 +481,7 @@ print(kinds.get(d.get("kind"), ""), d.get("resultRef", ""))
     fi
   fi
 
-  singular_write_status "$iteration" "running (disp=$dispatched int=$integrated failD=$faild failI=$faili planFail=$planner_failures planBackoff=$planner_backoff_deferred importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
+  singular_write_status "$iteration" "running (disp=$dispatched accepted=$accepted int=$integrated failD=$faild failI=$faili planFail=$planner_failures planBackoff=$planner_backoff_deferred importReject=$l1_import_rejections reapOK=$reaped_ok reapFail=$reaped_failures workers=$workers_running)"
 
   # Periodic supervisor briefing (0.10.0). BYTE-INERT when the interval knob is
   # unset/0: a single string test skips the whole block, so no supervisor/ dir,
@@ -465,3 +520,7 @@ done
 
 singular_append_event "autonomate.exited" "autonomous loop exited" "{\"iterations\":$iteration}"
 echo "[autonomate] done after $iteration iteration(s). STATUS: $SINGULAR_STATUS_FILE"
+if [[ "$campaign_drifted" == "yes" ]]; then
+  exit 2
+fi
+exit 0

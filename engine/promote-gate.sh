@@ -35,4 +35,12 @@ EOF
   exit 2
 fi
 
+_registers_only="no"
+for _arg in "$@"; do
+  [[ "$_arg" == "--registers" ]] && _registers_only="yes"
+done
+if [[ "$_registers_only" != "yes" ]]; then
+  singular_campaign_verify_or_refuse promote-gate entry || exit 2
+fi
+
 exec "${SINGULAR_BASH_BIN:-bash}" "$promoter" "$@"

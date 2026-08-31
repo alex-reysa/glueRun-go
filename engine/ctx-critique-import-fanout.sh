@@ -25,7 +25,7 @@
 # import — it never fabricates an approval.
 #
 # Shape / contract (mirrors singular_l1_fanout so the follow-up hook is a drop-in):
-#   singular_ctx_critique_import_fanout <run_id> <base_sha>
+#   singular_ctx_critique_import_fanout <run_id> <base_sha> [remaining_capacity]
 #     Select the L1 frontier (singular_select_l1_frontier), stage candidates per
 #     node with the same planner driver into the same l1-staging/<node> dirs (so
 #     the staged candidate sets are identical to plain fanout), then for each
@@ -50,6 +50,7 @@
 
 singular_ctx_critique_import_fanout() {
   local run_id="$1" base_sha="$2"
+  local remaining_capacity="${3:-}"
 
   # STOP fails closed — identical early return to plain fanout (no summary lines).
   if singular_stop_requested; then
@@ -59,6 +60,15 @@ singular_ctx_critique_import_fanout() {
 
   local cap="${SINGULAR_MAX_L1_CONCURRENT:-3}"
   [[ "$cap" =~ ^[0-9]+$ && "$cap" -ge 1 ]] || cap=1
+  [[ -n "$remaining_capacity" ]] || remaining_capacity="$cap"
+  [[ "$remaining_capacity" =~ ^[0-9]+$ ]] || remaining_capacity=0
+  [[ "$cap" -gt "$remaining_capacity" ]] && cap="$remaining_capacity"
+  if [[ "$cap" -eq 0 ]]; then
+    echo "actuation: l1 fanout: no remaining dispatch capacity"
+    echo "l1_planner_failures=0"
+    echo "l1_import_rejections=0"
+    return 0
+  fi
 
   # Low disk fails closed — identical to plain fanout.
   local free_gb min_gb
@@ -85,6 +95,7 @@ singular_ctx_critique_import_fanout() {
   local plan_root="$SINGULAR_RUNS_DIR/$run_id/l1-staging"
   local planner_driver="${SINGULAR_L1_PLAN_NODE:-$(dirname "${BASH_SOURCE[0]}")/l1-plan-node.sh}"
   local tasks_per_node="${SINGULAR_L1_TASKS_PER_NODE:-1}"
+  [[ "$tasks_per_node" =~ ^[0-9]+$ && "$tasks_per_node" -ge 1 ]] || tasks_per_node=1
   singular_append_event "origin.l1_fanout" "critique-aware l1 fanout started" \
     "{\"runId\":\"$run_id\",\"cap\":$cap,\"nodes\":${#nodes[@]},\"freeGb\":$free_gb}"
   echo "actuation: l1 fanout cap=$cap nodes=${#nodes[@]} (${nodes[*]})"
@@ -92,13 +103,21 @@ singular_ctx_critique_import_fanout() {
   # Stage candidates per node exactly as plain fanout does: same driver, same
   # l1-staging/<node> dirs, same args — so the staged candidate sets are identical.
   local -a pids=() pnodes=()
-  local node node_dir
+  local node node_dir node_count max_for_node
+  local candidates_remaining="$remaining_capacity" node_index=0 nodes_left
   for node in "${nodes[@]}"; do
+    nodes_left=$(( ${#nodes[@]} - node_index ))
+    max_for_node=$(( candidates_remaining - nodes_left + 1 ))
+    node_count="$tasks_per_node"
+    [[ "$node_count" -gt "$max_for_node" ]] && node_count="$max_for_node"
+    [[ "$node_count" -ge 1 ]] || break
     node_dir="$plan_root/$node"
     mkdir -p "$node_dir"
     ( "$planner_driver" --node "$node" --run-id "$run_id" --stage-dir "$node_dir" \
-        --base-sha "$base_sha" --count "$tasks_per_node" ) >"$node_dir/plan.log" 2>&1 &
+        --base-sha "$base_sha" --count "$node_count" ) >"$node_dir/plan.log" 2>&1 &
     pids+=("$!"); pnodes+=("$node")
+    candidates_remaining=$((candidates_remaining - node_count))
+    node_index=$((node_index + 1))
   done
 
   local -a staged_nodes=()
@@ -153,7 +172,7 @@ singular_ctx_critique_import_fanout() {
   # importer — its promotion logic is never duplicated. Withheld nodes are dropped.
   local import_rejections=0 import_out parsed_rejections
   if [[ "${#import_nodes[@]}" -gt 0 ]]; then
-    import_out="$(singular_l1_import_staged "$run_id" "${import_nodes[@]}" 2>&1)" || true
+    import_out="$(singular_l1_import_staged "$run_id" --max-candidates "$remaining_capacity" "${import_nodes[@]}" 2>&1)" || true
     printf '%s\n' "$import_out"
     parsed_rejections="$(printf '%s\n' "$import_out" | sed -n 's/^l1_import_rejections=//p' | tail -1)"
     [[ "$parsed_rejections" =~ ^[0-9]+$ ]] && import_rejections="$parsed_rejections"

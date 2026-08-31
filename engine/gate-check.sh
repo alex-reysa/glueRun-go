@@ -48,6 +48,23 @@ git -C "$PWD" status --porcelain=v1 --untracked-files=all 2>/dev/null \
   | sed -E '\#^.. (\.singular-state|\.singular-cache|\.singular-evidence)(/|$)#d' \
   >"$status_before" || true
 
+gate_cache_requested="${SINGULAR_GATE_PROOF_CACHE:-0}"
+# Project gates currently run under the orchestration user's UID with inherited
+# filesystem access. Therefore no persistent cache directory or same-UID MAC
+# can safely authorize skipping a later gate. Retain the legacy flag only to
+# explain why it has no effect; every gate execution is authoritative and cold.
+if [[ "$gate_cache_requested" == "1" ]]; then
+  printf '%s\n' \
+    'gate-proof-cache: persistent reuse disabled: no isolated gate executor is configured; executing the gate' \
+    >"$run_dir/gate-proof-cache-disabled.err"
+fi
+log_ref="$(singular_repo_relative_ref "$log")"
+baseline_path="${SINGULAR_GATE_BASELINE_FILE:-}"
+baseline_ref=""
+if [[ -n "$baseline_path" ]]; then
+  baseline_ref="$(singular_repo_relative_ref "$baseline_path")"
+fi
+
 # Wall-clock bound on the consumer's gate. There was none: no timeout, no
 # watchdog, no kill. A gate that hangs — a test waiting on a port, a package
 # manager waiting on a prompt — held the worker slot forever, and because the
@@ -139,7 +156,6 @@ fi
 # because gate-check.sh runs with $PWD set to a worktree while SINGULAR_ROOT and
 # SINGULAR_STATE_DIR still point at the main repo. Relativize against
 # SINGULAR_ROOT for the same reason — never against $PWD.
-log_ref="$(singular_repo_relative_ref "$log")"
 normalize_args=(
   --task-id "$task_id"
   --run-id "$run_id"
@@ -181,12 +197,12 @@ done
 # No --require-observation is passed at all: gate_report.py already refuses a
 # baseline whose observation is missing, with a message naming the baseline —
 # strictly better than the generic one this flag would raise first.
-if [[ -n "${SINGULAR_GATE_BASELINE_FILE:-}" ]]; then
+if [[ -n "$baseline_path" ]]; then
   # baselineRef lands in the report and dag.sh validates it with the same
   # regular_repo_file() call as logRef, so fixing logRef alone would just move
   # the rejection one line down.
-  normalize_args+=(--baseline "$SINGULAR_GATE_BASELINE_FILE"
-                   --baseline-ref "$(singular_repo_relative_ref "$SINGULAR_GATE_BASELINE_FILE")")
+  normalize_args+=(--baseline "$baseline_path"
+                   --baseline-ref "$baseline_ref")
 fi
 
 outcome=""
@@ -219,6 +235,7 @@ if [[ "$normalize_rc" -ne 0 || ! -f "$report" ]]; then
   "$SCRIPT_DIR/gate-report.py" "${fallback_args[@]}" || fallback_rc=$?
   outcome="inconclusive-infrastructure"
 fi
+
 cp "$report" "$summary"
 outcome="$(singular_json_field "$report" outcome 2>/dev/null || echo inconclusive-infrastructure)"
 resolved_expected="$(
@@ -246,6 +263,6 @@ case "$outcome" in
 esac
 
 singular_append_event "gate_check.completed" "gate check completed" \
-  "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"exitCode\":$exit_code,\"resultCode\":$result_code,\"outcome\":\"$outcome\",\"logRef\":\"$log\",\"reportRef\":\"$report\"}"
-echo "gate check exit_code=$exit_code outcome=$outcome log=$log report=$report"
+  "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"exitCode\":$exit_code,\"resultCode\":$result_code,\"outcome\":\"$outcome\",\"cacheHit\":false,\"logRef\":\"$log\",\"reportRef\":\"$report\"}"
+echo "gate check exit_code=$exit_code outcome=$outcome cache_hit=no log=$log report=$report"
 exit "$result_code"

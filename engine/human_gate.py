@@ -516,6 +516,7 @@ def approve_command(args: argparse.Namespace) -> None:
             "node": args.node,
             "status": "passed",
             "authoritative": True,
+            "campaignBinding": os.environ.get("SINGULAR_CAMPAIGN_BINDING", "legacy"),
             "evidenceClass": "human-approval",
             "evidence": [
                 {

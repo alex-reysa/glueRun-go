@@ -20,7 +20,7 @@
 #
 # Fail-open: the critic is an ADDED safety layer, so its infrastructure failing
 # must never deadlock planning. If the runner's output stays unparseable after
-# the SINGULAR_AUDIT_INFRA_MAX-bounded fresh retries, the driver treats the result
+# the SINGULAR_PLAN_CRITIC_INFRA_MAX-bounded fresh retries, the driver treats the result
 # as an "approve" verdict and appends a ctx.plan_critique_infra event rather
 # than blocking. The implementation auditor remains the safety floor.
 #
@@ -30,8 +30,9 @@
 #     "<state-dir>/sessions/plan-critic/<node>.json". No side effects.
 #   singular_ctx_plan_critic_run <node> <run_id> <stage_dir> [worktree]
 #     Run exactly ONE fresh (no --resume/session reuse), read-only critic pass
-#     over the staged candidate set via SINGULAR_RUNNER using the base plan-critic
-#     prompt, extract the critique with singular_extract_json, normalize finding
+#     over the staged candidate set via SINGULAR_RUNNER using a content-bound
+#     prompt (critic policy + candidates + existing-task summary + node authority),
+#     extract the critique with singular_extract_json, normalize finding
 #     ids to the singular_finding_id identity, persist it as plan-critique.json
 #     next to the staged candidates, append one plan.critiqued event (verdict +
 #     finding count), and finalize per-node critic session meta (role
@@ -68,6 +69,7 @@ singular_ctx_plan_critic_run() {
   local runner="${SINGULAR_RUNNER:-$SINGULAR_ENGINE_DIR/codex-run.sh}"
   local raw="$stage_dir/plan-critique-raw.json"
   local record="$stage_dir/plan-critique.json"
+  local critic_input="$stage_dir/plan-critic-input.md"
 
   # Per-node critic session meta (role plan-critic), usable by Stage 3 carry-over.
   local session_meta; session_meta="$(singular_ctx_plan_critic_session_path "$node")"
@@ -82,16 +84,115 @@ singular_ctx_plan_critic_run() {
   candidate_batch_dir="$(singular_task_batch_candidate_dir "$stage_dir")" || return 2
   local batch_csv=""
   local f base tid
-  for f in "$candidate_batch_dir"/TASK-*.md; do
+  for f in "$candidate_batch_dir"/TASK-*.candidate.md; do
     [[ -e "$f" ]] || continue
-    base="$(basename "$f" .md)"
+    base="$(basename "$f" .candidate.md)"
     tid="$(printf '%s' "$base" | grep -oE '^TASK-[0-9]{4,}' || true)"
     [[ -n "$tid" ]] || continue
     if [[ -z "$batch_csv" ]]; then batch_csv="$tid"; else batch_csv="$batch_csv,$tid"; fi
   done
+  # Legacy fixtures and pre-task-batch staging used TASK-*.md. Keep that input
+  # readable only when no authoritative candidate files exist.
+  if [[ -z "$batch_csv" ]]; then
+    for f in "$candidate_batch_dir"/TASK-*.md; do
+      [[ -e "$f" ]] || continue
+      base="$(basename "$f" .md)"
+      tid="$(printf '%s' "$base" | grep -oE '^TASK-[0-9]{4,}' || true)"
+      [[ -n "$tid" ]] || continue
+      if [[ -z "$batch_csv" ]]; then batch_csv="$tid"; else batch_csv="$batch_csv,$tid"; fi
+    done
+  fi
 
-  local infra_max="${SINGULAR_AUDIT_INFRA_MAX:-2}"
-  [[ "$infra_max" =~ ^[0-9]+$ ]] || infra_max=2
+  local base_sha="${SINGULAR_PLAN_ATTEMPT_BASE_SHA:-}"
+  if [[ -z "$base_sha" && -f "$stage_dir/plan-attempt-input.json" ]]; then
+    base_sha="$(python3 - "$stage_dir/plan-attempt-input.json" <<'PY' 2>/dev/null || true
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8")).get("baseSha", ""))
+PY
+)"
+  fi
+  [[ -n "$base_sha" ]] || base_sha="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || printf '%s' "")"
+
+  # The former driver built this context elsewhere but sent only the base policy
+  # to the runner. Compose one complete prompt here and bind all caching to its
+  # bytes. A critic can therefore neither run blind nor reuse a verdict for a
+  # changed candidate/summary/authority/policy.
+  if ! singular_ctx_plan_critic_context "$node" "$stage_dir" "$critic_input" "" "$prompt" "$base_sha"; then
+    return 2
+  fi
+  local context_sha; context_sha="$(singular_sha256_file "$critic_input" 2>/dev/null || printf '%s' "")"
+  [[ -n "$context_sha" ]] || return 2
+
+  local engine_version="${SINGULAR_ENGINE_VERSION:-}"
+  if [[ -z "$engine_version" ]]; then
+    local version_file="${SINGULAR_ENGINE_DIR}/../VERSION"
+    [[ -f "$version_file" ]] && engine_version="$(tr -d '[:space:]' < "$version_file")"
+  fi
+  local critic_policy_version="${SINGULAR_PLAN_CRITIC_POLICY_VERSION:-1}"
+  local critic_model_version
+  if [[ "$(type -t singular_plan_attempt_critic_model_version)" == "function" ]]; then
+    critic_model_version="$(singular_plan_attempt_critic_model_version)"
+  else
+    critic_model_version="${SINGULAR_PLAN_CRITIC_MODEL_VERSION:-$runner_basename}"
+  fi
+  local critic_capability_profile="${SINGULAR_CRITIC_CAPABILITY_PROFILE:-audit-core}"
+  local critique_identity
+  critique_identity="$(python3 - "$node" "$base_sha" "$context_sha" "$prompt_sha" \
+    "$engine_version" "$critic_policy_version" "$critic_model_version" \
+    "$critic_capability_profile" <<'PY'
+import hashlib, json, sys
+keys = ("node", "baseSha", "contextSha", "promptSha", "engineVersion",
+        "policyVersion", "modelVersion", "capabilityProfile")
+doc = dict(zip(keys, sys.argv[1:]))
+raw = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
+print(hashlib.sha256(raw).hexdigest())
+PY
+)"
+  local node_key; node_key="$(printf '%s' "$node" | tr -c 'A-Za-z0-9._-' '-')"
+  local cache_dir="${SINGULAR_STATE_DIR:-$SINGULAR_ROOT/.singular-state}/planning-attempts/$node_key/critique-cache"
+  local cache_record="$cache_dir/$critique_identity.json"
+
+  # A parsed semantic verdict is immutable for this exact identity. Rehydrate it
+  # with the current run id rather than paying for a second critic pass (notably
+  # the historical l1-plan/import-fanout double invocation). Infrastructure
+  # fail-open records are never cached.
+  if [[ -f "$cache_record" ]] && python3 - "$cache_record" "$node" <<'PY' >/dev/null 2>&1
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+assert doc.get("schema") == "singular.orchestration.plan-critique.v0"
+assert doc.get("node") == sys.argv[2]
+assert doc.get("verdict") in ("approve", "revise", "park")
+assert isinstance(doc.get("findings"), list)
+PY
+  then
+    local original_run_id
+    original_run_id="$(python3 - "$cache_record" "$record" "$run_id" <<'PY'
+import json, os, sys, tempfile
+source, target, run_id = sys.argv[1:4]
+doc = json.load(open(source, encoding="utf-8"))
+original = str(doc.get("runId", ""))
+doc["runId"] = run_id
+os.makedirs(os.path.dirname(target), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".plan-critique.", dir=os.path.dirname(target))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, target)
+finally:
+    if os.path.exists(tmp): os.unlink(tmp)
+print(original)
+PY
+)"
+    singular_append_event "plan.critique_reused" "reused identity-bound plan critique" \
+      "{\"node\":\"$node\",\"runId\":\"$run_id\",\"originalRunId\":\"$original_run_id\",\"critiqueIdentity\":\"$critique_identity\",\"contextSha256\":\"$context_sha\"}"
+    return 0
+  fi
+
+  local infra_max="${SINGULAR_PLAN_CRITIC_INFRA_MAX:-1}"
+  [[ "$infra_max" =~ ^[0-9]+$ ]] || infra_max=1
+  # Permit disabling the retry, never increasing it beyond one extra call.
+  (( infra_max <= 1 )) || infra_max=1
 
   # Up to infra_max+1 fresh, read-only critic passes. FRESH = no
   # --resume-session / session reuse; read-only = --level readonly. A parseable
@@ -105,7 +206,6 @@ singular_ctx_plan_critic_run() {
     local result_file="$stage_dir/plan-critic-try-${try}-runner-result.json"
     rm -f "$raw" "$result_file" 2>/dev/null || true
     local rc=0
-    local critic_capability_profile="${SINGULAR_CRITIC_CAPABILITY_PROFILE:-audit-core}"
     singular_runner_contract_prepare \
       "$runner" critic "$critic_capability_profile" "$result_file"
     SINGULAR_RUNNER_ROLE=critic \
@@ -114,7 +214,7 @@ singular_ctx_plan_critic_run() {
     SINGULAR_RUNNER_RUN_ID="$run_id" \
     "$runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
       --level readonly -C "$worktree" --run-id "$run_id" \
-      --prompt-file "$prompt" --output-last-message "$raw" \
+      --prompt-file "$critic_input" --output-last-message "$raw" \
       --session-meta "$session_meta" >/dev/null 2>&1 || rc=$?
     if [[ "$rc" -eq 124 ]]; then
       infra_reason="timeout"
@@ -212,7 +312,24 @@ PY
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
 
     singular_append_event "plan.critiqued" "plan critic recorded a critique" \
-      "{\"node\":\"$node\",\"runId\":\"$run_id\",\"verdict\":\"$verdict\",\"findingsCount\":$count}"
+      "{\"node\":\"$node\",\"runId\":\"$run_id\",\"verdict\":\"$verdict\",\"findingsCount\":$count,\"critiqueIdentity\":\"$critique_identity\",\"contextSha256\":\"$context_sha\"}"
+
+    # Cache only a successfully parsed semantic result. Atomic replacement makes
+    # a concurrent reader see either no cache or the complete record.
+    python3 - "$record" "$cache_record" <<'PY' >/dev/null 2>&1 || true
+import json, os, sys, tempfile
+source, target = sys.argv[1:3]
+doc = json.load(open(source, encoding="utf-8"))
+os.makedirs(os.path.dirname(target), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix=".critique-cache.", dir=os.path.dirname(target))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(doc, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, target)
+finally:
+    if os.path.exists(tmp): os.unlink(tmp)
+PY
   else
     # Fail OPEN: infrastructure failure of an added safety layer must never
     # deadlock planning. Treat as an approve and record it as a distinct infra

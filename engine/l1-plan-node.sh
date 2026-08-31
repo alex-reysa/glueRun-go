@@ -122,16 +122,117 @@ singular_l1_lease_write "$node" "$area" "$stage" "$layer" planning "$run_id" "$b
 }
 singular_l1_lease_set_status "$node" active || true
 
+# Persist the stable, pre-provider lineage input and consult its terminal before
+# spending another planner call. Generated candidates are intentionally absent
+# from this identity, so cosmetic regeneration cannot mint a fresh revision
+# budget. Only semantically relevant node, dependency, source, task, authority,
+# prompt, policy, and operator inputs produce a new identity.
+plan_attempt_manifest="$(singular_plan_attempt_input_manifest \
+  "$node" "$base_sha" "$stage_dir" "$count" "$fields")" || {
+  singular_l1_lease_set_status "$node" failed || true
+  echo "plan-failed:$node (attempt-input-failed)"
+  exit 1
+}
+plan_attempt_identity="$(singular_plan_attempt_identity \
+  "$node" "$base_sha" "$stage_dir" "$SINGULAR_ROOT")" || {
+  singular_l1_lease_set_status "$node" failed || true
+  echo "plan-failed:$node (attempt-identity-failed)"
+  exit 1
+}
+[[ -d "$stage_dir/.plan-relevant-tasks" ]] || {
+  singular_l1_lease_set_status "$node" failed || true
+  echo "plan-failed:$node (attempt-input-failed)"
+  exit 1
+}
+plan_attempt_terminal="$(singular_plan_attempt_terminal \
+  "$node" "$plan_attempt_identity" "$run_id" "$base_sha" 2>/dev/null || true)"
+if [[ -n "$plan_attempt_terminal" ]]; then
+  IFS=$'\t' read -r plan_attempt_status plan_attempt_reason _ \
+    <<<"$plan_attempt_terminal"
+  if [[ "$plan_attempt_status" == "import" ]] \
+    && singular_plan_attempt_restore_candidates \
+      "$node" "$plan_attempt_identity" "$stage_dir"; then
+    singular_append_event "plan.attempt_replayed" \
+      "restored exact approved candidates for idempotent import" \
+      "{\"node\":\"$node\",\"runId\":\"$run_id\",\"attemptIdentity\":\"$plan_attempt_identity\",\"status\":\"import\"}" || true
+    planner_node_status_activity="Restored approved candidates for $node"
+    planner_node_status_next_action="Import the identity-bound staged candidates"
+    planner_node_status_outcome="planned-replay"
+    echo "planned:$node"
+    exit 0
+  fi
+  singular_append_event "plan.attempt_suppressed" \
+    "stable planning lineage is already terminal; suppressing planner" \
+    "{\"node\":\"$node\",\"runId\":\"$run_id\",\"attemptIdentity\":\"$plan_attempt_identity\",\"status\":\"$plan_attempt_status\",\"reason\":\"${plan_attempt_reason:-terminal}\"}" || true
+  singular_l1_lease_set_status "$node" failed || true
+  planner_node_status_activity="Planning suppressed for terminal lineage $node"
+  planner_node_status_next_action="Change the stable planning input or record an operator override"
+  planner_node_status_outcome="planning-suppressed-terminal"
+  echo "plan-failed:$node (terminal-lineage ${plan_attempt_reason:-$plan_attempt_status})"
+  exit 1
+fi
+
 planner="${SINGULAR_L1_PLANNER:-$SCRIPT_DIR/generate-tasks.sh}"
-if SINGULAR_PLANNING_RUN_ID="$run_id" \
-   SINGULAR_PLANNING_ARTIFACT_DIR="$stage_dir" \
-   "$planner" --node "$node" --stage-dir "$stage_dir" --count "$count" >>"$stage_dir/planner.out" 2>&1 \
-   && { singular_task_batch_has_candidates "$stage_dir" || [[ -f "$stage_dir/NO-TASKS" ]]; }; then
+plan_attempt_record=""
+plan_attempt_record_rc=0
+plan_attempt_record="$(singular_plan_attempt_begin_initial \
+  "$node" "$plan_attempt_identity" "$run_id" "$base_sha")" \
+  || plan_attempt_record_rc=$?
+if [[ "$plan_attempt_record_rc" -ne 0 ]]; then
+  singular_l1_lease_set_status "$node" failed || true
+  if [[ "$plan_attempt_record_rc" -eq 3 ]]; then
+    echo "plan-failed:$node (attempt-state-corrupt)"
+  else
+    echo "plan-failed:$node (attempt-state-failed)"
+  fi
+  exit 1
+fi
+initial_infra_max="${SINGULAR_PLAN_INITIAL_INFRA_MAX:-1}"
+[[ "$initial_infra_max" =~ ^[0-9]+$ ]] || initial_infra_max=1
+# Infrastructure knobs may disable the retry with 0, but cannot expand the
+# provider budget beyond one extra attempt.
+(( initial_infra_max <= 1 )) || initial_infra_max=1
+planner_succeeded="no"
+while :; do
+  # Reserve before calling the provider so a process crash cannot forget and
+  # replay an unbounded initial attempt after restart.
+  initial_infra_count="$(singular_plan_attempt_note_initial_infra \
+    "$plan_attempt_record" provider-attempt-started 2>/dev/null \
+    || printf '%s' "$((initial_infra_max + 2))")"
+  [[ "$initial_infra_count" =~ ^[0-9]+$ ]] || initial_infra_count=$((initial_infra_max + 2))
+  if (( initial_infra_count > initial_infra_max + 1 )); then
+    singular_plan_attempt_mark_terminal "$plan_attempt_record" park \
+      initial-planner-infra-exhausted "$run_id" || true
+    break
+  fi
+  planner_rc=0
+  SINGULAR_PLANNING_RUN_ID="$run_id" \
+  SINGULAR_PLANNING_ARTIFACT_DIR="$stage_dir" \
+  SINGULAR_TASKS_DIR="$stage_dir/.plan-relevant-tasks" \
+    "$planner" --node "$node" --stage-dir "$stage_dir" --count "$count" \
+      >>"$stage_dir/planner.out" 2>&1 || planner_rc=$?
+  if [[ "$planner_rc" -eq 0 ]] \
+    && { singular_task_batch_has_candidates "$stage_dir" || [[ -f "$stage_dir/NO-TASKS" ]]; }; then
+    planner_succeeded="yes"
+    break
+  fi
+  if (( initial_infra_count > initial_infra_max )); then
+    singular_plan_attempt_mark_terminal "$plan_attempt_record" park \
+      initial-planner-infra-exhausted "$run_id" || true
+    break
+  fi
+  singular_append_event "ctx.plan_initial_infra_retry" \
+    "initial planner infrastructure failed; retrying same stable lineage" \
+    "{\"node\":\"$node\",\"runId\":\"$run_id\",\"attemptIdentity\":\"$plan_attempt_identity\",\"infraAttempt\":$initial_infra_count,\"initialAttempts\":1}" || true
+done
+
+if [[ "$planner_succeeded" == "yes" ]]; then
   singular_planner_node_status_write \
     "Validating staged candidates for $node" "Critique or import the validated candidates"
   # A valid empty batch (NO-TASKS marker, 0.5.0): nothing to critique or
   # import; leave the lease for L0's importer to release.
   if [[ -f "$stage_dir/NO-TASKS" ]] && ! singular_task_batch_has_candidates "$stage_dir"; then
+    singular_plan_attempt_mark_terminal "$plan_attempt_record" park no-tasks "$run_id" || true
     planner_node_status_activity="Planning completed with no tasks for $node"
     planner_node_status_next_action="Release the node lease"
     planner_node_status_outcome="planned-empty"
@@ -158,7 +259,8 @@ if SINGULAR_PLANNING_RUN_ID="$run_id" \
   # brick's present-but-uncalled grep of engine/*.sh stays literal-match green.
   if [[ "${SINGULAR_PLAN_CRITIQUE:-0}" == "1" ]]; then
     _revise_pfx=singular_plan_revise_
-    revise_outcome="$("${_revise_pfx}loop" "$node" "$run_id" "$stage_dir")" \
+    revise_outcome="$(SINGULAR_PLAN_ATTEMPT_BASE_SHA="$base_sha" \
+      "${_revise_pfx}loop" "$node" "$run_id" "$stage_dir" "$SINGULAR_ROOT")" \
       || revise_outcome="park loop-error"
     if [[ "${revise_outcome%% *}" != "import" ]]; then
       singular_l1_lease_set_status "$node" failed || true

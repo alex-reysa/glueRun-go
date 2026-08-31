@@ -613,7 +613,7 @@ test_unproven_storage_proof_does_not_advance_downstream() {
   fi
 }
 
-test_human_provision_block_is_idempotent_and_excludes_planner() {
+test_human_provision_block_excludes_planner_and_recovers() {
   with_fixture
   write_subgraph_dag
   write_passed_gate D1.contract internal/artifact
@@ -621,8 +621,8 @@ test_human_provision_block_is_idempotent_and_excludes_planner() {
   write_passed_gate D1.storage_spec internal/artifact
   write_task TASK-0368
   # Ready proof but no resolvable DSN -> authoritative HumanProvisionRequired
-  # block. That block IS authoritative, so (a) it excludes the node from the
-  # planner and (b) re-running with no DSN is a no-op (already-blocked).
+  # block. That block is authoritative for the planner, but the promoter must
+  # keep re-evaluating it so the external prerequisite can later unblock it.
   env -u SINGULAR_STORAGE_PROOF_DATABASE_URL -u SINGULAR_DATABASE_URL \
     SINGULAR_PROMOTE_GATE_COMMAND="printf 'ok\n'" \
     "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof >/dev/null 2>&1 || true
@@ -633,7 +633,19 @@ test_human_provision_block_is_idempotent_and_excludes_planner() {
   out="$(env -u SINGULAR_STORAGE_PROOF_DATABASE_URL -u SINGULAR_DATABASE_URL \
         SINGULAR_PROMOTE_GATE_COMMAND="printf 'ok\n'" \
         "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof 2>&1 || true)"
-  assert_contains "$out" "already-blocked node=D1.storage_proof" "re-running with no DSN is idempotent"
+  assert_contains "$out" "blocked node=D1.storage_proof" \
+    "re-running without the external prerequisite remains blocked"
+
+  out="$(SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
+        SINGULAR_PROOF_RED_COMMAND="exit 7" \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'promotion-ok\n'" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof 2>&1)"
+  assert_contains "$out" "promoted node=D1.storage_proof" \
+    "supplying the external prerequisite supersedes the blocked gate"
+  assert_contains "$(gate_status "$SINGULAR_ORCH_DIR/gates/D1.storage_proof.gate-result.json")" \
+    "passed" "recovered storage proof gate is passed"
+  "$SCRIPT_DIR/dag.sh" area-gate D1.storage_proof >/dev/null \
+    || fail "recovered storage proof must satisfy area-gate"
 }
 
 test_generic_storage_proof_promotes_from_owned_repository_files() {
@@ -718,6 +730,29 @@ if not any("skip-guard-red" in e["ref"] for e in reds):
 PY
 }
 
+test_storage_proof_refuses_source_mutating_green_gate() {
+  with_fixture
+  write_subgraph_dag
+  write_passed_gate D1.contract internal/artifact
+  write_passed_gate S0.storage_substrate_base internal/storage
+  write_passed_gate D1.storage_spec internal/artifact
+  write_task TASK-0368
+
+  local out rc=0 gate
+  out="$(SINGULAR_STORAGE_PROOF_DATABASE_URL="postgres://fixture/skip-guard" \
+        SINGULAR_PROMOTE_GATE_COMMAND="printf 'gate-mutation\\n' >> docs/orchestration/project-state.md; printf 'green\\n'" \
+        SINGULAR_PROOF_RED_COMMAND="exit 7" \
+        "$ENGINE_HOME/singular-ext/promote-gate.sh" D1.storage_proof 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "source-mutating storage promotion was accepted"
+  assert_contains "$out" "changed certified source state" "storage red/green promotion rejects a mutated source tree"
+  gate="$SINGULAR_ORCH_DIR/gates/D1.storage_proof.gate-result.json"
+  [[ ! -f "$gate" ]] || fail "source-mutating storage promotion published a gate"
+  [[ ! -e "$SINGULAR_ORCH_DIR/gates/evidence/D1.storage_proof.regression.txt" ]] \
+    || fail "source-mutating storage promotion published a green log"
+  [[ ! -e "$SINGULAR_ORCH_DIR/gates/evidence/D1.storage_proof.skip-guard-red.txt" ]] \
+    || fail "source-mutating storage promotion published a red log"
+}
+
 test_promote_d2_storage_proof_after_durable_task_integrated() {
   with_fixture
   write_subgraph_dag
@@ -797,6 +832,7 @@ test_storage_proof_requires_external_database_when_unresolvable() {
   assert_contains "$out" "blocked node=D1.storage_proof" "unresolvable DSN records a block, not a promotion"
   gate="$SINGULAR_ORCH_DIR/gates/D1.storage_proof.gate-result.json"
   assert_contains "$(gate_status "$gate")" "blocked" "HumanProvisionRequired gate status is blocked"
+  assert_contains "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["blockerClass"])' "$gate")" "blocked-external" "HumanProvisionRequired is classified as externally blocked"
   rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
   assert_contains "$rationale" "HumanProvisionRequired" "rationale marks an external-resource stop"
   assert_contains "$rationale" "SINGULAR_STORAGE_PROOF_DATABASE_URL" "rationale names the exact remediation env var"
@@ -925,12 +961,17 @@ test_block_d2_contract_when_not_ready() {
   assert_contains "$out" "blocked node=D2.contract" "not-ready D2.contract is blocked, not promoted"
   gate="$SINGULAR_ORCH_DIR/gates/D2.contract.gate-result.json"
   assert_contains "$(gate_status "$gate")" "blocked" "not-ready D2.contract gate status is blocked"
+  assert_contains "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["blockerClass"])' "$gate")" "needs-work" "not-ready D2.contract remains planner eligible"
   local rationale
   rationale="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rationale"])' "$gate")"
   assert_contains "$rationale" "TASK-0048" "blocked rationale names the unmet readiness predicate"
   if "$SCRIPT_DIR/dag.sh" area-gate D2.contract >/dev/null 2>&1; then
     fail "a blocked D2.contract must not pass area-gate"
   fi
+  local node_fields
+  node_fields="$("$SCRIPT_DIR/dag.sh" node-fields D2.contract)" \
+    || fail "a needs-work closeout gate must remain planner eligible"
+  assert_contains "$node_fields" "lifecycle=needs-work" "promoter classification reaches the DAG frontier"
 }
 
 	test_block_then_promote_supersedes() {
@@ -1700,9 +1741,10 @@ test_promote_gate_propagates_failed_command_exit
 test_reconcile_auto_promotes_before_generation
 test_unproven_storage_proof_stays_planner_eligible
 test_unproven_storage_proof_does_not_advance_downstream
-test_human_provision_block_is_idempotent_and_excludes_planner
+test_human_provision_block_excludes_planner_and_recovers
 test_generic_storage_proof_promotes_from_owned_repository_files
 test_promote_storage_proof_after_durable_task_integrated
+	test_storage_proof_refuses_source_mutating_green_gate
 	test_promote_d2_storage_proof_after_durable_task_integrated
 	test_storage_proof_refuses_vacuous_proof_when_skip_guard_passes
 	test_storage_proof_requires_external_database_when_unresolvable

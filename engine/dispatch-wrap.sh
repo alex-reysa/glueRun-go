@@ -39,4 +39,19 @@ elif [[ "$rc" -ne 0 && "$lease_status" == "running" ]]; then
   # of after the stale-lease window.
   singular_lease_set_status "$task_id" "failed" 2>/dev/null || true
 fi
+
+# Detached workers finish outside reconcile's process tree. Without a wakeup,
+# the newly free slot is invisible until autonomate's next polling interval,
+# adding a full sleep between implementation, import, and refill. Touching the
+# cooperative WAKE sentinel is idempotent across concurrent completions and does
+# not kill or signal the scheduler. Batch mode is already waiting in-process and
+# deliberately avoids leaving a redundant wake behind.
+if [[ "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" ]]; then
+  wake_file="$(singular_wake_file)"
+  mkdir -p "$(dirname "$wake_file")"
+  : >"$wake_file"
+  singular_append_event "origin.capacity_released" \
+    "detached worker completed; scheduler wake requested" \
+    "{\"taskId\":\"$task_id\",\"exitCode\":$rc}" 2>/dev/null || true
+fi
 exit "$rc"

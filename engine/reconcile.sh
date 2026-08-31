@@ -39,6 +39,15 @@ case "${1:-}" in
     ;;
 esac
 
+# Direct callers are an equally authoritative mutation entry point; campaign
+# pinning cannot depend on reaching this script through autonomate.sh. Apply
+# imports and commits control state too, so both mutating modes verify before
+# even scaffolding state.
+if [[ "$mode" == "apply" || "$mode" == "actuate" ]] \
+    && ! singular_campaign_verify_or_refuse reconcile entry; then
+  exit 2
+fi
+
 if [[ "$mode" == "status" ]]; then
   echo "singular orchestration status"
   echo "repo: $SINGULAR_ROOT"
@@ -141,8 +150,10 @@ failed_imports=0
 dispatched_this_run=0
 failed_dispatches=0
 refused_dispatches=0
+refill_requested_this_run=0
 integrations_this_run=0
 integration_failures=0
+gates_promoted_this_run=0
 planner_failures_this_run=0
 planner_backoff_active_this_run=0
 l1_import_rejections_this_run=0
@@ -244,13 +255,21 @@ if [[ "$mode" == "actuate" ]]; then
   # target that already includes prior accepted slices (avoids a stale-base
   # build break). Packets dispatched this cycle integrate on the next cycle.
   if [[ "${SINGULAR_AUTO_INTEGRATE:-1}" == "1" ]]; then
+    singular_campaign_verify_or_refuse reconcile pre-integration || exit 2
     echo "actuation: auto-integration (pre-dispatch)"
-    integ_out="$("$SCRIPT_DIR/integrate.sh" --from-reconcile --run-id "$run_id" 2>&1)" || true
+    integration_gates_before="$(singular_authoritative_gate_snapshot_json)"
+    integ_out="$(singular_with_origin_lock_capability \
+      "$SCRIPT_DIR/integrate.sh" --from-reconcile --run-id "$run_id" 2>&1)" || true
     printf '%s\n' "$integ_out" | sed 's/^/  integ: /'
     integrations_this_run="$(printf '%s\n' "$integ_out" | sed -n 's/^integrated_this_run=//p' | tail -1)"
     integration_failures="$(printf '%s\n' "$integ_out" | sed -n 's/^failed_integrations=//p' | tail -1)"
+    integration_gates_after="$(singular_authoritative_gate_snapshot_json)"
+    promoted_during_integration="$(singular_authoritative_gate_transition_count \
+      "$integration_gates_before" "$integration_gates_after" 2>/dev/null || echo 0)"
     [[ "$integrations_this_run" =~ ^[0-9]+$ ]] || integrations_this_run=0
     [[ "$integration_failures" =~ ^[0-9]+$ ]] || integration_failures=0
+    [[ "$promoted_during_integration" =~ ^[0-9]+$ ]] || promoted_during_integration=0
+    gates_promoted_this_run=$((gates_promoted_this_run + promoted_during_integration))
   fi
 
   resource_configured_slots="${SINGULAR_MAX_CONCURRENT:-1}"
@@ -292,7 +311,8 @@ PY
   # then measure again before accepting zero capacity.
   if [[ "$resource_configured_slots" -gt 0 && "$resource_effective_slots" -eq 0 ]]; then
     resource_gc_attempted=1
-    "$SCRIPT_DIR/ops.sh" gc --from-reconcile "$run_id" \
+    singular_with_origin_lock_capability \
+      "$SCRIPT_DIR/ops.sh" gc --from-reconcile "$run_id" \
       >"$run_dir/resource-gc.log" 2>&1 || true
     resource_plan_rc=0
     "$SCRIPT_DIR/resource-plan.sh" --configured-slots "$resource_configured_slots" --json \
@@ -344,12 +364,21 @@ PY
       "low disk; planning and dispatch suspended, reconciliation continues" \
       "{\"runId\":\"$run_id\",\"reason\":\"$resource_reason\",\"configuredSlots\":$resource_configured_slots,\"freeGb\":$free_gb,\"gcAttempted\":$resource_gc_attempted,\"exitCondition\":\"effectiveSlots >= 1\"}"
   fi
-  # This list is used only for queue-size/empty checks. Duplicate suppression is
-  # authoritative in singular_select_dispatch_frontier below, whose single-pass
-  # parser also enforces dependencies, leases, and scope conflicts. Re-running
-  # the legacy signature scan once per ready task makes large campaigns spend
-  # minutes here before every dispatch cycle.
+  # Keep raw Status:ready telemetry separate from the dispatchable frontier.
+  # A task may remain lifecycle-ready while an in-flight lease owns it, a
+  # dependency is incomplete, or its owned scope conflicts with active work.
+  # Using the raw list as the refill predicate made any such task suppress L1
+  # planning even when another dispatch slot was free. The frontier is the
+  # authoritative eligibility calculation; leases remain orthogonal metadata
+  # and never require rewriting the task lifecycle to a synthetic `leased`
+  # status.
   mapfile -t ready_tasks < <(singular_list_status_ready_tasks)
+  dispatchable_probe_limit=${#ready_tasks[@]}
+  if [[ "$dispatchable_probe_limit" -gt 0 ]]; then
+    mapfile -t dispatchable_tasks < <(singular_select_dispatch_frontier "$dispatchable_probe_limit")
+  else
+    dispatchable_tasks=()
+  fi
   base_sha="$(git -C "$SINGULAR_ROOT" rev-parse "$SINGULAR_TARGET_BRANCH")"
   batch_id="$run_id-batch"
 
@@ -360,17 +389,32 @@ PY
   # 0.5.0: default ON, and promotion no longer requires a free dispatch slot —
   # it is completion-authority work, not dispatch (0.4.0's extra condition
   # meant auto-promotion effectively never fired in the field).
-  if [[ ${#ready_tasks[@]} -eq 0 && "${SINGULAR_AUTO_PROMOTE_GATES:-1}" == "1" ]]; then
-    echo "actuation: ready queue empty; attempting gate promotion..."
-    promo_out="$("${SINGULAR_PROMOTER:-$SCRIPT_DIR/promote-gate.sh}" --from-reconcile --frontier 2>&1)" || true
+  if [[ "${SINGULAR_AUTO_PROMOTE_GATES:-1}" == "1" \
+        && "${#dispatchable_tasks[@]}" -eq 0 ]]; then
+    echo "actuation: completion frontier eligible; attempting gate promotion..."
+    promotion_gates_before="$(singular_authoritative_gate_snapshot_json)"
+    promo_out="$(singular_with_origin_lock_capability \
+      "${SINGULAR_PROMOTER:-$SCRIPT_DIR/promote-gate.sh}" \
+      --from-reconcile --frontier 2>&1)" || true
     printf '%s\n' "$promo_out" | sed 's/^/  promotion: /'
+    promotion_gates_after="$(singular_authoritative_gate_snapshot_json)"
+    promoted_now="$(singular_authoritative_gate_transition_count \
+      "$promotion_gates_before" "$promotion_gates_after" 2>/dev/null || echo 0)"
+    [[ "$promoted_now" =~ ^[0-9]+$ ]] || promoted_now=0
+    gates_promoted_this_run=$((gates_promoted_this_run + promoted_now))
     mapfile -t ready_tasks < <(singular_list_status_ready_tasks)
+    dispatchable_probe_limit=${#ready_tasks[@]}
+    if [[ "$dispatchable_probe_limit" -gt 0 ]]; then
+      mapfile -t dispatchable_tasks < <(singular_select_dispatch_frontier "$dispatchable_probe_limit")
+    else
+      dispatchable_tasks=()
+    fi
   fi
 
   # With L1 parallelism enabled, plan several independent DAG nodes concurrently
   # and import their staged proposals serially (L0 stays the only importer);
   # otherwise fall back to the single-node generator (unchanged).
-  if [[ ${#ready_tasks[@]} -eq 0 && "$dispatch_budget" -gt 0 \
+  if [[ ${#dispatchable_tasks[@]} -eq 0 && "$dispatch_budget" -gt 0 \
         && "$dispatch_gate" == "open" && "${SINGULAR_GENERATE:-1}" == "1" ]]; then
     planner_backoff_json="$(singular_planner_backoff_active_json 2>/dev/null || true)"
     if [[ -n "$planner_backoff_json" ]]; then
@@ -381,22 +425,22 @@ PY
         "planner backoff active; planning deferred without failure" \
         "{\"runId\":\"$run_id\",\"backoff\":$planner_backoff_json}"
     elif [[ "${SINGULAR_ENABLE_L1_PARALLEL:-0}" == "1" ]]; then
-      echo "actuation: ready queue empty; L1 parallel fanout (cap ${SINGULAR_MAX_L1_CONCURRENT:-3})..."
+      echo "actuation: dispatchable queue empty; L1 parallel fanout (cap ${SINGULAR_MAX_L1_CONCURRENT:-3}, remaining capacity $dispatch_budget)..."
       # Plan-critique knob (default-OFF): when ON, route the L1 import fanout
       # through the integrated critique-aware orchestrator so L0 import honors the
       # plan critic verdict; it mirrors singular_l1_fanout's args and summary lines
       # (l1_planner_failures= / l1_import_rejections=), so the parsing below is
       # unchanged. When OFF (0/unset) this is byte-identical to prior behavior.
       if [[ "${SINGULAR_PLAN_CRITIQUE:-0}" == "1" ]]; then
-        l1_out="$(singular_ctx_critique_import_fanout "$run_id" "$base_sha" 2>&1)" || true
+        l1_out="$(singular_ctx_critique_import_fanout "$run_id" "$base_sha" "$dispatch_budget" 2>&1)" || true
       else
-        l1_out="$(singular_l1_fanout "$run_id" "$base_sha" 2>&1)" || true
+        l1_out="$(singular_l1_fanout "$run_id" "$base_sha" "$dispatch_budget" 2>&1)" || true
       fi
       printf '%s\n' "$l1_out" | sed 's/^/  l1: /'
       planner_failures_this_run="$(printf '%s\n' "$l1_out" | sed -n 's/^l1_planner_failures=//p' | tail -1)"
       l1_import_rejections_this_run="$(printf '%s\n' "$l1_out" | sed -n 's/^l1_import_rejections=//p' | tail -1)"
     else
-      echo "actuation: ready queue empty; invoking task generator for up to $dispatch_budget task(s)..."
+      echo "actuation: dispatchable queue empty; invoking task generator for up to $dispatch_budget task(s)..."
       gen_out="$("$SCRIPT_DIR/generate-tasks.sh" --count "$dispatch_budget" 2>&1)" || true
       printf '%s\n' "$gen_out" | sed 's/^/  gen: /'
       if printf '%s\n' "$gen_out" | grep -q 'planner-backoff'; then
@@ -409,14 +453,24 @@ PY
     [[ "$planner_failures_this_run" =~ ^[0-9]+$ ]] || planner_failures_this_run=0
     [[ "$l1_import_rejections_this_run" =~ ^[0-9]+$ ]] || l1_import_rejections_this_run=0
     mapfile -t ready_tasks < <(singular_list_status_ready_tasks)
+    dispatchable_probe_limit=${#ready_tasks[@]}
+    if [[ "$dispatchable_probe_limit" -gt 0 ]]; then
+      mapfile -t dispatchable_tasks < <(singular_select_dispatch_frontier "$dispatchable_probe_limit")
+    else
+      dispatchable_tasks=()
+    fi
   fi
 
+  # Planning may be a long provider round trip. Re-check the pinned prompt,
+  # config and engine identity after it returns so a mid-plan hot patch cannot
+  # flow into a worker launch in the same reconcile call.
+  singular_campaign_verify_or_refuse reconcile pre-dispatch || exit 2
   if [[ "$dispatch_gate" == "open" ]]; then
     mapfile -t dispatch_tasks < <(singular_select_dispatch_frontier "$dispatch_budget")
   else
     dispatch_tasks=()
   fi
-  echo "actuation: ready=${#ready_tasks[@]} frontier=${#dispatch_tasks[@]} active_leases=$active_leases cap=$max_concurrent max_dispatch=$max_dispatch available=$available_slots gate=$dispatch_gate"
+  echo "actuation: ready=${#ready_tasks[@]} dispatchable=${#dispatchable_tasks[@]} frontier=${#dispatch_tasks[@]} active_leases=$active_leases cap=$max_concurrent max_dispatch=$max_dispatch available=$available_slots gate=$dispatch_gate"
   if [[ "$dispatch_gate" != "open" && ${#ready_tasks[@]} -gt 0 ]]; then
     echo "actuation: ${#ready_tasks[@]} ready task(s) held by the $dispatch_gate gate"
   elif [[ "$available_slots" -eq 0 && ${#ready_tasks[@]} -gt 0 ]]; then
@@ -452,6 +506,7 @@ PY
         "planned" "$run_id" "" "$base_sha" "$batch_id" "$pre_owned_json" "" || true
     fi
     (
+      unset SINGULAR_ORIGIN_LOCK_CAPABILITY
       export SINGULAR_DISPATCH_BATCH_ID="$batch_id"
       export SINGULAR_DISPATCH_BASE_SHA="$base_sha"
       if [[ "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" ]]; then
@@ -475,6 +530,30 @@ os.execvp(sys.argv[1], sys.argv[1:])' "$SCRIPT_DIR/dispatch-wrap.sh" "$tid" "$l1
     singular_dispatch_record_write "$tid" "$run_id" "$dispatch_pid" \
       "$(singular_dispatch_pid_start "$dispatch_pid")" "$dispatch_log" "$base_sha" "$batch_id"
   done
+
+  # Ready work always launches before the planner is asked for more work. When
+  # that launch only partially fills the currently available capacity, request
+  # an immediate event-driven reconcile instead of waiting for the normal poll
+  # interval. The next cycle observes these pre-leases as active, computes the
+  # exact remaining capacity, and (because the dispatchable frontier is then
+  # empty) plans/imports only enough independent work to fill it. This keeps the
+  # scheduler work-conserving without holding already-ready tasks behind a slow
+  # planner call or weakening the active-scope conflict checks.
+  launched_this_cycle=${#dispatch_pids[@]}
+  if [[ "$dispatch_gate" == "open" \
+        && "${SINGULAR_GENERATE:-1}" == "1" \
+        && "$launched_this_cycle" -gt 0 \
+        && "$launched_this_cycle" -lt "$dispatch_budget" ]]; then
+    refill_requested_this_run=1
+    refill_slots=$((dispatch_budget - launched_this_cycle))
+    wake_file="$(singular_wake_file)"
+    mkdir -p "$(dirname "$wake_file")"
+    : >"$wake_file"
+    echo "actuation: partial frontier launched; requesting immediate refill for $refill_slots slot(s)"
+    singular_append_event "origin.refill_requested" \
+      "partial frontier launched; immediate capacity refill requested" \
+      "{\"runId\":\"$run_id\",\"launched\":$launched_this_cycle,\"remainingSlots\":$refill_slots,\"activeLeasesBeforeLaunch\":$active_leases,\"dispatchBudget\":$dispatch_budget}"
+  fi
 
   if [[ "${SINGULAR_DETACHED_DISPATCH:-0}" == "1" ]]; then
     # Detached: no wait. The cycle ends in seconds; outcomes are attributed by
@@ -533,6 +612,7 @@ Dispatched this run: $dispatched_this_run
 Failed dispatches: $failed_dispatches
 Integrated this run: $integrations_this_run
 Failed integrations: $integration_failures
+Gates promoted this run: $gates_promoted_this_run
 Planner failures this run: $planner_failures_this_run
 Planner backoff active this run: $planner_backoff_active_this_run
 L1 import rejections this run: $l1_import_rejections_this_run
@@ -654,6 +734,10 @@ singular_write_origin_state "$run_id"
 if [[ "$do_import" == "yes" && "$(singular_current_branch)" == "$SINGULAR_TARGET_BRANCH" ]]; then
   if [[ -n "$(git -C "$SINGULAR_ROOT" status --porcelain -- docs/orchestration)" ]] \
     && [[ -n "$_ctl_material_pending" || "$_ctl_snapshot_written" == "yes" ]]; then
+    # Import/planning may include a long provider round trip. Refuse a
+    # control-state commit if the frozen runtime changed while this cycle was
+    # in flight.
+    singular_campaign_verify_or_refuse reconcile pre-control-state-commit || exit 2
     # add -> scan -> commit/reset mutates the main worktree index, so it runs
     # under the repo-wide git lock shared with worker git ops; detached workers
     # may be running concurrently with this block.
@@ -730,6 +814,7 @@ if [[ "$mode" == "actuate" ]]; then
   echo "dispatched_this_run=$dispatched_this_run"
   echo "failed_dispatches=$failed_dispatches"
   echo "refused_dispatches=$refused_dispatches"
+  echo "refill_requested_this_run=$refill_requested_this_run"
   echo "detached_dispatch=${SINGULAR_DETACHED_DISPATCH:-0}"
   echo "reaped_ok=$reaped_ok"
   echo "reaped_failures=$reaped_failures"
@@ -738,6 +823,7 @@ if [[ "$mode" == "actuate" ]]; then
   echo "auto_integrate=${SINGULAR_AUTO_INTEGRATE:-1}"
   echo "integrated_this_run=$integrations_this_run"
   echo "failed_integrations=$integration_failures"
+  echo "gates_promoted_this_run=$gates_promoted_this_run"
   echo "planner_failures_this_run=$planner_failures_this_run"
   echo "planner_backoff_active_this_run=$planner_backoff_active_this_run"
   echo "l1_import_rejections_this_run=$l1_import_rejections_this_run"
@@ -752,4 +838,4 @@ else
   echo "worker_launch=disabled"
 fi
 
-singular_append_event "origin.reconcile_completed" "origin reconcile completed" "{\"runId\":\"$run_id\",\"mode\":\"$mode\",\"inboxPackets\":$inbox_count,\"validInboxPackets\":$valid_inbox_count,\"invalidInboxPackets\":$invalid_inbox_count,\"importedThisRun\":$imported_this_run,\"failedImports\":$failed_imports,\"dispatchedThisRun\":$dispatched_this_run,\"failedDispatches\":$failed_dispatches,\"reapedOk\":$reaped_ok,\"reapedFailures\":$reaped_failures,\"workersRunning\":$workers_running,\"integratedThisRun\":$integrations_this_run,\"failedIntegrations\":$integration_failures,\"plannerFailuresThisRun\":$planner_failures_this_run,\"plannerBackoffActiveThisRun\":$planner_backoff_active_this_run,\"l1ImportRejectionsThisRun\":$l1_import_rejections_this_run,\"importedPackets\":$imported_count,\"configuredSlots\":$resource_configured_slots,\"effectiveSlots\":$resource_effective_slots,\"availableSlots\":$resource_available_slots,\"resourceGcAttempted\":$resource_gc_attempted,\"resourceReason\":\"$resource_reason\"}"
+singular_append_event "origin.reconcile_completed" "origin reconcile completed" "{\"runId\":\"$run_id\",\"mode\":\"$mode\",\"inboxPackets\":$inbox_count,\"validInboxPackets\":$valid_inbox_count,\"invalidInboxPackets\":$invalid_inbox_count,\"importedThisRun\":$imported_this_run,\"failedImports\":$failed_imports,\"dispatchedThisRun\":$dispatched_this_run,\"failedDispatches\":$failed_dispatches,\"refillRequestedThisRun\":$refill_requested_this_run,\"reapedOk\":$reaped_ok,\"reapedFailures\":$reaped_failures,\"workersRunning\":$workers_running,\"integratedThisRun\":$integrations_this_run,\"failedIntegrations\":$integration_failures,\"gatesPromotedThisRun\":$gates_promoted_this_run,\"plannerFailuresThisRun\":$planner_failures_this_run,\"plannerBackoffActiveThisRun\":$planner_backoff_active_this_run,\"l1ImportRejectionsThisRun\":$l1_import_rejections_this_run,\"importedPackets\":$imported_count,\"configuredSlots\":$resource_configured_slots,\"effectiveSlots\":$resource_effective_slots,\"availableSlots\":$resource_available_slots,\"resourceGcAttempted\":$resource_gc_attempted,\"resourceReason\":\"$resource_reason\"}"

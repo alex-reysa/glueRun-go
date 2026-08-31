@@ -215,6 +215,7 @@ PY
 # NO --resume-session, plus a role=plan-critic strategy_selected(fresh) event.
 # ===========================================================================
 reset_case
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-recritic-A
 export STUB_MODE="json"; export STUB_VERDICT="revise"; export STUB_FINDINGS="$FINDING"
 export STUB_RESUME_REFUSE=0
 stage_dir="$(make_stage_dir "OFF")"
@@ -253,6 +254,7 @@ pass "(A) knob off -> fresh delegate: same record + one plan.critiqued, no --res
 # same record via shared helpers, one plan.critiqued, RESUME strategy event.
 # ===========================================================================
 reset_case
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-recritic-B
 forge_meta
 export STUB_MODE="json"; export STUB_VERDICT="revise"; export STUB_FINDINGS="$FINDING"
 export STUB_RESUME_REFUSE=0
@@ -292,6 +294,7 @@ pass "(B) knob on + valid session -> --resume-session run, same record, one plan
 # FRESH pass (no --resume-session on the second call) produces the record.
 # ===========================================================================
 reset_case
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-recritic-C
 forge_meta
 export STUB_MODE="json"; export STUB_VERDICT="revise"; export STUB_FINDINGS="$FINDING"
 export STUB_RESUME_REFUSE=1
@@ -333,10 +336,11 @@ pass "(C) rc-86 resume refused -> fresh fallback recorded + FRESH pass produces 
 # no plan.critiqued, returns 0 (never blocks the revision loop).
 # ===========================================================================
 reset_case
+export SINGULAR_PLAN_CRITIC_MODEL_VERSION=stub-recritic-D
 forge_meta
 export STUB_MODE="prose"; export STUB_RESUME_REFUSE=0
 unset STUB_FINDINGS 2>/dev/null || true
-export SINGULAR_AUDIT_INFRA_MAX=2
+unset SINGULAR_PLAN_CRITIC_INFRA_MAX 2>/dev/null || true
 rm -f "$lease_path"
 stage_dir="$(make_stage_dir "INFRA")"
 run_id="RUN-INFRA"

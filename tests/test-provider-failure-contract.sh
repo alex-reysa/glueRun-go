@@ -750,4 +750,28 @@ fi
   || fail "refused backoff evidence still recorded provider pressure"
 pass "pressure is observed at the validated backoff-arming choke point"
 
+# Every normalized runner result is also an exact campaign invocation record.
+# Metrics must not have to infer model calls from routing/session events.
+python3 - "$SINGULAR_EVENTS_FILE" <<'PY' || fail "runner completion telemetry"
+import json
+import sys
+
+events = []
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("type") == "runner.completed":
+        events.append(event)
+assert events, "no runner.completed event"
+data = events[-1]["data"]
+assert data.get("provider") in {"codex", "claude", "gemini", "opencode", "cursor", "openrouter", "grok"}, data
+assert data.get("role") == "planner", data
+assert isinstance(data.get("exitCode"), int), data
+assert data.get("outcome"), data
+assert data.get("runnerResultRef", "").endswith("runner-result.json"), data
+PY
+pass "normalized results emit exact runner completion telemetry"
+
 echo "ALL PROVIDER FAILURE CONTRACT TESTS PASSED"

@@ -610,13 +610,19 @@ EOF
 }
 
 write_blocked_gate() {
-  # args: node source-ref — emit a minimal valid authoritative blocked gate.
+  # args: node source-ref [blocker-class] — omit the class for a persisted
+  # pre-classification record (which must migrate conservatively at read time).
+  local blocker_field=""
+  if [[ -n "${3:-}" ]]; then
+    blocker_field="  \"blockerClass\": \"$3\","
+  fi
   cat >"$SINGULAR_ORCH_DIR/gates/$1.gate-result.json" <<EOF
 {
   "schema": "singular.orchestration.gate-result.v0",
   "node": "$1",
   "status": "blocked",
   "authoritative": true,
+$blocker_field
   "evidenceClass": "deterministic-proof",
   "evidence": [ { "kind": "source-path", "ref": "$2", "description": "blocked fixture" } ],
   "decidedBy": "test",
@@ -703,6 +709,49 @@ test_node_fields_rejects_authoritative_blocked_gate() {
   assert_contains "$out" "node has authoritative blocked gate: D1.contract" "node-fields explains blocked-gate ineligibility"
 }
 
+test_needs_work_gate_remains_planner_eligible() {
+  with_fixture
+  write_blocked_gate D1.contract internal/artifact needs-work
+  local out
+  out="$("$SCRIPT_DIR/dag.sh" next-areas --explain)"
+  assert_contains "$out" '"node":"D1.contract"' "needs-work remains in the planning frontier"
+  assert_contains "$out" '"lifecycle":"needs-work"' "frontier reports the durable remediation lifecycle"
+  out="$("$SCRIPT_DIR/dag.sh" node-fields D1.contract)"
+  assert_contains "$out" "node=D1.contract" "node-fields permits needs-work remediation"
+  assert_contains "$out" "lifecycle=needs-work" "node-fields exposes remediation state to planners"
+}
+
+test_blocked_external_gate_stays_parked() {
+  with_fixture
+  write_blocked_gate D1.contract internal/artifact blocked-external
+  local out rc=0
+  out="$("$SCRIPT_DIR/dag.sh" next-areas)"
+  assert_not_contains "$out" '"node":"D1.contract"' "blocked-external is absent from the frontier"
+  out="$("$SCRIPT_DIR/dag.sh" next-areas --explain)"
+  assert_contains "$out" '"reason":"blocked-external"' "explain reports the external blocker class"
+  out="$("$SCRIPT_DIR/dag.sh" node-fields D1.contract 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "blocked-external must not be planner eligible"
+  assert_contains "$out" "blocked-external" "node-fields explains the external-input requirement"
+}
+
+test_blocker_class_transition_and_legacy_migration_are_deterministic() {
+  with_fixture
+  # A historical classless record remains safely parked.
+  write_blocked_gate D1.contract internal/artifact
+  local out
+  out="$("$SCRIPT_DIR/dag.sh" next-areas --explain)"
+  assert_contains "$out" '"node":"D1.contract","reason":"blocked-external"' "legacy blocked normalizes conservatively"
+
+  # Rewriting only the machine-readable class deterministically changes
+  # eligibility; no prose/rationale heuristic participates in the decision.
+  write_blocked_gate D1.contract internal/artifact needs-work
+  out="$("$SCRIPT_DIR/dag.sh" next-areas --explain)"
+  assert_contains "$out" '"node":"D1.contract"' "needs-work transition resumes planning"
+  write_blocked_gate D1.contract internal/artifact blocked-external
+  out="$("$SCRIPT_DIR/dag.sh" next-areas --explain)"
+  assert_contains "$out" '"node":"D1.contract","reason":"blocked-external"' "blocked-external transition parks planning"
+}
+
 test_next_areas_all_complete() {
   with_fixture
   write_passed_gate D1.contract internal/artifact
@@ -749,6 +798,9 @@ test_next_areas_failed_gate_does_not_advance
 test_next_areas_excludes_authoritative_blocked_gate
 test_next_area_skips_authoritative_blocked_gate_to_next_eligible_node
 test_node_fields_rejects_authoritative_blocked_gate
+test_needs_work_gate_remains_planner_eligible
+test_blocked_external_gate_stays_parked
+test_blocker_class_transition_and_legacy_migration_are_deterministic
 test_next_areas_all_complete
 test_next_area_backcompat_unchanged
 test_generate_tasks_frozen_by_stop

@@ -47,6 +47,13 @@ done
 [[ -n "$failure_class" ]] || { echo "decide.sh: --failure-class required" >&2; exit 2; }
 [[ -n "$run_id" ]] || run_id="$(singular_worker_run_id)"
 [[ -d "$worktree" ]] || worktree="$SINGULAR_ROOT"
+singular_campaign_verify_or_refuse decide entry || exit 2
+decider_campaign_binding="$(singular_campaign_binding)" || exit 2
+if [[ -n "${SINGULAR_EXPECTED_CAMPAIGN_BINDING:-}" \
+    && "$decider_campaign_binding" != "$SINGULAR_EXPECTED_CAMPAIGN_BINDING" ]]; then
+  echo "decide: caller campaign identity is no longer current" >&2
+  exit 2
+fi
 singular_ensure_state_dirs
 run_dir="$(singular_run_dir "$run_id")"
 mkdir -p "$run_dir"
@@ -54,6 +61,7 @@ mkdir -p "$run_dir"
 decider_status_activity="Decision failed for $failure_class"
 decider_status_next_action="Inspect the decider evidence"
 decider_status_outcome="decision-failed"
+decider_campaign_lock_held="no"
 
 singular_decider_status_write() {
   local activity="$1" next_action="$2" process_type="${3:-decider}" process_pid="${4:-$$}"
@@ -67,6 +75,11 @@ singular_decider_status_on_exit() {
   local rc=$?
   local state="failed"
   trap - EXIT
+  if [[ "$decider_campaign_lock_held" == "yes" ]]; then
+    singular_campaign_lock_release 2>/dev/null || true
+    decider_campaign_lock_held="no"
+  fi
+  rm -f "${verdict_candidate:-}" "${verdict_publication_tmp:-}" 2>/dev/null || true
   [[ "$rc" -eq 0 ]] && state="completed"
   "$SCRIPT_DIR/run-status.sh" write \
     --run-id "$run_id" --task-id "${task_id:-}" --phase terminal --state "$state" \
@@ -126,6 +139,8 @@ with open(out_path, "w", encoding="utf-8") as f:
 PY
 
 verdict="$run_dir/decision-$failure_class.json"
+verdict_candidate="$run_dir/.decision-$failure_class.candidate.$$.json"
+verdict_publication_tmp="$run_dir/.decision-$failure_class.publication.$$.json"
 invalid_verdict="$run_dir/decision-$failure_class.invalid.json"
 action="escalate-parked"
 rationale="decider unavailable; parked by fallback"
@@ -192,7 +207,7 @@ singular_runner_contract_prepare \
     --level readonly -C "$worktree" \
     --run-id "$run_id" \
     --prompt-file "$prompt_file" \
-    --output-last-message "$verdict" \
+    --output-last-message "$verdict_candidate" \
     --session-meta "$decider_meta"
 ) >>"$decider_log" 2>&1 &
 decider_pid=$!
@@ -222,7 +237,7 @@ singular_session_meta_finalize "$decider_meta" "decider" "$task_id" "$run_id" \
 if [[ "$timed_out" == "yes" ]]; then
   singular_decider_timeout_action
   owner="human"; [[ "$action" == "retry" ]] && owner="l1"
-  singular_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "$owner"
+  singular_write_decider_verdict "$verdict_candidate" "$task_id" "$failure_class" "$action" "$rationale" "$owner"
   singular_append_event "decider.timeout" "readonly decider timed out" \
     "$(python3 - "$task_id" "$run_id" "$failure_class" "$action" "$decider_timeout_sec" <<'PY'
 import json, sys
@@ -230,19 +245,20 @@ task_id, run_id, failure_class, action, timeout_sec = sys.argv[1:6]
 print(json.dumps({"taskId": task_id, "runId": run_id, "failureClass": failure_class, "timeoutSec": int(timeout_sec), "action": action}, separators=(",", ":")))
 PY
 )"
-elif [[ -f "$verdict" ]] && singular_extract_json "$verdict" "$verdict" 2>/dev/null; then
+elif [[ -f "$verdict_candidate" ]] \
+    && singular_extract_json "$verdict_candidate" "$verdict_candidate" 2>/dev/null; then
   validation_log="$run_dir/decision-$failure_class.validation.log"
-  if singular_validate_decider_verdict "$verdict" "$failure_class" "$task_id" >"$validation_log" 2>&1; then
-    a="$(singular_json_field "$verdict" action 2>/dev/null || echo "")"
-    r="$(singular_json_field "$verdict" rationale 2>/dev/null || echo "")"
+  if singular_validate_decider_verdict "$verdict_candidate" "$failure_class" "$task_id" >"$validation_log" 2>&1; then
+    a="$(singular_json_field "$verdict_candidate" action 2>/dev/null || echo "")"
+    r="$(singular_json_field "$verdict_candidate" rationale 2>/dev/null || echo "")"
     if [[ -n "$a" ]]; then action="$a"; fi
     if [[ -n "$r" ]]; then rationale="$r"; fi
   else
-    cp "$verdict" "$invalid_verdict" 2>/dev/null || true
+    cp "$verdict_candidate" "$invalid_verdict" 2>/dev/null || true
     invalid_reason="$(cat "$validation_log" 2>/dev/null || echo "schema validation failed")"
     action="escalate-parked"
     rationale="invalid decider verdict; parked by fallback: $invalid_reason"
-    singular_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "human"
+    singular_write_decider_verdict "$verdict_candidate" "$task_id" "$failure_class" "$action" "$rationale" "human"
     singular_append_event "decider.invalid_verdict" "decider verdict failed validation; using fallback" \
       "$(decider_event_data "$invalid_reason")"
   fi
@@ -250,13 +266,40 @@ else
   # Decider produced no parseable JSON action (prose-only, refusal, or truncated).
   # Falls back to the escalate-parked default, but record WHY so a prose stall is
   # visible rather than indistinguishable from a deliberate human-park decision.
-  [[ -f "$verdict" ]] && cp "$verdict" "$invalid_verdict" 2>/dev/null || true
-  singular_write_decider_verdict "$verdict" "$task_id" "$failure_class" "$action" "$rationale" "human"
+  [[ -f "$verdict_candidate" ]] && cp "$verdict_candidate" "$invalid_verdict" 2>/dev/null || true
+  singular_write_decider_verdict "$verdict_candidate" "$task_id" "$failure_class" "$action" "$rationale" "human"
   singular_append_event "decider.unparseable" "decider produced no parseable JSON action; using fallback" \
     "$(decider_event_data "unparseable")"
 fi
 
 # Record the decision durably.
+singular_campaign_binding_matches \
+  "$decider_campaign_binding" decide pre-decision-publication-checkpoint || exit 2
+singular_campaign_lock_acquire || {
+  echo "decide: campaign publication lock unavailable" >&2
+  exit 75
+}
+decider_campaign_lock_held="yes"
+singular_campaign_publication_cas \
+  "$decider_campaign_binding" decide pre-decision-publication || exit 2
+python3 - "$verdict_candidate" "$verdict_publication_tmp" \
+  "$run_id" "$decider_campaign_binding" <<'PY'
+import json
+import sys
+
+source, destination, run_id, campaign_binding = sys.argv[1:5]
+with open(source, encoding="utf-8") as stream:
+    data = json.load(stream)
+data["runId"] = run_id
+data["campaignBinding"] = campaign_binding
+with open(destination, "w", encoding="utf-8") as stream:
+    json.dump(data, stream, indent=2)
+    stream.write("\n")
+PY
+singular_validate_decider_verdict \
+  "$verdict_publication_tmp" "$failure_class" "$task_id" >/dev/null
+mv "$verdict_publication_tmp" "$verdict"
+rm -f "$verdict_candidate"
 "$SCRIPT_DIR/record-decision.sh" --task "${task_id:-UNKNOWN}" --decision "decide:$action" \
   --rationale "$failure_class -> $action: $rationale" --run "$run_id" --branch "$branch" \
   --authority decider >/dev/null 2>&1 || true
@@ -268,14 +311,16 @@ if [[ "$action" == "escalate-infra" ]]; then
   # through `singular unpark`.
   singular_append_event "decider.parked_infrastructure" \
     "decision parked on an environment failure, not a product defect" \
-    "$(decider_event_data "$rationale")"
+    "$(decider_event_data "$rationale")" || true
 elif [[ "$action" == "escalate-parked" ]]; then
   singular_append_event "decider.parked" "decision parked for human review" \
-    "$(decider_event_data "$rationale")"
+    "$(decider_event_data "$rationale")" || true
 else
   singular_append_event "decider.verdict" "decider chose an action" \
-    "$(decider_event_data)"
+    "$(decider_event_data)" || true
 fi
+singular_campaign_lock_release
+decider_campaign_lock_held="no"
 
 decider_status_activity="Decision recorded for ${task_id:-unscoped}: $action"
 decider_status_next_action="Apply the recorded recovery action"

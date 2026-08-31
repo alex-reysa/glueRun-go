@@ -2288,6 +2288,7 @@ Setup / lifecycle:
                        (default: attach to it), durable manifest + per-test logs
                        under .singular-state/test-runs/
   update [VERSION]     pin this repo to an engine version (.singular-version)
+  campaign start|end|verify|status|canary              freeze, verify, and explicitly end an autonomous campaign
   migrate [--dry-run]  bring this repo's schemaVersion up to the engine's
                        (--dry-run prints the migration chain and changes nothing)
   version              print CLI + resolved engine version
@@ -2348,6 +2349,7 @@ main() {
     report)        run_engine ops.sh report "$@" ;;
     lease)         run_engine lease.sh "$@" ;;
     accept-packet) run_engine accept-existing-packet.sh "$@" ;;
+    campaign)      run_engine campaign.sh "$@" ;;
     metrics)       cmd_metrics "$@" ;;
     graph)         [[ "${SINGULAR_CTX_GRAPH:-0}" == "1" ]] || die "unknown command: $cmd (try: singular help)"; cmd_graph "$@" ;;
     experiment-report) [[ "${SINGULAR_CTX_EXPERIMENT:-0}" == "1" ]] || die "unknown command: $cmd (try: singular help)"; cmd_experiment_report "$@" ;;

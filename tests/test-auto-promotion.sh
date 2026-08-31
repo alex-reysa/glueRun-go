@@ -24,12 +24,32 @@ root="$tmp/repo"
 mkdir -p "$root/docs/orchestration/tasks" "$root/docs/orchestration/gates" "$root/.singular-state"
 git -C "$root" init -q
 git -C "$root" checkout -q -b target
+cat >"$root/docs/orchestration/dag.v0.json" <<'EOF'
+{
+  "schema": "singular.orchestration.dag.v0",
+  "nodes": [
+    {"id":"D1.contract","stage":"D1","area":"artifact","layer":"contract","kind":"contract","dependsOn":[],"requiredCompletion":"contract_complete"}
+  ]
+}
+EOF
+git -C "$root" add docs/orchestration/dag.v0.json
 git -C "$root" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 
 fake_promoter="$tmp/fake-promoter.sh"
 cat >"$fake_promoter" <<'SH'
 #!/usr/bin/env bash
 echo "FAKE-PROMOTER argv:$*"
+if [[ "${FAKE_PROMOTED:-0}" == "1" ]]; then
+  echo "promoted node=D1.contract gate=fake log=fake"
+  exit 0
+fi
+if [[ "${FAKE_GATE_TRANSITION:-0}" == "1" ]]; then
+  cat >"$SINGULAR_ORCH_DIR/gates/D1.contract.gate-result.json" <<'EOF'
+{"schema":"singular.orchestration.gate-result.v0","node":"D1.contract","status":"passed","authoritative":true,"evidenceClass":"grandfathered","evidence":[{"kind":"source-path","ref":"docs/orchestration/dag.v0.json"}],"decidedBy":"test-promoter","recordedAt":"2026-08-30T00:00:00Z"}
+EOF
+  echo "promoted node=D1.contract gate=real log=real"
+  exit 0
+fi
 echo "no promotable frontier gates"
 SH
 chmod +x "$fake_promoter"
@@ -49,6 +69,16 @@ common_env() {
 out="$(common_env "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"
 assert_contains "$out" "attempting gate promotion" "empty-queue pass fires by default"
 assert_contains "$out" "FAKE-PROMOTER argv:--from-reconcile --frontier" "configured promoter invoked"
+
+# Promoter stdout is not authority. A forged success line without an actual,
+# schema-valid authoritative gate transition must count as zero.
+out="$(common_env env FAKE_PROMOTED=1 "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"
+assert_contains "$out" "gates_promoted_this_run=0" "forged promoter stdout cannot report progress"
+
+# A real false->true authoritative transition survives the reconcile summary
+# boundary so autonomate can safely treat it as breaker-resetting progress.
+out="$(common_env env FAKE_GATE_TRANSITION=1 "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"
+assert_contains "$out" "gates_promoted_this_run=1" "reconcile reports a validated direct gate transition"
 
 # 2. Opt-out restores 0.4.0 silence.
 out="$(common_env env SINGULAR_AUTO_PROMOTE_GATES=0 "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1 || true)"

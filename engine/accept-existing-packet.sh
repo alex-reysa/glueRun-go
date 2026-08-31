@@ -14,6 +14,12 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib.sh"
 
+singular_campaign_verify_or_refuse accept-existing-packet entry || exit 2
+accept_campaign_binding="$(singular_campaign_binding)" || {
+  echo "accept-existing-packet: inconsistent campaign identity" >&2
+  exit 2
+}
+
 usage() {
   echo "usage: $0 path/to/state-packet.json" >&2
   exit 2
@@ -28,6 +34,9 @@ verification_worktree=""
 verification_worktree_added="no"
 original_workspace_fingerprint=""
 check_original_workspace_on_exit="no"
+accept_campaign_lock_held="no"
+accept_git_lock_held="no"
+audit_candidate=""
 
 workspace_fingerprint() {
   python3 - "$1" <<'PY'
@@ -55,6 +64,15 @@ PY
 cleanup() {
   local rc=$?
   trap - EXIT
+  if [[ "$accept_campaign_lock_held" == "yes" ]]; then
+    singular_campaign_lock_release 2>/dev/null || true
+    accept_campaign_lock_held="no"
+  fi
+  if [[ "$accept_git_lock_held" == "yes" ]]; then
+    singular_git_lock_release 2>/dev/null || true
+    accept_git_lock_held="no"
+  fi
+  [[ -z "$audit_candidate" ]] || rm -f "$audit_candidate" 2>/dev/null || true
   if [[ "$check_original_workspace_on_exit" == "yes" \
     && -n "$original_workspace_fingerprint" && -d "${workspace:-}" ]]; then
     local current_workspace_fingerprint=""
@@ -95,7 +113,31 @@ base_ref="$(singular_json_field "$packet" baseRef)"
 workspace="$(singular_json_field "$packet" workspace)"
 run_dir="$SINGULAR_RUNS_DIR/$run_id"
 audit_record="$(singular_audit_record_path "$run_id")"
+audit_candidate="$run_dir/.audit.accept-existing.$$.tmp"
 task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+packet_initial_sha="$(shasum -a 256 "$packet" | awk '{print $1}')"
+lease_path="$(singular_lease_path "$task_id")"
+lease_initial_sha="$(shasum -a 256 "$lease_path" 2>/dev/null | awk '{print $1}' || true)"
+packet_campaign_binding="$(python3 - "$packet" <<'PY' 2>/dev/null || true
+import json
+import sys
+packet = json.load(open(sys.argv[1], encoding="utf-8"))
+for item in packet.get("evidence", []):
+    if isinstance(item, dict) and item.get("kind") == "campaign-binding":
+        print(item.get("ref", ""))
+        break
+PY
+)"
+lease_campaign_binding="$(singular_lease_field "$task_id" campaignBinding 2>/dev/null || true)"
+if [[ "$accept_campaign_binding" == "legacy" ]]; then
+  [[ -n "$packet_campaign_binding" ]] || packet_campaign_binding="legacy"
+  [[ -n "$lease_campaign_binding" ]] || lease_campaign_binding="legacy"
+fi
+if [[ "$packet_campaign_binding" != "$accept_campaign_binding" \
+    || "$lease_campaign_binding" != "$accept_campaign_binding" ]]; then
+  echo "packet/lease campaign binding does not match the current campaign; re-audit required" >&2
+  exit 2
+fi
 repo_schema_version="$(python3 - "$SINGULAR_ROOT/singular.config.json" <<'PY' 2>/dev/null || true
 import json
 import sys
@@ -512,8 +554,6 @@ if [[ -z "$current_workspace_fingerprint" \
   echo "original packet workspace changed during deterministic acceptance; refusing" >&2
   exit 2
 fi
-check_original_workspace_on_exit="no"
-
 if [[ -n "$failed_command" ]]; then
   echo "packet command failed during deterministic acceptance with exit $failed_command_exit: $failed_command (log: $failed_command_log)" >&2
   cat "$failed_command_log" >&2
@@ -699,8 +739,49 @@ manifest_json="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sy
 singular_json_schema_check "$manifest_json" "$manifest_schema" "evidence manifest" \
   || { echo "evidence manifest schema validation failed for $evidence_manifest" >&2; exit 2; }
 
-python3 - "$packet" "$audit_record" "$scope_log" "$secret_log" "$cmd_list" \
-  "$rerun_logs" "$audit_contract" "$evidence_manifest" <<'PY'
+singular_campaign_binding_matches \
+  "$accept_campaign_binding" accept-existing-packet pre-audit-publication-checkpoint \
+  || exit 2
+singular_git_lock_acquire || {
+  echo "accept-existing-packet: git operation lock unavailable" >&2
+  exit 75
+}
+accept_git_lock_held="yes"
+singular_campaign_lock_acquire || {
+  echo "accept-existing-packet: campaign publication lock unavailable" >&2
+  exit 75
+}
+accept_campaign_lock_held="yes"
+singular_campaign_publication_cas \
+  "$accept_campaign_binding" accept-existing-packet pre-audit-publication || exit 2
+
+# Re-read every mutable authority input under the same short git->campaign
+# critical section as publication. Long verification remains parallel, but a
+# packet, lease, branch, or workspace change during it cannot publish.
+current_packet_sha="$(shasum -a 256 "$packet" 2>/dev/null | awk '{print $1}' || true)"
+current_lease_sha="$(shasum -a 256 "$lease_path" 2>/dev/null | awk '{print $1}' || true)"
+current_branch_head="$(git -C "$SINGULAR_ROOT" rev-parse "$branch" 2>/dev/null || true)"
+current_workspace_head="$(git -C "$workspace" rev-parse HEAD 2>/dev/null || true)"
+current_workspace_fingerprint="$(workspace_fingerprint "$workspace" 2>/dev/null || true)"
+current_lease_campaign_binding="$(singular_lease_field "$task_id" campaignBinding 2>/dev/null || true)"
+if [[ -z "$current_lease_campaign_binding" && "$accept_campaign_binding" == "legacy" ]]; then
+  current_lease_campaign_binding="legacy"
+fi
+if [[ -z "$current_packet_sha" || "$current_packet_sha" != "$packet_initial_sha" \
+    || -z "$lease_initial_sha" || "$current_lease_sha" != "$lease_initial_sha" \
+    || "$current_branch_head" != "$head_sha" \
+    || "$current_workspace_head" != "$head_sha" \
+    || -z "$current_workspace_fingerprint" \
+    || "$current_workspace_fingerprint" != "$original_workspace_fingerprint" \
+    || "$current_lease_campaign_binding" != "$accept_campaign_binding" ]]; then
+  echo "accept-existing-packet: packet, lease, branch, or workspace changed during verification; refusing publication" >&2
+  exit 2
+fi
+check_original_workspace_on_exit="no"
+
+python3 - "$packet" "$audit_candidate" "$scope_log" "$secret_log" "$cmd_list" \
+  "$rerun_logs" "$audit_contract" "$evidence_manifest" \
+  "$accept_campaign_binding" <<'PY'
 import json
 import os
 import sys
@@ -711,10 +792,11 @@ import sys
     scope_log,
     secret_log,
     cmd_list,
-    rerun_logs,
-    contract,
-    evidence_manifest,
-) = sys.argv[1:9]
+  rerun_logs,
+  contract,
+  evidence_manifest,
+  campaign_binding,
+) = sys.argv[1:10]
 with open(packet_path, encoding="utf-8") as f:
     packet = json.load(f)
 with open(cmd_list, encoding="utf-8") as f:
@@ -728,6 +810,8 @@ evidence = [
     scope_log,
     secret_log,
     *logs,
+    "campaign-binding:" + campaign_binding,
+    "reviewed-head-sha:" + packet["headSha"],
 ]
 for item in packet.get("evidence", []):
     ref = item.get("ref")
@@ -773,14 +857,15 @@ PY
 # Central validator (0.5.0): the same schema check every auditor verdict gets,
 # replacing this script's hand-rolled required/extra/const/enum python.
 SINGULAR_AUDIT_SCHEMA="$audit_schema_path" \
-  singular_validate_audit_verdict "$audit_record" "$task_id" "$run_id" \
-  || { echo "audit schema validation failed for $audit_record" >&2; exit 2; }
+  singular_validate_audit_verdict "$audit_candidate" "$task_id" "$run_id" \
+  || { echo "audit schema validation failed for $audit_candidate" >&2; exit 2; }
 
-python3 - "$packet" "$run_id" <<'PY'
+python3 - "$packet" "$run_id" "$accept_campaign_binding" <<'PY'
 import json
+import os
 import sys
 
-packet_path, run_id = sys.argv[1:3]
+packet_path, run_id, campaign_binding = sys.argv[1:4]
 with open(packet_path, encoding="utf-8") as f:
     packet = json.load(f)
 packet["status"] = "accepted"
@@ -788,11 +873,19 @@ packet["nextAction"] = "import into control state and reconcile"
 audit_ref = f"runs/{run_id}/audit.json"
 if not any(item.get("kind") == "audit" and item.get("ref") == audit_ref for item in packet["evidence"]):
     packet["evidence"].append({"kind": "audit", "ref": audit_ref})
-with open(packet_path, "w", encoding="utf-8") as f:
+packet["evidence"] = [
+    item for item in packet["evidence"] if item.get("kind") != "campaign-binding"
+]
+packet["evidence"].append({"kind": "campaign-binding", "ref": campaign_binding})
+temporary = packet_path + ".accept-existing.tmp"
+with open(temporary, "w", encoding="utf-8") as f:
     json.dump(packet, f, indent=2)
     f.write("\n")
+os.replace(temporary, packet_path)
 PY
 singular_validate_packet_basic "$packet" >/dev/null
+mv "$audit_candidate" "$audit_record"
+audit_candidate=""
 
 if ! singular_lease_set_status "$task_id" "accepted"; then
   echo "lease not found for task: $task_id" >&2
@@ -804,5 +897,10 @@ singular_task_set_status "$task_file" "accepted"
   --run "$run_id" --branch "$branch" --authority origin >/dev/null
 singular_append_event "packet.accepted_existing" "existing state packet accepted deterministically" \
   "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"branch\":\"$branch\",\"headSha\":\"$head_sha\",\"audit\":\"$audit_record\"}"
+
+singular_campaign_lock_release
+accept_campaign_lock_held="no"
+singular_git_lock_release
+accept_git_lock_held="no"
 
 echo "accepted existing packet: $packet (audit: $audit_record)"

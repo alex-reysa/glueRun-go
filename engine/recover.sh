@@ -134,8 +134,10 @@ PY
     fi
     if [[ "$is_stale" == "yes" ]]; then
       # Ask the autonomous decider what to do with the stale task (AI-native; no
-      # human halt). retry/rerun/rebuild -> clear the lease so it re-dispatches;
-      # cancel/supersede -> terminal; otherwise park as stale.
+      # human halt). retry/rerun/rebuild -> retain the lease as failed and make
+      # the task dispatchable.  The lease is the durable product-budget and
+      # lineage record: deleting it used to mint a fresh initial pass after
+      # every crash. cancel/supersede remain terminal; otherwise park as stale.
       singular_lease_set_status "$task_id" "stale" || true
       if [[ "$fast_stale" == "yes" ]]; then
         # Close out the dispatch record here so the reconcile reaper does not
@@ -148,9 +150,16 @@ PY
       [[ -n "$action" ]] || action="escalate-parked"
       case "$action" in
         retry|rerun-tests|rebuild-context|revalidate-evidence)
-          rm -f "$(singular_lease_path "$task_id")"
-          [[ -f "$task_file" ]] && singular_task_set_status "$task_file" "ready" || true
-          echo "recover: cleared stale lease $task_id for retry (decider: $action)" ;;
+          if singular_lease_set_status "$task_id" "failed"; then
+            [[ -f "$task_file" ]] && singular_task_set_status "$task_file" "ready" || true
+            singular_append_event "recover.stale_retry_preserved" \
+              "stale lease made recoverable without resetting product budget" \
+              "{\"taskId\":\"$task_id\",\"runId\":\"${run_id:-}\",\"action\":\"$action\",\"leaseStatus\":\"failed\",\"productBudgetPreserved\":true}" \
+              || true
+            echo "recover: preserved stale lease $task_id as failed/recoverable for retry (decider: $action)"
+          else
+            echo "recover: could not preserve stale lease $task_id; leaving task non-ready" >&2
+          fi ;;
         cancel)    singular_lease_set_status "$task_id" "cancelled" || true; echo "recover: cancelled stale $task_id" ;;
         supersede) singular_lease_set_status "$task_id" "superseded" || true; echo "recover: superseded stale $task_id" ;;
         *)         echo "recover: parked stale lease $task_id (decider: $action)" ;;

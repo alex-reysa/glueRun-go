@@ -85,6 +85,7 @@ PY
 singular_plan_revise_loop_park_failure() {
   local node="${1:-}" run_id="${2:-}" revisions_done="${3:-0}"
   local failure_class="${4:-unknown}" exit_code="${5:-0}" evidence_ref="${6:-}"
+  local attempt_record="${7:-}"
   local event_json
   event_json="$(python3 - "$node" "$run_id" "$revisions_done" "$failure_class" \
     "$exit_code" "$evidence_ref" <<'PY'
@@ -113,6 +114,9 @@ print(json.dumps(data, separators=(",", ":")))
 PY
 )"
   singular_append_event "plan.revise_parked" "plan revision staging failed" "$event_json" || true
+  [[ -n "$attempt_record" ]] \
+    && singular_plan_attempt_mark_terminal "$attempt_record" park \
+      "revision-staging-failed:$failure_class" "$run_id" || true
   echo "park revision-staging-failed"
 }
 
@@ -140,6 +144,38 @@ singular_plan_revise_loop() {
   # the runner writes to (present-but-empty until a real session exists).
   local session_meta; session_meta="$(singular_ctx_planner_session_path "$node" 2>/dev/null || printf '%s' "")"
 
+  # Establish or recover the durable candidate-lineage identity before invoking
+  # the critic. This is the outer-loop memory that survives reconcile restarts.
+  local base_sha="${SINGULAR_PLAN_ATTEMPT_BASE_SHA:-}"
+  [[ -n "$base_sha" ]] || base_sha="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || printf '%s' "")"
+  local attempt_info attempt_identity attempt_record revisions_done attempt_status
+  local attempt_reason current_context_sha terminal_candidate_match
+  attempt_info="$(singular_plan_attempt_prepare "$node" "$run_id" "$base_sha" "$stage_dir" "$worktree")" \
+    || { echo "park attempt-identity-failed"; return 0; }
+  IFS=$'\t' read -r attempt_identity attempt_record revisions_done attempt_status \
+    attempt_reason current_context_sha terminal_candidate_match <<<"$attempt_info"
+  [[ "$revisions_done" =~ ^[0-9]+$ ]] || revisions_done=0
+  export SINGULAR_PLAN_ATTEMPT_BASE_SHA="$base_sha"
+
+  if [[ "$attempt_status" == "import" ]]; then
+    if [[ "$terminal_candidate_match" != "yes" ]]; then
+      singular_append_event "plan.attempt_suppressed" "completed lineage emitted a different candidate" \
+        "{\"node\":\"$node\",\"runId\":\"$run_id\",\"attemptIdentity\":\"$attempt_identity\",\"reason\":\"lineage-already-completed\"}" || true
+      echo "park lineage-already-completed"
+      return 0
+    fi
+    singular_append_event "plan.attempt_reused" "reused terminal plan attempt" \
+      "{\"node\":\"$node\",\"runId\":\"$run_id\",\"attemptIdentity\":\"$attempt_identity\",\"status\":\"import\"}" || true
+    echo "import"
+    return 0
+  fi
+  if [[ "$attempt_status" == "park" ]]; then
+    singular_append_event "plan.attempt_reused" "reused durable parked plan attempt" \
+      "{\"node\":\"$node\",\"runId\":\"$run_id\",\"attemptIdentity\":\"$attempt_identity\",\"status\":\"park\",\"reason\":\"$attempt_reason\"}" || true
+    echo "park ${attempt_reason:-parked}"
+    return 0
+  fi
+
   # Composed-name prefixes: the integrated helpers are invoked through these so the
   # sibling bricks' frozen present-but-uncalled greps (literal-symbol scans of
   # engine/*.sh, out of this task's edit scope) stay green. See header.
@@ -147,7 +183,6 @@ singular_plan_revise_loop() {
   local _rev_pfx=singular_plan_revise_
   local _rec_pfx=singular_plan_revise_record_
 
-  local revisions_done=0
   while :; do
     # 1. Re-critique the current staged candidate set: fresh, read-only critic on
     #    the DEFAULT runner. Persists plan-critique.json + a plan.critiqued event.
@@ -156,6 +191,19 @@ singular_plan_revise_loop() {
 
     # 2. Read the verdict the critic recorded (fail-closed: empty -> park).
     local verdict; verdict="$(singular_plan_revise_loop_verdict "$record")"
+    current_context_sha="$(singular_plan_attempt_context_sha "$node" "$stage_dir" 2>/dev/null || printf '%s' "$current_context_sha")"
+    local finding_disposition="new"
+    if [[ -f "$record" && -n "$current_context_sha" ]]; then
+      finding_disposition="$(singular_plan_attempt_note_critique \
+        "$attempt_record" "$current_context_sha" "$record" 2>/dev/null || printf '%s' "new")"
+    fi
+    if [[ "$finding_disposition" == "repeat" && "$verdict" != "approve" ]]; then
+      singular_plan_attempt_mark_terminal "$attempt_record" park repeated-findings "$run_id" "$current_context_sha" || true
+      singular_append_event "plan.revise_parked" "identical critic findings repeated after revision" \
+        "{\"node\":\"$node\",\"runId\":\"$run_id\",\"reason\":\"repeated-findings\",\"revisionsDone\":$revisions_done,\"attemptIdentity\":\"$attempt_identity\"}" || true
+      echo "park repeated-findings"
+      return 0
+    fi
 
     # 3. Bound decider: map verdict + rounds-already-spent to the next action.
     local decision action
@@ -164,6 +212,11 @@ singular_plan_revise_loop() {
 
     # Terminal accept: approve -> import; leave the staged set intact for L0.
     if [[ "$action" == "import" ]]; then
+      local approved_snapshot=""
+      approved_snapshot="$(singular_plan_attempt_snapshot_candidates \
+        "$attempt_record" "$current_context_sha" "$stage_dir" 2>/dev/null || printf '%s' "")"
+      singular_plan_attempt_mark_terminal "$attempt_record" import approved "$run_id" \
+        "$current_context_sha" "$approved_snapshot" || true
       echo "import"
       return 0
     fi
@@ -172,15 +225,25 @@ singular_plan_revise_loop() {
     # Recorded once as provenance; the loop drives no other state.
     if [[ "$action" == "park" ]]; then
       local reason="${decision#park }"
+      singular_plan_attempt_mark_terminal "$attempt_record" park "$reason" "$run_id" "$current_context_sha" || true
       singular_append_event "plan.revise_parked" "plan revision loop parked" \
-        "{\"node\":\"$node\",\"runId\":\"$run_id\",\"reason\":\"$reason\",\"revisionsDone\":$revisions_done}" || true
+        "{\"node\":\"$node\",\"runId\":\"$run_id\",\"reason\":\"$reason\",\"revisionsDone\":$revisions_done,\"attemptIdentity\":\"$attempt_identity\"}" || true
       echo "park $reason"
       return 0
     fi
 
     # action == revise: `revise <next_round>`. Run exactly one bounded revision
     # round, then loop back to re-critique.
-    local next_round="${decision##* }"
+    local reserve next_round
+    reserve="$(singular_plan_attempt_reserve_revision "$attempt_record" \
+      "$(singular_plan_revise_max)" "$run_id")"
+    if [[ "${reserve%% *}" != "revise" ]]; then
+      local reserve_reason="${reserve#park }"
+      singular_plan_attempt_mark_terminal "$attempt_record" park "$reserve_reason" "$run_id" "$current_context_sha" || true
+      echo "park $reserve_reason"
+      return 0
+    fi
+    next_round="${reserve##* }"
     local revises_run_id="${run_id}-revise-${next_round}"
 
     # Freeze the prior candidate set's exact identity contract before invoking a
@@ -189,7 +252,7 @@ singular_plan_revise_loop() {
     local prior_contract="$stage_dir/revision-contract-${next_round}.json"
     if ! singular_task_batch_stage_contract "$stage_dir" "$prior_contract"; then
       singular_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
-        candidate-contract-invalid 0 "$prior_contract"
+        candidate-contract-invalid 0 "$prior_contract" "$attempt_record"
       return 0
     fi
     local expected_ids_json expected_area
@@ -209,7 +272,7 @@ PY
     local prompt_file="$stage_dir/revision-prompt-${next_round}.md"
     if ! "${_rev_pfx}prompt" "$node" "$record" "$stage_dir" "$prompt_file"; then
       singular_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
-        prompt-assembly-failed 0 "$prompt_file"
+        prompt-assembly-failed 0 "$prompt_file" "$attempt_record"
       return 0
     fi
 
@@ -248,26 +311,29 @@ PY
     [[ "$strategy" == "resume" ]] && run_args+=(--resume-session "$resume_sid")
 
     local planner_result="$stage_dir/revised-planner-${next_round}-${strategy}-runner-result.json"
-    rm -f "$planner_result"
     local prc=0
     local planner_capability_profile="${SINGULAR_PLANNER_CAPABILITY_PROFILE:-planner-core}"
-    singular_runner_contract_prepare \
-      "$planner_runner" planner "$planner_capability_profile" "$planner_result"
-    SINGULAR_RUNNER_ROLE=planner \
-    SINGULAR_RUNNER_CAPABILITY_PROFILE="$planner_capability_profile" \
-    SINGULAR_RUNNER_RESULT_FILE="$planner_result" \
-    SINGULAR_RUNNER_RUN_ID="$revises_run_id" \
-    "$planner_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
-      "${run_args[@]}" >"$stage_dir/revised-planner-${next_round}.log" 2>&1 || prc=$?
-
-    # (d) rc-86 resume-refused: the runner declined the resume. Record the
-    #     fresh fallback and re-run FRESH (drop --resume-session) with the SAME
-    #     prompt — a pure optimization miss; the planning outcome is unchanged.
-    if [[ "$prc" -eq 86 && "$strategy" == "resume" ]]; then
-      "${_rec_pfx}resume_failed" "$node" "$run_id" "$revises_run_id" "$resume_sid" || true
+    local revision_infra_max="${SINGULAR_PLAN_REVISION_INFRA_MAX:-1}"
+    [[ "$revision_infra_max" =~ ^[0-9]+$ ]] || revision_infra_max=1
+    # Permit disabling the retry, never increasing it beyond one extra call.
+    (( revision_infra_max <= 1 )) || revision_infra_max=1
+    local revision_log="$stage_dir/revised-planner-${next_round}.log"
+    local infra_reason infra_count
+    while :; do
+      # Reserve the infrastructure attempt BEFORE the provider call. A hard
+      # process interruption therefore consumes the bounded retry instead of
+      # being forgotten and replayed forever after restart.
+      infra_count="$(singular_plan_attempt_note_infra \
+        "$attempt_record" provider-attempt-started 2>/dev/null \
+        || printf '%s' "$((revision_infra_max + 2))")"
+      [[ "$infra_count" =~ ^[0-9]+$ ]] || infra_count=$((revision_infra_max + 2))
+      if (( infra_count > revision_infra_max + 1 )); then
+        singular_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
+          runner-failed 0 "$revision_log" "$attempt_record"
+        return 0
+      fi
+      rm -f "$planner_result" "$out"
       prc=0
-      planner_result="$stage_dir/revised-planner-${next_round}-fresh-runner-result.json"
-      rm -f "$planner_result"
       singular_runner_contract_prepare \
         "$planner_runner" planner "$planner_capability_profile" "$planner_result"
       SINGULAR_RUNNER_ROLE=planner \
@@ -275,19 +341,33 @@ PY
       SINGULAR_RUNNER_RESULT_FILE="$planner_result" \
       SINGULAR_RUNNER_RUN_ID="$revises_run_id" \
       "$planner_runner" "${SINGULAR_RUNNER_CONTRACT_ARGS[@]}" \
-        "${base_args[@]}" >"$stage_dir/revised-planner-${next_round}.log" 2>&1 || prc=$?
-    fi
+        "${run_args[@]}" >"$revision_log" 2>&1 || prc=$?
 
-    if [[ "$prc" -ne 0 ]]; then
-      singular_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
-        runner-failed "$prc" "$stage_dir/revised-planner-${next_round}.log"
-      return 0
-    fi
-    if [[ ! -s "$out" ]]; then
-      singular_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
-        output-missing 0 "$out"
-      return 0
-    fi
+      [[ "$prc" -eq 0 && -s "$out" ]] && break
+
+      if [[ "$prc" -eq 86 && "$strategy" == "resume" ]]; then
+        infra_reason="resume-refused"
+        "${_rec_pfx}resume_failed" "$node" "$run_id" "$revises_run_id" "$resume_sid" || true
+      elif [[ "$prc" -ne 0 ]]; then
+        infra_reason="$(singular_planner_failure_class \
+          "$revision_log" "$prc" "$out" "$planner_result" 2>/dev/null || printf '%s' "runner-failed")"
+      else
+        infra_reason="empty-output"
+      fi
+      if (( infra_count > revision_infra_max )); then
+        singular_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
+          runner-failed "$prc" "$revision_log" "$attempt_record"
+        return 0
+      fi
+      singular_append_event "ctx.plan_revision_infra_retry" \
+        "plan revision infrastructure failed; re-running fresh" \
+        "{\"node\":\"$node\",\"runId\":\"$run_id\",\"revisesRunId\":\"$revises_run_id\",\"infraAttempt\":$infra_count,\"reason\":\"$infra_reason\",\"revisionsDone\":$revisions_done}" || true
+      # Every infrastructure retry is fresh but consumes the exact same prompt.
+      # It advances infraAttempts only, never revisionsDone.
+      run_args=("${base_args[@]}")
+      strategy="fresh"
+      planner_result="$stage_dir/revised-planner-${next_round}-fresh-infra-${infra_count}-runner-result.json"
+    done
 
     # (e) Materialize the complete revision privately. Exact id-set validation,
     #     markdown validation, and dependency checks all finish before the old
@@ -301,7 +381,7 @@ PY
       [[ "$batch_rc" -eq 4 ]] && batch_failure="batch-empty"
       [[ "$batch_rc" -eq 3 ]] && batch_failure="batch-malformed"
       singular_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
-        "$batch_failure" "$batch_rc" "$validation_log"
+        "$batch_failure" "$batch_rc" "$validation_log" "$attempt_record"
       return 0
     fi
 
@@ -309,7 +389,7 @@ PY
     #     old files back; no disposition is recorded for an unstaged revision.
     if ! singular_task_batch_replace_stage "$candidate_dir" "$stage_dir"; then
       singular_plan_revise_loop_park_failure "$node" "$run_id" "$revisions_done" \
-        stage-replace-failed 0 "$validation_log"
+        stage-replace-failed 0 "$validation_log" "$attempt_record"
       return 0
     fi
     singular_append_event "plan.revision_staged" "revised task batch staged" \
@@ -332,7 +412,17 @@ PY
     #     overwrites it.
     "${_rec_pfx}dispositions" "$node" "$revises_run_id" "$record" "$normalized" || true
 
+    local revised_context_sha
+    revised_context_sha="$(singular_plan_attempt_context_sha "$node" "$stage_dir" 2>/dev/null || printf '%s' "")"
+    singular_plan_attempt_complete_revision "$attempt_record" "$revised_context_sha" || true
     revisions_done="$next_round"
+    if [[ -n "$revised_context_sha" && "$revised_context_sha" == "$current_context_sha" ]]; then
+      singular_plan_attempt_mark_terminal "$attempt_record" park identical-candidate "$run_id" "$revised_context_sha" || true
+      singular_append_event "plan.revise_parked" "revision produced an identical candidate context" \
+        "{\"node\":\"$node\",\"runId\":\"$run_id\",\"reason\":\"identical-candidate\",\"revisionsDone\":$revisions_done,\"attemptIdentity\":\"$attempt_identity\"}" || true
+      echo "park identical-candidate"
+      return 0
+    fi
     # Loop: re-critique the revised candidate set.
   done
 }

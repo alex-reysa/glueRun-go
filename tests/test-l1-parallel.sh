@@ -192,8 +192,9 @@ STUB
   chmod +x "$1"
 }
 
-# A codex-runner stub that emits a single-task markdown for whatever area the
-# generated planner prompt names (exercises the REAL generate-tasks.sh staged path).
+# A runner stub that emits a deterministic approval for the plan-critic role,
+# or a single-task markdown for whatever area the generated planner prompt names
+# (exercises the REAL generate-tasks.sh staged path without calling a provider).
 make_codex_md_stub() {
   cat >"$1" <<'STUB'
 #!/usr/bin/env bash
@@ -204,6 +205,12 @@ while [[ $# -gt 0 ]]; do case "$1" in
   --prompt-file) prompt="$2"; shift 2;;
   *) shift;; esac; done
 [[ -n "$out" ]] || exit 2
+if [[ "${SINGULAR_RUNNER_ROLE:-}" == "critic" ]]; then
+  cat >"$out" <<'EOF'
+{"verdict":"approve","findings":[],"assumptionsChallenged":[],"rationale":"deterministic test approval"}
+EOF
+  exit 0
+fi
 area="$(sed -n 's/^- area: `\(.*\)`$/\1/p' "$prompt" | tail -1)"
 [[ -n "$area" ]] || area="artifact"
 cat >"$out" <<EOF
@@ -326,12 +333,17 @@ EOF
 
 write_blocked_gate() {
   local node="$1" source_path="$2" missing_task="$3"
+  local blocker_field=""
+  if [[ -n "${4:-}" ]]; then
+    blocker_field="  \"blockerClass\": \"$4\","
+  fi
   cat >"$SINGULAR_ORCH_DIR/gates/$node.gate-result.json" <<EOF
 {
   "schema": "singular.orchestration.gate-result.v0",
   "node": "$node",
   "status": "blocked",
   "authoritative": true,
+$blocker_field
   "evidenceClass": "deterministic-proof",
   "evidence": [
     {
@@ -500,13 +512,24 @@ test_generate_tasks_honors_blocked_gate_without_calling_codex() {
   assert_eq "$(task_count)" "0" "blocked gate must not create tasks"
 }
 
+test_generate_tasks_allows_needs_work_remediation() {
+  with_fixture
+  write_blocked_gate D1.contract internal/artifact TASK-0099 needs-work
+  local out rc=0
+  out="$("$SCRIPT_DIR/generate-tasks.sh" --node D1.contract --dry-run 2>&1)" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "needs-work remediation should reach the planner: $out"
+  assert_contains "$out" "DRY RUN" "needs-work bypasses the historical blocked-gate stop guard"
+  assert_not_contains "$out" "planner-blocked" "needs-work is not treated as an external stop"
+}
+
 # --- full chain: fanout -> real l1-plan-node -> real generate-tasks -> import ---
 
 test_fanout_full_chain_two_nodes_unique_ids() {
   with_fixture
   local stub="$SINGULAR_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
   local out plan_root artifact_prompt storage_prompt
-  out="$(SINGULAR_CODEX_RUNNER="$stub" singular_l1_fanout RUN-chain "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
+  out="$(SINGULAR_CODEX_RUNNER="$stub" SINGULAR_RUNNER="$stub" \
+    singular_l1_fanout RUN-chain "$(git -C "$SINGULAR_ROOT" rev-parse target)" 2>&1)"
   assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "2" "fanout imports both planned nodes"
   [[ -f "$SINGULAR_TASKS_DIR/TASK-0001.md" && -f "$SINGULAR_TASKS_DIR/TASK-0002.md" ]] \
     || fail "two staged batches must import as distinct sequential real ids"
@@ -533,7 +556,7 @@ test_fanout_full_chain_two_nodes_unique_ids() {
 test_fanout_planners_write_distinct_run_status_records() {
   with_fixture
   local stub="$SINGULAR_ROOT/codex-stub.sh"; make_codex_md_stub "$stub"
-  SINGULAR_CODEX_RUNNER="$stub" singular_l1_fanout RUN-chain \
+  SINGULAR_CODEX_RUNNER="$stub" SINGULAR_RUNNER="$stub" singular_l1_fanout RUN-chain \
     "$(git -C "$SINGULAR_ROOT" rev-parse target)" >/dev/null 2>&1
   python3 - "$SINGULAR_RUNS_DIR" <<'PY' || fail "concurrent planners did not get distinct run-status records"
 import json
@@ -624,6 +647,48 @@ test_fanout_cap_override_one() {
   [[ ! -f "$(singular_l1_lease_path S0.storage_substrate_base)" ]] || fail "cap=1 must not lease the second node"
 }
 
+# Reconcile owns the live worker-capacity calculation. With two active worker
+# leases and a configured cap of three, a static L1 cap of three must still
+# start/import exactly one planner candidate for the one free slot.
+test_reconcile_parallel_fanout_uses_one_remaining_slot() {
+  with_fixture
+  singular_lease_write TASK-9001 agent/other/TASK-9001 other l2 \
+    "internal/other/one.go" planned RUN-ACTIVE-1 \
+    "$SINGULAR_ROOT/.worktrees/TASK-9001" base-one batch-one \
+    '["internal/other/one.go"]' '[]'
+  singular_lease_write TASK-9002 agent/other/TASK-9002 other l2 \
+    "internal/other/two.go" planned RUN-ACTIVE-2 \
+    "$SINGULAR_ROOT/.worktrees/TASK-9002" base-two batch-two \
+    '["internal/other/two.go"]' '[]'
+
+  local planner_stub="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$planner_stub"
+  local critic_stub="$SINGULAR_ROOT/critic-stub.sh"; make_codex_md_stub "$critic_stub"
+  local worker_stub="$SINGULAR_ROOT/worker-stub.sh"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$1" >>"$SINGULAR_STATE_DIR/one-slot-dispatch.log"' \
+    >"$worker_stub"
+  chmod +x "$worker_stub"
+
+  local out
+  out="$(SINGULAR_ENABLE_L1_PARALLEL=1 SINGULAR_MAX_L1_CONCURRENT=3 \
+    SINGULAR_L1_PLAN_NODE="$planner_stub" SINGULAR_L1_DRIVER="$worker_stub" \
+    SINGULAR_RUNNER="$critic_stub" \
+    SINGULAR_AUTO_PROMOTE_GATES=0 SINGULAR_AUTO_INTEGRATE=0 SINGULAR_PUSH=0 \
+    SINGULAR_MAX_CONCURRENT=3 SINGULAR_MAX_DISPATCH=3 \
+    SINGULAR_DISK_RESERVE_BYTES=0 SINGULAR_ESTIMATED_WORKTREE_BYTES=1 \
+    SINGULAR_DETACHED_DISPATCH=0 \
+    "$SCRIPT_DIR/reconcile.sh" --actuate 2>&1)"
+
+  assert_contains "$out" "remaining capacity 1" \
+    "parallel refill passes the exact one-slot budget into fanout"
+  assert_eq "$(task_count)" "1" "one free slot imports exactly one planned task"
+  assert_eq "$(wc -l <"$SINGULAR_STATE_DIR/one-slot-dispatch.log" | tr -d ' ')" "1" \
+    "one free slot dispatches exactly one generated task"
+  [[ -f "$(singular_l1_lease_path D1.contract)" ]] \
+    || fail "the first DAG-order node was not planned"
+  [[ ! -f "$(singular_l1_lease_path S0.storage_substrate_base)" ]] \
+    || fail "static planner cap launched a second planner despite one free slot"
+}
+
 test_fanout_excludes_authoritative_blocked_gate() {
   with_fixture
   write_blocked_gate D1.contract internal/artifact TASK-0099
@@ -708,6 +773,55 @@ test_autonomate_sleeps_through_quota_window_without_breaker() {
   assert_contains "$out" "quota window open" "autonomate detects the open quota window"
   assert_not_contains "$out" "RECONCILE_WAS_CALLED" "autonomate does NOT run reconcile during a quota window"
   assert_eq "$(singular_breaker_count)" "0" "sleeping through a quota window does not trip the breaker"
+}
+
+# A worker completion may wake the loop while the planner provider is still in
+# quota backoff. That wake must run one control-plane reconcile (no planning or
+# worker dispatch), then return to backoff. The stub sets STOP after the call so
+# the test can observe exactly one bounded pass without waiting for expiry.
+test_autonomate_wake_during_backoff_runs_control_plane_only() {
+  with_fixture
+  local evidence
+  evidence="$(make_structured_quota_evidence RUN-q-wake)"
+  SINGULAR_PLANNER_QUOTA_BACKOFF_SECONDS=120 \
+    singular_planner_backoff_set quota RUN-q-wake D1.contract "$evidence"
+  : >"$(singular_wake_file)"
+
+  local stub="$SINGULAR_ROOT/reconcile-control-only.sh"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s|generate=%s|max_dispatch=%s\n' "$*" \
+  "${SINGULAR_GENERATE:-unset}" "${SINGULAR_MAX_DISPATCH:-unset}" \
+  >>"$SINGULAR_STATE_DIR/control-reconcile.log"
+: >"$SINGULAR_STOP_FILE"
+echo "imported_this_run=0"
+echo "dispatched_this_run=0"
+echo "integrated_this_run=0"
+echo "failed_dispatches=0"
+echo "failed_integrations=0"
+echo "planner_failures_this_run=0"
+echo "planner_backoff_active_this_run=1"
+echo "l1_import_rejections_this_run=0"
+echo "reaped_ok=0"
+echo "reaped_failures=0"
+echo "workers_running=0"
+echo "gates_promoted_this_run=0"
+STUB
+  chmod +x "$stub"
+
+  local out
+  out="$(SINGULAR_QUOTA_SLEEP_CAP=30 SINGULAR_SLEEP_POLL_SEC=1 \
+    SINGULAR_RECONCILE_SCRIPT="$stub" "$SCRIPT_DIR/autonomate.sh" 2>&1 || true)"
+  assert_contains "$out" "running one control-plane-only reconcile" \
+    "WAKE under active quota services completion state"
+  assert_eq "$(wc -l <"$SINGULAR_STATE_DIR/control-reconcile.log" | tr -d ' ')" "1" \
+    "one wake runs exactly one control-plane reconcile"
+  assert_contains "$(cat "$SINGULAR_STATE_DIR/control-reconcile.log")" \
+    "--actuate|generate=0|max_dispatch=0" \
+    "control reconcile hard-disables both planning and dispatch"
+  assert_eq "$(singular_breaker_count)" "0" \
+    "control-plane work during provider backoff does not trip the breaker"
 }
 
 # Non-quota backoffs still permit reconcile, but a repeated planner refusal is
@@ -1457,7 +1571,38 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
   assert_eq "$(singular_l1_lease_status S0.storage_substrate_base)" "failed" "the node lease is marked failed on promotion failure"
 }
 
-	test_rewrite_task_id_token_is_token_safe
+test_import_rejects_batch_above_live_candidate_budget() {
+  with_fixture
+  singular_l1_lease_write S0.storage_substrate_base storage S0 storage_substrate_base active RUN-budget abc1234 target
+  local sdir="$SINGULAR_RUNS_DIR/RUN-budget/l1-staging/S0.storage_substrate_base" k out
+  mkdir -p "$sdir"
+  for k in 1 2; do
+    printf '%s\n' "# TASK-000$k: c$k" '' 'Status: ready' 'Area: storage' \
+      'Dispatch mode: canonical' 'Depends on: []' '' '## Scope' '' 'Owned files:' '' \
+      "- \`internal/storage/budget_$k.go\`" >"$sdir/TASK-000$k.candidate.md"
+  done
+  out="$(singular_l1_import_staged RUN-budget --max-candidates 1 S0.storage_substrate_base 2>&1 || true)"
+  assert_contains "$out" "candidate-budget-exceeded" \
+    "import refuses an overproducing planner batch"
+  assert_eq "$(task_count)" "0" "over-budget candidate batch imports nothing"
+  assert_eq "$(singular_l1_lease_status S0.storage_substrate_base)" "failed" \
+    "over-budget planner lineage is terminally rejected"
+}
+
+case "${SINGULAR_L1_TEST_FOCUS:-}" in
+  scheduler-one-slot) test_reconcile_parallel_fanout_uses_one_remaining_slot; exit 0 ;;
+  scheduler-import-budget) test_import_rejects_batch_above_live_candidate_budget; exit 0 ;;
+  scheduler-backoff-wake) test_autonomate_wake_during_backoff_runs_control_plane_only; exit 0 ;;
+  scheduler-closure)
+    test_reconcile_parallel_fanout_uses_one_remaining_slot
+    test_import_rejects_batch_above_live_candidate_budget
+    test_autonomate_wake_during_backoff_runs_control_plane_only
+    echo "l1 scheduler closure tests passed"
+    exit 0
+    ;;
+esac
+
+test_rewrite_task_id_token_is_token_safe
 	test_import_fails_closed_on_missing_lease
 	test_import_rejects_candidate_without_taskid
 	test_import_rejects_duplicate_candidate_matching_open_task_signature
@@ -1467,6 +1612,7 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_ready_listing_skips_duplicate_ready_task_by_owned_files
 	test_active_lease_count_uses_single_json_pass
 	test_import_rolls_back_partial_promotion_on_mv_failure
+	test_import_rejects_batch_above_live_candidate_budget
 	test_generate_tasks_staged_writes_only_to_stage_dir
 	test_generate_tasks_staged_batch_rewrites_planner_id_to_temp_id
 	test_generate_tasks_prompt_directs_slice_folding
@@ -1476,17 +1622,20 @@ test_import_rolls_back_partial_promotion_on_mv_failure() {
 	test_reconcile_defers_serial_planning_during_active_backoff
 	test_reconcile_defers_parallel_planning_before_leases
 	test_generate_tasks_honors_blocked_gate_without_calling_codex
+	test_generate_tasks_allows_needs_work_remediation
 	test_fanout_full_chain_two_nodes_unique_ids
 	test_fanout_planners_write_distinct_run_status_records
 	test_health_counts_every_active_planner
 	test_fanout_default_cap_two
 	test_fanout_unique_ids_from_same_temp_id
 		test_fanout_cap_override_one
+		test_reconcile_parallel_fanout_uses_one_remaining_slot
 		test_fanout_excludes_authoritative_blocked_gate
 		test_fanout_one_failure_isolated
 	test_fanout_reports_planner_failures_for_breaker_accounting
 	test_autonomate_counts_planner_failures_against_breaker
 	test_autonomate_sleeps_through_quota_window_without_breaker
+	test_autonomate_wake_during_backoff_runs_control_plane_only
 	test_autonomate_nonquota_backoff_neutralizes_repeated_planner_failure
 	test_autonomate_nonquota_backoff_still_counts_unrelated_failure
 	test_autonomate_expired_quota_backoff_falls_through

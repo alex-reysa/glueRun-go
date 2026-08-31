@@ -42,6 +42,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Direct integration is an authoritative mutation entrypoint. Verify before
+# creating state, taking the origin lock, or staging a merge.
+singular_campaign_verify_or_refuse integrate entry || exit 2
+integration_campaign_binding="$(singular_campaign_binding)" || {
+  echo "integrate: inconsistent campaign identity at entry" >&2
+  exit 2
+}
+
 singular_ensure_state_dirs
 singular_require_target_branch
 
@@ -65,14 +73,15 @@ fi
 # commits it separately at the end of the cycle.
 if [[ "$dry_run" != "yes" ]]; then
   code_dirt=0
+  code_dirt_path=""
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     [[ "$line" == '??'* ]] && continue   # untracked files never enter the merge
     p="${line:3}"; p="${p##* -> }"
-    case "$p" in docs/orchestration/*) ;; *) code_dirt=1; break ;; esac
+    case "$p" in docs/orchestration/*) ;; *) code_dirt=1; code_dirt_path="$p"; break ;; esac
   done < <(git -C "$SINGULAR_ROOT" status --porcelain)
   if [[ "$code_dirt" -eq 1 ]]; then
-    echo "refuse: working tree has non-control-state changes; commit or stash before integrating" >&2
+    echo "refuse: working tree has non-control-state changes ($code_dirt_path); commit or stash before integrating" >&2
     exit 2
   fi
 fi
@@ -82,6 +91,79 @@ fi
 integration_status_activity="Integration failed"
 integration_status_next_action="Inspect the integration evidence"
 integration_status_outcome="integration-failed"
+integration_gate_tmp=""
+integration_gate_worktree=""
+integration_gate_worktree_added="no"
+integration_campaign_lock_held="no"
+
+# A staged integration tree is tested in a disposable detached worktree. Keep
+# its lifecycle explicit so a red gate, setup error, interrupt, or ordinary exit
+# cannot leave a registered worktree behind.
+singular_integration_gate_cleanup() {
+  local cleanup_complete="yes"
+  if [[ "$integration_gate_worktree_added" == "yes" && -n "$integration_gate_worktree" ]]; then
+    if singular_git_lock_acquire; then
+      if ! git -C "$SINGULAR_ROOT" worktree remove --force "$integration_gate_worktree" >/dev/null 2>&1; then
+        cleanup_complete="no"
+      fi
+      singular_git_lock_release
+    else
+      # Never mutate shared .git metadata outside the repo-wide git lock. A
+      # registered disposable checkout is safer to leave for bounded GC than
+      # to race another worktree/commit operation.
+      cleanup_complete="no"
+    fi
+    if [[ "$cleanup_complete" != "yes" ]]; then
+      singular_append_event "integration.gate_cleanup_deferred" \
+        "disposable integration gate worktree cleanup deferred for GC" \
+        "{\"runId\":\"$run_id\",\"worktree\":\"$integration_gate_worktree\"}" \
+        >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ "$cleanup_complete" == "yes" && -n "$integration_gate_tmp" ]]; then
+    case "$integration_gate_tmp" in
+      "$SINGULAR_STATE_DIR"/tmp/integration-gate.*)
+        rm -rf -- "$integration_gate_tmp" 2>/dev/null || true ;;
+    esac
+  fi
+  integration_gate_tmp=""
+  integration_gate_worktree=""
+  integration_gate_worktree_added="no"
+}
+
+# Abort an uncommitted integration without destroying bytes that appeared in
+# the main checkout while its exact-tree gate was running. `git merge --abort`
+# is preferred because it restores the complete pre-merge state. It can refuse
+# when a concurrent worktree edit overlaps a merged path; in that case a mixed
+# reset clears MERGE_HEAD and the staged tree while deliberately preserving the
+# worktree. The task-status edit is engine-owned, so restore that one control
+# file from the pre-merge parent to avoid a false `integrated` lifecycle state.
+singular_integration_abort_merge() {
+  local task_path="${1:-}" parent="${2:-HEAD}" task_rel="" cleanup_rc=0
+  if ! singular_git_lock_acquire; then
+    return 1
+  fi
+  if git -C "$SINGULAR_ROOT" merge --abort >/dev/null 2>&1; then
+    singular_git_lock_release
+    return 0
+  fi
+  git -C "$SINGULAR_ROOT" reset --mixed "$parent" >/dev/null 2>&1 \
+    || cleanup_rc=$?
+  if [[ "$cleanup_rc" -eq 0 && -n "$task_path" ]]; then
+    case "$task_path" in
+      "$SINGULAR_ROOT"/*) task_rel="${task_path#"$SINGULAR_ROOT"/}" ;;
+      *) task_rel="$task_path" ;;
+    esac
+    git -C "$SINGULAR_ROOT" restore --source="$parent" --worktree -- "$task_rel" \
+      >/dev/null 2>&1 || cleanup_rc=$?
+  fi
+  if [[ -e "$SINGULAR_ROOT/.git/MERGE_HEAD" ]] \
+      || ! git -C "$SINGULAR_ROOT" diff --cached --quiet; then
+    cleanup_rc=1
+  fi
+  singular_git_lock_release
+  return "$cleanup_rc"
+}
 
 singular_integration_status_write() {
   local activity="$1" next_action="$2" task="${3:-}"
@@ -98,6 +180,11 @@ singular_integrate_on_exit() {
   local rc=$?
   local state="failed"
   trap - EXIT
+  if [[ "$integration_campaign_lock_held" == "yes" ]]; then
+    singular_campaign_lock_release 2>/dev/null || true
+    integration_campaign_lock_held="no"
+  fi
+  singular_integration_gate_cleanup
   [[ "$rc" -eq 0 ]] && state="completed"
   "$SCRIPT_DIR/run-status.sh" write \
     --run-id "$run_id" --phase terminal --state "$state" \
@@ -115,13 +202,20 @@ singular_integration_status_write \
 trap singular_integrate_on_exit EXIT
 
 # ---- Lock (shared with reconcile when invoked via --from-reconcile) ----
-if [[ "$from_reconcile" != "yes" ]]; then
+if [[ "$from_reconcile" == "yes" ]]; then
+  singular_require_inherited_origin_lock "$run_id" || {
+    echo "integrate: --from-reconcile requires verified inherited lock authority" >&2
+    exit 2
+  }
+else
   singular_acquire_lock "$run_id"
 fi
 
 gate_cmd="${SINGULAR_DEFAULT_GATE_CMD}"
 integrated_this_run=0
 declare -a integrated_nodes=()
+declare -A immediate_promotion_attempted=()
+gates_promoted_this_run=0
 failed_integrations=0
 skipped=0
 eligible=0
@@ -222,6 +316,80 @@ for d in "${dirs[@]}"; do
     skipped=$((skipped + 1))
     continue
   fi
+
+  packet_campaign_binding="$(python3 - "$packet" <<'PY' 2>/dev/null || true
+import json
+import sys
+packet = json.load(open(sys.argv[1], encoding="utf-8"))
+for item in packet.get("evidence", []):
+    if isinstance(item, dict) and item.get("kind") == "campaign-binding":
+        print(item.get("ref", ""))
+        break
+PY
+)"
+  lease_campaign_binding="$(singular_lease_field "$task_id" campaignBinding 2>/dev/null || true)"
+  audit_campaign_binding=""
+  if [[ "$acceptance_mode" == "accepted" ]]; then
+    audit_campaign_binding="$(python3 - "$sidecar" <<'PY' 2>/dev/null || true
+import json
+import sys
+audit = json.load(open(sys.argv[1], encoding="utf-8"))
+for item in audit.get("evidenceReviewed", []):
+    marker = str(item)
+    if marker.startswith("campaign-binding:"):
+        print(marker[len("campaign-binding:"):])
+        break
+PY
+)"
+  fi
+  if [[ "$integration_campaign_binding" == "legacy" ]]; then
+    [[ -n "$packet_campaign_binding" ]] || packet_campaign_binding="legacy"
+    [[ -n "$lease_campaign_binding" ]] || lease_campaign_binding="legacy"
+    if [[ "$acceptance_mode" == "accepted" && -z "$audit_campaign_binding" ]]; then
+      audit_campaign_binding="legacy"
+    fi
+  fi
+  campaign_binding_ok="yes"
+  [[ "$packet_campaign_binding" == "$integration_campaign_binding" ]] \
+    || campaign_binding_ok="no"
+  [[ "$lease_campaign_binding" == "$integration_campaign_binding" ]] \
+    || campaign_binding_ok="no"
+  if [[ "$acceptance_mode" == "accepted" \
+      && "$audit_campaign_binding" != "$integration_campaign_binding" ]]; then
+    campaign_binding_ok="no"
+  fi
+  if [[ "$campaign_binding_ok" != "yes" ]]; then
+    echo "skip $task_id: accepted artifacts do not belong to the current campaign"
+    if [[ "$dry_run" != "yes" ]]; then
+      singular_record_recovery \
+        "accepted packet/audit campaign binding mismatch for $task_id" \
+        "$task_id" "$branch" "re-audit-current-campaign" "origin" \
+        "review exact head under the current campaign policy" "origin" || true
+      singular_lease_set_status "$task_id" "blocked" 2>/dev/null || true
+      task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+      [[ -f "$task_file" ]] && singular_task_set_status "$task_file" "blocked" || true
+      singular_append_event "integration.campaign_mismatch" \
+        "accepted work refused across campaign identity" \
+        "$(python3 - "$run_id" "$task_id" "$integration_campaign_binding" \
+            "$packet_campaign_binding" "$audit_campaign_binding" "$lease_campaign_binding" <<'PY'
+import json
+import sys
+print(json.dumps({
+    "runId": sys.argv[1],
+    "taskId": sys.argv[2],
+    "currentBinding": sys.argv[3],
+    "packetBinding": sys.argv[4],
+    "auditBinding": sys.argv[5],
+    "leaseBinding": sys.argv[6],
+}, separators=(",", ":")))
+PY
+)" || true
+    fi
+    skipped=$((skipped + 1))
+    continue
+  fi
+  singular_campaign_binding_matches \
+    "$packet_campaign_binding" integrate pre-merge || exit 2
 
   # Branch must exist.
   if ! git -C "$SINGULAR_ROOT" rev-parse --verify --quiet "$branch^{commit}" >/dev/null; then
@@ -363,14 +531,140 @@ PY
     failed_integrations=$((failed_integrations + 1)); continue
   fi
 
-  # Gate-verify the staged merged tree.
+  # The task's terminal status is tracked source, so it must be part of the
+  # exact staged tree covered by the mandatory integration gate.  Previously
+  # this transition happened after the merge commit and silently made the
+  # promotion checkout differ from the tree that had passed regression.
+  task_file="$SINGULAR_TASKS_DIR/$task_id.md"
+  if [[ -f "$task_file" ]]; then
+    singular_task_set_status "$task_file" "integrated"
+    if singular_git_lock_acquire; then
+      task_status_stage_ec=0
+      git -C "$SINGULAR_ROOT" add -- "$task_file" || task_status_stage_ec=$?
+      singular_git_lock_release
+      if [[ "$task_status_stage_ec" -ne 0 ]]; then
+        singular_integration_abort_merge "$task_file" HEAD || true
+        singular_append_event "integration.failed" "could not stage terminal task status" \
+          "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"reason\":\"task-status-stage-failed\"}"
+        echo "FAILED $task_id: could not stage terminal task status"
+        failed_integrations=$((failed_integrations + 1)); continue
+      fi
+    else
+      singular_integration_abort_merge "$task_file" HEAD || true
+      singular_append_event "integration.failed" "git lock unavailable while staging terminal task status" \
+        "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"reason\":\"git-lock-timeout\"}"
+      echo "FAILED $task_id: git lock unavailable while staging task status"
+      failed_integrations=$((failed_integrations + 1)); continue
+    fi
+  fi
+
+  # Freeze the exact staged tree and both intended parents into an unreachable
+  # synthetic commit. The mandatory gate runs in a disposable checkout of that
+  # object, so unrelated unstaged/control-state bytes in the integration
+  # checkout cannot make an uncommitted tree pass. The synthetic object never
+  # updates a ref and cannot itself authorize promotion.
+  gate_run_id="$run_id-integrate-$task_id"
+  gate_run_dir="$SINGULAR_RUNS_DIR/$gate_run_id"
+  gate_prepare_log="$run_dir/integration-gate-prepare-$task_id.log"
+  mkdir -p "$SINGULAR_STATE_DIR/tmp" "$gate_run_dir"
+  : >"$gate_prepare_log"
+  integration_gate_setup_ec=0
+  integration_gate_setup_reason=""
+  tested_tree=""
+  tested_parent=""
+  tested_merge_head=""
+  synthetic_commit=""
+  if ! integration_gate_tmp="$(mktemp -d "$SINGULAR_STATE_DIR/tmp/integration-gate.XXXXXX")"; then
+    integration_gate_setup_ec=20
+    integration_gate_setup_reason="worktree-temp-create-failed"
+  else
+    integration_gate_worktree="$integration_gate_tmp/worktree"
+  fi
+
+  if [[ "$integration_gate_setup_ec" -eq 0 ]]; then
+    if singular_git_lock_acquire; then
+      if ! tested_tree="$(git -C "$SINGULAR_ROOT" write-tree 2>>"$gate_prepare_log")"; then
+        integration_gate_setup_ec=20
+        integration_gate_setup_reason="staged-tree-snapshot-failed"
+      elif ! tested_parent="$(git -C "$SINGULAR_ROOT" rev-parse --verify HEAD 2>>"$gate_prepare_log")"; then
+        integration_gate_setup_ec=20
+        integration_gate_setup_reason="integration-parent-snapshot-failed"
+      elif ! tested_merge_head="$(git -C "$SINGULAR_ROOT" rev-parse --verify MERGE_HEAD 2>>"$gate_prepare_log")"; then
+        integration_gate_setup_ec=20
+        integration_gate_setup_reason="merge-parent-snapshot-failed"
+      elif ! synthetic_commit="$(
+        printf 'singular integration gate %s %s\n' "$run_id" "$task_id" \
+          | git -C "$SINGULAR_ROOT" \
+              -c user.name="$SINGULAR_GIT_L0_NAME" \
+              -c user.email="$SINGULAR_GIT_L0_EMAIL" \
+              commit-tree "$tested_tree" -p "$tested_parent" -p "$tested_merge_head" \
+              2>>"$gate_prepare_log"
+      )"; then
+        integration_gate_setup_ec=20
+        integration_gate_setup_reason="synthetic-commit-create-failed"
+      elif ! git -C "$SINGULAR_ROOT" worktree add --detach -q \
+          "$integration_gate_worktree" "$synthetic_commit" >>"$gate_prepare_log" 2>&1; then
+        integration_gate_setup_ec=20
+        integration_gate_setup_reason="worktree-create-failed"
+      else
+        integration_gate_worktree_added="yes"
+      fi
+      singular_git_lock_release
+    else
+      integration_gate_setup_ec=20
+      integration_gate_setup_reason="git-lock-timeout"
+    fi
+  fi
+
+  if [[ "$integration_gate_setup_ec" -eq 0 ]]; then
+    if ! singular_worktree_prepare \
+        "$integration_gate_worktree" "" "$SINGULAR_ROOT" "$gate_prepare_log"; then
+      integration_gate_setup_ec=20
+      integration_gate_setup_reason="worktree-prepare-${SINGULAR_WORKTREE_PREPARE_STAGE:-failed}"
+    elif [[ -n "$(git -C "$integration_gate_worktree" status --porcelain=v1 --untracked-files=all 2>>"$gate_prepare_log")" ]]; then
+      integration_gate_setup_ec=20
+      integration_gate_setup_reason="prepared-worktree-not-clean"
+      git -C "$integration_gate_worktree" status --porcelain=v1 --untracked-files=all \
+        >>"$gate_prepare_log" 2>&1 || true
+    fi
+  fi
+
+  if [[ "$integration_gate_setup_ec" -ne 0 ]]; then
+    singular_integration_gate_cleanup
+    singular_integration_abort_merge "$task_file" "${tested_parent:-HEAD}" || true
+    singular_record_recovery \
+      "could not create exact-tree integration gate workspace ($integration_gate_setup_reason) for $task_id" \
+      "$task_id" "$branch" "escalate-parked" "origin" \
+      "disposable gate over the exact staged merge tree" "origin"
+    singular_append_event "integration.failed" "integration gate workspace setup failed" \
+      "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"reason\":\"$integration_gate_setup_reason\"}"
+    echo "FAILED $task_id: exact-tree integration gate setup failed ($integration_gate_setup_reason)"
+    failed_integrations=$((failed_integrations + 1))
+    continue
+  fi
+
   gate_ec=0
-  ( cd "$SINGULAR_ROOT" && SINGULAR_ROOT="$SINGULAR_ROOT" SINGULAR_STATE_DIR="$SINGULAR_STATE_DIR" \
-      "$SCRIPT_DIR/gate-check.sh" "$run_id-integrate-$task_id" \
-      --task-id "$task_id" --phase integration --workspace-kind integration -- \
-      "$(singular_bash_bin)" -c "$gate_cmd" ) >/dev/null 2>&1 || gate_ec=$?
+  singular_run_in_worktree_env "$integration_gate_worktree" env \
+    SINGULAR_ROOT="$integration_gate_worktree" \
+    SINGULAR_STATE_DIR="$SINGULAR_STATE_DIR" \
+    "$SCRIPT_DIR/gate-check.sh" "$gate_run_id" \
+    --task-id "$task_id" --phase integration --workspace-kind integration -- \
+    "$(singular_bash_bin)" -c "$gate_cmd" >/dev/null 2>&1 || gate_ec=$?
+  if [[ "$gate_ec" -eq 0 ]]; then
+    if [[ "$(git -C "$integration_gate_worktree" rev-parse HEAD 2>/dev/null || true)" != "$synthetic_commit" ]] \
+        || [[ -n "$(git -C "$integration_gate_worktree" status --porcelain=v1 --untracked-files=all 2>/dev/null || true)" ]]; then
+      gate_ec=20
+      printf '%s\n' \
+        'gate-check: disposable exact-tree worktree changed during the integration gate' \
+        >>"$gate_run_dir/gate-check.log"
+    fi
+  fi
+  singular_integration_gate_cleanup
   if [[ "$gate_ec" -ne 0 ]]; then
-    singular_with_git_lock git -C "$SINGULAR_ROOT" merge --abort 2>/dev/null || true
+    if ! singular_integration_abort_merge "$task_file" "$tested_parent"; then
+      echo "refuse: integration gate failed and merge cleanup is incomplete" >&2
+      exit 2
+    fi
     action="$(integration_decide "integration-gate-red" "$task_id" "$branch" "$SINGULAR_RUNS_DIR/$run_id-integrate-$task_id/gate-check.log")"
     singular_record_recovery "post-merge regression gate red (exit $gate_ec) for $task_id" \
       "$task_id" "$branch" "${action:-escalate-parked}" "decider" "green regression on merged tree" "human"
@@ -381,25 +675,133 @@ PY
     continue
   fi
 
-  # Secret-scan the staged merged tree before finalizing.
-  if ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$SINGULAR_ROOT" --staged >"$run_dir/secret-scan-merge-$task_id.log" 2>&1; then
-    singular_with_git_lock git -C "$SINGULAR_ROOT" merge --abort 2>/dev/null || true
-    singular_append_event "integration.failed" "secret-scan blocked merge" \
-      "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"reason\":\"secret-detected\"}"
-    echo "FAILED $task_id: secret-scan blocked merge (parked)"
+  # The exact staged tree is green, but a long gate is also a window in which
+  # the frozen engine/config/prompt policy can change. Re-verify immediately
+  # before finalization; on drift abort the uncommitted merge so HEAD remains
+  # exactly at the pre-integration parent.
+  if ! singular_campaign_binding_matches \
+      "$packet_campaign_binding" integrate post-exact-gate; then
+    singular_integration_abort_merge "$task_file" "$tested_parent" || {
+      echo "refuse: campaign drift and merge cleanup is incomplete" >&2
+      exit 2
+    }
+    echo "refuse: campaign runtime drift after exact-tree gate; merge aborted before commit" >&2
+    exit 2
+  fi
+
+  # Reacquire the git lock and require the staged tree plus both parents to be
+  # byte-for-byte identical to the synthetic commit that passed. Secret scan
+  # and commit happen under the same lock so no engine git operation can race
+  # between validation and finalization. Project hooks are disabled here: an
+  # agent-authored pre-commit hook must not rewrite the tested index.
+  finalize_reason=""
+  merge_commit=""
+  if singular_git_lock_acquire; then
+    # The pre-lock check above avoids waiting on known drift; this in-lock
+    # check closes the wait/commit TOCTOU. It also compares the operation's
+    # original opaque binding, so a valid replacement manifest is not allowed
+    # to inherit the old audit.
+    if ! singular_campaign_lock_acquire; then
+      finalize_reason="campaign-publication-lock-timeout"
+    else
+      integration_campaign_lock_held="yes"
+    fi
+    if [[ -z "$finalize_reason" ]] && ! singular_campaign_publication_cas \
+        "$packet_campaign_binding" integrate pre-commit-locked; then
+      finalize_reason="campaign-identity-changed"
+    elif [[ -z "$finalize_reason" ]]; then
+      current_tree="$(git -C "$SINGULAR_ROOT" write-tree 2>/dev/null || true)"
+      current_parent="$(git -C "$SINGULAR_ROOT" rev-parse --verify HEAD 2>/dev/null || true)"
+      current_merge_head="$(git -C "$SINGULAR_ROOT" rev-parse --verify MERGE_HEAD 2>/dev/null || true)"
+    fi
+    if [[ -z "$finalize_reason" ]]; then
+      if [[ "$current_tree" != "$tested_tree" \
+          || "$current_parent" != "$tested_parent" \
+          || "$current_merge_head" != "$tested_merge_head" ]]; then
+        finalize_reason="tested-tree-or-parent-changed"
+      elif ! "$SCRIPT_DIR/secret-scan.sh" --worktree "$SINGULAR_ROOT" --staged \
+          >"$run_dir/secret-scan-merge-$task_id.log" 2>&1; then
+        finalize_reason="secret-detected"
+      elif ! git -C "$SINGULAR_ROOT" \
+          -c user.name="$SINGULAR_GIT_L0_NAME" \
+          -c user.email="$SINGULAR_GIT_L0_EMAIL" \
+          -c core.hooksPath=/dev/null \
+          commit --no-edit -q \
+          -m "integrate($task_id): merge $branch into $SINGULAR_TARGET_BRANCH" \
+          -m "Worker head: $actual_head" \
+          -m "Packet: docs/orchestration/packets/imported/$task_id/$run_packet.json" \
+          -m "Acceptance: $acceptance_mode. Regression gate: green (run $run_id)."; then
+        finalize_reason="merge-commit-failed"
+      else
+        merge_commit="$(git -C "$SINGULAR_ROOT" rev-parse HEAD 2>/dev/null || true)"
+        committed_tree="$(git -C "$SINGULAR_ROOT" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+        committed_parents="$(git -C "$SINGULAR_ROOT" rev-list --parents -n 1 HEAD 2>/dev/null || true)"
+        if [[ "$committed_tree" != "$tested_tree" \
+            || "$committed_parents" != "$merge_commit $tested_parent $tested_merge_head" ]]; then
+          finalize_reason="committed-tree-or-parent-mismatch"
+        fi
+      fi
+    fi
+    if [[ "$integration_campaign_lock_held" == "yes" ]]; then
+      singular_campaign_lock_release 2>/dev/null || true
+      integration_campaign_lock_held="no"
+    fi
+    singular_git_lock_release
+  else
+    finalize_reason="git-lock-timeout"
+  fi
+
+  if [[ -n "$finalize_reason" ]]; then
+    if [[ -z "$merge_commit" ]]; then
+      singular_integration_abort_merge "$task_file" "$tested_parent" || {
+        echo "refuse: finalization failed and merge cleanup is incomplete" >&2
+        exit 2
+      }
+    fi
+    singular_record_recovery \
+      "exact-tree integration finalization failed ($finalize_reason) for $task_id" \
+      "$task_id" "$branch" "escalate-parked" "origin" \
+      "commit with tested tree $tested_tree and parents $tested_parent $tested_merge_head" "human"
+    singular_append_event "integration.failed" "exact-tree integration finalization failed" \
+      "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"reason\":\"$finalize_reason\"}"
+    echo "FAILED $task_id: exact-tree integration finalization failed ($finalize_reason)"
     failed_integrations=$((failed_integrations + 1))
+    if [[ -n "$merge_commit" ]]; then
+      echo "refuse: committed integration identity mismatch requires operator recovery" >&2
+      exit 2
+    fi
     continue
   fi
 
-  # Green: finalize the merge commit.
-  singular_with_git_lock git -C "$SINGULAR_ROOT" -c user.name="$SINGULAR_GIT_L0_NAME" -c user.email="$SINGULAR_GIT_L0_EMAIL" \
-    commit --no-edit -q \
-    -m "integrate($task_id): merge $branch into $SINGULAR_TARGET_BRANCH" \
-    -m "Worker head: $actual_head" \
-    -m "Packet: docs/orchestration/packets/imported/$task_id/$run_packet.json" \
-    -m "Acceptance: $acceptance_mode. Regression gate: green (run $run_id)."
-  merge_commit="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
   echo "INTEGRATED $task_id: $branch ($actual_head) -> $SINGULAR_TARGET_BRANCH @ $merge_commit"
+
+  # Promote before writing any post-integration decision artifacts.  The task
+  # status is already part of the tested merge commit, so readiness is true;
+  # running here minimizes queue latency. Promotion still runs its own full
+  # gate: same-UID cache or caller-provided handoff state is not trusted proof.
+  # The post-loop pass remains as an idempotent fallback for custom promoters.
+  integrated_node="$(singular_task_node "$task_file" 2>/dev/null || true)"
+  if [[ -n "$integrated_node" ]]; then
+    integrated_nodes+=("$integrated_node")
+    if [[ "${SINGULAR_AUTO_PROMOTE_GATES:-1}" == "1" ]] \
+        && singular_node_pending_promotion "$integrated_node" 2>/dev/null; then
+      immediate_promotion_attempted["$integrated_node"]=1
+      echo "integration: node $integrated_node pending promotion; invoking promoter..."
+      promotion_was_passed=0
+      singular_authoritative_gate_passed "$integrated_node" && promotion_was_passed=1
+      promo_out="$(singular_with_origin_lock_capability \
+        "$SCRIPT_DIR/promote-gate.sh" --from-reconcile --if-ready \
+        "$integrated_node" 2>&1)" || true
+      printf '%s\n' "$promo_out" | sed 's/^/  promotion: /'
+      promotion_is_passed=0
+      singular_authoritative_gate_passed "$integrated_node" && promotion_is_passed=1
+      if [[ "$promotion_was_passed" -eq 0 && "$promotion_is_passed" -eq 1 ]]; then
+        gates_promoted_this_run=$((gates_promoted_this_run + 1))
+      fi
+      singular_append_event "integration.promotion_attempted" "integrate-time gate promotion attempted" \
+        "{\"runId\":\"$run_id\",\"node\":\"$integrated_node\"}"
+    fi
+  fi
 
   "$SCRIPT_DIR/record-decision.sh" --task "$task_id" --decision "integrate" \
     --rationale "merged $branch ($actual_head) into $SINGULAR_TARGET_BRANCH as $merge_commit; gate green; acceptance=$acceptance_mode" \
@@ -414,11 +816,6 @@ PY
   # can promote it the moment its last task lands, instead of waiting for an
   # empty-queue reconcile cycle that may never coincide (field audit: every
   # gate needed manual promotion).
-  integrated_node="$(singular_task_node "$task_file" 2>/dev/null || true)"
-  if [[ -n "$integrated_node" ]]; then
-    integrated_nodes+=("$integrated_node")
-  fi
-
   # Push the updated target and the worker branch to origin (no-op unless SINGULAR_PUSH=1).
   push_branch "$SINGULAR_TARGET_BRANCH"
   push_branch "$branch"
@@ -436,16 +833,22 @@ fi
 # Integrate-time gate promotion (0.5.0, SINGULAR_AUTO_PROMOTE_GATES=1 default):
 # for each node whose tasks all just reached a satisfied state and whose gate
 # is unpublished, run the configured promoter in non-strict named-node mode.
-gates_promoted_this_run=0
 if [[ "${SINGULAR_AUTO_PROMOTE_GATES:-1}" == "1" && ${#integrated_nodes[@]} -gt 0 ]]; then
   mapfile -t _promo_nodes < <(printf '%s\n' "${integrated_nodes[@]}" | sort -u)
   for _node in "${_promo_nodes[@]}"; do
     [[ -n "$_node" ]] || continue
+    [[ -z "${immediate_promotion_attempted[$_node]:-}" ]] || continue
     if singular_node_pending_promotion "$_node" 2>/dev/null; then
       echo "integration: node $_node pending promotion; invoking promoter..."
-      promo_out="$("$SCRIPT_DIR/promote-gate.sh" --from-reconcile --if-ready "$_node" 2>&1)" || true
+      promotion_was_passed=0
+      singular_authoritative_gate_passed "$_node" && promotion_was_passed=1
+      promo_out="$(singular_with_origin_lock_capability \
+        "$SCRIPT_DIR/promote-gate.sh" --from-reconcile --if-ready \
+        "$_node" 2>&1)" || true
       printf '%s\n' "$promo_out" | sed 's/^/  promotion: /'
-      if grep -q '^promoted node=' <<<"$promo_out"; then
+      promotion_is_passed=0
+      singular_authoritative_gate_passed "$_node" && promotion_is_passed=1
+      if [[ "$promotion_was_passed" -eq 0 && "$promotion_is_passed" -eq 1 ]]; then
         gates_promoted_this_run=$((gates_promoted_this_run + 1))
       fi
       singular_append_event "integration.promotion_attempted" "integrate-time gate promotion attempted" \

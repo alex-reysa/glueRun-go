@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ctx-plan-critic-context.sh — assemble the read-only staged-candidate critic
 # context the S2 skeptic (node plan-critic-driver, layer engine_runtime) must
-# actually receive.
+# actually receive. The output may include the critic policy itself, making it
+# the complete prompt passed to the runner rather than an unused side artifact.
 #
 # Auto-sourced by the ctx-loader block in lib.sh (engine/ctx-*.sh). Defines NEW
 # functions only; NO existing engine path invokes them, so with this file
@@ -32,10 +33,13 @@
 #     (SINGULAR_PLAN_DIR), or empty when no stage file declares the node. Read-only;
 #     depends on no network or mutable run state.
 #   singular_ctx_plan_critic_context <node> <stage_dir> <out_file> [summary_file]
+#                                    [prompt_file] [base_sha]
 #     Pure: compose the read-only critic context — every `*.candidate.md` body in
 #     <stage_dir> (sorted), the existing-task summary (summary_file, else
 #     <stage_dir>/existing-tasks.md), and the node's stage-file content — into
-#     <out_file>. Writes ONLY <out_file>; appends no events; invokes no runner.
+#     <out_file>. When prompt_file is supplied, prepend its policy verbatim so
+#     <out_file> is directly runnable. Writes ONLY <out_file>; appends no events;
+#     invokes no runner.
 
 # Pure resolver: print the node's stage file under the context-build-plan dir, or
 # empty when no plan file declares the node. A node is "declared" by a
@@ -66,6 +70,7 @@ singular_ctx_plan_critic_stage_file() {
 # across runs for a fixed input set.
 singular_ctx_plan_critic_context() {
   local node="$1" stage_dir="$2" out_file="$3" summary_file="${4:-}"
+  local prompt_file="${5:-}" base_sha="${6:-}"
   [[ -n "$out_file" ]] || return 2
   local candidate_batch_dir
   candidate_batch_dir="$(singular_task_batch_candidate_dir "$stage_dir")" || return 2
@@ -76,8 +81,16 @@ singular_ctx_plan_critic_context() {
   mkdir -p "$(dirname "$out_file")"
 
   {
+    if [[ -n "$prompt_file" && -f "$prompt_file" ]]; then
+      printf '# Critic Policy\n\n'
+      cat "$prompt_file"
+      printf '\n\n---\n\n'
+    fi
     printf '# Plan Critic Context: %s\n\n' "$node"
     printf 'Read-only staged-candidate context for the S2 plan critic (skeptic).\n\n'
+
+    printf '## Bound Lineage\n\n'
+    printf -- '- base SHA: `%s`\n\n' "${base_sha:-unknown}"
 
     printf '## Candidate Tasks\n\n'
     local c

@@ -12,9 +12,9 @@ set -euo pipefail
 # - implementer capsule: argv scope (post-amend) wins over the packet's scope,
 #   lists capped at 20;
 # - reviewer capsule: tolerates junk verdict JSON (missing/odd fields);
-# - l1-drive.sh --dry-run stdout for a valid generic task is byte-identical
-#   (run-ids normalized) to the HEAD revision of l1-drive.sh on the same
-#   fixture — the split + preflight changed nothing observable for valid tasks.
+# - l1-drive.sh --dry-run stdout for a valid generic task remains byte-identical
+#   (run-ids and the intentionally changed retry-policy field normalized) to
+#   the HEAD revision on the same fixture.
 
 if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
   if [[ -x /opt/homebrew/bin/bash ]]; then exec /opt/homebrew/bin/bash "$0" "$@"; fi
@@ -379,7 +379,9 @@ EOF
 # byte-identical to the HEAD revision of l1-drive.sh run on the same fixture
 # (run-ids normalized; both share the CURRENT lib.sh, whose changes are additive).
 normalize_run_ids() {
-  sed -E 's/RUN-[0-9]{8}T[0-9]{6}Z-[0-9]+/RUN-XXXXXXXXTXXXXXXZ-X/g'
+  sed -E \
+    -e 's/RUN-[0-9]{8}T[0-9]{6}Z-[0-9]+/RUN-XXXXXXXXTXXXXXXZ-X/g' \
+    -e 's/  (max_retries=[0-9]+|risk_tier=[^ ]+  product_repairs=[0-9]+)$/  RETRY_POLICY/'
 }
 
 test_dry_run_byte_identical_to_head() {
@@ -400,7 +402,7 @@ test_dry_run_byte_identical_to_head() {
   old_out="$(printf '%s\n' "$old_out" | normalize_run_ids)"
   if [[ "$new_out" != "$old_out" ]]; then
     diff <(printf '%s\n' "$old_out") <(printf '%s\n' "$new_out") >&2 || true
-    fail "dry-run output must be byte-identical to HEAD l1-drive.sh (after run-id normalization)"
+    fail "dry-run output must match HEAD outside the intentional retry-policy field"
   fi
   echo "ok: dry-run byte parity vs HEAD"
 }

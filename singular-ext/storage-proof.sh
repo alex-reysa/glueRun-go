@@ -101,6 +101,7 @@ singular_packet_module_guard() {
   python3 - "$packet" "$task_file" "$workspace" "$run_dir" <<'PY'
 import json
 import os
+import stat
 import sys
 
 packet_path, task_path, workspace, run_dir = sys.argv[1:5]
@@ -117,23 +118,96 @@ def as_int(value):
     except Exception:
         return 999
 
-def candidates(ref):
-    if not ref:
-        return []
-    if os.path.isabs(ref):
-        return [ref]
-    out = []
-    if workspace:
-        out.append(os.path.join(workspace, ref))
-    if run_dir:
-        out.append(os.path.join(run_dir, ref))
-        if ref.startswith(".singular-evidence/"):
-            out.append(os.path.join(run_dir, "worker-evidence", os.path.basename(ref)))
-    return out
+def canonical_directory(path):
+    """Return an existing root without allowing a symlink root to widen scope."""
+    if not path:
+        return None
+    root = os.path.realpath(path)
+    try:
+        mode = os.lstat(root).st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        fail(f"storage_proof evidence root cannot be inspected: {path}: {exc}")
+    if not stat.S_ISDIR(mode):
+        fail(f"storage_proof evidence root is not a directory: {path}")
+    return root
+
+workspace_root = canonical_directory(workspace)
+run_root = canonical_directory(run_dir)
+
+def safe_ref_parts(ref):
+    # Packet evidence refs are POSIX-relative identifiers. Validate the raw
+    # components instead of normalizing them: normalization would erase the
+    # very `.`/`..` traversal that this trust boundary must reject.
+    if not ref or ref in {".", ".."}:
+        fail(f"unsafe storage_proof skip-guard evidence ref: {ref!r}")
+    if os.path.isabs(ref) or ref.startswith("/"):
+        fail(f"unsafe absolute storage_proof skip-guard evidence ref: {ref!r}")
+    if any(ord(char) < 32 or ord(char) == 127 for char in ref):
+        fail(f"unsafe control character in storage_proof skip-guard evidence ref: {ref!r}")
+    parts = ref.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        fail(f"unsafe traversal in storage_proof skip-guard evidence ref: {ref!r}")
+    return tuple(parts)
+
+def candidate_is_regular_file(root, parts, ref):
+    if root is None:
+        return False
+    candidate = os.path.join(root, *parts)
+    try:
+        if os.path.commonpath([root, os.path.abspath(candidate)]) != root:
+            fail(f"storage_proof skip-guard evidence escapes its allowed root: {ref}")
+    except ValueError:
+        fail(f"storage_proof skip-guard evidence escapes its allowed root: {ref}")
+
+    # Do not let lstat's final-component behavior hide a symlink in a parent.
+    # Resolving from the already-canonical root also keeps the check meaningful
+    # when the caller supplied a root through a symlinked path.
+    current = root
+    try:
+        final_mode = None
+        for part in parts:
+            current = os.path.join(current, part)
+            final_mode = os.lstat(current).st_mode
+            if stat.S_ISLNK(final_mode):
+                fail(f"storage_proof skip-guard evidence traverses a symlink: {ref}")
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        fail(f"storage_proof skip-guard evidence cannot be inspected: {ref}: {exc}")
+
+    resolved = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([root, resolved]) != root:
+            fail(f"storage_proof skip-guard evidence escapes its allowed root: {ref}")
+    except ValueError:
+        fail(f"storage_proof skip-guard evidence escapes its allowed root: {ref}")
+    if final_mode is None or not stat.S_ISREG(final_mode):
+        fail(f"storage_proof skip-guard evidence is not a regular file: {ref}")
+    return True
 
 def exists(ref):
-    paths = candidates(ref)
-    return bool(paths) and any(os.path.isfile(path) for path in paths)
+    parts = safe_ref_parts(ref)
+    candidates = []
+    if workspace_root is not None:
+        candidates.append((workspace_root, parts))
+    if run_root is not None:
+        candidates.append((run_root, parts))
+        if parts[0] == ".singular-evidence" and len(parts) > 1:
+            # L1 snapshots the worker's .singular-evidence tree here before it
+            # invokes this guard. Preserve subdirectories rather than reducing
+            # the identity to basename, which could alias two distinct refs.
+            candidates.append((run_root, ("worker-evidence", *parts[1:])))
+    seen = set()
+    for root, relative_parts in candidates:
+        key = (root, relative_parts)
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate_is_regular_file(root, relative_parts, ref):
+            return True
+    return False
 
 marked_red_commands = []
 for idx, command in enumerate(packet.get("commands", [])):

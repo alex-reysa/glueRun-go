@@ -196,15 +196,23 @@ assert_valid "{
   \"assumptionsChallenged\": [], \"rationale\": \"reproducible id\"
 }" "derived singular_finding_id validates against pattern"
 
-# --- prompt exists, is the plan-batch skeptic, and is present-but-unwired -----
+# --- prompt exists, is the plan-batch skeptic, and is campaign-bound ----------
 [[ -f "$PROMPT" ]] || fail "missing prompt: $PROMPT"
 grep -qi "skeptic" "$PROMPT" || fail "plan-critic.md must frame the critic as a skeptic"
 grep -qi "read-only" "$PROMPT" || fail "plan-critic.md must instruct read-only repo access"
 grep -q "plan-critique.v0.schema.json" "$PROMPT" \
   || fail "plan-critic.md must point its final JSON at the schema"
 
-# No engine/CLI/driver path may reference the prompt yet (contract-node gate).
-wired="$(grep -rl "plan-critic.md" "$ENGINE_HOME/engine" "$ENGINE_HOME/cli" 2>/dev/null || true)"
-[[ -z "$wired" ]] || fail "plan-critic.md must be unwired but is referenced by: $wired"
+# Campaigns resolve the one critic template that the runtime consumes, then
+# register that exact path as active policy. campaign_manifest.py fingerprints
+# active-policy values, so a prompt hot patch cannot silently change a frozen
+# campaign. Keep both halves explicit: wiring without the active-policy entry
+# would weaken the campaign safety boundary.
+CAMPAIGN="$ENGINE_HOME/engine/campaign.sh"
+[[ -f "$CAMPAIGN" ]] || fail "missing campaign driver: $CAMPAIGN"
+grep -Fq 'critic_template="${SINGULAR_PLAN_CRITIC_TEMPLATE:-$SINGULAR_ORCH_DIR/prompts/plan-critic.md}"' "$CAMPAIGN" \
+  || fail "campaign must resolve the canonical plan-critic template"
+grep -Fq -- '--active-policy "critic-template=$critic_template"' "$CAMPAIGN" \
+  || fail "campaign must fingerprint the resolved plan-critic template"
 
 echo "test-plan-critique-schema: all assertions passed"

@@ -539,13 +539,16 @@ PY
 
 singular_packet_has_accept_waiver() {
   local packet="$1"
+  local current_campaign_binding
   singular_unbound_waivers_enabled || return 1
-  python3 - "$packet" "$SINGULAR_RUNS_DIR" "$SINGULAR_ORCH_DIR/decisions.md" <<'PY'
+  current_campaign_binding="$(singular_campaign_binding 2>/dev/null)" || return 1
+  python3 - "$packet" "$SINGULAR_RUNS_DIR" "$SINGULAR_ORCH_DIR/decisions.md" \
+    "$current_campaign_binding" <<'PY'
 import json
 import os
 import sys
 
-packet_path, runs_dir, decisions_path = sys.argv[1:4]
+packet_path, runs_dir, decisions_path, current_binding = sys.argv[1:5]
 try:
     with open(packet_path, encoding="utf-8") as f:
         packet = json.load(f)
@@ -559,6 +562,12 @@ if not task or not run or packet.get("status") != "accepted":
     sys.exit(1)
 
 evidence = packet.get("evidence", [])
+packet_binding = next((
+    str(item.get("ref", "")) for item in evidence
+    if isinstance(item, dict) and item.get("kind") == "campaign-binding"
+), "")
+if not packet_binding and current_binding == "legacy":
+    packet_binding = "legacy"
 has_waiver_ref = any(
     isinstance(item, dict)
     and item.get("kind") == "waiver"
@@ -573,28 +582,27 @@ decision_path = os.path.join(runs_dir, run, "decision-audit-needs-fix.json")
 try:
     with open(decision_path, encoding="utf-8") as f:
         decision = json.load(f)
+    decision_binding = str(decision.get("campaignBinding", ""))
+    decision_run = str(decision.get("runId", ""))
+    if not decision_binding and current_binding == "legacy":
+        decision_binding = "legacy"
+    if not decision_run and current_binding == "legacy":
+        decision_run = run
     decision_json_ok = (
         decision.get("taskId") == task
         and decision.get("action") == "accept-waiver"
         and decision.get("failureClass") == "audit-needs-fix"
+        and decision_run == run
+        and packet_binding == current_binding
+        and decision_binding == current_binding
     )
 except (OSError, json.JSONDecodeError):
     decision_json_ok = False
 
-decisions_md_ok = False
-try:
-    with open(decisions_path, encoding="utf-8") as f:
-        text = f.read()
-    decisions_md_ok = (
-        f"— {task} — decide:accept-waiver" in text
-        and f"— {task} — accept" in text
-        and f"- Run: `{run}`" in text
-        and (not branch or f"- Branch: `{branch}`" in text)
-    )
-except OSError:
-    decisions_md_ok = False
-
-if decision_json_ok or decisions_md_ok:
+# Markdown is an operator-facing journal, not structured authority. Combining
+# task/run/branch substrings from unrelated sections allowed a false waiver;
+# only the run-local decision JSON can authorize this compatibility path.
+if decision_json_ok:
     sys.exit(0)
 sys.exit(1)
 PY
@@ -738,6 +746,337 @@ event = {
 with open(path, "a", encoding="utf-8") as f:
     f.write(json.dumps(event, separators=(",", ":")) + "\n")
 PY
+}
+
+# Verify the immutable campaign boundary before a control-plane mutation.
+#
+# Planning fanout deliberately points SINGULAR_TASKS_DIR at a request-scoped
+# staging directory.  That path is not campaign policy: the canonical task
+# root is.  Normalize it only when the staged task directory is actually
+# contained by SINGULAR_PLANNING_ARTIFACT_DIR; an arbitrary caller-provided
+# task directory remains fingerprinted and therefore fails closed.
+#
+# Arguments: entrypoint [phase].  Returns 2 for every refusal so callers do not
+# accidentally classify campaign drift as a product/gate failure.  Event
+# emission is best-effort because an unavailable journal must not turn a clean
+# refusal into a different failure class.
+singular_campaign_verify_or_refuse() {
+  local entrypoint="${1:-control-plane}" phase="${2:-entry}"
+  local campaign_script="$SINGULAR_LIB_DIR/campaign.sh"
+  local verify_tasks_dir="$SINGULAR_TASKS_DIR" verify_rc=0 event_json=""
+
+  if [[ -n "${SINGULAR_PLANNING_ARTIFACT_DIR:-}" ]] \
+      && python3 - "$SINGULAR_TASKS_DIR" "$SINGULAR_PLANNING_ARTIFACT_DIR" <<'PY' >/dev/null 2>&1
+import os
+import sys
+
+tasks = os.path.realpath(sys.argv[1])
+artifacts = os.path.realpath(sys.argv[2])
+try:
+    contained = os.path.commonpath((tasks, artifacts)) == artifacts
+except ValueError:
+    contained = False
+raise SystemExit(0 if contained else 1)
+PY
+  then
+    verify_tasks_dir="$SINGULAR_ORCH_DIR/tasks"
+  fi
+
+  SINGULAR_TASKS_DIR="$verify_tasks_dir" \
+    "$campaign_script" verify --quiet || verify_rc=$?
+  [[ "$verify_rc" -eq 0 ]] && return 0
+
+  echo "$entrypoint: campaign runtime drift at $phase; control-plane mutation refused" >&2
+  event_json="$(python3 - "$entrypoint" "$phase" \
+      "${SINGULAR_CAMPAIGN_MANIFEST:-$SINGULAR_STATE_DIR/campaign/manifest.json}" \
+      "$verify_rc" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+print(json.dumps({
+    "entrypoint": sys.argv[1],
+    "phase": sys.argv[2],
+    "manifest": sys.argv[3],
+    "verifyExitCode": int(sys.argv[4]),
+}, separators=(",", ":")))
+PY
+)"
+  singular_append_event "campaign.drift_detected" \
+    "$entrypoint refused campaign runtime drift" "${event_json:-{}}" \
+    >/dev/null 2>&1 || true
+  return 2
+}
+
+# Return one opaque identity for the campaign policy under which durable work
+# is produced.  `legacy` is an identity too: work accepted before a campaign
+# starts must not silently cross into a newly frozen campaign.  Partial state
+# is never treated as legacy.
+singular_campaign_binding() {
+  local manifest="${SINGULAR_CAMPAIGN_MANIFEST:-$SINGULAR_STATE_DIR/campaign/manifest.json}"
+  local active="$(dirname "$manifest")/ACTIVE"
+  local epoch="$(dirname "$manifest")/EPOCH"
+  local transition="$(dirname "$manifest")/TRANSITION"
+  local enforced="$SINGULAR_STATE_DIR/CAMPAIGN_ENFORCED"
+  python3 - "$manifest" "$active" "$enforced" "$epoch" "$transition" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+
+manifest, active, enforced, epoch, transition = sys.argv[1:6]
+if os.path.exists(transition):
+    raise SystemExit(2)
+present = [os.path.isfile(path) for path in (manifest, active, enforced)]
+if not any(present):
+    if os.path.isfile(epoch):
+        try:
+            inactive_epoch = open(epoch, encoding="utf-8").read().strip()
+        except OSError:
+            raise SystemExit(2)
+        if not re.fullmatch(r"[0-9a-f]{48}", inactive_epoch):
+            raise SystemExit(2)
+        print(f"legacy:epoch:{inactive_epoch}")
+    elif os.path.exists(epoch):
+        raise SystemExit(2)
+    else:
+        # Virgin repositories retain the historical compatibility identity.
+        print("legacy")
+    raise SystemExit(0)
+if not all(present):
+    raise SystemExit(2)
+try:
+    raw = open(manifest, "rb").read()
+    data = json.loads(raw)
+    campaign_id = str(data.get("campaignId", ""))
+    manifest_epoch = str(data.get("campaignEpoch", ""))
+    active_id = open(active, encoding="utf-8").read().strip()
+    latch = open(enforced, encoding="utf-8").read().strip()
+except (OSError, ValueError, TypeError):
+    raise SystemExit(2)
+if not re.fullmatch(r"[A-Za-z0-9._:-]+", campaign_id):
+    raise SystemExit(2)
+if active_id != campaign_id or latch != "singular-campaign-enforced-v1":
+    raise SystemExit(2)
+epoch_suffix = ""
+if manifest_epoch:
+    try:
+        active_epoch = open(epoch, encoding="utf-8").read().strip()
+    except OSError:
+        raise SystemExit(2)
+    if not re.fullmatch(r"[0-9a-f]{48}", manifest_epoch) or active_epoch != manifest_epoch:
+        raise SystemExit(2)
+    epoch_suffix = f":epoch:{manifest_epoch}"
+elif os.path.exists(epoch):
+    # An upgraded legacy manifest may coexist with a transition epoch; bind it
+    # even though the historical manifest did not record the field.
+    try:
+        active_epoch = open(epoch, encoding="utf-8").read().strip()
+    except OSError:
+        raise SystemExit(2)
+    if not re.fullmatch(r"[0-9a-f]{48}", active_epoch):
+        raise SystemExit(2)
+    epoch_suffix = f":epoch:{active_epoch}"
+print(f"campaign:{campaign_id}:sha256:{hashlib.sha256(raw).hexdigest()}{epoch_suffix}")
+PY
+}
+
+_singular_campaign_binding_compare() {
+  local expected="$1" entrypoint="${2:-control-plane}" phase="${3:-binding-check}"
+  local actual="" event_json=""
+  actual="$(singular_campaign_binding 2>/dev/null)" || actual=""
+  if [[ -n "$actual" && "$actual" == "$expected" ]]; then
+    return 0
+  fi
+  echo "$entrypoint: campaign identity changed at $phase; control-plane mutation refused" >&2
+  event_json="$(python3 - "$entrypoint" "$phase" "$expected" "$actual" <<'PY' 2>/dev/null || true
+import json
+import sys
+print(json.dumps({
+    "entrypoint": sys.argv[1],
+    "phase": sys.argv[2],
+    "expectedBinding": sys.argv[3],
+    "actualBinding": sys.argv[4],
+}, separators=(",", ":")))
+PY
+)"
+  singular_append_event "campaign.identity_mismatch" \
+    "$entrypoint refused work from a different campaign identity" \
+    "${event_json:-{}}" >/dev/null 2>&1 || true
+  return 2
+}
+
+# Full policy checkpoint for a long-running operation. This intentionally
+# fingerprints engine/config/prompt bytes and then compares the opaque campaign
+# identity captured by the caller. Use it at entry/cycle boundaries and after
+# provider or gate work, outside serialized publication critical sections.
+singular_campaign_binding_matches() {
+  local expected="$1" entrypoint="${2:-control-plane}" phase="${3:-binding-check}"
+  singular_campaign_verify_or_refuse "$entrypoint" "$phase" || return 2
+  _singular_campaign_binding_compare "$expected" "$entrypoint" "$phase"
+}
+
+# Serialize campaign transitions with the tiny publication critical sections
+# that turn a reviewed result into authoritative state. Long-running model and
+# gate work stays outside this lock; publishers acquire it only for the final
+# binding compare-and-swap plus mutation.
+singular_campaign_lock_path() {
+  local manifest="${SINGULAR_CAMPAIGN_MANIFEST:-$SINGULAR_STATE_DIR/campaign/manifest.json}"
+  python3 - "$manifest" <<'PY'
+import os
+import sys
+
+manifest = os.path.abspath(sys.argv[1])
+parent = os.path.dirname(manifest)
+if parent == os.path.sep:
+    print("unsafe campaign publication lock parent: %s" % parent, file=sys.stderr)
+    raise SystemExit(2)
+print(os.path.join(parent, ".publication-lock"))
+PY
+}
+
+singular_campaign_lock_owned() {
+  local lock_dir owner_file owner_pid pid_file_pid owner_token process_id
+  lock_dir="$(singular_campaign_lock_path)" || return 2
+  owner_file="$lock_dir/owner.json"
+  process_id="${BASHPID:-$$}"
+  [[ -d "$lock_dir" && ! -L "$lock_dir" ]] || return 1
+  owner_pid="$(singular_json_field "$owner_file" pid 2>/dev/null || true)"
+  owner_token="$(singular_json_field "$owner_file" token 2>/dev/null || true)"
+  pid_file_pid="$(cat "$lock_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$owner_pid" == "$process_id" && "$pid_file_pid" == "$process_id" \
+      && -n "${SINGULAR_CAMPAIGN_LOCK_CAPABILITY:-}" \
+      && "$owner_token" == "$SINGULAR_CAMPAIGN_LOCK_CAPABILITY" ]]
+}
+
+# Final publication CAS. The expensive runtime fingerprint must already have
+# been checked before taking the lock; while holding it, only ACTIVE/latch,
+# manifest bytes and epoch are compared. This closes campaign replace/end ABA
+# races without serializing parallel publishers behind recursive tree hashing.
+singular_campaign_publication_cas() {
+  local expected="$1" entrypoint="${2:-control-plane}" phase="${3:-publication-cas}"
+  if ! singular_campaign_lock_owned; then
+    echo "$entrypoint: campaign publication CAS requires the owned publication lock" >&2
+    return 2
+  fi
+  _singular_campaign_binding_compare "$expected" "$entrypoint" "$phase"
+}
+
+singular_campaign_lock_remove_stale() {
+  local stale_path="$1" lock_dir suffix
+  lock_dir="$(singular_campaign_lock_path)" || return 2
+  suffix="${stale_path#"$lock_dir.stale."}"
+  if [[ "$stale_path" != "$lock_dir.stale."* \
+      || ! "$suffix" =~ ^[1-9][0-9]*\.[0-9a-f]{32}$ ]]; then
+    echo "refusing cleanup outside campaign publication lock: $stale_path" >&2
+    return 2
+  fi
+  # rm does not follow a command-line symlink. Quarantining first and removing
+  # only this capability-suffixed exact path avoids traversing an attacker-
+  # supplied lock symlink via "$stale/owner.json" or "$stale/pid".
+  rm -rf -- "$stale_path"
+}
+
+singular_campaign_lock_acquire() {
+  local lock_dir owner_file owner_pid pid_file_pid owner_token process_id waited=0 stale temporary
+  local wait_limit="${SINGULAR_CAMPAIGN_LOCK_WAIT_TICKS:-600}"
+  lock_dir="$(singular_campaign_lock_path)" || return 2
+  owner_file="$lock_dir/owner.json"
+  process_id="${BASHPID:-$$}"
+  [[ "$wait_limit" =~ ^[1-9][0-9]*$ ]] || wait_limit=600
+  if ! owner_token="$(python3 -c 'import secrets; print(secrets.token_hex(16))')" \
+      || [[ ! "$owner_token" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "could not generate campaign publication lock capability" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$lock_dir")" || return 1
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    if [[ -L "$lock_dir" ]]; then
+      echo "refusing symlink campaign publication lock: $lock_dir" >&2
+      return 2
+    fi
+    owner_pid=""
+    pid_file_pid=""
+    owner_pid="$(singular_json_field "$owner_file" pid 2>/dev/null || true)"
+    pid_file_pid="$(cat "$lock_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    if { [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] \
+          && singular_pid_alive "$owner_pid"; } \
+        || { [[ "$pid_file_pid" =~ ^[1-9][0-9]*$ ]] \
+          && singular_pid_alive "$pid_file_pid"; }; then
+      waited=$((waited + 1))
+      if [[ "$waited" -ge "$wait_limit" ]]; then
+        echo "timed out waiting for campaign publication lock: $lock_dir" >&2
+        return 75
+      fi
+      sleep 0.1
+      continue
+    fi
+    # A creator can briefly own the directory before its pid file is visible.
+    if [[ -z "$owner_pid" && -z "$pid_file_pid" && "$waited" -lt 10 ]]; then
+      waited=$((waited + 1))
+      if [[ "$waited" -ge "$wait_limit" ]]; then
+        echo "timed out waiting for campaign publication lock: $lock_dir" >&2
+        return 75
+      fi
+      sleep 0.1
+      continue
+    fi
+    stale="$lock_dir.stale.$process_id.$owner_token"
+    if mv "$lock_dir" "$stale" 2>/dev/null; then
+      singular_campaign_lock_remove_stale "$stale" || return $?
+      waited=0
+    fi
+  done
+  if ! printf '%s\n' "$process_id" >"$lock_dir/pid"; then
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  fi
+  temporary="$lock_dir/.owner.$process_id.tmp"
+  if ! python3 - "$temporary" "$process_id" "$owner_token" <<'PY'
+import json
+import sys
+
+path, pid, token = sys.argv[1:4]
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump({"pid": int(pid), "token": token}, stream, separators=(",", ":"))
+    stream.write("\n")
+PY
+  then
+    rm -f "$temporary" 2>/dev/null || true
+    rm -f "$lock_dir/pid" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  fi
+  if ! mv "$temporary" "$owner_file"; then
+    rm -f "$temporary" 2>/dev/null || true
+    rm -f "$lock_dir/pid" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  fi
+  SINGULAR_CAMPAIGN_LOCK_CAPABILITY="$owner_token"
+  return 0
+}
+
+singular_campaign_lock_release() {
+  local lock_dir owner_file owner_pid pid_file_pid owner_token process_id
+  lock_dir="$(singular_campaign_lock_path)" || return 2
+  owner_file="$lock_dir/owner.json"
+  process_id="${BASHPID:-$$}"
+  [[ -d "$lock_dir" ]] || return 0
+  [[ ! -L "$lock_dir" ]] || return 1
+  owner_pid="$(singular_json_field "$owner_file" pid 2>/dev/null || true)"
+  owner_token="$(singular_json_field "$owner_file" token 2>/dev/null || true)"
+  pid_file_pid="$(cat "$lock_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$owner_pid" == "$process_id" && "$pid_file_pid" == "$process_id" \
+      && -n "${SINGULAR_CAMPAIGN_LOCK_CAPABILITY:-}" \
+      && "$owner_token" == "$SINGULAR_CAMPAIGN_LOCK_CAPABILITY" ]] || return 1
+  rm -f "$owner_file"
+  rm -f "$lock_dir/pid"
+  if rmdir "$lock_dir"; then
+    unset SINGULAR_CAMPAIGN_LOCK_CAPABILITY
+    return 0
+  fi
+  return 1
 }
 
 singular_require_target_branch() {
@@ -1269,27 +1608,141 @@ PY
   return 0
 }
 
+singular_origin_lock_path() {
+  python3 - "$SINGULAR_LOCK_FILE" "$SINGULAR_STATE_DIR" <<'PY'
+import os
+import sys
+
+configured = os.path.abspath(sys.argv[1])
+expected = os.path.abspath(os.path.join(sys.argv[2], "locks", "origin.lock.json"))
+if configured != expected or configured == os.path.sep:
+    print(
+        "unsafe origin lock path: %s (expected %s)" % (configured, expected),
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+print(expected)
+PY
+}
+
+singular_origin_guard_lock_path() {
+  local lock_file
+  lock_file="$(singular_origin_lock_path)" || return 2
+  printf '%s.guard\n' "$lock_file"
+}
+
+singular_origin_guard_remove_stale() {
+  local stale_path="$1" guard_dir suffix
+  guard_dir="$(singular_origin_guard_lock_path)" || return 2
+  suffix="${stale_path#"$guard_dir.stale."}"
+  if [[ "$stale_path" != "$guard_dir.stale."* \
+      || ! "$suffix" =~ ^[1-9][0-9]*\.[0-9a-f]{64}$ ]]; then
+    echo "refusing cleanup outside origin guard lock: $stale_path" >&2
+    return 2
+  fi
+  # The quarantined path may itself be a hostile symlink. Removing the exact
+  # command-line path recursively unlinks that symlink without following it.
+  rm -rf -- "$stale_path"
+}
+
 singular_acquire_lock() {
   local run_id="$1"
+  local capability capability_sha lock_file guard_dir guard_pid metadata_pid process_id waited=0 stale
   singular_ensure_state_dirs
-  if [[ -f "$SINGULAR_LOCK_FILE" ]]; then
-    local pid
-    pid="$(singular_json_field "$SINGULAR_LOCK_FILE" pid 2>/dev/null || true)"
-    if singular_pid_alive "$pid"; then
-      echo "active origin lock exists for pid $pid: $SINGULAR_LOCK_FILE" >&2
-      singular_append_event "origin.lock_skipped" "active origin lock exists" "{\"pid\":\"$pid\"}"
+  lock_file="$(singular_origin_lock_path)" || return 2
+  guard_dir="$(singular_origin_guard_lock_path)" || return 2
+  process_id="${BASHPID:-$$}"
+  if ! capability="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
+      || [[ ! "$capability" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "could not generate origin lock capability" >&2
+    return 1
+  fi
+  capability_sha="$(singular_sha256_text "$capability")"
+
+  # A metadata symlink is never valid, whether or not a guard exists.
+  if [[ -L "$lock_file" ]]; then
+    echo "refusing symlink origin lock metadata: $lock_file" >&2
+    return 2
+  fi
+
+  # mkdir is the ownership decision. The JSON file is metadata only; two
+  # reconcilers can no longer both observe absence and overwrite each other.
+  while ! mkdir "$guard_dir" 2>/dev/null; do
+    if [[ -L "$guard_dir" ]]; then
+      echo "refusing symlink origin guard lock: $guard_dir" >&2
+      return 2
+    fi
+    guard_pid=""
+    guard_pid="$(cat "$guard_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "$guard_pid" =~ ^[1-9][0-9]*$ ]] && singular_pid_alive "$guard_pid"; then
+      echo "active origin lock exists for pid $guard_pid: $lock_file" >&2
+      singular_append_event "origin.lock_skipped" "active origin lock exists" \
+        "{\"pid\":\"$guard_pid\"}"
       return 75
     fi
-    local stale="$SINGULAR_LOCK_FILE.stale.$(date -u +%Y%m%dT%H%M%SZ)"
-    mv "$SINGULAR_LOCK_FILE" "$stale"
-    singular_append_event "origin.lock_stale" "moved stale origin lock" "{\"path\":\"$stale\"}"
+    # Allow an acquiring process a brief window to publish its owner pid.
+    if [[ -z "$guard_pid" && "$waited" -lt 10 ]]; then
+      waited=$((waited + 1))
+      sleep 0.1
+      continue
+    fi
+    stale="$guard_dir.stale.$process_id.$capability"
+    if mv "$guard_dir" "$stale" 2>/dev/null; then
+      singular_origin_guard_remove_stale "$stale" || return $?
+      waited=0
+    fi
+  done
+  # Publish ownership immediately. A contender can now prove this process is
+  # live while the backward-compatible standalone metadata is reconciled.
+  if ! printf '%s\n' "$process_id" >"$guard_dir/pid"; then
+    rmdir "$guard_dir" 2>/dev/null || true
+    return 1
   fi
-  python3 - "$SINGULAR_LOCK_FILE" "$run_id" "$$" "${SINGULAR_LOCK_MINUTES:-60}" <<'PY'
+
+  # Legacy metadata lives outside the guard directory. Touch it only after we
+  # own the canonical guard name: stale recovery that quarantines a guard must
+  # never race ahead and move metadata published by a newer guard generation.
+  if [[ -L "$lock_file" || ( -e "$lock_file" && ! -f "$lock_file" ) ]]; then
+    echo "refusing unsafe origin lock metadata: $lock_file" >&2
+    rm -f "$guard_dir/pid" 2>/dev/null || true
+    rmdir "$guard_dir" 2>/dev/null || true
+    return 2
+  fi
+  if [[ -f "$lock_file" ]]; then
+    metadata_pid="$(singular_json_field "$lock_file" pid 2>/dev/null || true)"
+    if [[ "$metadata_pid" =~ ^[1-9][0-9]*$ ]] \
+        && singular_pid_alive "$metadata_pid"; then
+      echo "active legacy origin lock exists for pid $metadata_pid: $lock_file" >&2
+      singular_append_event "origin.lock_skipped" "active legacy origin lock exists" \
+        "{\"pid\":\"$metadata_pid\"}"
+      rm -f "$guard_dir/pid" 2>/dev/null || true
+      rmdir "$guard_dir" 2>/dev/null || true
+      return 75
+    fi
+    stale="$lock_file.stale.$(date -u +%Y%m%dT%H%M%SZ).$process_id.$capability"
+    if ! mv "$lock_file" "$stale"; then
+      rm -f "$guard_dir/pid" 2>/dev/null || true
+      rmdir "$guard_dir" 2>/dev/null || true
+      return 1
+    fi
+    singular_append_event "origin.lock_stale" "moved stale origin lock" \
+      "{\"path\":\"$stale\"}"
+  fi
+  SINGULAR_ORIGIN_LOCK_CAPABILITY="$capability"
+  # Keep the bearer token shell-local. Trusted direct children receive it via
+  # singular_with_origin_lock_capability; workers, providers, hooks, gates and
+  # arbitrary dispatch adapters never inherit it transitively.
+  export -n SINGULAR_ORIGIN_LOCK_CAPABILITY 2>/dev/null || true
+  if ! python3 - "$lock_file" "$run_id" "$process_id" \
+    "${SINGULAR_LOCK_MINUTES:-60}" "$capability_sha" <<'PY'
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-path, run_id, pid, minutes = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+path, run_id, pid, minutes, capability_sha = (
+    sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+)
 now = datetime.now(timezone.utc).replace(microsecond=0)
 data = {
     "schema": "singular.orchestration.lock.v0",
@@ -1298,41 +1751,229 @@ data = {
     "startedAt": now.isoformat().replace("+00:00", "Z"),
     "expiresAt": (now + timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z"),
     "pid": pid,
+    "capabilitySha256": capability_sha,
 }
-with open(path, "w", encoding="utf-8") as f:
+temporary = path + ".tmp." + str(pid)
+with open(temporary, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
+os.replace(temporary, path)
 PY
+  then
+    unset SINGULAR_ORIGIN_LOCK_CAPABILITY
+    rm -f "$guard_dir/pid" 2>/dev/null || true
+    rmdir "$guard_dir" 2>/dev/null || true
+    return 1
+  fi
 }
 
 singular_release_lock() {
   local run_id="$1"
-  if [[ ! -f "$SINGULAR_LOCK_FILE" ]]; then
+  local existing lock_file lock_pid guard_dir guard_pid process_id stored_sha actual_sha
+  lock_file="$(singular_origin_lock_path)" || return 2
+  guard_dir="$(singular_origin_guard_lock_path)" || return 2
+  process_id="${BASHPID:-$$}"
+  [[ ! -L "$lock_file" && ! -L "$guard_dir" ]] || return 1
+  existing="$(singular_json_field "$lock_file" runId 2>/dev/null || true)"
+  lock_pid="$(singular_json_field "$lock_file" pid 2>/dev/null || true)"
+  guard_pid="$(cat "$guard_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  stored_sha="$(singular_json_field "$lock_file" capabilitySha256 2>/dev/null || true)"
+  actual_sha="$(singular_sha256_text "${SINGULAR_ORIGIN_LOCK_CAPABILITY:-}" 2>/dev/null || true)"
+  if [[ "$existing" == "$run_id" && "$lock_pid" == "$process_id" \
+      && "$guard_pid" == "$process_id" \
+      && -n "${SINGULAR_ORIGIN_LOCK_CAPABILITY:-}" \
+      && -n "$stored_sha" && "$stored_sha" == "$actual_sha" ]]; then
+    rm -f "$lock_file"
+    rm -f "$guard_dir/pid"
+    rmdir "$guard_dir" 2>/dev/null || true
+    unset SINGULAR_ORIGIN_LOCK_CAPABILITY
     return 0
   fi
-  local existing
-  existing="$(singular_json_field "$SINGULAR_LOCK_FILE" runId 2>/dev/null || true)"
-  if [[ "$existing" == "$run_id" ]]; then
-    rm -f "$SINGULAR_LOCK_FILE"
+  return 1
+}
+
+# Validate a child process's inherited authority to reuse the origin lock.
+# A public `--from-reconcile` flag alone is not authority: only the process
+# that acquired the lock knows this per-acquisition random capability, and only
+# explicitly authorized direct children receive it for one invocation.
+singular_require_inherited_origin_lock() {
+  local expected_run_id="${1:-}"
+  local token="${SINGULAR_ORIGIN_LOCK_CAPABILITY:-}"
+  local lock_run_id lock_pid stored_sha actual_sha lock_file guard_dir guard_pid
+  lock_file="$(singular_origin_lock_path)" || return 2
+  guard_dir="$(singular_origin_guard_lock_path)" || return 2
+  [[ -n "$token" && -f "$lock_file" && ! -L "$lock_file" \
+      && -d "$guard_dir" && ! -L "$guard_dir" ]] || {
+    echo "inherited origin lock capability is missing" >&2
+    return 2
+  }
+  lock_run_id="$(singular_json_field "$lock_file" runId 2>/dev/null || true)"
+  lock_pid="$(singular_json_field "$lock_file" pid 2>/dev/null || true)"
+  guard_pid="$(cat "$guard_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  stored_sha="$(singular_json_field "$lock_file" capabilitySha256 2>/dev/null || true)"
+  actual_sha="$(singular_sha256_text "$token" 2>/dev/null || true)"
+  if [[ -z "$lock_run_id" || "$guard_pid" != "$lock_pid" \
+      || -z "$stored_sha" || "$stored_sha" != "$actual_sha" \
+      || ( -n "$expected_run_id" && "$lock_run_id" != "$expected_run_id" ) ]] \
+      || ! singular_pid_alive "$lock_pid"; then
+    echo "inherited origin lock capability did not verify" >&2
+    return 2
   fi
+  # Environment-imported variables retain their export attribute in Bash.
+  # De-export after authentication so project gates/providers launched by this
+  # trusted child do not receive the bearer token by accident.
+  export -n SINGULAR_ORIGIN_LOCK_CAPABILITY 2>/dev/null || true
+  return 0
+}
+
+singular_with_origin_lock_capability() {
+  local token="${SINGULAR_ORIGIN_LOCK_CAPABILITY:-}"
+  [[ "$token" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "origin lock capability is unavailable for trusted child" >&2
+    return 2
+  }
+  env SINGULAR_ORIGIN_LOCK_CAPABILITY="$token" "$@"
+}
+
+singular_git_lock_path() {
+  # This lock protects repository-wide .git mutations, so stale recovery may
+  # only ever remove the one narrow lock below the current state directory.
+  # Resolve `.` and duplicate separators lexically, without following symlinks,
+  # then require an exact match. This also catches callers that rebind
+  # SINGULAR_STATE_DIR but accidentally retain a lock path from another run.
+  python3 - "$SINGULAR_GIT_LOCK_DIR" "$SINGULAR_STATE_DIR" <<'PY'
+import os
+import sys
+
+configured = os.path.abspath(sys.argv[1])
+expected = os.path.abspath(os.path.join(sys.argv[2], "locks", "git-op.lock"))
+if configured != expected or configured == os.path.sep:
+    print(
+        "unsafe git operation lock path: %s (expected %s)" % (configured, expected),
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+print(expected)
+PY
+}
+
+singular_git_lock_remove_stale() {
+  local stale_path="$1" lock_dir suffix
+  lock_dir="$(singular_git_lock_path)" || return 2
+  suffix="${stale_path#"$lock_dir.stale."}"
+  if [[ "$stale_path" != "$lock_dir.stale."* \
+      || ! "$suffix" =~ ^[1-9][0-9]*\.[0-9a-f]{32}$ ]]; then
+    echo "refusing recursive cleanup outside git operation lock: $stale_path" >&2
+    return 2
+  fi
+  rm -rf -- "$stale_path"
 }
 
 singular_git_lock_acquire() {
   singular_ensure_state_dirs
-  local waited=0
-  while ! mkdir "$SINGULAR_GIT_LOCK_DIR" 2>/dev/null; do
-    sleep 0.1
-    waited=$((waited + 1))
-    if [[ "$waited" -ge 600 ]]; then
-      echo "timed out waiting for git operation lock: $SINGULAR_GIT_LOCK_DIR" >&2
-      return 75
+  local lock_dir owner_file owner_pid pid_file_pid owner_token process_id
+  local waited=0 stale temporary
+  local wait_limit="${SINGULAR_GIT_LOCK_WAIT_TICKS:-600}"
+
+  lock_dir="$(singular_git_lock_path)" || return 2
+  owner_file="$lock_dir/owner.json"
+  process_id="${BASHPID:-$$}"
+  [[ "$wait_limit" =~ ^[1-9][0-9]*$ ]] || wait_limit=600
+  if ! owner_token="$(python3 -c 'import secrets; print(secrets.token_hex(16))')" \
+      || [[ ! "$owner_token" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "could not generate git operation lock capability" >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$lock_dir")"
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    owner_pid="$(singular_json_field "$owner_file" pid 2>/dev/null || true)"
+    pid_file_pid="$(cat "$lock_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+
+    # Treat either live owner record as authoritative. The two files are
+    # written in order, so this also protects the short publication window.
+    if { [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] \
+          && singular_pid_alive "$owner_pid"; } \
+        || { [[ "$pid_file_pid" =~ ^[1-9][0-9]*$ ]] \
+          && singular_pid_alive "$pid_file_pid"; }; then
+      waited=$((waited + 1))
+      if [[ "$waited" -ge "$wait_limit" ]]; then
+        echo "timed out waiting for git operation lock: $lock_dir" >&2
+        return 75
+      fi
+      sleep 0.1
+      continue
+    fi
+
+    # A creator can own the directory briefly before publishing either owner
+    # record. Give that window a bounded grace period before stale recovery.
+    if [[ -z "$owner_pid" && -z "$pid_file_pid" && "$waited" -lt 10 ]]; then
+      waited=$((waited + 1))
+      if [[ "$waited" -ge "$wait_limit" ]]; then
+        echo "timed out waiting for git operation lock: $lock_dir" >&2
+        return 75
+      fi
+      sleep 0.1
+      continue
+    fi
+
+    stale="$lock_dir.stale.$process_id.$owner_token"
+    if mv "$lock_dir" "$stale" 2>/dev/null; then
+      singular_git_lock_remove_stale "$stale" || return $?
+      waited=0
     fi
   done
-  printf '%s\n' "$$" >"$SINGULAR_GIT_LOCK_DIR/pid"
+
+  if ! printf '%s\n' "$process_id" >"$lock_dir/pid"; then
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  fi
+  temporary="$lock_dir/.owner.$process_id.tmp"
+  if ! python3 - "$temporary" "$process_id" "$owner_token" <<'PY'
+import json
+import sys
+
+path, pid, token = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump({"pid": int(pid), "token": token}, stream, separators=(",", ":"))
+    stream.write("\n")
+PY
+  then
+    rm -f "$temporary" 2>/dev/null || true
+    rm -f "$lock_dir/pid" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  fi
+  if ! mv "$temporary" "$owner_file"; then
+    rm -f "$temporary" 2>/dev/null || true
+    rm -f "$lock_dir/pid" 2>/dev/null || true
+    rmdir "$lock_dir" 2>/dev/null || true
+    return 1
+  fi
+  SINGULAR_GIT_LOCK_CAPABILITY="$owner_token"
+  return 0
 }
 
 singular_git_lock_release() {
-  rm -rf "$SINGULAR_GIT_LOCK_DIR" 2>/dev/null || true
+  local lock_dir owner_file owner_pid pid_file_pid owner_token process_id
+  lock_dir="$(singular_git_lock_path)" || return 2
+  owner_file="$lock_dir/owner.json"
+  process_id="${BASHPID:-$$}"
+  [[ -d "$lock_dir" ]] || return 0
+  [[ ! -L "$lock_dir" ]] || return 1
+  owner_pid="$(singular_json_field "$owner_file" pid 2>/dev/null || true)"
+  owner_token="$(singular_json_field "$owner_file" token 2>/dev/null || true)"
+  pid_file_pid="$(cat "$lock_dir/pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$owner_pid" == "$process_id" && "$pid_file_pid" == "$process_id" \
+      && -n "${SINGULAR_GIT_LOCK_CAPABILITY:-}" \
+      && "$owner_token" == "$SINGULAR_GIT_LOCK_CAPABILITY" ]] || return 1
+  rm -f "$owner_file"
+  rm -f "$lock_dir/pid"
+  if rmdir "$lock_dir"; then
+    unset SINGULAR_GIT_LOCK_CAPABILITY
+    return 0
+  fi
+  return 1
 }
 
 singular_with_git_lock() {
@@ -1341,8 +1982,12 @@ singular_with_git_lock() {
   "$@"
   local ec=$?
   set -e
-  singular_git_lock_release
-  return "$ec"
+  local release_ec=0
+  singular_git_lock_release || release_ec=$?
+  if [[ "$ec" -ne 0 ]]; then
+    return "$ec"
+  fi
+  return "$release_ec"
 }
 
 singular_validate_packet_basic() {
@@ -1918,6 +2563,74 @@ def satisfied(t, depth=0):
 
 
 sys.exit(0 if all(satisfied(t) for t in tasks) else 1)
+PY
+}
+
+# Return success only when NODE currently has a schema-valid, authoritative
+# passing gate (including any configured human-gate requirement). Callers must
+# not infer this transition from promoter stdout: a custom promoter may log
+# anything, while dag.sh area-gate is the completion authority.
+singular_authoritative_gate_passed() {
+  local node="$1"
+  [[ -n "$node" ]] || return 1
+  "$SINGULAR_LIB_DIR/dag.sh" area-gate "$node" >/dev/null 2>&1
+}
+
+# Snapshot every authoritative passing gate as a JSON array in DAG order. A
+# malformed/missing DAG or invalid gate fails closed to an empty snapshot; the
+# transition counter below can therefore never manufacture progress from log
+# text or a partially valid gate record.
+singular_authoritative_gate_snapshot_json() {
+  local dag_file="${SINGULAR_DAG_FILE:-$SINGULAR_ORCH_DIR/dag.v0.json}"
+  [[ -f "$dag_file" ]] || { printf '[]\n'; return 0; }
+  local nodes node
+  nodes="$(python3 - "$dag_file" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding="utf-8"))
+    nodes = data.get("nodes", [])
+    if not isinstance(nodes, list):
+        raise ValueError("nodes is not a list")
+    for entry in nodes:
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]:
+            print(entry["id"])
+except Exception:
+    pass
+PY
+)"
+  local -a passed=()
+  while IFS= read -r node; do
+    [[ -n "$node" ]] || continue
+    if singular_authoritative_gate_passed "$node"; then
+      passed+=("$node")
+    fi
+  done <<<"$nodes"
+  printf '%s\n' ${passed[@]+"${passed[@]}"} | python3 -c \
+    'import json,sys; print(json.dumps([line.rstrip("\n") for line in sys.stdin if line.rstrip("\n")], separators=(",", ":")))'
+}
+
+# Count only false->true transitions between two authoritative snapshots.
+# Invalid caller input returns non-zero rather than becoming breaker-resetting
+# progress.
+singular_authoritative_gate_transition_count() {
+  local before="$1" after="$2"
+  python3 - "$before" "$after" <<'PY'
+import json
+import sys
+
+try:
+    before = json.loads(sys.argv[1])
+    after = json.loads(sys.argv[2])
+    if not isinstance(before, list) or not isinstance(after, list):
+        raise ValueError("snapshots must be arrays")
+    if not all(isinstance(item, str) and item for item in before + after):
+        raise ValueError("snapshot members must be non-empty strings")
+except Exception:
+    raise SystemExit(2)
+
+print(len(set(after) - set(before)))
 PY
 }
 
@@ -3347,6 +4060,43 @@ PY
       "{\"runnerResultRef\":$(printf '%s' "$result_file" | singular_json_escape),\"providerError\":$provider_error_json}" \
       2>/dev/null || true
   fi
+
+  # One normalized result is written for every actual runner execution.  Emit
+  # the measurement from that authority boundary instead of asking campaign
+  # metrics to infer model calls from routing/session events (which may be
+  # emitted even when a resume is rejected before a provider is reached, or may
+  # be absent for a direct fresh call).  This event is observability-only: a
+  # journal write failure can never alter the runner outcome.
+  local runner_completed_json
+  runner_completed_json="$(python3 - "$result_file" <<'PY' 2>/dev/null || true
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    result = json.load(open(path, encoding="utf-8"))
+except (OSError, ValueError):
+    raise SystemExit(0)
+
+record = {
+    "runnerResultRef": path,
+    "provider": result.get("provider"),
+    "runId": result.get("runId"),
+    "role": result.get("role"),
+    "capabilityProfile": result.get("capabilityProfile"),
+    "exitCode": result.get("exitCode"),
+    "outcome": result.get("outcome"),
+    "failureClass": result.get("failureClass"),
+}
+if isinstance(result.get("usage"), dict):
+    record["usage"] = result["usage"]
+print(json.dumps(record, separators=(",", ":")))
+PY
+)"
+  if [[ -n "$runner_completed_json" ]]; then
+    singular_append_event "runner.completed" "runner execution completed" \
+      "$runner_completed_json" 2>/dev/null || true
+  fi
 }
 
 # Validate a runner-result and its provider-error binding. On matching evidence,
@@ -4261,6 +5011,11 @@ except Exception:
     sys.exit(1)
 if gate.get("node") != node or gate.get("status") != "blocked":
     sys.exit(1)
+# A needs-work gate is an instruction to plan a remediation slice, not a stop.
+# Legacy classless blocks remain conservative and reach this guard; explicit
+# blocked-external records are normally rejected earlier by dag.sh node-fields.
+if gate.get("blockerClass") == "needs-work":
+    sys.exit(1)
 missing = []
 for evidence in gate.get("evidence", []):
     if evidence.get("kind") == "task-set":
@@ -4661,6 +5416,9 @@ max_retries = int(os.environ.get("SINGULAR_MAX_RETRIES", "3"))
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 created = now
 retry_count = 0
+product_pass_started = False
+product_pass_started_at = ""
+product_pass_started_run_id = ""
 def parse_array(raw, fallback=None):
     if raw:
         try:
@@ -4677,6 +5435,21 @@ if os.path.exists(path):
             prev = json.load(f)
         created = prev.get("createdAt", now)
         retry_count = int(prev.get("retryCount", 0))
+        previous_marker = prev.get("productPassStarted")
+        if isinstance(previous_marker, bool):
+            product_pass_started = previous_marker
+        else:
+            # Compatibility for leases written before productPassStarted was
+            # introduced.  A scheduler-only reservation was `planned`; an
+            # explicit operator budget reset was `ready` with retryCount zero.
+            # Every other legacy lease remains conservatively "started" so an
+            # upgrade cannot mint a new initial product pass.
+            previous_status = str(prev.get("status", ""))
+            product_pass_started = not (
+                retry_count == 0 and previous_status in {"planned", "ready"}
+            )
+        product_pass_started_at = str(prev.get("productPassStartedAt", "") or "")
+        product_pass_started_run_id = str(prev.get("productPassStartedRunId", "") or "")
         if not base_sha:
             base_sha = prev.get("baseSha", "")
         if not batch_id:
@@ -4700,9 +5473,14 @@ data = {
     "status": status,
     "retryCount": retry_count,
     "maxRetries": max_retries,
+    "productPassStarted": product_pass_started,
     "createdAt": created,
     "updatedAt": now,
 }
+if product_pass_started_at:
+    data["productPassStartedAt"] = product_pass_started_at
+if product_pass_started_run_id:
+    data["productPassStartedRunId"] = product_pass_started_run_id
 tmp = path + ".tmp"
 with open(tmp, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
@@ -4738,11 +5516,9 @@ PY
 
 # Return a lease to a dispatchable state and give the task its retry budget back.
 #
-# retryCount is the part that matters. Nothing else in the engine ever resets
-# it, and decide.sh reads it from here to decide whether any budget remains — so
-# a task unparked at retryCount == maxRetries would park again on its first
-# failure with no attempt left to spend, which looks exactly like the unpark not
-# having worked.
+# retryCount and productPassStarted form the durable product-budget state.
+# Resetting only the count would still make re-entry look like a continuation
+# after a prior initial pass; reset both to begin the operator-authorized lineage.
 singular_lease_unpark() {
   local task_id="$1"
   local lease
@@ -4759,7 +5535,43 @@ with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
 data["status"] = "ready"
 data["retryCount"] = 0
+data["productPassStarted"] = False
+data.pop("productPassStartedAt", None)
+data.pop("productPassStartedRunId", None)
 data["updatedAt"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+}
+
+# Durably distinguish scheduler reservation from execution.  Detached dispatch
+# creates a `planned` lease before l1-drive starts; that reservation must not
+# consume the task's initial product pass.  l1-drive flips this marker before it
+# invokes any worker so a crash/re-entry cannot mint another initial pass.
+singular_lease_mark_product_pass_started() {
+  local task_id="$1" run_id="${2:-}"
+  local lease
+  lease="$(singular_lease_path "$task_id")"
+  [[ -f "$lease" ]] || return 1
+  python3 - "$lease" "$run_id" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, run_id = sys.argv[1:3]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+if data.get("productPassStarted") is not True:
+    data["productPassStarted"] = True
+    data["productPassStartedAt"] = now
+if run_id and not data.get("productPassStartedRunId"):
+    data["productPassStartedRunId"] = run_id
+data["updatedAt"] = now
 tmp = path + ".tmp"
 with open(tmp, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
@@ -5234,7 +6046,10 @@ def check(val, spec, where):
             except ValueError:
                 fail(f"{where} must be an ISO-8601 date-time")
         pattern = spec.get("pattern")
-        if pattern and not re.fullmatch(pattern, val):
+        # JSON Schema `pattern` uses regular-expression search semantics, not
+        # an implicit whole-string match.  Schemas that require a full match
+        # carry their own ^...$ anchors.
+        if pattern and not re.search(pattern, val):
             fail(f"{where} must match pattern {pattern}")
     if kind == "array":
         min_items = spec.get("minItems")
@@ -6121,12 +6936,24 @@ PY
 # discards another's staged batch.
 singular_l1_fanout() {
   local run_id="$1" base_sha="$2"
+  # The caller's live remaining capacity is a harder ceiling than the static
+  # planner cap. Direct/legacy callers that omit it retain the configured cap.
+  local remaining_capacity="${3:-}"
   if singular_stop_requested; then
     singular_append_event "origin.fanout_aborted" "STOP sentinel present; no l1 fanout" "{\"runId\":\"$run_id\"}"
     return 0
   fi
   local cap="${SINGULAR_MAX_L1_CONCURRENT:-3}"
   [[ "$cap" =~ ^[0-9]+$ && "$cap" -ge 1 ]] || cap=1
+  [[ -n "$remaining_capacity" ]] || remaining_capacity="$cap"
+  [[ "$remaining_capacity" =~ ^[0-9]+$ ]] || remaining_capacity=0
+  [[ "$cap" -gt "$remaining_capacity" ]] && cap="$remaining_capacity"
+  if [[ "$cap" -eq 0 ]]; then
+    echo "actuation: l1 fanout: no remaining dispatch capacity"
+    echo "l1_planner_failures=0"
+    echo "l1_import_rejections=0"
+    return 0
+  fi
   local free_gb min_gb
   free_gb="$(singular_free_disk_gb)"; [[ "$free_gb" =~ ^[0-9]+$ ]] || free_gb=0
   min_gb="${SINGULAR_MIN_DISK_GB:-1}"
@@ -6162,17 +6989,29 @@ singular_l1_fanout() {
   local plan_root="$SINGULAR_RUNS_DIR/$run_id/l1-staging"
   local planner_driver="${SINGULAR_L1_PLAN_NODE:-$(dirname "${BASH_SOURCE[0]}")/l1-plan-node.sh}"
   local tasks_per_node="${SINGULAR_L1_TASKS_PER_NODE:-1}"
+  [[ "$tasks_per_node" =~ ^[0-9]+$ && "$tasks_per_node" -ge 1 ]] || tasks_per_node=1
   singular_append_event "origin.l1_fanout" "l1 fanout started" \
     "{\"runId\":\"$run_id\",\"cap\":$cap,\"nodes\":${#nodes[@]},\"freeGb\":$free_gb}"
   echo "actuation: l1 fanout cap=$cap nodes=${#nodes[@]} (${nodes[*]})"
   local -a pids=() pnodes=()
-  local node node_dir
+  local node node_dir node_count max_for_node
+  local candidates_remaining="$remaining_capacity" node_index=0 nodes_left
   for node in "${nodes[@]}"; do
+    # Reserve at least one candidate for every selected independent node, then
+    # give this node any remaining configured batch allowance. The sum of all
+    # --count values can never exceed the live dispatch capacity.
+    nodes_left=$(( ${#nodes[@]} - node_index ))
+    max_for_node=$(( candidates_remaining - nodes_left + 1 ))
+    node_count="$tasks_per_node"
+    [[ "$node_count" -gt "$max_for_node" ]] && node_count="$max_for_node"
+    [[ "$node_count" -ge 1 ]] || break
     node_dir="$plan_root/$node"
     mkdir -p "$node_dir"
     ( "$planner_driver" --node "$node" --run-id "$run_id" --stage-dir "$node_dir" \
-        --base-sha "$base_sha" --count "$tasks_per_node" ) >"$node_dir/plan.log" 2>&1 &
+        --base-sha "$base_sha" --count "$node_count" ) >"$node_dir/plan.log" 2>&1 &
     pids+=("$!"); pnodes+=("$node")
+    candidates_remaining=$((candidates_remaining - node_count))
+    node_index=$((node_index + 1))
   done
 	  local -a import_nodes=()
 	  local i ec planner_failures=0 import_rejections=0 import_out parsed_rejections
@@ -6187,7 +7026,7 @@ singular_l1_fanout() {
 	    fi
 	  done
 	  if [[ "${#import_nodes[@]}" -gt 0 ]]; then
-	    import_out="$(singular_l1_import_staged "$run_id" "${import_nodes[@]}" 2>&1)" || true
+	    import_out="$(singular_l1_import_staged "$run_id" --max-candidates "$remaining_capacity" "${import_nodes[@]}" 2>&1)" || true
 	    printf '%s\n' "$import_out"
 	    parsed_rejections="$(printf '%s\n' "$import_out" | sed -n 's/^l1_import_rejections=//p' | tail -1)"
 	    [[ "$parsed_rejections" =~ ^[0-9]+$ ]] && import_rejections="$parsed_rejections"
@@ -6204,8 +7043,14 @@ singular_l1_fanout() {
 # imported all-or-nothing after validating shape (status/area/ownedFiles/
 # dispatchMode). A node's lease is released on success, marked failed otherwise.
 singular_l1_import_staged() {
-	  local run_id="$1"; shift
-	  local node stage_dir node_area cand
+		  local run_id="$1"; shift
+		  local max_candidates=-1 imported_candidates=0
+		  if [[ "${1:-}" == "--max-candidates" ]]; then
+		    max_candidates="${2:-}"
+		    shift 2
+		    [[ "$max_candidates" =~ ^[0-9]+$ ]] || max_candidates=0
+		  fi
+		  local node stage_dir node_area cand
 	  local import_rejections=0
 	  for node in "$@"; do
     stage_dir="$SINGULAR_RUNS_DIR/$run_id/l1-staging/$node"
@@ -6231,7 +7076,17 @@ singular_l1_import_staged() {
 	      singular_append_event "origin.l1_import_rejected" "no staged candidates" "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
 	      continue
     fi
-    node_area="$(singular_l1_lease_field "$node" area 2>/dev/null || true)"
+	    if [[ "$max_candidates" -ge 0 \
+	        && $((imported_candidates + ${#cands[@]})) -gt "$max_candidates" ]]; then
+	      import_rejections=$((import_rejections + 1))
+	      singular_l1_lease_set_status "$node" failed 2>/dev/null || true
+	      singular_append_event "origin.l1_import_rejected" \
+	        "staged candidate batch exceeds remaining dispatch capacity" \
+	        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"candidates\":${#cands[@]},\"alreadyImported\":$imported_candidates,\"maxCandidates\":$max_candidates}"
+	      echo "candidate-budget-exceeded node=$node candidates=${#cands[@]} remaining=$((max_candidates - imported_candidates))"
+	      continue
+	    fi
+	    node_area="$(singular_l1_lease_field "$node" area 2>/dev/null || true)"
 	    if [[ -z "$node_area" ]]; then
       # Fail closed: a missing/unreadable lease means the node was never validly
       # planned (l1-plan-node writes the lease before planning). Import nothing.
@@ -6321,7 +7176,7 @@ singular_l1_import_staged() {
     done
 	    if [[ "$mv_ok" -ne 1 ]]; then
 	      import_rejections=$((import_rejections + 1))
-	      for rid in "${moved[@]}"; do
+	    for rid in "${moved[@]}"; do
         rm -f "$SINGULAR_TASKS_DIR/$rid.md" 2>/dev/null || true
       done
       singular_l1_lease_set_status "$node" failed 2>/dev/null || true
@@ -6332,9 +7187,10 @@ singular_l1_import_staged() {
     for rid in "${moved[@]}"; do
       singular_append_event "planner.generated" "task imported from l1 plan" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\",\"taskId\":\"$rid\"}"
-      echo "generated:$rid"
-    done
-	    singular_l1_lease_set_status "$node" released 2>/dev/null || true
+	      echo "generated:$rid"
+	    done
+	    imported_candidates=$((imported_candidates + ${#moved[@]}))
+		    singular_l1_lease_set_status "$node" released 2>/dev/null || true
 	  done
 	  echo "l1_import_rejections=$import_rejections"
 	}
@@ -6584,6 +7440,7 @@ PY
 singular_tracked_source_snapshot() {
   local worktree="$1" output="$2"
   python3 - "$worktree" "$output" <<'PY'
+import hashlib
 import json
 import os
 import stat
@@ -6592,7 +7449,10 @@ import sys
 
 root, output = sys.argv[1:3]
 result = subprocess.run(
-    ["git", "-C", root, "ls-files", "-z"],
+    [
+        "git", "-C", root, "ls-files", "-z", "--cached", "--others",
+        "--exclude-standard",
+    ],
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     check=False,
@@ -6601,24 +7461,45 @@ if result.returncode:
     sys.stderr.buffer.write(result.stderr)
     raise SystemExit(result.returncode)
 snapshot = {}
+excluded_roots = {".singular-state", ".singular-cache", ".singular-evidence", ".worktrees"}
 for raw in result.stdout.split(b"\0"):
     if not raw:
         continue
     relative = os.fsdecode(raw)
+    if relative.replace("\\", "/").split("/", 1)[0] in excluded_roots:
+        continue
     path = os.path.join(root, relative)
     try:
         info = os.lstat(path)
     except FileNotFoundError:
         snapshot[relative] = {"missing": True}
         continue
+    mode = stat.S_IMODE(info.st_mode)
+    if stat.S_ISLNK(info.st_mode):
+        payload = os.fsencode(os.readlink(path))
+        kind = "symlink"
+    elif stat.S_ISREG(info.st_mode):
+        with open(path, "rb") as stream:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        payload = None
+        kind = "file"
+    else:
+        raise SystemExit(f"unsupported source object: {relative}")
     snapshot[relative] = {
+        "kind": kind,
+        "mode": mode,
         "device": info.st_dev,
         "inode": info.st_ino,
-        "kind": stat.S_IFMT(info.st_mode),
-        "mode": stat.S_IMODE(info.st_mode),
         "size": info.st_size,
         "mtimeNs": info.st_mtime_ns,
         "ctimeNs": info.st_ctime_ns,
+        "sha256": (
+            hashlib.sha256(payload).hexdigest()
+            if payload is not None
+            else digest.hexdigest()
+        ),
     }
 temporary = output + ".tmp"
 with open(temporary, "w", encoding="utf-8") as handle:
@@ -7576,6 +8457,22 @@ singular_interruptible_sleep() {
   [[ "$poll" =~ ^[0-9]+$ && "$poll" -ge 1 ]] || poll=10
   local wake slept=0 chunk
   wake="$(singular_wake_file)"
+
+  # A completion/refill event may arrive between the cycle's last state read
+  # and this nap.  Checking only after the first chunk imposed one full poll
+  # interval (10s by default) on an already-pending wake and defeated the
+  # work-conserving scheduler's immediate refill contract.
+  if singular_stop_requested; then
+    return 2
+  fi
+  if [[ -f "$wake" ]]; then
+    rm -f "$wake" 2>/dev/null || true
+    return 1
+  fi
+  if [[ "$watch_backoff" == "1" ]] && ! singular_planner_backoff_active_json >/dev/null 2>&1; then
+    return 1
+  fi
+
   while (( slept < total )); do
     chunk=$(( total - slept < poll ? total - slept : poll ))
     sleep "$chunk"

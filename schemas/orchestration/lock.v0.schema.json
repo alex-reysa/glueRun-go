@@ -11,6 +11,7 @@
     "runId": { "type": "string", "minLength": 1 },
     "startedAt": { "type": "string", "format": "date-time" },
     "expiresAt": { "type": "string", "format": "date-time" },
-    "pid": { "type": "integer", "minimum": 1 }
+    "pid": { "type": "integer", "minimum": 1 },
+    "capabilitySha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
   }
 }

@@ -3,7 +3,8 @@ set -uo pipefail
 
 # Covers the critique-aware L1 import fanout orchestrator
 # engine/ctx-critique-import-fanout.sh: a drop-in vehicle mirroring the shape of
-# singular_l1_fanout (same two args, same l1_planner_failures= / l1_import_rejections=
+# singular_l1_fanout (same required args plus an optional live-capacity ceiling,
+# same l1_planner_failures= / l1_import_rejections=
 # summary lines) that composes the integrated pieces so the import path can honor
 # the plan critic verdict WITHOUT modifying engine/lib.sh.
 #
@@ -290,6 +291,23 @@ test_observe_only_ignores_reject_verdict() {
   assert_eq "$(events_count 'origin.l1_import_rejected')" "0" "observe-only records no rejection for reject verdicts"
 }
 
+# The static L1 cap is only an upper bound. Reconcile passes the current
+# remaining worker capacity, and the critique-aware path must start/import no
+# more candidates than that live ceiling.
+test_live_capacity_clamps_critique_fanout() {
+  with_fixture
+  local plan="$SINGULAR_ROOT/plan-stub.sh"; make_plan_stub "$plan"
+  local critic="$SINGULAR_ROOT/critic-stub.sh"; make_critic_stub "$critic"
+  local base; base="$(git -C "$SINGULAR_ROOT" rev-parse target)"
+  local out
+  out="$(SINGULAR_L1_PLAN_NODE="$plan" SINGULAR_RUNNER="$critic" \
+        singular_ctx_critique_import_fanout RUN-one "$base" 1 2>&1)"
+  assert_eq "$(printf '%s\n' "$out" | grep -c '^generated:')" "1" \
+    "live capacity=1 imports exactly one critique-approved candidate"
+  assert_eq "$(task_count)" "1" "critique-aware fanout never imports its static cap when only one slot is free"
+  assert_eq "$(events_count 'plan.critiqued')" "1" "only one planner/critic lineage starts for one free slot"
+}
+
 # ---------------------------------------------------------------------------
 # ON enforcement: approve imports, revise is withheld with exactly one
 # origin.l1_import_rejected (reason plan-critique) and the lease set failed.
@@ -343,12 +361,11 @@ test_on_enforcement_park()   { run_on_case park; }
 # ---------------------------------------------------------------------------
 test_reconcile_wired_behind_knob() {
   local rc="$SCRIPT_DIR/reconcile.sh"
-  # The orchestrator is now invoked by reconcile.sh with the same (run_id, base_sha).
-  grep -q 'singular_ctx_critique_import_fanout "$run_id" "$base_sha"' "$rc" \
-    || fail "reconcile.sh must invoke singular_ctx_critique_import_fanout \"\$run_id\" \"\$base_sha\""
-  # The OFF path still calls plain singular_l1_fanout with the same args.
-  grep -q 'singular_l1_fanout "$run_id" "$base_sha"' "$rc" \
-    || fail "reconcile.sh must retain singular_l1_fanout \"\$run_id\" \"\$base_sha\" for the OFF path"
+  # Both routes receive the exact current dispatch budget, not just a static cap.
+  grep -q 'singular_ctx_critique_import_fanout "$run_id" "$base_sha" "$dispatch_budget"' "$rc" \
+    || fail "reconcile.sh must pass dispatch_budget to singular_ctx_critique_import_fanout"
+  grep -q 'singular_l1_fanout "$run_id" "$base_sha" "$dispatch_budget"' "$rc" \
+    || fail "reconcile.sh must pass dispatch_budget to singular_l1_fanout"
   # Structural: the L1 parallel branch gates the routing on SINGULAR_PLAN_CRITIQUE,
   # with the orchestrator in the ON arm and plain fanout in the OFF (else) arm.
   python3 - "$rc" <<'PY' || fail "reconcile.sh L1 parallel branch not gated correctly on SINGULAR_PLAN_CRITIQUE"
@@ -371,8 +388,8 @@ block = "\n".join(lines[start + 1:end])
 assert 'SINGULAR_PLAN_CRITIQUE' in block, "L1 branch must gate routing on SINGULAR_PLAN_CRITIQUE"
 # Anchor on the actual call invocations (with args), not comment mentions.
 gate = block.index('SINGULAR_PLAN_CRITIQUE')
-orch = block.index('singular_ctx_critique_import_fanout "$run_id" "$base_sha"')
-fan = block.index('singular_l1_fanout "$run_id" "$base_sha"')
+orch = block.index('singular_ctx_critique_import_fanout "$run_id" "$base_sha" "$dispatch_budget"')
+fan = block.index('singular_l1_fanout "$run_id" "$base_sha" "$dispatch_budget"')
 # ON: the orchestrator call follows the knob gate; OFF: plain fanout is the else arm.
 assert gate < orch, "orchestrator call must sit under the SINGULAR_PLAN_CRITIQUE gate"
 assert orch < fan, "plain fanout must be the OFF (else) arm after the ON orchestrator call"
@@ -381,6 +398,7 @@ PY
 
 test_observe_only_equivalent_to_plain_fanout
 test_observe_only_ignores_reject_verdict
+test_live_capacity_clamps_critique_fanout
 test_on_enforcement_revise
 test_on_enforcement_park
 test_reconcile_wired_behind_knob

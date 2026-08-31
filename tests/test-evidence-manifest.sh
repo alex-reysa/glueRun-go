@@ -133,13 +133,26 @@ assert data["providerUsage"] == {
 }
 PY
 
-if SINGULAR_EVIDENCE_CONFIG_JSON='{"auditInputTokenCanary":8000}' \
+canary_warning="$tmp/canary-warning.log"
+cp "$run/evidence-manifest.json" "$tmp/evidence-manifest-before-canary.json"
+SINGULAR_EVIDENCE_CONFIG_JSON='{"auditInputTokenCanary":8000}' \
   "$ROOT/engine/evidence-manifest.sh" \
     --run-dir "$run" --task-id TASK-0001 --worktree "$repo" \
-    --base-ref "$base" --head-sha "$head" >/dev/null 2>&1; then
-  echo "expected auditor input-token canary to fail at its bound" >&2
+    --base-ref "$base" --head-sha "$head" >/dev/null 2>"$canary_warning"
+grep -q 'warning: auditor input-token canary exceeded (8000 >= 8000)' "$canary_warning" || {
+  echo "expected an inclusive auditor input-token telemetry warning" >&2
   exit 1
-fi
+}
+python3 - "$run/evidence-manifest.json" <<'PY'
+import json, sys
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+assert manifest["budget"]["auditInputTokenCanary"] == 8000
+assert manifest["budget"]["actualAuditInputTokens"] == 8000
+PY
+# The retrieval assertions below intentionally exercise the original 200-byte
+# manifest budget. Restore those exact bytes after this independent canary case.
+cp "$tmp/evidence-manifest-before-canary.json" "$run/evidence-manifest.json"
 
 "$ROOT/engine/evidence-show.sh" "$run/evidence-manifest.json" \
   worker-evidence/huge.log 128 >"$tmp/excerpt"

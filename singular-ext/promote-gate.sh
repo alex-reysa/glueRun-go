@@ -18,6 +18,68 @@ export SINGULAR_ENGINE_HOME
 ENGINE_BIN="$SINGULAR_ENGINE_HOME/engine"
 source "$ENGINE_BIN/lib.sh"
 
+# Execution and source-integrity scratch data must not live in the repository:
+# a custom SINGULAR_STATE_DIR is allowed to be inside a worktree, and its own
+# changing logs must never look like project-source drift. The exact mktemp
+# directory is private to this process and removed on every normal exit.
+promotion_temp_root=""
+promotion_campaign_lock_held="no"
+promotion_transaction_dir=""
+promotion_recovery_marker="${SINGULAR_STATE_DIR:-.singular-state}/promotion/RECOVERY_REQUIRED.json"
+
+promotion_transaction_record_recovery() {
+  local marker_dir marker_tmp
+  marker_dir="$(dirname "$promotion_recovery_marker")"
+  mkdir -p "$marker_dir" || return 1
+  marker_tmp="$promotion_recovery_marker.tmp.${BASHPID:-$$}"
+  python3 - "$marker_tmp" "$promotion_transaction_dir" "$promotion_temp_root" <<'PY' \
+    || return 1
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path, transaction_dir, temp_root = sys.argv[1:4]
+record = {
+    "schema": "singular.orchestration.promotion-recovery.v0",
+    "reason": "rollback-failed",
+    "transactionDir": transaction_dir,
+    "tempRoot": temp_root,
+    "recordedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(record, handle, indent=2)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+PY
+  mv "$marker_tmp" "$promotion_recovery_marker"
+}
+
+promotion_cleanup() {
+  local rollback_ok="yes"
+  if [[ -n "${promotion_transaction_dir:-}" ]] \
+      && declare -F promotion_transaction_rollback >/dev/null; then
+    promotion_transaction_rollback 2>/dev/null || rollback_ok="no"
+  fi
+  if [[ "$promotion_campaign_lock_held" == "yes" && "$rollback_ok" == "yes" ]]; then
+    if singular_campaign_lock_release 2>/dev/null; then
+      promotion_campaign_lock_held="no"
+    fi
+  fi
+  if [[ "$rollback_ok" != "yes" ]]; then
+    promotion_transaction_record_recovery 2>/dev/null || true
+    echo "promote-gate: rollback failed; recovery journal retained at $promotion_recovery_marker" >&2
+  elif [[ -n "$promotion_temp_root" && -d "$promotion_temp_root" ]]; then
+    rm -rf -- "$promotion_temp_root"
+  fi
+}
+trap 'promotion_cleanup' EXIT
+
+# Caller-provided proof/cache material is never promotion authority. Remove
+# legacy experimental variables before any project-owned gate command runs.
+unset SINGULAR_GATE_PROMOTION_HANDOFF_FILE SINGULAR_GATE_PROMOTION_HANDOFF_SHA256
+
 from_reconcile="no"
 frontier_mode="no"
 if_ready_mode="no"
@@ -66,6 +128,51 @@ if [[ "$frontier_mode" != "yes" && -z "$registers_query" && "${#requested_nodes[
   exit 2
 fi
 
+if [[ -z "$registers_query" ]]; then
+  singular_campaign_verify_or_refuse promote-gate entry || exit 2
+  promotion_campaign_binding="$(singular_campaign_binding)" || {
+    echo "promote-gate: inconsistent campaign identity at entry" >&2
+    exit 2
+  }
+fi
+
+promotion_publication_begin() {
+  if [[ -e "$promotion_recovery_marker" ]]; then
+    echo "refusing promotion publication: unresolved rollback recovery marker: $promotion_recovery_marker" >&2
+    return 2
+  fi
+  singular_campaign_binding_matches \
+    "$promotion_campaign_binding" promote-gate pre-result-publication-checkpoint \
+    || return 2
+  singular_campaign_lock_acquire || return $?
+  promotion_campaign_lock_held="yes"
+  if [[ -e "$promotion_recovery_marker" ]]; then
+    echo "refusing promotion publication: rollback recovery marker appeared while waiting for lock" >&2
+    singular_campaign_lock_release 2>/dev/null || true
+    promotion_campaign_lock_held="no"
+    return 2
+  fi
+  if singular_campaign_publication_cas \
+      "$promotion_campaign_binding" promote-gate pre-result-publication; then
+    return 0
+  fi
+  if singular_campaign_lock_release 2>/dev/null; then
+    promotion_campaign_lock_held="no"
+  fi
+  return 2
+}
+
+promotion_publication_end() {
+  if [[ "$promotion_campaign_lock_held" == "yes" ]]; then
+    if singular_campaign_lock_release; then
+      promotion_campaign_lock_held="no"
+      return 0
+    fi
+    return 1
+  fi
+  return 0
+}
+
 singular_ensure_state_dirs
 gates_dir="${SINGULAR_GATES_DIR:-$SINGULAR_ORCH_DIR/gates}"
 evidence_dir="$gates_dir/evidence"
@@ -84,9 +191,14 @@ if [[ -z "$registers_query" ]]; then
   fi
 
   run_id="$(singular_run_id)"
-  if [[ "$from_reconcile" != "yes" ]]; then
+  if [[ "$from_reconcile" == "yes" ]]; then
+    singular_require_inherited_origin_lock || {
+      echo "promote-gate: --from-reconcile requires verified inherited lock authority" >&2
+      exit 2
+    }
+  else
     singular_acquire_lock "$run_id"
-    trap 'singular_release_lock "$run_id"' EXIT
+    trap 'promotion_cleanup; singular_release_lock "$run_id"' EXIT
   fi
 
   mkdir -p "$gates_dir" "$evidence_dir"
@@ -219,9 +331,14 @@ strict_gate_report_sha=""
 # supplied observation ref. A missing/malformed observation or stale baseline
 # is infrastructure-inconclusive and can never create a passing gate.
 write_strict_gate_report() {
-  # node command exit_code log_ref head_sha observation_ref report_ref
+  # node command exit_code log_ref head_sha observation_path report_path log_source_path
+  #
+  # Promotion executes its arbitrary project command with every generated
+  # artifact outside the source tree. `log_ref` remains the eventual,
+  # repository-relative citation, while *_path are the engine-owned temporary
+  # files used during execution and normalization.
   local node="$1" command="$2" exit_code="$3" log_ref="$4" head_sha="$5"
-  local observation_ref="$6" report_ref="$7"
+  local observation_path="$6" report_path="$7" log_source_path="$8"
   local task_id="${gate_evidence_tasks[0]:-}"
   if [[ ! "$task_id" =~ ^TASK-[0-9]{4,}$ ]]; then
     echo "gate promotion node=$node has no task ID suitable for strict report binding" >&2
@@ -268,29 +385,52 @@ PY
     --command "$command"
     --raw-exit-code "$exit_code"
     --log-ref "$log_ref"
-    --log-path "$log_ref"
-    --observation "$observation_ref"
+    # Hash the private scratch log. Its bytes are published only after the
+    # campaign compare-and-publish lock succeeds.
+    --log-path "$log_source_path"
+    --observation "$observation_path"
     --require-observation
     --phase integration
     --workspace-kind integration
-    --output "$report_ref"
+    --output "$report_path"
   )
   [[ -n "$baseline_ref" ]] && normalize_args+=(--baseline "$baseline_ref")
 
-  rm -f "$SINGULAR_ROOT/$report_ref"
+  rm -f "$report_path"
   if ! (cd "$SINGULAR_ROOT" && python3 "$ENGINE_BIN/gate_report.py" "${normalize_args[@]}") \
     >/dev/null; then
     return 2
   fi
-  local report_path="$SINGULAR_ROOT/$report_ref" report_json
   [[ -f "$report_path" ]] || return 2
+  # logPath is a durable citation for consumers, while logSha256/logBytes were
+  # derived from the byte-identical scratch source. Keeping those concerns
+  # separate lets the entire evidence bundle remain private until the campaign
+  # binding has been checked under the publication lock.
+  if ! python3 - "$report_path" "$SINGULAR_ROOT/$log_ref" <<'PY'
+import json
+import os
+import sys
+
+path, durable_log_path = sys.argv[1:3]
+with open(path, encoding="utf-8") as stream:
+    report = json.load(stream)
+report["logPath"] = durable_log_path
+temporary = path + ".tmp"
+with open(temporary, "w", encoding="utf-8") as stream:
+    json.dump(report, stream, indent=2, sort_keys=True)
+    stream.write("\n")
+os.replace(temporary, path)
+PY
+  then
+    return 2
+  fi
   report_json="$(<"$report_path")"
   singular_json_schema_check \
     "$report_json" \
     "$SINGULAR_ENGINE_HOME/schemas/gate-report.v0.schema.json" \
     "strict gate report" >/dev/null || return 2
   strict_gate_report_outcome="$(singular_json_field "$report_path" outcome)"
-  strict_gate_report_sha="$(gate_source_sha256 "$report_ref")" || return 2
+  strict_gate_report_sha="$(shasum -a 256 "$report_path" | awk '{print $1}')" || return 2
 }
 
 declare gate_node gate_source_path gate_task_ref gate_command_ref gate_upstream gate_rationale gate_completion_ref gate_requirement_mode gate_storage_proof_red_command
@@ -301,6 +441,201 @@ declare block_node_id block_source_path block_source_desc block_rationale block_
 gate_task_index_json=""
 promoted_total=0
 blocked_total=0
+
+# Promotion gates run project-owned commands in the origin checkout, so they
+# must certify the exact source state they started from. Logs, observations,
+# and reports are first written in private engine scratch space and copied to
+# their durable repository citations only after this guard passes. That avoids
+# the false choice between allowing a gate to mutate its own evidence directory
+# and treating the engine's output as project source.
+promotion_gate_log_path=""
+promotion_guard_head_before=""
+promotion_guard_source_before=""
+promotion_guard_status_before=""
+
+promotion_status_snapshot() {
+  local output="$1"
+  git -C "$SINGULAR_ROOT" status --porcelain=v1 --untracked-files=all 2>/dev/null \
+    | sed -E '\#^.. (\.singular-state|\.singular-cache|\.singular-evidence|\.worktrees)(/|$)#d' \
+    >"$output"
+}
+
+promotion_source_guard_begin() {
+  local node="$1" guard_dir
+  promotion_temp_root_init || return 2
+  guard_dir="$promotion_temp_root/promotion-source/$node"
+  mkdir -p "$guard_dir" || return 2
+  promotion_guard_head_before="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)" || return 2
+  promotion_guard_source_before="$guard_dir/source-before.json"
+  promotion_guard_status_before="$guard_dir/status-before.txt"
+  singular_tracked_source_snapshot "$SINGULAR_ROOT" "$promotion_guard_source_before" \
+    || return 2
+  promotion_status_snapshot "$promotion_guard_status_before" || return 2
+}
+
+promotion_source_guard_verify() {
+  local node="$1" guard_dir source_after status_after head_after changes_output
+  guard_dir="${promotion_guard_source_before%/*}"
+  source_after="$guard_dir/source-after.json"
+  status_after="$guard_dir/status-after.txt"
+  head_after="$(git -C "$SINGULAR_ROOT" rev-parse HEAD 2>/dev/null || true)"
+  if [[ "$head_after" != "$promotion_guard_head_before" ]]; then
+    echo "refusing to promote node=$node: gate changed HEAD (before=$promotion_guard_head_before after=${head_after:-unresolved})" >&2
+    return 1
+  fi
+  if ! singular_tracked_source_snapshot "$SINGULAR_ROOT" "$source_after"; then
+    echo "refusing to promote node=$node: cannot capture source state after gate" >&2
+    return 1
+  fi
+  if ! promotion_status_snapshot "$status_after"; then
+    echo "refusing to promote node=$node: cannot capture repository status after gate" >&2
+    return 1
+  fi
+  local -a changed=()
+  if ! changes_output="$(singular_tracked_source_changes \
+      "$promotion_guard_source_before" "$source_after")"; then
+    echo "refusing to promote node=$node: cannot compare certified source snapshots" >&2
+    return 1
+  fi
+  if [[ -n "$changes_output" ]]; then
+    mapfile -t changed <<<"$changes_output"
+  fi
+  if ! cmp -s "$promotion_guard_status_before" "$status_after"; then
+    changed+=("repository-status")
+  fi
+  if [[ "${#changed[@]}" -gt 0 ]]; then
+    printf 'refusing to promote node=%s: gate changed certified source state (%s)\n' \
+      "$node" "${changed[*]}" >&2
+    return 1
+  fi
+}
+
+promotion_execution_paths() {
+  local node="$1" execution_dir
+  promotion_temp_root_init
+  execution_dir="$promotion_temp_root/promotion-gates/$node"
+  mkdir -p "$execution_dir"
+  promotion_gate_log_path="$execution_dir/regression.txt"
+  promotion_gate_observation_path="$execution_dir/gate-observation.json"
+  promotion_gate_report_path="$execution_dir/gate-report.json"
+  promotion_gate_red_log_path="$execution_dir/skip-guard-red.txt"
+}
+
+promotion_gate_candidate_path() {
+  local node="$1" candidate_dir
+  promotion_temp_root_init || return 2
+  candidate_dir="$promotion_temp_root/candidates"
+  mkdir -p "$candidate_dir" || return 2
+  mktemp "$candidate_dir/$node.gate-result.XXXXXX"
+}
+
+promotion_temp_root_init() {
+  if [[ -z "$promotion_temp_root" ]]; then
+    promotion_temp_root="$(mktemp -d "${TMPDIR:-/tmp}/singular-promote-gate.XXXXXX")"
+  fi
+}
+
+# Gate publication is a small recoverable file transaction inside the campaign
+# lock. Evidence is installed first and the gate last; any validation or write
+# failure restores every prior byte so an existing authoritative gate cannot be
+# corrupted by a half-published replacement. This is deliberately local file
+# rollback, not a proof cache or a second review pass.
+declare -a promotion_transaction_paths=()
+declare -a promotion_transaction_backups=()
+declare -a promotion_transaction_existed=()
+declare -a promotion_transaction_identities=()
+
+promotion_transaction_begin() {
+  local node="$1"
+  promotion_temp_root_init
+  promotion_transaction_dir="$(mktemp -d "$promotion_temp_root/transaction.$node.XXXXXX")"
+  promotion_transaction_paths=()
+  promotion_transaction_backups=()
+  promotion_transaction_existed=()
+  promotion_transaction_identities=()
+}
+
+promotion_transaction_publish_path() {
+  local source_path="$1" destination="$2" index backup existed identity prepared
+  if [[ ! -f "$source_path" || -L "$source_path" ]]; then
+    echo "promotion transaction source is missing: $source_path" >&2
+    return 1
+  fi
+  index="${#promotion_transaction_paths[@]}"
+  backup="$promotion_transaction_dir/$index.backup"
+  prepared="$(python3 "$ENGINE_BIN/safe_publish.py" prepare \
+    --root "$SINGULAR_ROOT" --destination "$destination" --backup "$backup" \
+    2>"$promotion_transaction_dir/$index.prepare.err")" || {
+      cat "$promotion_transaction_dir/$index.prepare.err" >&2 2>/dev/null || true
+      rm -f "$backup" 2>/dev/null || true
+      echo "promotion transaction refused unsafe destination: $destination" >&2
+      return 1
+    }
+  IFS=$'\t' read -r existed identity <<<"$prepared"
+  if [[ "$existed" != "yes" && "$existed" != "no" ]] \
+      || [[ -z "$identity" ]]; then
+    rm -f "$backup" 2>/dev/null || true
+    echo "promotion transaction received invalid destination identity: $destination" >&2
+    return 1
+  fi
+  if ! python3 "$ENGINE_BIN/safe_publish.py" publish \
+      --root "$SINGULAR_ROOT" --destination "$destination" --source "$source_path" \
+      --expected-existed "$existed" --expected-identity "$identity"; then
+    rm -f "$backup" 2>/dev/null || true
+    echo "promotion transaction could not publish: $source_path -> $destination" >&2
+    return 1
+  fi
+  # The safe publisher atomically installs only below no-symlink dirfds. Add
+  # the path to the in-process rollback journal immediately after that replace.
+  promotion_transaction_paths+=("$destination")
+  promotion_transaction_backups+=("$backup")
+  promotion_transaction_existed+=("$existed")
+  promotion_transaction_identities+=("$identity")
+}
+
+promotion_transaction_publish_artifact() {
+  promotion_transaction_publish_path "$1" "$SINGULAR_ROOT/$2"
+}
+
+promotion_transaction_rollback() {
+  local index destination backup existed rollback_rc=0
+  for ((index=${#promotion_transaction_paths[@]} - 1; index>=0; index--)); do
+    destination="${promotion_transaction_paths[$index]}"
+    backup="${promotion_transaction_backups[$index]}"
+    existed="${promotion_transaction_existed[$index]}"
+    if [[ "$existed" == "yes" ]]; then
+      if [[ ! -f "$backup" ]]; then
+        echo "promotion rollback backup is missing: $backup" >&2
+        rollback_rc=1
+        continue
+      fi
+    fi
+    if ! python3 "$ENGINE_BIN/safe_publish.py" rollback \
+        --root "$SINGULAR_ROOT" --destination "$destination" \
+        --existed "$existed" --backup "$backup"; then
+      rollback_rc=1
+    fi
+  done
+  if [[ "$rollback_rc" -ne 0 ]]; then
+    echo "promotion transaction rollback failed; retaining journal and publication lock" >&2
+    return 1
+  fi
+  [[ -z "$promotion_transaction_dir" ]] || rm -rf -- "$promotion_transaction_dir"
+  promotion_transaction_dir=""
+  promotion_transaction_paths=()
+  promotion_transaction_backups=()
+  promotion_transaction_existed=()
+  promotion_transaction_identities=()
+}
+
+promotion_transaction_commit() {
+  [[ -z "$promotion_transaction_dir" ]] || rm -rf -- "$promotion_transaction_dir"
+  promotion_transaction_dir=""
+  promotion_transaction_paths=()
+  promotion_transaction_backups=()
+  promotion_transaction_existed=()
+  promotion_transaction_identities=()
+}
 
 gate_promoter_config() {
   local node="$1"
@@ -1191,10 +1526,10 @@ node_already_passed() {
   "$ENGINE_BIN/dag.sh" area-gate "$1" >/dev/null 2>&1
 }
 
-# Block registry: nodes that must record an authoritative BLOCKED gate naming
-# the exact unmet predicate rather than silently skipping. A blocked gate is
-# authoritative state but NOT completion — dag.sh treats only status==passed as
-# done, so a block can never advance the frontier or satisfy a dependent.
+# Block registry: nodes that must record an authoritative blocked gate naming
+# the exact unmet predicate rather than silently skipping. These are product
+# remediation predicates, so block_only_node classifies them as needs-work:
+# planner-eligible, but never completion and never enough to satisfy a dependent.
 gate_block_config() {
   local node="$1"
   block_node_id="$node"
@@ -1240,10 +1575,6 @@ except Exception:
 PY
 }
 
-node_already_blocked() {
-  [[ "$(gate_current_status "$1" 2>/dev/null)" == "blocked" ]]
-}
-
 write_gate_json() {
   local node="$1" command="$2" log_ref="$3" sha="$4" head_sha="$5" recorded_at="$6" out_path="$7"
   local green_exit="${8:-0}" red_command="${9:-}" red_log_ref="${10:-}" red_sha="${11:-}" red_exit="${12:-}"
@@ -1259,7 +1590,8 @@ write_gate_json() {
     "$gate_upstream" "$gate_rationale" "$command" "$log_ref" "$sha" \
     "$head_sha" "$recorded_at" "$tasks_json" "$out_path" \
     "$green_exit" "$red_command" "$red_log_ref" "$red_sha" "$red_exit" "$schema_id" \
-    "$source_sha" "$task_set_sha" "$report_ref" "$report_sha" "$report_outcome" <<'PY'
+    "$source_sha" "$task_set_sha" "$report_ref" "$report_sha" "$report_outcome" \
+    "$promotion_campaign_binding" <<'PY'
 import json
 import sys
 
@@ -1288,7 +1620,8 @@ import sys
     report_ref,
     report_sha,
     report_outcome,
-) = sys.argv[1:25]
+    campaign_binding,
+) = sys.argv[1:26]
 task_ids = json.loads(tasks_raw)
 upstream_gates = [item for item in upstream.split() if item]
 evidence = [
@@ -1306,7 +1639,7 @@ evidence = [
     {
         "kind": "command-log",
         "ref": command_ref,
-        "description": "Fresh full regression command captured during L0 gate promotion.",
+        "description": "Authoritative full regression command captured on the exact promoted tree during integration or L0 gate promotion.",
         "command": command,
         "exitCode": int(green_exit),
         "logRef": log_ref,
@@ -1354,6 +1687,7 @@ gate = {
         else "passed"
     ),
     "authoritative": True,
+    "campaignBinding": campaign_binding,
     "evidenceClass": "deterministic-proof",
     "evidence": evidence,
     "upstreamGates": upstream_gates,
@@ -1371,19 +1705,21 @@ PY
 }
 
 validate_gate_candidate_file() {
-  local node="$1" gate_file="$2" tmp_gates
+  local node="$1" gate_file="$2" tmp_gates rc=0
   tmp_gates="$(mktemp -d)"
   if compgen -G "$gates_dir/*.gate-result.json" >/dev/null; then
     cp "$gates_dir"/*.gate-result.json "$tmp_gates/"
   fi
   cp "$gate_file" "$tmp_gates/$node.gate-result.json"
-  SINGULAR_GATES_DIR="$tmp_gates" "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
+  SINGULAR_GATES_DIR="$tmp_gates" "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null \
+    || rc=$?
   rm -rf "$tmp_gates"
+  return "$rc"
 }
 
 write_blocked_gate_json() {
-  # node source_path source_desc rationale upstream missing_tasks_json out_path
-  local node="$1" source_path="$2" source_desc="$3" rationale="$4" upstream="$5" missing_json="$6" out_path="$7" recorded_at
+  # node source_path source_desc rationale upstream missing_tasks_json blocker_class out_path
+  local node="$1" source_path="$2" source_desc="$3" rationale="$4" upstream="$5" missing_json="$6" blocker_class="$7" out_path="$8" recorded_at
   local schema_id source_sha="" task_set_sha=""
   recorded_at="$(singular_timestamp)"
   schema_id="$(gate_result_schema_id)"
@@ -1393,8 +1729,8 @@ write_blocked_gate_json() {
       task_set_sha="$(gate_task_set_sha256 "${node}-unmet-readiness-tasks" "$missing_json")" || return 1
     fi
   fi
-  python3 - "$node" "$source_path" "$source_desc" "$rationale" "$upstream" "$missing_json" "$recorded_at" "$out_path" \
-    "$schema_id" "$source_sha" "$task_set_sha" <<'PY'
+  python3 - "$node" "$source_path" "$source_desc" "$rationale" "$upstream" "$missing_json" "$blocker_class" "$recorded_at" "$out_path" \
+    "$schema_id" "$source_sha" "$task_set_sha" "$promotion_campaign_binding" <<'PY'
 import json
 import sys
 
@@ -1405,12 +1741,16 @@ import sys
     rationale,
     upstream,
     missing_json,
+    blocker_class,
     recorded_at,
     out_path,
     schema_id,
     source_sha,
     task_set_sha,
-) = sys.argv[1:12]
+    campaign_binding,
+) = sys.argv[1:14]
+if blocker_class not in ("needs-work", "blocked-external"):
+    raise SystemExit(f"unsupported blocker class: {blocker_class!r}")
 missing = json.loads(missing_json) if missing_json else []
 evidence = [
     {
@@ -1436,7 +1776,9 @@ gate = {
     "schema": schema_id,
     "node": node,
     "status": "blocked",
+    "blockerClass": blocker_class,
     "authoritative": True,
+    "campaignBinding": campaign_binding,
     "evidenceClass": "deterministic-proof",
     "evidence": evidence,
     "decidedBy": "l0-gate-promoter",
@@ -1453,9 +1795,8 @@ PY
 
 validate_blocked_gate_candidate_file() {
   # A blocked gate must be schema-valid, authoritative, tied to the requested
-  # node, and explicitly NOT gate-passed. Planner eligibility is deliberately
-  # stronger than this: dag.sh node-fields excludes authoritative blocks so L1
-  # cannot keep slicing an already-adjudicated blocker.
+  # node, explicitly classified, and NOT gate-passed. dag.sh independently maps
+  # needs-work to planner eligibility and blocked-external to a durable park.
   local node="$1" gate_file="$2" tmp_gates
   tmp_gates="$(mktemp -d)"
   if compgen -G "$gates_dir/*.gate-result.json" >/dev/null; then
@@ -1475,6 +1816,8 @@ if gate.get("status") != "blocked":
     raise SystemExit(f"blocked gate status must be blocked: {gate.get('status')}")
 if gate.get("authoritative") is not True:
     raise SystemExit("blocked gate must be authoritative")
+if gate.get("blockerClass") not in ("needs-work", "blocked-external"):
+    raise SystemExit(f"blocked gate has invalid blockerClass: {gate.get('blockerClass')!r}")
 PY
   local out rc=0
   out="$(SINGULAR_GATES_DIR="$tmp_gates" "$ENGINE_BIN/dag.sh" area-gate "$node" 2>&1)" || rc=$?
@@ -1490,17 +1833,12 @@ PY
 }
 
 block_with() {
-  # node source_path source_desc rationale upstream missing_tasks_json
-  local node="$1" source_path="$2" source_desc="$3" rationale="$4" upstream="$5" missing_json="${6:-}"
-  if node_already_blocked "$node"; then
-    blocked_total=$((blocked_total + 1))
-    echo "already-blocked node=$node"
-    return 0
-  fi
+  # node source_path source_desc rationale upstream missing_tasks_json blocker_class
+  local node="$1" source_path="$2" source_desc="$3" rationale="$4" upstream="$5" missing_json="${6:-}" blocker_class="${7:-blocked-external}"
   local gate_path="$gates_dir/$node.gate-result.json"
   local tmp_gate
-  tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
-  if ! write_blocked_gate_json "$node" "$source_path" "$source_desc" "$rationale" "$upstream" "$missing_json" "$tmp_gate"; then
+  tmp_gate="$(promotion_gate_candidate_path "$node")" || return 2
+  if ! write_blocked_gate_json "$node" "$source_path" "$source_desc" "$rationale" "$upstream" "$missing_json" "$blocker_class" "$tmp_gate"; then
     rm -f "$tmp_gate"
     echo "refusing to write unhashable blocked gate evidence node=$node" >&2
     return 2
@@ -1510,11 +1848,52 @@ block_with() {
     echo "refusing to write malformed blocked gate node=$node" >&2
     return 2
   fi
-  mv "$tmp_gate" "$gate_path"
+  if ! promotion_publication_begin; then
+    rm -f "$tmp_gate"
+    return 2
+  fi
+  promotion_transaction_begin "$node"
+  if ! promotion_transaction_publish_path "$tmp_gate" "$gate_path" \
+      || ! "$ENGINE_BIN/dag.sh" validate-gate-file "$gate_path" >/dev/null; then
+    promotion_transaction_rollback
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to publish invalid campaign-bound blocked gate node=$node" >&2
+    return 2
+  fi
   singular_append_event "gate_promotion.blocked" "gate blocked" \
-    "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
+    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"blockerClass\":\"$blocker_class\"}" \
+    || true
+  promotion_transaction_commit
+  if ! promotion_publication_end; then
+    rm -f "$tmp_gate"
+    return 2
+  fi
+  rm -f "$tmp_gate"
   blocked_total=$((blocked_total + 1))
-  echo "blocked node=$node gate=$gate_path"
+  echo "blocked node=$node blockerClass=$blocker_class gate=$gate_path"
+}
+
+# Evaluate planning/readiness state with only the node's own disposition
+# removed. A blocked-external gate deliberately excludes the node from normal
+# planning, but the promoter is the component that must be able to re-evaluate
+# it after the external prerequisite arrives. Keeping dependency gates in the
+# temporary view preserves every upstream and human-gate safety check.
+promotion_node_fields_without_own_gate() {
+  local node="$1" tmp_gates existing name rc=0
+  tmp_gates="$(mktemp -d)" || return 2
+  for existing in "$gates_dir"/*.gate-result.json; do
+    [[ -e "$existing" ]] || continue
+    name="$(basename "$existing")"
+    [[ "$name" == "$node.gate-result.json" ]] && continue
+    cp "$existing" "$tmp_gates/$name" || { rc=$?; break; }
+  done
+  if [[ "$rc" -eq 0 ]]; then
+    SINGULAR_GATES_DIR="$tmp_gates" "$ENGINE_BIN/dag.sh" node-fields "$node" \
+      || rc=$?
+  fi
+  rm -rf "$tmp_gates"
+  return "$rc"
 }
 
 block_only_node() {
@@ -1524,19 +1903,14 @@ block_only_node() {
     echo "already-passed node=$node"
     return 0
   fi
-  if node_already_blocked "$node"; then
-    blocked_total=$((blocked_total + 1))
-    echo "already-blocked node=$node"
-    return 0
-  fi
-  if ! "$ENGINE_BIN/dag.sh" node-fields "$node" >/dev/null 2>&1; then
+  if ! promotion_node_fields_without_own_gate "$node" >/dev/null 2>&1; then
     if [[ "$strict" == "yes" ]]; then
-      "$ENGINE_BIN/dag.sh" node-fields "$node" >&2 || true
+      promotion_node_fields_without_own_gate "$node" >&2 || true
       return 2
     fi
     return 0
   fi
-  block_with "$node" "$block_source_path" "$block_source_desc" "$block_rationale" "$block_upstream" ""
+  block_with "$node" "$block_source_path" "$block_source_desc" "$block_rationale" "$block_upstream" "" "needs-work"
 }
 
 # Read one field (area|layer|...) for a node straight from the DAG manifest,
@@ -1564,6 +1938,16 @@ for n in data.get("nodes", []):
         sys.exit(0 if out != "" else 1)
 sys.exit(1)
 PY
+}
+
+promotion_upstreams_authoritative() {
+  local node="$1" context="${2:-promotion}" upstream_node
+  for upstream_node in $gate_upstream; do
+    if ! "$ENGINE_BIN/dag.sh" area-gate "$upstream_node" >/dev/null; then
+      echo "refusing $context for node=$node: upstream is not authoritative ($upstream_node)" >&2
+      return 2
+    fi
+  done
 }
 
 # Extract ONLY the storage-proof DSN from an env file by sourcing it in a
@@ -1624,7 +2008,7 @@ human_provision_required_block() {
   local source_desc rationale
   source_desc="$node storage_proof needs an external PostgreSQL database that agents cannot self-provision; the durable round-trip proof for internal/$area cannot run without it."
   rationale="HumanProvisionRequired: $node storage_proof_complete cannot be certified because no reachable PostgreSQL database is available for the durable round-trip proof. Local self-service was attempted and failed (${proof_dsn_attempts[*]:-none}). This is an EXTERNAL-RESOURCE stop, not a trust or readiness block: provide a PostgreSQL DSN via SINGULAR_STORAGE_PROOF_DATABASE_URL (or SINGULAR_DATABASE_URL) — e.g. set it in .singular-state/singular-storage-proof.env, or run 'make deps-up' for a local Postgres and export its URL — then re-run promotion. Validation after provisioning: go test ./internal/$area -run StorageRepositoryDurableRoundTrip -count=1."
-  block_with "$node" "internal/$area" "$source_desc" "$rationale" "$upstream" ""
+  block_with "$node" "internal/$area" "$source_desc" "$rationale" "$upstream" "" "blocked-external"
 }
 
 # Promote a *.storage_proof node with a deterministic skip-guard. A durable proof
@@ -1651,10 +2035,7 @@ promote_storage_proof_node() {
     return $?
   fi
 
-  local upstream_node
-  for upstream_node in $gate_upstream; do
-    "$ENGINE_BIN/dag.sh" area-gate "$upstream_node" >/dev/null
-  done
+  promotion_upstreams_authoritative "$node" "storage promotion gate" || return 2
 
   # The green/red commands may be overridden ONLY by test fixtures under
   # SINGULAR_TEST_FIXTURE=1. In production these env vars are ignored, so a stray
@@ -1671,10 +2052,12 @@ promote_storage_proof_node() {
     green_command="$SINGULAR_DEFAULT_GATE_CMD"
   fi
   green_log_ref="docs/orchestration/gates/evidence/$node.regression.txt"
-  green_log_path="$SINGULAR_ROOT/$green_log_ref"
+  promotion_execution_paths "$node"
+  green_log_path="$promotion_gate_log_path"
   local observation_ref="docs/orchestration/gates/evidence/$node.gate-observation.json"
-  local observation_path="$SINGULAR_ROOT/$observation_ref"
+  local observation_path="$promotion_gate_observation_path"
   local report_ref="docs/orchestration/gates/evidence/$node.gate-report.json"
+  local report_path="$promotion_gate_report_path"
   local schema_id
   schema_id="$(gate_result_schema_id)"
 
@@ -1687,13 +2070,13 @@ promote_storage_proof_node() {
     red_command="go test ./internal/$area -run StorageRepositoryDurableRoundTrip -count=1"
   fi
   red_log_ref="docs/orchestration/gates/evidence/$node.skip-guard-red.txt"
-  red_log_path="$SINGULAR_ROOT/$red_log_ref"
+  red_log_path="$promotion_gate_red_log_path"
 
-  local tmp_gate
-  tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
+  local tmp_gate=""
   if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
-    rm -f "$observation_path" "$SINGULAR_ROOT/$report_ref"
+    rm -f "$observation_path" "$report_path"
   fi
+  promotion_source_guard_begin "$node"
 
   singular_append_event "gate_promotion.started" "gate promotion started" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\",\"layer\":\"storage_proof\"}"
@@ -1711,33 +2094,23 @@ promote_storage_proof_node() {
 
   local green_sha head_sha report_sha="" report_outcome=""
   green_sha="$(shasum -a 256 "$green_log_path" | awk '{print $1}')"
-  head_sha="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
-  if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
-    if ! write_strict_gate_report \
-      "$node" "$green_command" "$green_exit" "$green_log_ref" "$head_sha" \
-      "$observation_ref" "$report_ref"; then
-      rm -f "$tmp_gate"
-      singular_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
-        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"inconclusive-infrastructure\",\"logRef\":\"$green_log_ref\"}"
-      echo "refusing to promote node=$node: strict gate report is missing or invalid" >&2
+  head_sha="$promotion_guard_head_before"
+  if [[ "$schema_id" != "singular.orchestration.gate-result.v1" && "$green_exit" -ne 0 ]]; then
+    local failure_log_ref="${green_log_ref%.txt}.failed.$run_id.txt"
+    promotion_source_guard_verify "$node" || return 2
+    promotion_publication_begin || return 2
+    promotion_transaction_begin "$node"
+    if ! promotion_transaction_publish_artifact "$green_log_path" "$failure_log_ref"; then
+      promotion_transaction_rollback
+      promotion_publication_end || true
       return 2
     fi
-    report_sha="$strict_gate_report_sha"
-    report_outcome="$strict_gate_report_outcome"
-    if [[ "$report_outcome" != "passed" \
-      && "$report_outcome" != "passed-with-acknowledged-baseline" ]]; then
-      rm -f "$tmp_gate"
-      singular_append_event "gate_promotion.failed" "strict gate report did not pass" \
-        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"$report_outcome\",\"exitCode\":$green_exit,\"logRef\":\"$green_log_ref\",\"gateReportRef\":\"$report_ref\"}"
-      echo "gate promotion did not pass node=$node classification=$report_outcome log=$green_log_ref report=$report_ref" >&2
-      [[ "$green_exit" -ne 0 ]] && return "$green_exit"
-      return 2
-    fi
-  elif [[ "$green_exit" -ne 0 ]]; then
-    rm -f "$tmp_gate"
     singular_append_event "gate_promotion.failed" "gate promotion command failed" \
-      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"exitCode\":$green_exit,\"logRef\":\"$green_log_ref\"}"
-    echo "gate promotion command failed node=$node exit=$green_exit log=$green_log_ref" >&2
+      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"exitCode\":$green_exit,\"logRef\":\"$failure_log_ref\"}" \
+      || true
+    promotion_transaction_commit
+    promotion_publication_end || return 2
+    echo "gate promotion command failed node=$node exit=$green_exit log=$failure_log_ref" >&2
     return "$green_exit"
   fi
 
@@ -1757,9 +2130,37 @@ promote_storage_proof_node() {
     return 2
   fi
 
+  if ! promotion_source_guard_verify "$node"; then
+    singular_append_event "gate_promotion.failed" "gate mutated certified source state" \
+      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"source-integrity-violation\"}"
+    return 2
+  fi
+
+  if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
+    if ! write_strict_gate_report \
+      "$node" "$green_command" "$green_exit" "$green_log_ref" "$head_sha" \
+      "$observation_path" "$report_path" "$green_log_path"; then
+      singular_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
+        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"inconclusive-infrastructure\",\"logRef\":\"$green_log_ref\"}"
+      echo "refusing to promote node=$node: strict gate report is missing or invalid" >&2
+      return 2
+    fi
+    report_sha="$strict_gate_report_sha"
+    report_outcome="$strict_gate_report_outcome"
+    if [[ "$report_outcome" != "passed" \
+      && "$report_outcome" != "passed-with-acknowledged-baseline" ]]; then
+      singular_append_event "gate_promotion.failed" "strict gate report did not pass" \
+        "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"$report_outcome\",\"exitCode\":$green_exit,\"logRef\":\"$green_log_ref\",\"gateReportRef\":\"$report_ref\"}"
+      echo "gate promotion did not pass node=$node classification=$report_outcome log=$green_log_ref report=$report_ref" >&2
+      [[ "$green_exit" -ne 0 ]] && return "$green_exit"
+      return 2
+    fi
+  fi
+
   local red_sha recorded_at
   red_sha="$(shasum -a 256 "$red_log_path" | awk '{print $1}')"
   recorded_at="$(singular_timestamp)"
+  tmp_gate="$(promotion_gate_candidate_path "$node")" || return 2
   if ! write_gate_json "$node" "$green_command" "$green_log_ref" "$green_sha" "$head_sha" "$recorded_at" "$tmp_gate" \
     "$green_exit" "$red_command" "$red_log_ref" "$red_sha" "$red_exit" \
     "$report_ref" "$report_sha" "$report_outcome"; then
@@ -1767,11 +2168,53 @@ promote_storage_proof_node() {
     echo "refusing to write unhashable gate evidence node=$node" >&2
     return 2
   fi
-  validate_gate_candidate_file "$node" "$tmp_gate"
-  mv "$tmp_gate" "$gates_dir/$node.gate-result.json"
-  "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
+  if ! promotion_publication_begin; then
+    rm -f "$tmp_gate"
+    return 2
+  fi
+  if ! promotion_source_guard_verify "$node" \
+      || ! promotion_upstreams_authoritative "$node" "storage promotion publication"; then
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: certified source/upstream changed before publication" >&2
+    return 2
+  fi
+  promotion_transaction_begin "$node"
+  if ! promotion_transaction_publish_artifact "$green_log_path" "$green_log_ref" \
+    || ! promotion_transaction_publish_artifact "$red_log_path" "$red_log_ref" \
+    || ! { [[ "$schema_id" != "singular.orchestration.gate-result.v1" ]] \
+           || promotion_transaction_publish_artifact "$report_path" "$report_ref"; }; then
+    promotion_transaction_rollback
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: cannot publish campaign-bound gate evidence" >&2
+    return 2
+  fi
+  if ! validate_gate_candidate_file "$node" "$tmp_gate"; then
+    promotion_transaction_rollback
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: campaign-bound gate evidence did not validate" >&2
+    return 2
+  fi
+  if ! promotion_transaction_publish_path \
+      "$tmp_gate" "$gates_dir/$node.gate-result.json" \
+      || ! "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null; then
+    promotion_transaction_rollback
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: live gate publication did not validate" >&2
+    return 2
+  fi
   singular_append_event "gate_promotion.completed" "gate promoted" \
-    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"logRef\":\"$green_log_ref\",\"redLogRef\":\"$red_log_ref\",\"headSha\":\"$head_sha\"}"
+    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"logRef\":\"$green_log_ref\",\"redLogRef\":\"$red_log_ref\",\"headSha\":\"$head_sha\"}" \
+    || true
+  promotion_transaction_commit
+  if ! promotion_publication_end; then
+    rm -f "$tmp_gate"
+    return 2
+  fi
+  rm -f "$tmp_gate"
   promoted_total=$((promoted_total + 1))
   echo "promoted node=$node gate=$gates_dir/$node.gate-result.json log=$green_log_ref skip-guard-red=$red_log_ref"
 }
@@ -1796,6 +2239,8 @@ EOF
 run_gate_command_with_progress() {
   # args: command log_path [observation_path] -- returns the command's exit code
   local command="$1" log_path="$2" observation_path="${3:-}"
+  local gate_bash
+  gate_bash="$(singular_bash_bin)"
   local -a command_env=()
   [[ -n "$observation_path" ]] \
     && command_env=(env "SINGULAR_GATE_REPORT_FILE=$observation_path")
@@ -1803,10 +2248,10 @@ run_gate_command_with_progress() {
   [[ "$interval" =~ ^[0-9]+$ ]] || interval=15
   local ec=0
   if (( interval == 0 )); then
-    (cd "$SINGULAR_ROOT" && "${command_env[@]}" bash -c "$command") >"$log_path" 2>&1 || ec=$?
+    (cd "$SINGULAR_ROOT" && "${command_env[@]}" "$gate_bash" -c "$command") >"$log_path" 2>&1 || ec=$?
     return "$ec"
   fi
-  (cd "$SINGULAR_ROOT" && "${command_env[@]}" bash -c "$command") >"$log_path" 2>&1 &
+  (cd "$SINGULAR_ROOT" && "${command_env[@]}" "$gate_bash" -c "$command") >"$log_path" 2>&1 &
   local child=$! started=$SECONDS
   while kill -0 "$child" 2>/dev/null; do
     sleep 1
@@ -1833,11 +2278,12 @@ promote_node() {
     return 0
   fi
 
-  if ! "$ENGINE_BIN/dag.sh" node-fields "$node" >/dev/null 2>&1; then
-    if node_already_blocked "$node"; then
-      :
-    elif [[ "$strict" == "yes" ]]; then
-      "$ENGINE_BIN/dag.sh" node-fields "$node" >&2 || true
+  if ! promotion_node_fields_without_own_gate "$node" >/dev/null 2>&1; then
+    # Re-evaluate with the node's own gate removed: blocked-external is a park
+    # for the scheduler, not an irreversible poison pill for the promoter.
+    # Dependencies, human gates, and DAG membership remain authoritative.
+    if [[ "$strict" == "yes" ]]; then
+      promotion_node_fields_without_own_gate "$node" >&2 || true
       return 2
     else
       return 0
@@ -1868,7 +2314,7 @@ promote_node() {
         reason="$node ${gate_completion_ref:-contract_complete} is blocked: every required contract slice must be integrated before promotion, but these are not yet integrated: ${gate_missing_tasks[*]}. This gate is BLOCKED (authoritative, not complete) until those slices land; the missing predicate is the listed task integration, not any unbuilt behavior."
         source_desc="$node source package; promotion is blocked on unmet readiness evidence, not on missing behavior."
       fi
-      block_with "$node" "$gate_source_path" "$source_desc" "$reason" "$gate_upstream" "$missing_json"
+      block_with "$node" "$gate_source_path" "$source_desc" "$reason" "$gate_upstream" "$missing_json" "needs-work"
       return $?
     fi
     if [[ "$strict" == "yes" ]]; then
@@ -1887,24 +2333,26 @@ promote_node() {
     return $?
   fi
 
-  local upstream_node
-  for upstream_node in $gate_upstream; do
-    "$ENGINE_BIN/dag.sh" area-gate "$upstream_node" >/dev/null
-  done
+  promotion_upstreams_authoritative "$node" "promotion gate" || return 2
 
   local command="${SINGULAR_PROMOTE_GATE_COMMAND:-$SINGULAR_DEFAULT_GATE_CMD}"
   local log_ref="docs/orchestration/gates/evidence/$node.regression.txt"
-  local log_path="$SINGULAR_ROOT/$log_ref"
+  promotion_execution_paths "$node"
+  local log_path="$promotion_gate_log_path"
   local observation_ref="docs/orchestration/gates/evidence/$node.gate-observation.json"
-  local observation_path="$SINGULAR_ROOT/$observation_ref"
+  local observation_path="$promotion_gate_observation_path"
   local report_ref="docs/orchestration/gates/evidence/$node.gate-report.json"
+  local report_path="$promotion_gate_report_path"
   local gate_path="$gates_dir/$node.gate-result.json"
   local tmp_gate schema_id
   schema_id="$(gate_result_schema_id)"
-  tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
+  # Do not create the gate-result temporary before execution: it is
+  # tracked-source-shaped and must not contaminate the gate's input tree.
+  tmp_gate=""
   if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
-    rm -f "$observation_path" "$SINGULAR_ROOT/$report_ref"
+    rm -f "$observation_path" "$report_path"
   fi
+  promotion_source_guard_begin "$node"
 
   singular_append_event "gate_promotion.started" "gate promotion started" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
@@ -1918,12 +2366,17 @@ promote_node() {
 
   local sha head_sha recorded_at report_sha="" report_outcome=""
   sha="$(shasum -a 256 "$log_path" | awk '{print $1}')"
-  head_sha="$(git -C "$SINGULAR_ROOT" rev-parse HEAD)"
+  head_sha="$promotion_guard_head_before"
   recorded_at="$(singular_timestamp)"
+  if ! promotion_source_guard_verify "$node"; then
+    singular_append_event "gate_promotion.failed" "gate mutated certified source state" \
+      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"source-integrity-violation\"}"
+    return 2
+  fi
   if [[ "$schema_id" == "singular.orchestration.gate-result.v1" ]]; then
     if ! write_strict_gate_report \
       "$node" "$command" "$exit_code" "$log_ref" "$head_sha" \
-      "$observation_ref" "$report_ref"; then
+      "$observation_path" "$report_path" "$log_path"; then
       rm -f "$tmp_gate"
       singular_append_event "gate_promotion.failed" "strict gate report is missing or invalid" \
         "{\"runId\":\"$run_id\",\"node\":\"$node\",\"classification\":\"inconclusive-infrastructure\",\"logRef\":\"$log_ref\"}"
@@ -1942,13 +2395,25 @@ promote_node() {
       return 2
     fi
   elif [[ "$exit_code" -ne 0 ]]; then
+    local failure_log_ref="${log_ref%.txt}.failed.$run_id.txt"
     rm -f "$tmp_gate"
+    promotion_publication_begin || return 2
+    promotion_transaction_begin "$node"
+    if ! promotion_transaction_publish_artifact "$log_path" "$failure_log_ref"; then
+      promotion_transaction_rollback
+      promotion_publication_end || true
+      return 2
+    fi
     singular_append_event "gate_promotion.failed" "gate promotion command failed" \
-      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"exitCode\":$exit_code,\"logRef\":\"$log_ref\"}"
-    echo "gate promotion command failed node=$node exit=$exit_code log=$log_ref" >&2
+      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"exitCode\":$exit_code,\"logRef\":\"$failure_log_ref\"}" \
+      || true
+    promotion_transaction_commit
+    promotion_publication_end || return 2
+    echo "gate promotion command failed node=$node exit=$exit_code log=$failure_log_ref" >&2
     return "$exit_code"
   fi
 
+  tmp_gate="$(promotion_gate_candidate_path "$node")" || return 2
   if ! write_gate_json \
     "$node" "$command" "$log_ref" "$sha" "$head_sha" "$recorded_at" "$tmp_gate" \
     "$exit_code" "" "" "" "" "$report_ref" "$report_sha" "$report_outcome"; then
@@ -1956,11 +2421,51 @@ promote_node() {
     echo "refusing to write unhashable gate evidence node=$node" >&2
     return 2
   fi
-  validate_gate_candidate_file "$node" "$tmp_gate"
-  mv "$tmp_gate" "$gate_path"
-  "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
+  if ! promotion_publication_begin; then
+    rm -f "$tmp_gate"
+    return 2
+  fi
+  if ! promotion_source_guard_verify "$node" \
+      || ! promotion_upstreams_authoritative "$node" "promotion publication"; then
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: certified source/upstream changed before publication" >&2
+    return 2
+  fi
+  promotion_transaction_begin "$node"
+  if ! promotion_transaction_publish_artifact "$log_path" "$log_ref" \
+    || ! { [[ "$schema_id" != "singular.orchestration.gate-result.v1" ]] \
+           || promotion_transaction_publish_artifact "$report_path" "$report_ref"; }; then
+    promotion_transaction_rollback
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: cannot publish campaign-bound gate evidence" >&2
+    return 2
+  fi
+  if ! validate_gate_candidate_file "$node" "$tmp_gate"; then
+    promotion_transaction_rollback
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: campaign-bound gate evidence did not validate" >&2
+    return 2
+  fi
+  if ! promotion_transaction_publish_path "$tmp_gate" "$gate_path" \
+      || ! "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null; then
+    promotion_transaction_rollback
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: live gate publication did not validate" >&2
+    return 2
+  fi
   singular_append_event "gate_promotion.completed" "gate promoted" \
-    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"logRef\":\"$log_ref\",\"headSha\":\"$head_sha\"}"
+    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"logRef\":\"$log_ref\",\"headSha\":\"$head_sha\"}" \
+    || true
+  promotion_transaction_commit
+  if ! promotion_publication_end; then
+    rm -f "$tmp_gate"
+    return 2
+  fi
+  rm -f "$tmp_gate"
   promoted_total=$((promoted_total + 1))
   echo "promoted node=$node gate=$gate_path log=$log_ref"
 }
@@ -2018,16 +2523,17 @@ EOF
         operator_hashes+=("$evidence_sha")
       done
     fi
-    tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
+    tmp_gate="$(promotion_gate_candidate_path "$node")" || return 2
     python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "$schema_id" \
-      "${#operator_evidence[@]}" "${operator_evidence[@]}" "${operator_hashes[@]}" <<'PY'
+      "$promotion_campaign_binding" "${#operator_evidence[@]}" \
+      "${operator_evidence[@]}" "${operator_hashes[@]}" <<'PY'
 import json
 import sys
 
-node, head_sha, recorded_at, out_path, schema_id, count_raw = sys.argv[1:7]
+node, head_sha, recorded_at, out_path, schema_id, campaign_binding, count_raw = sys.argv[1:8]
 count = int(count_raw)
-refs = sys.argv[7:7 + count]
-hashes = sys.argv[7 + count:]
+refs = sys.argv[8:8 + count]
+hashes = sys.argv[8 + count:]
 if schema_id.endswith(".v1") and len(hashes) != len(refs):
     raise SystemExit("operator evidence hash count mismatch")
 evidence = []
@@ -2045,6 +2551,7 @@ gate = {
     "node": node,
     "status": "passed",
     "authoritative": True,
+    "campaignBinding": campaign_binding,
     "evidenceClass": "operator-review",
     "evidence": evidence,
     "decidedBy": "operator:" + (__import__("os").environ.get("USER") or "cli"),
@@ -2057,11 +2564,33 @@ with open(out_path, "w", encoding="utf-8") as f:
     json.dump(gate, f, indent=2)
     f.write("\n")
 PY
-    validate_gate_candidate_file "$node" "$tmp_gate"
-    mv "$tmp_gate" "$gate_path"
-    "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
+    if ! validate_gate_candidate_file "$node" "$tmp_gate"; then
+      rm -f "$tmp_gate"
+      echo "refusing to promote node=$node: evaluation gate candidate did not validate" >&2
+      return 2
+    fi
+    if ! promotion_publication_begin; then
+      rm -f "$tmp_gate"
+      return 2
+    fi
+    promotion_transaction_begin "$node"
+    if ! promotion_transaction_publish_path "$tmp_gate" "$gate_path" \
+        || ! "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null; then
+      promotion_transaction_rollback
+      promotion_publication_end || true
+      rm -f "$tmp_gate"
+      echo "refusing to promote node=$node: live evaluation gate did not validate" >&2
+      return 2
+    fi
     singular_append_event "gate_promotion.completed" "evaluation gate promoted (operator)" \
-      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"evidenceClass\":\"operator-review\"}"
+      "{\"runId\":\"$run_id\",\"node\":\"$node\",\"evidenceClass\":\"operator-review\"}" \
+      || true
+    promotion_transaction_commit
+    if ! promotion_publication_end; then
+      rm -f "$tmp_gate"
+      return 2
+    fi
+    rm -f "$tmp_gate"
     promoted_total=$((promoted_total + 1))
     echo "promoted node=$node gate=$gate_path evidenceClass=operator-review"
     return 0
@@ -2173,6 +2702,19 @@ import sys
 print(os.path.relpath(sys.argv[1], sys.argv[2]))
 PY
 )"
+  # Capture the review's evidence cardinality for every gate-result schema.
+  # The candidate writer checks it again immediately before publication so a
+  # review-file change cannot silently alter the evidence it records. Hashes
+  # are additionally required by gate-result.v1 below.
+  if ! review_ref_count="$(python3 - "$review_file" <<'PY'
+import json
+import sys
+print(len(json.load(open(sys.argv[1], encoding="utf-8")).get("evidenceRefs", [])))
+PY
+)"; then
+    echo "evaluation node $node: review evidence refs are malformed" >&2
+    return 2
+  fi
   if [[ "$review_schema_id" == "singular.orchestration.gate-result.v1" ]]; then
     if ! review_file_sha="$(gate_source_sha256 "$review_file_ref")"; then
       echo "evaluation node $node: review file cannot be safely hash-bound: $review_file_ref" >&2
@@ -2190,15 +2732,6 @@ print(json.dumps(refs, ensure_ascii=False, separators=(",", ":")))
 PY
 )"; then
       echo "evaluation node $node: review evidence refs cannot be safely hash-bound" >&2
-      return 2
-    fi
-    if ! review_ref_count="$(python3 - "$review_refs_json" <<'PY'
-import json
-import sys
-print(len(json.loads(sys.argv[1])))
-PY
-)"; then
-      echo "evaluation node $node: review evidence refs are malformed" >&2
       return 2
     fi
     local review_ref review_index evidence_sha
@@ -2220,9 +2753,10 @@ PY
     done
   fi
 
-  tmp_gate="$(mktemp "$gates_dir/.$node.gate-result.json.tmp.XXXXXX")"
+  tmp_gate="$(promotion_gate_candidate_path "$node")" || return 2
   python3 - "$node" "$head_sha" "$recorded_at" "$tmp_gate" "$review_file" "$r_reviewer_kind" "$r_reviewer_id" "$SINGULAR_ROOT" \
-    "$review_schema_id" "$review_file_sha" "$review_ref_count" "${review_ref_hashes[@]}" <<'PY'
+    "$review_schema_id" "$review_file_sha" "$promotion_campaign_binding" \
+    "$review_ref_count" "${review_ref_hashes[@]}" <<'PY'
 import json
 import os
 import sys
@@ -2238,9 +2772,10 @@ import sys
     root,
     schema_id,
     review_file_sha,
+    campaign_binding,
     ref_count_raw,
-) = sys.argv[1:12]
-ref_hashes = sys.argv[12:]
+) = sys.argv[1:13]
+ref_hashes = sys.argv[13:]
 ref_count = int(ref_count_raw)
 review = json.load(open(review_file))
 evidence = [
@@ -2268,6 +2803,7 @@ gate = {
     "node": node,
     "status": "passed",
     "authoritative": True,
+    "campaignBinding": campaign_binding,
     "evidenceClass": "agent-review",
     "evidence": evidence,
     "decidedBy": f"agent-review:{r_kind}/{r_id}",
@@ -2280,11 +2816,33 @@ with open(out_path, "w", encoding="utf-8") as f:
     json.dump(gate, f, indent=2)
     f.write("\n")
 PY
-  validate_gate_candidate_file "$node" "$tmp_gate"
-  mv "$tmp_gate" "$gate_path"
-  "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null
+  if ! validate_gate_candidate_file "$node" "$tmp_gate"; then
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: review gate candidate did not validate" >&2
+    return 2
+  fi
+  if ! promotion_publication_begin; then
+    rm -f "$tmp_gate"
+    return 2
+  fi
+  promotion_transaction_begin "$node"
+  if ! promotion_transaction_publish_path "$tmp_gate" "$gate_path" \
+      || ! "$ENGINE_BIN/dag.sh" area-gate "$node" >/dev/null; then
+    promotion_transaction_rollback
+    promotion_publication_end || true
+    rm -f "$tmp_gate"
+    echo "refusing to promote node=$node: live review gate did not validate" >&2
+    return 2
+  fi
   singular_append_event "gate_promotion.completed" "evaluation gate promoted (agent review)" \
-    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"evidenceClass\":\"agent-review\",\"reviewer\":\"$r_reviewer_kind/$r_reviewer_id\"}"
+    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"evidenceClass\":\"agent-review\",\"reviewer\":\"$r_reviewer_kind/$r_reviewer_id\"}" \
+    || true
+  promotion_transaction_commit
+  if ! promotion_publication_end; then
+    rm -f "$tmp_gate"
+    return 2
+  fi
+  rm -f "$tmp_gate"
   promoted_total=$((promoted_total + 1))
   echo "promoted node=$node gate=$gate_path evidenceClass=agent-review reviewer=$r_reviewer_kind/$r_reviewer_id"
   return 0
@@ -2365,12 +2923,12 @@ strict_arg="$([[ "$frontier_mode" == "yes" || "$if_ready_mode" == "yes" ]] && ec
 overall_rc=0
 unregistered_nodes=()
 for node in "${requested_nodes[@]}"; do
-  if process_node "$node" "$strict_arg"; then
-    :
-  else
-    node_rc=$?
-    [[ "$overall_rc" -eq 0 ]] && overall_rc="$node_rc"
-  fi
+  # Keep errexit active throughout process_node's nested call tree. Invoking a
+  # Bash function as an `if`/`||` condition disables `set -e` inside every
+  # function it calls and previously let failed validation/publication steps
+  # continue to a success report. Genuine failures now stop this promotion run;
+  # normal frontier skips and authoritative blocks return zero themselves.
+  process_node "$node" "$strict_arg"
 done
 if [[ "$frontier_mode" == "yes" && $((promoted_total + blocked_total)) -eq 0 ]]; then
   echo "no promotable frontier gates"

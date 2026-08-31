@@ -66,10 +66,23 @@ cat > "$runs/RUN-B/attempts/index.json" <<'EOF'
 EOF
 
 cat > "$events" <<'EOF'
-{"ts":"2026-07-11T00:00:01Z","type":"context.strategy_selected","message":"m","data":{"strategy":"fresh","reason":"no-prior-session"}}
-{"ts":"2026-07-11T00:00:02Z","type":"context.strategy_selected","message":"m","data":{"strategy":"resume","reason":"resume"}}
-{"ts":"2026-07-11T00:00:03Z","type":"l1.attempt_archived","message":"m","data":{"n":1}}
-{"ts":"2026-07-11T00:00:04Z","type":"context.strategy_selected","message":"m","data":{"strategy":"resume","reason":"resume"}}
+{"ts":"2026-07-11T00:00:00Z","type":"campaign.started","message":"m","data":{"campaignId":"C-1"}}
+{"ts":"2026-07-11T00:00:01Z","type":"autonomate.started","message":"m","data":{}}
+{"ts":"2026-07-11T00:00:02Z","type":"context.strategy_selected","message":"m","data":{"role":"planner","provider":"fable","strategy":"fresh","reason":"no-prior-session"}}
+{"ts":"2026-07-11T00:00:02Z","type":"runner.completed","message":"m","data":{"role":"planner","provider":"fable","outcome":"succeeded"}}
+{"ts":"2026-07-11T00:00:02Z","type":"planner.generated","message":"m","data":{"taskId":"TASK-0002"}}
+{"ts":"2026-07-11T00:00:03Z","type":"l1.dispatch_started","message":"m","data":{"taskId":"TASK-0002"}}
+{"ts":"2026-07-11T00:00:04Z","type":"context.strategy_selected","message":"m","data":{"role":"implementer","provider":"fable","strategy":"resume","reason":"resume"}}
+{"ts":"2026-07-11T00:00:04Z","type":"runner.completed","message":"m","data":{"role":"implementer","provider":"fable","outcome":"succeeded"}}
+{"ts":"2026-07-11T00:00:04Z","type":"l1.task_accepted","message":"m","data":{"taskId":"TASK-0002"}}
+{"ts":"2026-07-11T00:00:05Z","type":"packet.imported","message":"m","data":{"taskId":"TASK-0002","verdict":"needs-fix","acceptanceMode":"accepted-waiver"}}
+{"ts":"2026-07-11T00:00:06Z","type":"operator.stop_requested","message":"m","data":{}}
+{"ts":"2026-07-11T00:00:08Z","type":"operator.resume_requested","message":"m","data":{}}
+{"ts":"2026-07-11T00:00:09Z","type":"plan.attempt_reused","message":"m","data":{"attemptIdentity":"abc"}}
+{"ts":"2026-07-11T00:00:10Z","type":"integration.integrated","message":"m","data":{"taskId":"TASK-0002"}}
+{"ts":"2026-07-11T00:00:11Z","type":"gate_promotion.completed","message":"m","data":{"node":"N-1"}}
+{"ts":"2026-07-11T00:00:11Z","type":"context.strategy_selected","message":"m","data":{"role":"reviewer","strategy":"resume","reason":"resume"}}
+{"ts":"2026-07-11T00:00:11Z","type":"runner.completed","message":"m","data":{"role":"auditor","provider":"claude","outcome":"succeeded"}}
 EOF
 
 before="$(tree_hash "$runs")"
@@ -132,12 +145,147 @@ eq(g["workerStrategyCounts"], {"fresh": 2, "resume": 1}, "aggregate workerStrate
 eq(g["reviewerStrategyCounts"], {"fresh": 1, "resume": 1}, "aggregate reviewerStrategyCounts")
 eq(g["deciderAuthorityCounts"], {"auditor": 1, "decider": 2}, "aggregate deciderAuthorityCounts")
 eq(g["strategySelectedReasonCounts"], {"no-prior-session": 1, "resume": 2}, "aggregate strategySelectedReasonCounts")
+
+# campaign SLOs are evidence-backed: the fixture has an explicit campaign
+# anchor, a closed STOP interval, concrete lifecycle events, and one identity
+# re-entry.  New fields are additive; legacy aggregate fields above remain
+# byte-compatible.
+c = g["campaign"]
+eq(c["availability"], {
+    "eventsReadable": True,
+    "timestampEvents": 17,
+    "roleInvocationEvents": True,
+    "providerInvocationEvents": True,
+    "invocationSource": "runner.completed",
+    "attemptIdentityEvents": True,
+}, "campaign availability")
+eq(c["state"], "active", "campaign active state")
+eq(c["startedAt"], "2026-07-11T00:00:00Z", "campaign startedAt")
+eq(c["endedAt"], None, "active campaign endedAt")
+eq(c["startSource"], "campaign.started", "campaign startSource")
+eq(c["observedEndedAt"], "2026-07-11T00:00:11Z", "campaign observedEndedAt")
+eq(c["observedDurationSeconds"], 11, "campaign observedDurationSeconds")
+eq(c["timeToFirstPlanningSeconds"], 2, "campaign planning latency")
+eq(c["timeToFirstImplementationSeconds"], 3, "campaign implementation latency")
+eq(c["timeToFirstIntegrationSeconds"], 10, "campaign integration latency")
+eq(c["counters"], {
+    "acceptedImports": 1,
+    "acceptedImportsConfirmed": 1,
+    "acceptedImportsAvailability": "available",
+    "acceptedTasks": 1,
+    "integrations": 1,
+    "promotions": 1,
+    "roleInvocationCounts": {"auditor": 1, "implementer": 1, "planner": 1},
+    "providerInvocationCounts": {"claude": 1, "fable": 2},
+    "modelCalls": 3,
+    "plannerCriticCalls": 1,
+    "plannerCriticCallFraction": 1 / 3,
+    "identicalAttemptLineageReentries": 1,
+}, "campaign counters")
+eq(c["stop"], {
+    "closedIntervals": 1,
+    "openIntervals": 0,
+    "closedSeconds": 2,
+    "observedOpenSeconds": 0,
+    "openSince": None,
+}, "campaign STOP intervals")
+eq(c["usefulThroughput"], {
+    "integrationsPerObservedActiveHour": 400.0,
+    "observedActiveSeconds": 9,
+}, "campaign useful throughput")
 print("shape-ok")
 PY
 
 # --- Determinism: identical inputs -> byte-identical output ------------------
 out2="$(singular_ctx_metrics_json "$runs" "$events")"
 [[ "$out" == "$out2" ]] || fail "output not deterministic across identical runs"
+
+# --- Campaign boundary + private L1 runner evidence -------------------------
+# The latest campaign ends explicitly while STOP is still open. Events after
+# that matching end, an end for a different campaign, and pre-campaign private
+# runner rows must not leak into the selected campaign. Private runner rows that
+# duplicate a global/result-ref peer are counted exactly once.
+boundary_runs="$tmp/boundary-runs"
+boundary_events="$tmp/boundary-events.ndjson"
+mkdir -p \
+  "$boundary_runs/RUN-C/l1-staging/NODE-A" \
+  "$boundary_runs/RUN-C/l1-staging/NODE-B" \
+  "$boundary_runs/RUN-C/l1-staging/NODE-C"
+
+cat > "$boundary_events" <<'EOF'
+{"ts":"2026-07-11T00:00:00Z","type":"campaign.started","message":"old","data":{"campaignId":"C-OLD"}}
+{"ts":"2026-07-11T00:00:01Z","type":"runner.completed","message":"old","data":{"runnerResultRef":"/results/old.json","role":"planner","provider":"old"}}
+{"ts":"2026-07-11T00:00:02Z","type":"campaign.ended","message":"old","data":{"campaignId":"C-OLD"}}
+{"ts":"2026-07-11T00:00:10Z","type":"campaign.started","message":"current","data":{"campaignId":"C-2"}}
+{"ts":"2026-07-11T00:00:11Z","type":"planner.generated","message":"planned","data":{"taskId":"TASK-0100"}}
+{"ts":"2026-07-11T00:00:12Z","type":"l1.task_accepted","message":"accepted","data":{"taskId":"TASK-0100","runId":"RUN-100"}}
+{"ts":"2026-07-11T00:00:12Z","type":"l1.accepted_evidence_resume_completed","message":"replayed acceptance","data":{"taskId":"TASK-0100","runId":"RUN-100","resumeRunId":"RUN-RESUME"}}
+{"ts":"2026-07-11T00:00:13Z","type":"l1.accepted_evidence_resume_completed","message":"evidence-only acceptance","data":{"taskId":"TASK-0101","runId":"RUN-101","resumeRunId":"RUN-RESUME-2"}}
+{"ts":"2026-07-11T00:00:13Z","type":"integration.integrated","message":"integrated","data":{"taskId":"TASK-0100"}}
+{"ts":"2026-07-11T00:00:13Z","type":"runner.completed","message":"global planner","data":{"runnerResultRef":"/results/shared.json","role":"planner","provider":"fable"}}
+{"ts":"2026-07-11T00:00:14Z","type":"operator.stop_requested","message":"paused","data":{}}
+{"ts":"2026-07-11T00:00:15Z","type":"campaign.ended","message":"wrong campaign","data":{"campaignId":"C-OTHER"}}
+{"ts":"2026-07-11T00:00:20Z","type":"campaign.ended","message":"current ended","data":{"campaignId":"C-2"}}
+{"ts":"2026-07-11T00:00:21Z","type":"l1.task_accepted","message":"too late","data":{"taskId":"TASK-POST","runId":"RUN-POST"}}
+{"ts":"2026-07-11T00:00:22Z","type":"integration.integrated","message":"too late","data":{"taskId":"TASK-POST"}}
+{"ts":"2026-07-11T00:00:23Z","type":"runner.completed","message":"too late","data":{"runnerResultRef":"/results/post.json","role":"auditor","provider":"post"}}
+EOF
+
+cat > "$boundary_runs/RUN-C/l1-staging/NODE-A/planner-events.ndjson" <<'EOF'
+{"ts":"2026-07-11T00:00:13Z","type":"runner.completed","message":"duplicate private planner","data":{"runnerResultRef":"/results/shared.json","role":"planner","provider":"fable"}}
+{"ts":"2026-07-11T00:00:13.500000Z","type":"runner.completed","message":"private critic","data":{"runnerResultRef":"/results/critic.json","role":"critic","provider":"claude"}}
+EOF
+cat > "$boundary_runs/RUN-C/l1-staging/NODE-B/planner-events.ndjson" <<'EOF'
+{"ts":"2026-07-11T00:00:13.500000Z","type":"runner.completed","message":"duplicate private critic","data":{"runnerResultRef":"/results/critic.json","role":"critic","provider":"claude"}}
+{"ts":"2026-07-11T00:00:21Z","type":"runner.completed","message":"private after end","data":{"runnerResultRef":"/results/private-post.json","role":"critic","provider":"late"}}
+EOF
+cat > "$boundary_runs/RUN-C/l1-staging/NODE-C/planner-events.ndjson" <<'EOF'
+{"ts":"2026-07-11T00:00:01Z","type":"runner.completed","message":"private before campaign","data":{"runnerResultRef":"/results/private-old.json","role":"planner","provider":"old"}}
+not-json-yet
+EOF
+
+boundary_before="$(tree_hash "$boundary_runs")"
+boundary_events_before="$(shasum "$boundary_events" | awk '{print $1}')"
+boundary_out="$(singular_ctx_metrics_json "$boundary_runs" "$boundary_events")" \
+  || fail "extractor exited non-zero on bounded campaign/private-runner fixture"
+printf '%s' "$boundary_out" > "$tmp/boundary-out.json"
+[[ "$boundary_before" == "$(tree_hash "$boundary_runs")" ]] \
+  || fail "private L1 event scan mutated the runs tree"
+[[ "$boundary_events_before" == "$(shasum "$boundary_events" | awk '{print $1}')" ]] \
+  || fail "bounded campaign scan mutated the global journal"
+
+python3 - "$tmp/boundary-out.json" <<'PY' \
+  || fail "bounded campaign/private-runner metrics were incorrect"
+import json, sys
+with open(sys.argv[1]) as stream:
+    campaign = json.load(stream)["aggregate"]["campaign"]
+
+assert campaign["state"] == "ended", campaign
+assert campaign["startedAt"] == "2026-07-11T00:00:10Z", campaign
+assert campaign["endedAt"] == "2026-07-11T00:00:20Z", campaign
+assert campaign["observedEndedAt"] == "2026-07-11T00:00:20Z", campaign
+assert campaign["observedDurationSeconds"] == 10, campaign
+assert campaign["timeToFirstPlanningSeconds"] == 1, campaign
+assert campaign["counters"]["acceptedTasks"] == 2, campaign
+assert campaign["counters"]["integrations"] == 1, campaign
+assert campaign["counters"]["roleInvocationCounts"] == {"critic": 1, "planner": 1}, campaign
+assert campaign["counters"]["providerInvocationCounts"] == {"claude": 1, "fable": 1}, campaign
+assert campaign["counters"]["modelCalls"] == 2, campaign
+assert campaign["counters"]["plannerCriticCalls"] == 2, campaign
+assert campaign["counters"]["plannerCriticCallFraction"] == 1, campaign
+assert campaign["stop"] == {
+    "closedIntervals": 0,
+    "openIntervals": 1,
+    "closedSeconds": 0,
+    "observedOpenSeconds": 6,
+    "openSince": "2026-07-11T00:00:14Z",
+}, campaign
+assert campaign["usefulThroughput"] == {
+    "integrationsPerObservedActiveHour": 900.0,
+    "observedActiveSeconds": 4,
+}, campaign
+print("boundary-ok")
+PY
 
 # --- Fail-safe: empty/missing inputs -> well-formed zeroed metrics -----------
 empty_runs="$tmp/no-such-runs"
@@ -155,6 +303,19 @@ assert g["runsTotal"] == 0 and g["attemptsTotal"] == 0 and g["acceptedRuns"] == 
 for k in ("failureClassCounts", "auditVerdictCounts", "workerStrategyCounts",
           "reviewerStrategyCounts", "deciderAuthorityCounts", "strategySelectedReasonCounts"):
     assert m["aggregate"][k] == {}, f"{k} must be empty"
+c = m["aggregate"]["campaign"]
+assert c["state"] is None and c["startedAt"] is None and c["endedAt"] is None
+assert c["observedDurationSeconds"] is None
+assert c["counters"]["integrations"] is None
+assert c["stop"]["observedOpenSeconds"] is None
+assert c["availability"] == {
+    "eventsReadable": False,
+    "timestampEvents": 0,
+    "roleInvocationEvents": False,
+    "providerInvocationEvents": False,
+    "invocationSource": None,
+    "attemptIdentityEvents": False,
+}
 print("empty-ok")
 PY
 

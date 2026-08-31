@@ -12,8 +12,12 @@ dag_file="${SINGULAR_DAG_FILE:-$SINGULAR_ORCH_DIR/dag.v0.json}"
 gates_dir="${SINGULAR_GATES_DIR:-$SINGULAR_ORCH_DIR/gates}"
 gate_schema_v1="${SINGULAR_GATE_SCHEMA_V1:-$SINGULAR_SCHEMA_DIR/gate-result.v1.schema.json}"
 gate_report_schema="${SINGULAR_GATE_REPORT_SCHEMA:-$SINGULAR_SCHEMA_DIR/gate-report.v0.schema.json}"
+campaign_binding="$(singular_campaign_binding)" || {
+  echo "campaign state is inconsistent; refusing gate evaluation" >&2
+  exit 2
+}
 
-python3 - "$cmd" "$dag_file" "$gates_dir" "$SINGULAR_GATE_SCHEMA" "$gate_schema_v1" "$gate_report_schema" "$SINGULAR_ROOT" "$SCRIPT_DIR" "$@" <<'PY'
+python3 - "$cmd" "$dag_file" "$gates_dir" "$SINGULAR_GATE_SCHEMA" "$gate_schema_v1" "$gate_report_schema" "$SINGULAR_ROOT" "$SCRIPT_DIR" "$campaign_binding" "$@" <<'PY'
 import hashlib
 import json
 import os
@@ -32,6 +36,7 @@ from datetime import datetime
     gate_report_schema,
     repo_root,
     engine_dir,
+    current_campaign_binding,
     *args,
 ) = sys.argv[1:]
 sys.path.insert(0, engine_dir)
@@ -718,6 +723,28 @@ def validate_gate(data, path, node_id):
                 f"gate for {node_id} field '{key}'",
                 schema_root=schema,
             )
+    recorded_campaign_binding = data.get("campaignBinding")
+    if current_campaign_binding == "legacy":
+        # Historical unbound gates remain compatible only in an unfrozen
+        # legacy repository. A gate explicitly bound to a former campaign can
+        # never regain authority merely because that campaign was ended.
+        if recorded_campaign_binding not in (None, "legacy"):
+            fail(
+                f"gate for {node_id} belongs to campaign "
+                f"{recorded_campaign_binding!r}, current binding is legacy ({path})"
+            )
+    elif recorded_campaign_binding != current_campaign_binding:
+        fail(
+            f"gate for {node_id} campaign binding mismatch: expected "
+            f"{current_campaign_binding!r}, actual {recorded_campaign_binding!r} ({path})"
+        )
+    blocker_class = data.get("blockerClass")
+    if blocker_class is not None:
+        if data.get("status") != "blocked" or data.get("authoritative") is not True:
+            fail(
+                f"gate for {node_id} blockerClass is valid only on an "
+                f"authoritative blocked gate ({path})"
+            )
     validate_v1_evidence_hashes(data, node_id)
     validate_v1_verification(data, node_id)
     validate_deterministic_proof_gate(data, node_id)
@@ -777,9 +804,25 @@ def gate_passed(node_id):
     return True
 
 
-def gate_authoritative_blocked(node_id):
+def gate_blocker_class(node_id):
+    """Return the normalized durable lifecycle blocker class, if any.
+
+    Old gate-result records used only status=blocked. They remain readable and
+    fail closed as blocked-external until a promoter rewrites them with an
+    explicit machine-readable class. This avoids silently resuming work that a
+    historical operator intended to park.
+    """
     data = gate_data(node_id)
-    return bool(data and data.get("status") == "blocked" and data.get("authoritative") is True)
+    if not (
+        data
+        and data.get("status") == "blocked"
+        and data.get("authoritative") is True
+    ):
+        return None
+    blocker_class = data.get("blockerClass")
+    if blocker_class in ("needs-work", "blocked-external"):
+        return blocker_class
+    return "blocked-external"
 
 
 data = load_dag()
@@ -795,7 +838,7 @@ elif cmd == "next-area":
         if gate_passed(node_id):
             continue
         all_passed = False
-        if gate_authoritative_blocked(node_id):
+        if gate_blocker_class(node_id) == "blocked-external":
             continue
         if node.get("humanGate") is not None:
             continue
@@ -829,9 +872,10 @@ elif cmd == "next-areas":
                 excluded.append({"node": node_id, "reason": "gate-passed"})
             continue
         all_passed = False
-        if gate_authoritative_blocked(node_id):
+        blocker_class = gate_blocker_class(node_id)
+        if blocker_class == "blocked-external":
             if explain:
-                excluded.append({"node": node_id, "reason": "authoritative-blocked"})
+                excluded.append({"node": node_id, "reason": "blocked-external"})
             continue
         human = human_gate_state(node_id)
         if human is not None:
@@ -850,6 +894,8 @@ elif cmd == "next-areas":
             continue
         entry = {key: node[key] for key in ("stage", "area", "layer", "kind", "requiredCompletion")}
         entry["node"] = node_id
+        if blocker_class == "needs-work":
+            entry["lifecycle"] = "needs-work"
         frontier.append(entry)
     result = {"frontier": frontier}
     if explain:
@@ -871,8 +917,12 @@ elif cmd == "node-fields":
     node = by_id[node_id]
     if gate_passed(node_id):
         fail(f"node already gate-passed: {node_id}")
-    if gate_authoritative_blocked(node_id):
-        fail(f"node has authoritative blocked gate: {node_id}")
+    blocker_class = gate_blocker_class(node_id)
+    if blocker_class == "blocked-external":
+        fail(
+            f"node has authoritative blocked gate: {node_id} "
+            "(blocked-external; requires external input or explicit override)"
+        )
     human = human_gate_state(node_id)
     if human is not None:
         fail(f"node awaits human gate: {node_id} ({human.get('state')}: {human.get('reason')})")
@@ -882,6 +932,8 @@ elif cmd == "node-fields":
         out_key = "node" if key == "id" else key
         print(f"{out_key}={node[key]}")
     print(f"authority={node.get('authority', 'operator')}")
+    if blocker_class == "needs-work":
+        print("lifecycle=needs-work")
 elif cmd == "validate-gate-file":
     # Report EVERY contract breach in one pass, not just the first.
     #

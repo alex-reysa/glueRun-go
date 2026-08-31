@@ -221,6 +221,61 @@ assert_contains "$readyish" "TASK-0010" "unpark returns the task to the ready se
 out="$(ops unpark TASK-0010)"
 assert_contains "$out" "already ready" "unpark idempotent"
 
+# A partial prior unpark (or old engine bug) can leave the task ready while the
+# lease still says failed with an exhausted, started product lineage. Do not
+# claim an idempotent success without reconciling the durable budget.
+python3 - "$lease_json" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+lease = json.load(open(path, encoding="utf-8"))
+lease["status"] = "failed"
+lease["retryCount"] = 3
+lease["productPassStarted"] = True
+temporary = path + ".tmp"
+with open(temporary, "w", encoding="utf-8") as stream:
+    json.dump(lease, stream)
+os.replace(temporary, path)
+PY
+out="$(ops unpark TASK-0010)"
+assert_contains "$out" "stale lease budget reconciled" \
+  "unpark reconciles a ready task's exhausted lease"
+[[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["retryCount"])' "$lease_json")" == "0" ]] \
+  || fail "unpark ready reconciliation: retryCount not reset"
+[[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["productPassStarted"])' "$lease_json")" == "False" ]] \
+  || fail "unpark ready reconciliation: productPassStarted not reset"
+
+# If a lease exists but cannot be decoded/replaced, unpark must fail before
+# changing the task to ready. The old path printed "no lease (ok)" and exposed
+# a task that immediately re-parked against the unreconciled budget.
+cat >"$root/docs/orchestration/tasks/TASK-0012.md" <<'EOF'
+# TASK-0012: corrupt parked lease
+
+Status: blocked
+Area: core
+Dispatch mode: canonical
+
+## Objective
+
+Remain blocked when durable budget state cannot be reconciled.
+
+## Scope
+
+Owned files:
+
+- `src/corrupt.ts`
+EOF
+printf '%s\n' '{not-json' >"$root/.singular-state/leases/TASK-0012.json"
+rc=0
+out="$(ops unpark TASK-0012 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "unpark: corrupt existing lease must fail"
+assert_contains "$out" "lease budget reset FAILED" \
+  "unpark reports durable lease reset failure"
+grep -q '^Status: blocked$' "$root/docs/orchestration/tasks/TASK-0012.md" \
+  || fail "unpark: task must remain blocked when lease reset fails"
+
 # It must not override a live status — that would race a running worker.
 # A task of its own: the supersede cases above have already moved TASK-0003 into
 # tasks/superseded/, so reusing it would exercise the wrong refusal.

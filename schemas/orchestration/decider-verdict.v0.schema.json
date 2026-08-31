@@ -22,6 +22,14 @@
     "taskId": {
       "type": "string"
     },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "campaignBinding": {
+      "type": "string",
+      "minLength": 1
+    },
     "action": {
       "type": "string",
       "enum": [

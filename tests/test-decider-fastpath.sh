@@ -16,12 +16,15 @@ set -euo pipefail
 #     archived deciderAuthority is "policy";
 #   - the same with SINGULAR_DECIDER_FAST=0 consults decide.sh: a decider-prompt is
 #     created and the authority is "decider";
-#   - an auditor that emits prose twice then a valid verdict: the worker runs
-#     ONCE, the auditor runs 3x, the lease retryCount is unchanged, and two
-#     audit.infra_retry events fire;
+#   - an auditor that emits prose once then a valid verdict: the worker runs
+#     ONCE, the auditor runs 2x, the lease retryCount is unchanged, and one
+#     audit.infra_retry event fires (higher configured values are hard-capped);
 #   - a worker that exits 124 (timeout) every try: a worker.infra_retry event
 #     fires, NO decider-prompt is created (worker-infra parks via the fast-path),
 #     and the attempt is archived/parked as worker-infra.
+#   - a detached scheduler's planned lease remains unattempted: a normal task
+#     still gets its initial pass plus one repair, while exhausted re-entry gets
+#     no newly-minted pass.
 #   - a disposable audit gate that mutates committed source parks immediately as
 #     integrity-violation, without consulting the model or bumping retryCount.
 
@@ -75,8 +78,11 @@ with_fixture() {
   unset SINGULAR_MODULES SINGULAR_WORKER_RED_LOG SINGULAR_WORKER_CONTRACT_EXTRA SINGULAR_RUNNER \
     SINGULAR_PREFLIGHT_REQUIRE_ACCEPTANCE SINGULAR_ATTEMPT_TASK_ID SINGULAR_ATTEMPT_STARTED_AT \
     SINGULAR_DECIDER_FAST SINGULAR_WORKER_INFRA_MAX SINGULAR_AUDIT_INFRA_MAX \
+    SINGULAR_AUDIT_VERIFY_INFRA_MAX SINGULAR_EVIDENCE_INFRA_MAX \
+    SINGULAR_TASK_RISK_TIER SINGULAR_DEFAULT_RISK_TIER \
     SINGULAR_LOCAL_CONFIG_FILE SINGULAR_BASE_REF SINGULAR_DISPATCH_BASE_SHA \
     SINGULAR_DISPATCH_BATCH_ID SINGULAR_PAIRED_AUDIT_PCT 2>/dev/null || true
+  unset MOCK_AUDIT_FINDINGS 2>/dev/null || true
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib.sh"
 }
@@ -207,6 +213,21 @@ test_fast_action_repeat_and_disabled() {
   echo "ok: fast-path repeat + disabled"
 }
 
+test_candidate_signature_ignores_empty_commit_identity() {
+  with_fixture
+  eval "$(awk '/^l1_candidate_signature\(\) \{/{copy=1} copy{print} copy && /^}/{exit}' "$SCRIPT_DIR/l1-drive.sh")"
+  local before after changed
+  before="$(l1_candidate_signature "$SINGULAR_ROOT")"
+  git -C "$SINGULAR_ROOT" -c user.name=test -c user.email=test@example.local \
+    commit -q --allow-empty -m 'ceremonial empty commit'
+  after="$(l1_candidate_signature "$SINGULAR_ROOT")"
+  assert_eq "$after" "$before" "candidate signature: empty commit is not product progress"
+  printf 'real product byte\n' >"$SINGULAR_ROOT/real-product.txt"
+  changed="$(l1_candidate_signature "$SINGULAR_ROOT")"
+  [[ "$changed" != "$after" ]] || fail "candidate signature: source-byte change must count as progress"
+  echo "ok: candidate signature binds source tree bytes, not commit identity"
+}
+
 # ============================== Driver-level ===================================
 # A sequencing runner: auditor verdict follows MOCK_AUDIT_VERDICT_SEQ by call #.
 make_seq_runner() {
@@ -214,6 +235,11 @@ make_seq_runner() {
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 level=""; out=""; chdir=""; prompt=""
+if [[ -n "${SINGULAR_ORIGIN_LOCK_CAPABILITY:-}" \
+    && -n "${MOCK_ORIGIN_CAP_LEAK_FILE:-}" ]]; then
+  printf '%s\n' "${SINGULAR_RUNNER_ROLE:-unknown}" \
+    >>"$MOCK_ORIGIN_CAP_LEAK_FILE"
+fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --level) level="$2"; shift 2 ;;
@@ -260,13 +286,34 @@ if [[ "$n" -le "$prose_tries" ]]; then printf 'prose, no JSON here\n' >"$out"; e
 seq=(${MOCK_AUDIT_VERDICT_SEQ:-accepted})
 vi=$((n - prose_tries - 1)); [[ "$vi" -lt 0 ]] && vi=0
 verdict="${seq[$vi]:-${seq[${#seq[@]}-1]}}"
-python3 - "$out" "$verdict" <<'PY'
+python3 - "$out" "$verdict" "${MOCK_AUDIT_FINDINGS:-[]}" <<'PY'
 import json, sys
-json.dump({"schema":"singular.orchestration.audit-verdict.v0","taskId":"TASK-0001","runId":"r","branch":"agent/widget/TASK-0001-generic","verdict":sys.argv[2],"evidenceReviewed":[],"commandsRun":[],"findings":[],"requiredFixes":[],"rationale":"ok"}, open(sys.argv[1],"w"))
+findings = json.loads(sys.argv[3])
+json.dump({"schema":"singular.orchestration.audit-verdict.v0","taskId":"TASK-0001","runId":"r","branch":"agent/widget/TASK-0001-generic","verdict":sys.argv[2],"evidenceReviewed":[],"commandsRun":[],"findings":findings,"requiredFixes":findings if sys.argv[2] == "needs-fix" else [],"rationale":"ok"}, open(sys.argv[1],"w"))
 PY
 exit 0
 STUB
   chmod +x "$stub"
+}
+
+test_driver_scrubs_origin_capability_from_provider_runner() {
+  with_fixture
+  write_generic_task
+  local stub="$FIXTURE_TMP/mock-runner-capability-probe.sh"
+  make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/capability-counters"
+  export MOCK_AUDIT_VERDICT_SEQ="accepted"
+  export MOCK_ORIGIN_CAP_LEAK_FILE="$FIXTURE_TMP/provider-origin-capability.leaked"
+  export SINGULAR_ORIGIN_LOCK_CAPABILITY="fixture-origin-authority-must-not-leak"
+
+  local out rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "0" "capability-confinement driver accepts ($out)"
+  [[ ! -e "$MOCK_ORIGIN_CAP_LEAK_FILE" ]] \
+    || fail "origin lock capability reached provider runner roles: $(tr '\n' ' ' <"$MOCK_ORIGIN_CAP_LEAK_FILE")"
+  unset MOCK_ORIGIN_CAP_LEAK_FILE SINGULAR_ORIGIN_LOCK_CAPABILITY
+  echo "ok: driver scrubs origin capability from implementer/provider runners"
 }
 
 # Fast-path provenance: attempt-1 audit-needs-fix (a fast-path 'retry' class) with
@@ -323,31 +370,333 @@ test_driver_decider_when_fast_disabled() {
   echo "ok: driver decider consulted when fast disabled"
 }
 
-# Auditor infra: prose x2 then a valid verdict. Worker runs ONCE; auditor 3x;
-# lease retryCount unchanged; two audit.infra_retry events.
+# Ordinary tasks receive one repair after initial execution. Explicit high-risk
+# tasks receive two; an unknown explicit category fails safe to the same high
+# policy instead of silently becoming ordinary.
+test_driver_risk_bounded_product_repairs() {
+  with_fixture
+  write_generic_task
+  local stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-risk-normal"
+  export MOCK_AUDIT_VERDICT_SEQ="needs-fix needs-fix accepted"
+  export SINGULAR_MAX_RETRIES=99
+
+  local out rc=0 events
+  out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "ordinary risk parks after one product repair ($out)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "2" \
+    "ordinary risk: initial execution plus one repair"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "2" \
+    "ordinary risk: no third audit ceremony"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "1" \
+    "ordinary risk: exactly one product repair consumed"
+  assert_eq "$(singular_lease_field TASK-0001 maxRetries)" "1" \
+    "ordinary risk: legacy lease surface exposes bounded ceiling"
+  events="$(cat "$SINGULAR_EVENTS_FILE")"
+  assert_contains "$events" '"l1.product_repair_budget_consumed"' \
+    "ordinary risk: consumption event"
+  assert_contains "$events" '"l1.product_repair_budget_exhausted"' \
+    "ordinary risk: exhaustion event"
+  assert_contains "$events" '"productRepairMax":1' \
+    "ordinary risk: configured budget is machine-readable"
+
+  # A reset/re-entry without the explicit unpark budget reset must not mint a
+  # second initial pass after the durable lease already consumed its ceiling.
+  singular_task_set_status "$SINGULAR_TASKS_DIR/TASK-0001.md" ready
+  local calls_before
+  calls_before="$(cat "$MOCK_COUNTER_DIR/worker-calls")"
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" --reset TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "ordinary re-entry is refused after durable ceiling ($out)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "$calls_before" \
+    "ordinary re-entry: no additional product pass"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"priorLease":true' \
+    "ordinary re-entry: durable lease provenance is observable"
+
+  with_fixture
+  write_generic_task
+  python3 - "$SINGULAR_TASKS_DIR/TASK-0001.md" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace("Test policy: `strict_test_first`", "Risk tier: `high`\nTest policy: `strict_test_first`")
+open(path, "w", encoding="utf-8").write(text)
+PY
+  stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-risk-high"
+  export MOCK_AUDIT_VERDICT_SEQ="needs-fix needs-fix accepted"
+  export SINGULAR_MAX_RETRIES=99
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "0" "high risk accepts after two bounded repairs ($out)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "3" \
+    "high risk: initial execution plus two repairs"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "2" \
+    "high risk: exactly two product repairs consumed"
+  assert_eq "$(singular_lease_field TASK-0001 maxRetries)" "2" \
+    "high risk: lease exposes two-repair ceiling"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"riskTier":"high"' \
+    "high risk: resolved tier is observable"
+
+  with_fixture
+  write_generic_task
+  export SINGULAR_TASK_RISK_TIER="unrecognized-category"
+  stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-risk-unknown"
+  export MOCK_AUDIT_VERDICT_SEQ="accepted"
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "0" "unknown explicit risk still runs ($out)"
+  events="$(cat "$SINGULAR_EVENTS_FILE")"
+  assert_contains "$events" '"riskTier":"high"' "unknown risk: fail-safe high tier"
+  assert_contains "$events" 'fail-safe-unknown' "unknown risk: fail-safe provenance"
+  assert_contains "$events" '"productRepairMax":2' "unknown risk: two-repair ceiling"
+  unset SINGULAR_MAX_RETRIES SINGULAR_TASK_RISK_TIER
+  echo "ok: risk-bounded product repair policy (normal=1, high/unknown=2)"
+}
+
+# Detached dispatch reserves a task with a planned lease before l1-drive starts.
+# That scheduler reservation is not a product pass; the driver must durably mark
+# the first real pass and retain the exhausted budget across reset/re-entry.
+test_driver_detached_planned_lease_preserves_product_budget() {
+  with_fixture
+  write_generic_task
+  local stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-detached-planned"
+  export MOCK_AUDIT_VERDICT_SEQ="needs-fix needs-fix accepted"
+  export SINGULAR_MAX_RETRIES=99
+
+  local owned_json='["internal/widget/parser.go"]'
+  singular_lease_write TASK-0001 agent/widget/TASK-0001-generic widget l2-developer \
+    "internal/widget/parser.go" planned ORIGIN-DETACHED "" \
+    "$(git -C "$SINGULAR_ROOT" rev-parse target)" ORIGIN-DETACHED-batch \
+    "$owned_json" '[]'
+  assert_eq "$(singular_lease_field TASK-0001 productPassStarted)" "False" \
+    "detached reservation: planned lease is explicitly unattempted"
+
+  local out rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "detached reservation parks after one repair ($out)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "2" \
+    "detached reservation: initial execution plus one repair"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "2" \
+    "detached reservation: exactly two product audits"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "1" \
+    "detached reservation: one repair consumed"
+  assert_eq "$(singular_lease_field TASK-0001 maxRetries)" "1" \
+    "detached reservation: normal-risk ceiling retained"
+  assert_eq "$(singular_lease_field TASK-0001 productPassStarted)" "True" \
+    "detached reservation: first real product pass is durable"
+
+  singular_task_set_status "$SINGULAR_TASKS_DIR/TASK-0001.md" ready
+  local calls_before
+  calls_before="$(cat "$MOCK_COUNTER_DIR/worker-calls")"
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" --reset TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "detached exhausted re-entry is refused ($out)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "$calls_before" \
+    "detached exhausted re-entry: no product budget regained"
+  assert_eq "$(singular_lease_field TASK-0001 productPassStarted)" "True" \
+    "detached exhausted re-entry: durable started marker preserved"
+  unset SINGULAR_MAX_RETRIES
+  echo "ok: detached planned lease preserves initial+repair budget and exhausted re-entry"
+}
+
+# A process killed during product work cannot run its EXIT trap.  Recovery may
+# make the preserved lease dispatchable again, but each re-entry must consume a
+# durable repair *before* the worker is invoked. Otherwise every crash gets a
+# fresh first pass and the risk ceiling is never reached.
+make_crash_runner() {
+  local stub="$1"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+level=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --level) level="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "$level" == "l2" ]]; then
+  counter="${MOCK_CRASH_COUNTER:?}"
+  count=0
+  [[ -f "$counter" ]] && count="$(cat "$counter")"
+  count=$((count + 1))
+  printf '%s\n' "$count" >"$counter"
+  kill -KILL "$PPID"
+  exit 99
+fi
+exit 99
+STUB
+  chmod +x "$stub"
+}
+
+seed_started_product_lease() {
+  local maximum="$1"
+  singular_lease_write TASK-0001 agent/widget/TASK-0001-generic widget l2-developer \
+    "internal/widget/parser.go" failed RUN-CRASH-SEED "" \
+    "$(git -C "$SINGULAR_ROOT" rev-parse target)" CRASH-SEED-batch \
+    '["internal/widget/parser.go"]' '[]'
+  python3 - "$(singular_lease_path TASK-0001)" "$maximum" <<'PY'
+import json
+import os
+import sys
+
+path, maximum = sys.argv[1:3]
+lease = json.load(open(path, encoding="utf-8"))
+lease["status"] = "failed"
+lease["retryCount"] = 0
+lease["maxRetries"] = int(maximum)
+lease["productPassStarted"] = True
+lease["productPassStartedRunId"] = "RUN-CRASH-SEED"
+temporary = path + ".tmp"
+with open(temporary, "w", encoding="utf-8") as stream:
+    json.dump(lease, stream)
+    stream.write("\n")
+os.replace(temporary, path)
+PY
+}
+
+test_driver_crash_reentry_budget_is_monotonic() {
+  local stub out rc calls_before
+
+  # Normal risk: the first crash re-entry consumes the only repair before the
+  # worker. A second re-entry is refused without another worker invocation.
+  with_fixture
+  write_generic_task
+  stub="$FIXTURE_TMP/crash-runner.sh"; make_crash_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_CRASH_COUNTER="$FIXTURE_TMP/normal-crash-calls"
+  export SINGULAR_WORKER_INFRA_MAX=0
+  seed_started_product_lease 1
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" --reset TASK-0001 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "normal crash re-entry unexpectedly completed ($out)"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "1" \
+    "normal crash re-entry consumes repair before worker"
+  assert_eq "$(cat "$MOCK_CRASH_COUNTER")" "1" \
+    "normal crash re-entry invokes one worker"
+  singular_lease_set_status TASK-0001 failed
+  singular_task_set_status "$SINGULAR_TASKS_DIR/TASK-0001.md" ready
+  calls_before="$(cat "$MOCK_CRASH_COUNTER")"
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" --reset TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "normal repeated crash re-entry reaches durable ceiling ($out)"
+  assert_eq "$(cat "$MOCK_CRASH_COUNTER")" "$calls_before" \
+    "normal repeated crash cannot invoke an unbudgeted worker"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "1" \
+    "normal repeated crash leaves monotonic count at ceiling"
+
+  # High risk: exactly two crash re-entries are authorized. The third is
+  # refused, proving that repeated process death cannot exceed the two-repair
+  # policy either.
+  with_fixture
+  write_generic_task
+  python3 - "$SINGULAR_TASKS_DIR/TASK-0001.md" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace("Test policy: `strict_test_first`", "Risk tier: `high`\nTest policy: `strict_test_first`")
+open(path, "w", encoding="utf-8").write(text)
+PY
+  stub="$FIXTURE_TMP/crash-runner.sh"; make_crash_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_CRASH_COUNTER="$FIXTURE_TMP/high-crash-calls"
+  export SINGULAR_WORKER_INFRA_MAX=0
+  seed_started_product_lease 2
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" --reset TASK-0001 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "high first crash re-entry unexpectedly completed ($out)"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "1" \
+    "high first crash re-entry consumes first repair"
+  singular_lease_set_status TASK-0001 failed
+  singular_task_set_status "$SINGULAR_TASKS_DIR/TASK-0001.md" ready
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" --reset TASK-0001 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "high second crash re-entry unexpectedly completed ($out)"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "2" \
+    "high second crash re-entry consumes second repair"
+  assert_eq "$(cat "$MOCK_CRASH_COUNTER")" "2" \
+    "high risk authorizes exactly two crash re-entry workers"
+  singular_lease_set_status TASK-0001 failed
+  singular_task_set_status "$SINGULAR_TASKS_DIR/TASK-0001.md" ready
+  calls_before="$(cat "$MOCK_CRASH_COUNTER")"
+  rc=0
+  out="$("$SCRIPT_DIR/l1-drive.sh" --reset TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "high third crash re-entry reaches durable ceiling ($out)"
+  assert_eq "$(cat "$MOCK_CRASH_COUNTER")" "$calls_before" \
+    "high third crash cannot invoke an unbudgeted worker"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "2" \
+    "high repeated crash leaves monotonic count at ceiling"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"consumedBeforeWorker":true' \
+    "crash re-entry consumption is machine-readable"
+  unset MOCK_CRASH_COUNTER SINGULAR_WORKER_INFRA_MAX
+  echo "ok: crash re-entry repair budgets are monotonic (normal=1, high=2)"
+}
+
+test_driver_identical_findings_park_before_third_pass() {
+  with_fixture
+  write_generic_task
+  local stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-repeat-findings"
+  export MOCK_AUDIT_VERDICT_SEQ="needs-fix needs-fix accepted"
+  export MOCK_AUDIT_FINDINGS='["  parser   rejects empty input  "]'
+  export SINGULAR_TASK_RISK_TIER=high
+
+  local out rc=0 events
+  out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "identical findings park despite remaining high-risk budget ($out)"
+  local worker_calls
+  worker_calls="$(cat "$MOCK_COUNTER_DIR/worker-calls")"
+  [[ "$worker_calls" -ge 2 && "$worker_calls" -le 3 ]] || \
+    fail "identical findings: unexpected worker calls $worker_calls"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "2" \
+    "identical findings: no audit occurs after the repeated finding set"
+  local repairs_used
+  repairs_used="$(singular_lease_field TASK-0001 retryCount)"
+  [[ "$repairs_used" -le 2 ]] || fail "identical findings: repair ceiling exceeded ($repairs_used)"
+  events="$(cat "$SINGULAR_EVENTS_FILE")"
+  assert_contains "$events" '"l1.identical_findings_parked"' \
+    "identical findings: normalized repeat event"
+  assert_contains "$events" '"productRepairMax":2' \
+    "identical findings: park was no-progress, not exhaustion"
+  unset MOCK_AUDIT_FINDINGS SINGULAR_TASK_RISK_TIER
+  echo "ok: identical normalized findings suppress the next expensive pass"
+}
+
+# Auditor infra: prose x1 then a valid verdict. Worker runs ONCE; auditor 2x;
+# lease retryCount unchanged; one audit.infra_retry event. A requested budget of
+# 9 verifies the hard one-extra-try ceiling.
 test_driver_audit_infra_retry() {
   with_fixture
   write_generic_task
   local stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
   export SINGULAR_RUNNER="$stub"
   export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters3"
-  export MOCK_AUDIT_PROSE_TRIES=2
+  export MOCK_AUDIT_PROSE_TRIES=1
   export MOCK_AUDIT_VERDICT_SEQ="accepted"
-  export SINGULAR_AUDIT_INFRA_MAX=2
+  export SINGULAR_AUDIT_INFRA_MAX=9
 
   local out rc=0
   out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
   assert_eq "$rc" "0" "audit-infra run accepts after fresh re-audits ($out)"
   assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "1" "audit-infra: worker invoked exactly once"
-  assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "3" "audit-infra: auditor invoked 3x (1 + 2 infra retries)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "2" "audit-infra: auditor invoked 2x (1 + 1 infra retry)"
   local retries
   retries="$(singular_lease_field TASK-0001 retryCount)"
   assert_eq "$retries" "0" "audit-infra: lease retryCount unchanged"
   local infra_events
   infra_events="$(grep -c '"audit.infra_retry"' "$SINGULAR_EVENTS_FILE" || true)"
-  assert_eq "$infra_events" "2" "audit-infra: two audit.infra_retry events"
+  assert_eq "$infra_events" "1" "audit-infra: one audit.infra_retry event"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"maxExtraRetries":1' \
+    "audit-infra: machine-readable hard ceiling"
   unset MOCK_AUDIT_PROSE_TRIES SINGULAR_AUDIT_INFRA_MAX
-  echo "ok: driver audit-infra isolation (worker x1, auditor x3, retryCount=0)"
+  echo "ok: driver audit-infra isolation (worker x1, auditor x2, retryCount=0)"
 }
 
 # Worker infra: worker exits 124 every try. worker.infra_retry fires; the
@@ -442,9 +791,9 @@ PY
   echo "ok: driver integrity violation parks for human judgment (retryCount=0)"
 }
 
-# rc==0 but empty/prose worker output must classify as worker-no-packet (a real
-# model run that produced no packet) and flow through the MAIN retry loop — NOT
-# the worker-infra fast-path. Guards the rc==0 empty-output downgrade.
+# rc==0 but empty/prose worker output is worker-no-packet, not infrastructure.
+# Because it also leaves the exact candidate unchanged, it parks immediately
+# without spending a product repair on another expensive worker pass.
 test_driver_empty_output_is_no_packet_not_infra() {
   with_fixture
   write_generic_task
@@ -457,25 +806,269 @@ test_driver_empty_output_is_no_packet_not_infra() {
   local out rc=0
   out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
   assert_eq "$rc" "3" "empty-output run parks after budget ($out)"
-  # Main loop: attempt 0 (worker-no-packet, retry) + attempt 1 (parked) = 2 worker calls.
-  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "2" "no-packet: worker invoked via main loop (2x)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "1" "no-packet: unchanged candidate suppresses second worker pass"
   assert_not_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"worker.infra_retry"' "no-packet: NOT classified as worker-infra"
   local idx
   idx="$(find "$SINGULAR_RUNS_DIR" -name index.json -path '*/attempts/*' | head -1)"
   assert_contains "$(cat "$idx")" '"failureClass": "worker-no-packet"' "no-packet: archived worker-no-packet"
-  # A real retry bumped the lease (infra retries never do).
-  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "1" "no-packet: retryCount bumped by real retry"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"l1.unchanged_candidate_parked"' \
+    "no-packet: unchanged candidate park is explicit"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "0" "no-packet: no product repair consumed"
   unset MOCK_WORKER_EMPTY SINGULAR_MAX_RETRIES
   echo "ok: driver rc==0 empty output is worker-no-packet, not worker-infra"
 }
 
+# A campaign transition during an otherwise ordinary product attempt invalidates
+# every artifact produced by that attempt.  The driver must stop before writing
+# any decision, task transition, or repair-budget mutation under the new
+# campaign identity.
+test_driver_campaign_transition_refuses_publication() {
+  with_fixture
+  write_generic_task
+  python3 - "$SINGULAR_TASKS_DIR/TASK-0001.md" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+text = text.replace(
+    "Gate command: `true`",
+    "Gate command: `mkdir -p \"$SINGULAR_STATE_DIR\"; printf \"%s\\n\" singular-campaign-enforced-v1 > \"$SINGULAR_STATE_DIR/CAMPAIGN_ENFORCED\"; false`",
+)
+open(path, "w", encoding="utf-8").write(text)
+PY
+  local stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-campaign-transition"
+  export MOCK_AUDIT_VERDICT_SEQ="accepted"
+
+  local out rc=0 events decisions=""
+  out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "2" "campaign transition refuses L1 publication ($out)"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "1" \
+    "campaign transition: worker invoked exactly once"
+  assert_contains "$(sed -n '1,8p' "$SINGULAR_TASKS_DIR/TASK-0001.md")" "Status: ready" \
+    "campaign transition: task state remains at entry value"
+  assert_eq "$(singular_lease_field TASK-0001 status)" "running" \
+    "campaign transition: lease state remains pre-publication"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "0" \
+    "campaign transition: repair budget is not consumed"
+  assert_no_file "$SINGULAR_RUNS_DIR"/*/decision-gate-red.json \
+    "campaign transition: no authoritative decider artifact"
+  [[ -f "$SINGULAR_ORCH_DIR/decisions.md" ]] && decisions="$(cat "$SINGULAR_ORCH_DIR/decisions.md")"
+  assert_not_contains "$decisions" "decide:" \
+    "campaign transition: no decision log entry"
+  assert_not_contains "$decisions" "— accept" \
+    "campaign transition: no terminal acceptance entry"
+  events="$(cat "$SINGULAR_EVENTS_FILE")"
+  if [[ "$events" != *'"campaign.identity_mismatch"'* \
+      && "$events" != *'"campaign.drift_detected"'* \
+      && "$events" != *'"l1.campaign_mismatch"'* ]]; then
+    fail "campaign transition: no machine-readable campaign refusal event: $events"
+  fi
+  echo "ok: campaign transition invalidates L1 publication without consuming product budget"
+}
+
+# An accepted auditor verdict is product authority for its exact immutable head.
+# If the post-verdict evidence refresh fails, publication must park as an
+# external evidence blocker without re-running the worker/auditor, consulting a
+# decider, or consuming the lease's product-repair budget.
+test_driver_accepted_audit_awaits_evidence() {
+  with_fixture
+  write_generic_task
+  local stub="$FIXTURE_TMP/mock-runner.sh"; make_seq_runner "$stub"
+  export SINGULAR_RUNNER="$stub"
+  export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-evidence-authority"
+  export MOCK_AUDIT_VERDICT_SEQ="accepted"
+  export SINGULAR_MAX_RETRIES=2
+
+  # l1-drive addresses sibling engine programs through SCRIPT_DIR.  A symlinked
+  # test view lets this fixture fail only the third manifest call (the final
+  # post-verdict refresh) while exercising every real production helper.
+  local engine_view="$FIXTURE_TMP/engine-view" entry
+  mkdir -p "$engine_view"
+  for entry in "$ENGINE_HOME"/engine/*; do
+    ln -s "$entry" "$engine_view/$(basename "$entry")"
+  done
+  rm "$engine_view/evidence-manifest.sh"
+  cat >"$engine_view/evidence-manifest.sh" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+counter="${MOCK_MANIFEST_COUNTER:?}"
+count=0
+[[ -f "$counter" ]] && count="$(cat "$counter")"
+count=$((count + 1))
+printf '%s\n' "$count" >"$counter"
+if [[ "$count" -eq 3 || "$count" -eq 4 ]]; then
+  echo "injected post-verdict evidence finalization failure" >&2
+  exit 77
+fi
+exec "${REAL_EVIDENCE_MANIFEST:?}" "$@"
+STUB
+  chmod +x "$engine_view/evidence-manifest.sh"
+  export MOCK_MANIFEST_COUNTER="$FIXTURE_TMP/manifest-calls"
+  export REAL_EVIDENCE_MANIFEST="$ENGINE_HOME/engine/evidence-manifest.sh"
+
+  local out rc=0
+  out="$($engine_view/l1-drive.sh TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "accepted audit with final evidence failure parks ($out)"
+  assert_contains "$out" "AWAITING EVIDENCE" "accepted audit reports evidence blocker"
+  assert_eq "$(cat "$MOCK_MANIFEST_COUNTER")" "4" "final evidence phase receives exactly one isolated retry"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "1" "evidence blocker: worker invoked once"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "1" "evidence blocker: auditor invoked once"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "0" \
+    "evidence blocker: product-repair budget unchanged"
+  assert_eq "$(singular_lease_field TASK-0001 status)" "blocked" \
+    "evidence blocker: lease is non-dispatchable"
+  assert_contains "$(cat "$SINGULAR_TASKS_DIR/TASK-0001.md")" "Status: blocked" \
+    "evidence blocker: task is non-dispatchable"
+
+  local run_dir audit packet head
+  run_dir="$(find "$SINGULAR_RUNS_DIR" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  audit="$run_dir/audit.json"
+  packet="$run_dir/packet.json"
+  assert_file "$audit" "evidence blocker: accepted audit preserved"
+  assert_file "$packet" "evidence blocker: packet preserved"
+  assert_eq "$(singular_json_field "$audit" verdict)" "accepted" \
+    "evidence blocker: product verdict remains accepted"
+  assert_eq "$(singular_json_field "$packet" status)" "blocked" \
+    "evidence blocker: packet is not publishable"
+  head="$(git -C "$SINGULAR_ROOT/.worktrees/TASK-0001" rev-parse HEAD)"
+  python3 - "$packet" "$head" <<'PY'
+import json, sys
+
+packet = json.load(open(sys.argv[1], encoding="utf-8"))
+blockers = [b for b in packet["blockers"] if b.get("reason") == "awaiting-evidence"]
+assert len(blockers) == 1, blockers
+blocker = blockers[0]
+assert blocker["class"] == "blocked-external", blocker
+assert blocker["headSha"] == sys.argv[2], blocker
+assert blocker["productAuditVerdict"] == "accepted", blocker
+assert blocker["auditRef"] == "audit.json", blocker
+assert blocker["consumesProductRepairBudget"] is False, blocker
+assert "do not rerun implementation" in packet["nextAction"], packet["nextAction"]
+PY
+  assert_no_file "$SINGULAR_INBOX_DIR/$(basename "$run_dir").json" \
+    "evidence blocker: accepted audit is not published without final evidence"
+  local events prompts idx
+  events="$(cat "$SINGULAR_EVENTS_FILE")"
+  assert_contains "$events" '"l1.audit_accepted_awaiting_evidence"' \
+    "evidence blocker: preservation event emitted"
+  assert_contains "$events" '"l1.task_awaiting_evidence"' \
+    "evidence blocker: terminal publication state is explicit"
+  assert_contains "$events" '"action":"awaiting-evidence"' \
+    "evidence blocker: terminal classification is awaiting-evidence"
+  assert_not_contains "$events" '"type":"l1.task_terminal"' \
+    "evidence blocker: accepted product audit is not recorded as generic rejection"
+  assert_not_contains "$events" '"decider.fast_path"' \
+    "evidence blocker: no product/infra decider path"
+  assert_contains "$events" '"evidence.infra_retry"' \
+    "evidence blocker: isolated evidence retry is observable"
+  assert_contains "$events" '"consumesProductRepairBudget":false' \
+    "evidence blocker: evidence retry is outside the product budget"
+  prompts="$(find "$SINGULAR_RUNS_DIR" -name 'decider-prompt-*.md' 2>/dev/null || true)"
+  assert_eq "$prompts" "" "evidence blocker: no decider prompt"
+  idx="$(find "$SINGULAR_RUNS_DIR" -name index.json -path '*/attempts/*' | head -1)"
+  assert_contains "$(cat "$idx")" '"failureClass": "evidence-infra-after-accept"' \
+    "evidence blocker: archive distinguishes post-accept evidence failure"
+  assert_contains "$(cat "$idx")" '"deciderAction": "awaiting-evidence"' \
+    "evidence blocker: archive preserves publication action"
+
+  # Re-entry must recognize the durable accepted checkpoint before orphan or
+  # --reset cleanup. Only the failed evidence phase runs again; the immutable
+  # audit/head and product counters remain byte-for-byte authoritative.
+  local audit_sha_before worker_calls_before audit_calls_before retries_before
+  audit_sha_before="$(shasum -a 256 "$audit" | awk '{print $1}')"
+  worker_calls_before="$(cat "$MOCK_COUNTER_DIR/worker-calls")"
+  audit_calls_before="$(cat "$MOCK_COUNTER_DIR/audit-calls")"
+  retries_before="$(singular_lease_field TASK-0001 retryCount)"
+
+  # Once the marker is recognized, even a missing worktree must fail closed
+  # before --reset can erase the surviving accepted branch/audit checkpoint.
+  mv "$SINGULAR_ROOT/.worktrees/TASK-0001" "$SINGULAR_ROOT/.worktrees/TASK-0001.saved"
+  rc=0
+  out="$($engine_view/l1-drive.sh --reset TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "3" "missing accepted worktree fails closed before reset ($out)"
+  assert_contains "$out" "accepted checkpoint preserved" \
+    "missing-worktree checkpoint: preservation outcome"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "$worker_calls_before" \
+    "missing-worktree checkpoint: worker not rerun"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "$audit_calls_before" \
+    "missing-worktree checkpoint: auditor not rerun"
+  assert_eq "$(cat "$MOCK_MANIFEST_COUNTER")" "4" \
+    "missing-worktree checkpoint: evidence not attempted without exact head"
+  assert_eq "$(git -C "$SINGULAR_ROOT" rev-parse agent/widget/TASK-0001-generic)" "$head" \
+    "missing-worktree checkpoint: accepted branch preserved"
+  assert_eq "$(singular_json_field "$packet" status)" "blocked" \
+    "missing-worktree checkpoint: packet remains awaiting evidence"
+  assert_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"reason":"accepted-worktree-missing"' \
+    "missing-worktree checkpoint: exact refusal reason"
+  assert_not_contains "$(cat "$SINGULAR_EVENTS_FILE")" '"l1.orphan_recovered"' \
+    "missing-worktree checkpoint: orphan cleanup never ran"
+  mv "$SINGULAR_ROOT/.worktrees/TASK-0001.saved" "$SINGULAR_ROOT/.worktrees/TASK-0001"
+
+  rc=0
+  out="$($engine_view/l1-drive.sh --reset TASK-0001 2>&1)" || rc=$?
+  assert_eq "$rc" "0" "accepted evidence checkpoint resumes without product work ($out)"
+  assert_contains "$out" "RESUMED ACCEPTED EVIDENCE" \
+    "evidence resume: explicit success outcome"
+  assert_eq "$(cat "$MOCK_MANIFEST_COUNTER")" "5" \
+    "evidence resume: only evidence finalization reruns"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/worker-calls")" "$worker_calls_before" \
+    "evidence resume: worker not rerun"
+  assert_eq "$(cat "$MOCK_COUNTER_DIR/audit-calls")" "$audit_calls_before" \
+    "evidence resume: auditor not rerun"
+  assert_eq "$(singular_lease_field TASK-0001 retryCount)" "$retries_before" \
+    "evidence resume: product repair budget unchanged"
+  assert_eq "$(shasum -a 256 "$audit" | awk '{print $1}')" "$audit_sha_before" \
+    "evidence resume: accepted audit remains byte-identical"
+  assert_eq "$(git -C "$SINGULAR_ROOT/.worktrees/TASK-0001" rev-parse HEAD)" "$head" \
+    "evidence resume: exact accepted worktree head preserved despite --reset"
+  assert_eq "$(git -C "$SINGULAR_ROOT" rev-parse agent/widget/TASK-0001-generic)" "$head" \
+    "evidence resume: exact accepted branch head preserved"
+  assert_eq "$(singular_json_field "$packet" status)" "accepted" \
+    "evidence resume: packet becomes publishable"
+  python3 - "$packet" <<'PY'
+import json, sys
+packet = json.load(open(sys.argv[1], encoding="utf-8"))
+assert not any(
+    isinstance(item, dict) and item.get("reason") == "awaiting-evidence"
+    for item in packet.get("blockers", [])
+), packet.get("blockers")
+PY
+  assert_file "$SINGULAR_INBOX_DIR/$(basename "$run_dir").json" \
+    "evidence resume: existing accepted packet queued for origin integration"
+  assert_eq "$(singular_lease_field TASK-0001 status)" "accepted" \
+    "evidence resume: lease accepted"
+  assert_contains "$(cat "$SINGULAR_TASKS_DIR/TASK-0001.md")" "Status: accepted" \
+    "evidence resume: task accepted"
+  events="$(cat "$SINGULAR_EVENTS_FILE")"
+  assert_contains "$events" '"l1.accepted_evidence_resume_started"' \
+    "evidence resume: checkpoint recovery started event"
+  assert_contains "$events" '"l1.accepted_evidence_resume_completed"' \
+    "evidence resume: checkpoint recovery completed event"
+  assert_contains "$events" '"workerRerun":false' \
+    "evidence resume: machine-readable worker non-rerun"
+  assert_contains "$events" '"auditorRerun":false' \
+    "evidence resume: machine-readable auditor non-rerun"
+  unset SINGULAR_MAX_RETRIES MOCK_MANIFEST_COUNTER REAL_EVIDENCE_MANIFEST
+  echo "ok: accepted exact-head audit resumes evidence-only publication without product retry"
+}
+
 test_fast_action_table
 test_fast_action_repeat_and_disabled
+test_candidate_signature_ignores_empty_commit_identity
+test_driver_scrubs_origin_capability_from_provider_runner
 test_driver_fastpath_provenance
 test_driver_decider_when_fast_disabled
+test_driver_risk_bounded_product_repairs
+test_driver_detached_planned_lease_preserves_product_budget
+test_driver_crash_reentry_budget_is_monotonic
+test_driver_identical_findings_park_before_third_pass
 test_driver_audit_infra_retry
 test_driver_worker_infra_parks
 test_driver_integrity_violation_parks
 test_driver_empty_output_is_no_packet_not_infra
+test_driver_campaign_transition_refuses_publication
+test_driver_accepted_audit_awaits_evidence
 
 echo "decider-fastpath tests passed"

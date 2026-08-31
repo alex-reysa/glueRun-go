@@ -17,7 +17,7 @@
 #   (c) freshness/read-only -> the stub records it was invoked read-only
 #       (--level readonly) and fresh (no --resume / --resume-session);
 #   (d) infra fail-open -> when the runner stays unparseable across the
-#       SINGULAR_AUDIT_INFRA_MAX-bounded retries, the driver treats the result as
+#       SINGULAR_PLAN_CRITIC_INFRA_MAX-bounded retries, the driver treats the result as
 #       an "approve" verdict, persists an approve critique, and appends a
 #       ctx.plan_critique_infra event rather than blocking planning (and emits
 #       NO plan.critiqued event on this path);
@@ -167,8 +167,8 @@ count_events() { # <type>
 make_stage_dir() { # <name> -> prints path; seeds rendered candidate task files
   local d="$tmp/stage/$1"
   mkdir -p "$d"
-  printf '# TASK-0007\n' > "$d/TASK-0007.md"
-  printf '# TASK-0008\n' > "$d/TASK-0008.md"
+  printf '# TASK-0007\nUNIQUE-CANDIDATE-SEVEN\n' > "$d/TASK-0007.candidate.md"
+  printf '# TASK-0008\nUNIQUE-CANDIDATE-EIGHT\n' > "$d/TASK-0008.candidate.md"
   printf 'existing task summary\n' > "$d/existing-tasks.md"
   printf '%s' "$d"
 }
@@ -258,19 +258,54 @@ PY
     && fail "$label: critic invoked with --resume-session (not fresh)"
   grep -q -- '--resume' "$STUB_ARGV_FILE" \
     && fail "$label: critic invoked with a resume flag (not fresh)"
-  grep -q 'prompts/plan-critic.md' "$STUB_ARGV_FILE" \
-    || fail "$label: base plan-critic prompt not passed to the runner"
+  grep -q 'plan-critic-input.md' "$STUB_ARGV_FILE" \
+    || fail "$label: content-bound critic prompt not passed to the runner"
+  grep -q '# Plan Critic Prompt' "$stage_dir/plan-critic-input.md" \
+    || fail "$label: base critic policy missing from content-bound prompt"
 }
 
 verdict_case "APPROVE" "node-approve" "approve"
 verdict_case "REVISE"  "node-revise"  "revise"
 verdict_case "PARK"    "node-park"    "park"
 
+# The complete candidate context is what the runner receives, and an unchanged
+# semantic identity is critiqued once even when a later phase asks again.
+cache_stage="$(make_stage_dir CACHE)"
+printf '{"baseSha":"base-cache-123"}\n' > "$cache_stage/plan-attempt-input.json"
+: > "$SINGULAR_EVENTS_FILE"
+: > "$STUB_CALLS_FILE"
+export STUB_MODE=json STUB_VERDICT=approve STUB_FINDINGS='[]'
+SINGULAR_PLAN_ATTEMPT_BASE_SHA=base-cache-123 \
+  singular_ctx_plan_critic_run "node-cache" "RUN-CACHE-1" "$cache_stage" "$tmp/worktree" \
+  || fail "cache: first critic pass failed"
+grep -q 'UNIQUE-CANDIDATE-SEVEN' "$cache_stage/plan-critic-input.md" \
+  || fail "cache: candidate content was not bound into the runner prompt"
+grep -q 'base-cache-123' "$cache_stage/plan-critic-input.md" \
+  || fail "cache: base SHA was not bound into the runner prompt"
+# This mirrors the parent import phase: it has no inherited child environment,
+# but recovers the bound base from the stage manifest and reuses the verdict.
+singular_ctx_plan_critic_run "node-cache" "RUN-CACHE-2" "$cache_stage" "$tmp/worktree" \
+  || fail "cache: identity-bound reuse failed"
+calls="$(grep -c 'call' "$STUB_CALLS_FILE" 2>/dev/null || echo 0)"
+[[ "$calls" -eq 1 ]] || fail "cache: unchanged identity invoked critic $calls times (expected 1)"
+[[ "$(count_events plan.critique_reused)" -eq 1 ]] \
+  || fail "cache: reuse event not recorded"
+python3 - "$cache_stage/plan-critique.json" <<'PY' \
+  || fail "cache: reused record was not rebound to the current run"
+import json, sys
+assert json.load(open(sys.argv[1]))["runId"] == "RUN-CACHE-2"
+PY
+printf '\nchanged candidate bytes\n' >> "$cache_stage/TASK-0007.candidate.md"
+singular_ctx_plan_critic_run "node-cache" "RUN-CACHE-3" "$cache_stage" "$tmp/worktree" \
+  || fail "cache: changed-context critic pass failed"
+calls="$(grep -c 'call' "$STUB_CALLS_FILE" 2>/dev/null || echo 0)"
+[[ "$calls" -eq 2 ]] || fail "cache: changed context did not invalidate critic cache"
+
 # ---------------------------------------------------------------------------
 # (d) infra fail-open: unparseable runner output across the bounded retries ->
 # approve verdict + ctx.plan_critique_infra event, no plan.critiqued, no block.
 # ---------------------------------------------------------------------------
-export SINGULAR_AUDIT_INFRA_MAX=2
+export SINGULAR_PLAN_CRITIC_INFRA_MAX=99
 node="node-infra"
 run_id="RUN-INFRA"
 stage_dir="$(make_stage_dir "INFRA")"
@@ -301,9 +336,11 @@ PY
 [[ "$(count_events plan.critiqued)" -eq 0 ]] \
   || fail "infra: plan.critiqued emitted on the infra fail-open path"
 
-# The runner was actually retried up to the bounded max (1 initial + INFRA_MAX).
+# Even a large configured value is hard-capped at one extra infrastructure
+# retry (two total attempts).
 calls="$(grep -c 'call' "$STUB_CALLS_FILE" 2>/dev/null || echo 0)"
-[[ "$calls" -eq 3 ]] || fail "infra: expected 3 bounded runner attempts, got $calls"
+[[ "$calls" -eq 2 ]] || fail "infra: expected 2 bounded runner attempts, got $calls"
+unset SINGULAR_PLAN_CRITIC_INFRA_MAX
 
 # ---------------------------------------------------------------------------
 # (e) present-but-uncalled: no existing engine path invokes the new functions.

@@ -22,6 +22,12 @@
       "enum": ["passed", "failed", "blocked", "proposed"]
     },
     "authoritative": { "type": "boolean" },
+    "campaignBinding": { "type": "string", "minLength": 1 },
+    "blockerClass": {
+      "type": "string",
+      "enum": ["needs-work", "blocked-external"],
+      "description": "Machine-readable lifecycle disposition for an authoritative blocked gate. needs-work remains planner-eligible; blocked-external requires external input or an explicit override. Legacy blocked records without this field are treated conservatively as blocked-external."
+    },
     "evidenceClass": {
       "type": "string",
       "minLength": 1,

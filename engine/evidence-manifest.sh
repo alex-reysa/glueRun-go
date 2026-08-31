@@ -452,11 +452,15 @@ if usage_seen:
     manifest["providerUsage"] = usage
 manifest["budget"]["actualAuditInputTokens"] = audit_input_tokens
 if audit_input_tokens >= audit_input_token_canary:
+    # This is an observability canary, not product or evidence authority.  The
+    # manifest is still complete and hash-bound when the threshold is crossed;
+    # refusing to write it here used to discard an already completed auditor
+    # verdict during the final refresh.  Keep the inclusive warning so operators
+    # can tune prompt size, but never let telemetry reinterpret product review.
     sys.stderr.write(
-        "evidence-manifest: auditor input-token canary exceeded "
+        "evidence-manifest: warning: auditor input-token canary exceeded "
         f"({audit_input_tokens} >= {audit_input_token_canary})\n"
     )
-    sys.exit(4)
 
 for _ in range(3):
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
