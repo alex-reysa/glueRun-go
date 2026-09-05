@@ -22,13 +22,14 @@ Required completion: `[REQUIRED-COMPLETION]`
   records. Missing or non-authoritative gate results mean the node is not done.
 - `docs/orchestration/planner-contract.md` — what the planner may and may not
   emit.
-- `docs/kernel-build-plan/` — the staged build plan; find the file for this area's
-  stage and read its types / responsibilities / exit gate.
+- The repository's build plan or design documents, when it has them (the area
+  state file names them); find the section for this area's stage and read its
+  responsibilities and exit gate.
 - `docs/orchestration/tasks/` — existing task files and their `Status:` headers
   (the inline summary below lists them). Completed work has `Status: accepted`
   or `Status: integrated`.
 - `docs/orchestration/tasks/TEMPLATE.md` — the exact task-file structure to follow.
-- `internal/[AREA]/` and `internal/kernel/` — current code, to choose the next
+- [AREA-PATHS] — the area's owned paths; current code, to choose the next
   smallest brick that builds on what exists.
 
 ## Rules
@@ -49,7 +50,7 @@ Required completion: `[REQUIRED-COMPLETION]`
   task belongs to -- required for duplicate detection and gate promotion).
   `Worker branch: agent/[AREA]/<task-id>-<kebab-slug>`.
   `Test policy: strict_test_first`.
-  `Gate command: go build ./... && go vet ./... && go test ./...`.
+  `Gate command: [GATE-COMMAND]`.
 - `Dispatch mode: canonical`.
 - When a task intentionally replaces an earlier blocked/failed task with the
   same file scope, add a `Supersedes: TASK-XXXX` header line naming it -- this
@@ -57,11 +58,11 @@ Required completion: `[REQUIRED-COMPLETION]`
 - `Depends on: []` when there are no task dependencies, otherwise a comma
   separated list of already-integrated `TASK-XXXX` ids only.
 - Owned files: up to `[SLICE-BUDGET]` mutually-independent slices, each slice an
-  implementation file plus its `_test.go` (1–2 files per slice) under
-  `internal/[AREA]/`. The slices within one task must have no build/test ordering
-  dependency on each other. For `contract` and `storage_proof` layers always emit
-  a single slice. Keep each slice tight; do not modify `doc.go` or files outside
-  the area.
+  implementation file plus its test file (1–2 files per slice) under the area's
+  owned paths ([AREA-PATHS]). The slices within one task must have no
+  build/test ordering dependency on each other. For `contract` and
+  `storage_proof` layers always emit a single slice. Keep each slice tight; do
+  not modify files outside the area.
 - Acceptance criteria: behavior-level and checkable by tests.
 - OPTIONAL context packet: when a task's reasoning residue would help the
   implementer, add an additive `## Context packet` block to the task markdown
@@ -111,7 +112,7 @@ Output ONLY a JSON object matching
   "tasks": [
     {
       "taskId": "TASK-XXXX",
-      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nDAG node: [NODE]\nTarget branch: `[TARGET]`\nWorker branch: `agent/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `go build ./... && go vet ./... && go test ./...`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
+      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nDAG node: [NODE]\nTarget branch: `[TARGET]`\nWorker branch: `agent/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `[GATE-COMMAND]`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
     }
   ]
 }

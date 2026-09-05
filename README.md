@@ -64,6 +64,20 @@ the engine falls back to the exit code plus a deliberately narrow set of log
 signatures (`engine/infra-patterns.tsv`) covering only environment failures that
 application code cannot plausibly produce.
 
+**How many times a gate runs per task (0.21.0).** The host runs the consumer's
+gate once in the worker's worktree after the worker commits (`gate-check.sh`;
+the model never runs it), once more on a disposable checkout of the exact
+staged merge tree at integration, and cites that integration proof at
+promotion when the promoted tree is byte-identical
+(`.singular-state/proofs/<tree>.json`, `gate_promotion.proof_reused`). The
+disposable rerun before the auditor is risk-scoped: `SINGULAR_AUDIT_VERIFY=auto`
+(default) reruns only for a high-risk task, a worker gate that is not a clean
+`passed` at the exact committed head, a source-integrity anomaly, or a report
+from another phase; `1` always reruns, `0` never. The verification
+classification the auditor must echo is a host fact — a mismatching echo is
+rewritten to the host value (`l1.audit_verification_normalized`) rather than
+paid for with another auditor pass.
+
 ## Dispatch model
 
 **Detached dispatch is ON by default.** When `SINGULAR_DETACHED_DISPATCH=1` (the default),
@@ -399,6 +413,13 @@ because it mattered. That is fixed before rehydrate is promoted, not after.
 process environment, so in a repo that pins a knob there, `VAR=0 singular …` will
 *not* override it — edit the config (or `.singular-state/config.local.sh`) instead.
 
+`singular metrics` also reports what the model calls were spent on
+(`aggregate.roles`: invocations, outcomes, failure classes and tokens per role,
+from the runner-result sidecars) and a `ceremony` block: control-plane versus
+implementer invocation and input-token fractions, invocations per accepted
+task, input tokens per integration. A healthy campaign spends most of its
+tokens on implementers; the number to watch is `controlPlaneInputTokenFraction`.
+
 Key context event types (all in `.singular-state/events.ndjson`, countable via
 `singular metrics`): `context.strategy_selected`, `context.resume_failed`,
 `ctx.arm_assigned`, `ctx.paired_audit`, `ctx.critic_recheck`,
@@ -455,8 +476,8 @@ Every routing decision is reason-coded as a `context.strategy_selected` event
 
 ### Plan critique and revision
 
-Behind `SINGULAR_PLAN_CRITIQUE` (default OFF; flip only with the revision loop in
-service): staged planner batches are reviewed by a fresh, read-only plan critic
+Behind `SINGULAR_PLAN_CRITIQUE` (default ON since 0.20.0): staged planner
+batches are reviewed by a fresh, read-only plan critic
 on the default runner before L0 import. Verdicts follow `plan-critique.v0`:
 `approve` → import; `revise` → the node's planner session is resumed with the
 critic's structured findings (bounded by `SINGULAR_PLAN_REVISE_MAX`), records
@@ -465,6 +486,19 @@ recorded as unaddressed), and re-enters the critic; `park` / budget exhaustion �
 candidates never reach import (fail closed). Critic infrastructure failure fails
 OPEN with an event — the critic is an added safety layer; the un-bypassable
 implementation auditor remains the floor.
+
+Severities are a contract, not a mood (0.21.0). `blocking` is reserved for
+defects only the planner can fix — owned-file collisions, undeclared
+dependencies on unintegrated work, unverifiable acceptance criteria,
+duplicates, batch tasks that cannot land independently, contract violations.
+The host enforces it: a `revise` verdict with no blocking finding is downgraded
+to `approve` (`plan.critique_downgraded`; `SINGULAR_PLAN_CRITIQUE_REQUIRE_BLOCKING=0`
+restores verdict-as-written), and an approved batch carries its should-fix and
+note findings into every task as `## Plan critique (advisory)`, which the
+implementer prompt renders as work to address-or-decline and the auditor prompt
+as something to check (`SINGULAR_PLAN_CRITIQUE_ADVISORY=0` disables). A
+repository with no `prompts/plan-critic.md` uses the engine template
+(`ctx.plan_critic_prompt_fallback`) instead of running the critic blind.
 
 In schema v2, a successful revision is published as an immutable generation
 under the node staging directory. One atomically replaced
@@ -507,10 +541,20 @@ Two versions move independently:
 ## Development and tests
 
 ```bash
-bash tests/run.sh    # full regression suite (190+ tests)
+bash tests/run.sh    # full regression suite (210+ tests), serial
+SINGULAR_TEST_JOBS=6 bash tests/run.sh   # the same suite, six files at a time
 singular test         # the same suite as a supervised, attachable run
 bash tests/field-report-canary.sh  # required before promoting 0.11.2, 0.12.0, or 0.13.0
 ```
+
+Every test file builds its own scratch repository, so files are independent by
+construction and `SINGULAR_TEST_JOBS=N` runs them N at a time; results print in
+discovery order, so the output, the summary and `progress.jsonl` are identical
+to a serial run. A file that must not share the machine (it asserts wall-clock
+bounds, binds a fixed port, or drives a headless browser) declares
+`# singular-test: serial` in its first 40 lines and runs after the parallel
+batch. On the reference machine the suite takes 57 minutes serially and 12 with
+six jobs; this repository's own `gateCommand` uses four.
 
 `singular test` runs the resolved engine's own `tests/run.sh` as a supervised job
 and keeps the evidence in the current repo under

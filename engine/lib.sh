@@ -2331,6 +2331,7 @@ data = {
     "forbiddenFiles": [],
     "prerequisites": [],
     "acceptanceCriteria": [],
+    "planCritique": [],
 }
 
 header_keys = {
@@ -2406,6 +2407,13 @@ for raw in lines:
         im = re.match(r"^[-*]\s+(.*)$", line.strip())
         if im:
             data["acceptanceCriteria"].append(im.group(1).strip())
+        continue
+    if section.startswith("plan critique"):
+        # Advisory findings carried forward from the plan critic (0.21.0);
+        # rendered into the worker and auditor prompts, never into scope.
+        im = re.match(r"^[-*]\s+(.*)$", line.strip())
+        if im:
+            data["planCritique"].append(im.group(1).strip())
         continue
     if section == "executable dag frontier" and not data["dagNode"]:
         # Planner-appended provenance ("- node: `X`") — the dagNode fallback for

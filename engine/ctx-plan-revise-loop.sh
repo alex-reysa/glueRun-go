@@ -120,6 +120,91 @@ PY
   echo "park revision-staging-failed"
 }
 
+# Advisory carry-forward (0.21.0). An approved batch may still carry should-fix
+# and note findings; before this they lived only in plan-critique.json under the
+# staging dir, which nothing downstream read, so the critic's most useful
+# output evaporated the moment the batch was imported. Append them to each
+# candidate as a `## Plan critique (advisory)` section: singular_task_json
+# parses it, the L2 prompt renders it as work to address-or-decline, and the
+# auditor prompt renders it as something to check. Idempotent (the section is
+# replaced, never duplicated) and additive: headers, scope and acceptance
+# criteria are untouched, so every validator that inspects them is unaffected.
+# SINGULAR_PLAN_CRITIQUE_ADVISORY=0 disables the annotation.
+singular_plan_critique_annotate_candidates() {
+  local record="$1" stage_dir="$2"
+  [[ "${SINGULAR_PLAN_CRITIQUE_ADVISORY:-1}" != "0" ]] || return 0
+  [[ -f "$record" ]] || return 0
+  local candidate_dir
+  candidate_dir="$(singular_task_batch_candidate_dir "$stage_dir" 2>/dev/null || true)"
+  [[ -n "$candidate_dir" && -d "$candidate_dir" ]] || return 0
+  # Staged generations are immutable and hash-bound to their pointer, so the
+  # annotated set is materialized privately and published through the same
+  # transactional replacement the revision round uses; the files are never
+  # edited in place.
+  local replacement
+  replacement="$(mktemp -d "${TMPDIR:-/tmp}/singular-advisory.XXXXXX")" || return 1
+  local changed
+  changed="$(python3 - "$record" "$candidate_dir" "$replacement" <<'PY' 2>/dev/null || printf 'error'
+import glob, json, os, re, shutil, sys
+
+record, candidate_dir, replacement = sys.argv[1:4]
+try:
+    doc = json.load(open(record, encoding="utf-8"))
+except Exception:
+    print("unchanged"); raise SystemExit(0)
+findings = [f for f in (doc.get("findings") or []) if isinstance(f, dict)]
+findings = [f for f in findings if f.get("severity") in ("blocking", "should-fix", "note")]
+if not findings:
+    print("unchanged"); raise SystemExit(0)
+order = {"blocking": 0, "should-fix": 1, "note": 2}
+findings.sort(key=lambda f: (order[f["severity"]], str(f.get("id", ""))))
+lines = [
+    "## Plan critique (advisory)",
+    "",
+    "Findings the plan critic recorded before this task was imported. They are",
+    "advisory: address each one within the owned files, or state in the packet's",
+    "`nextAction` why it does not apply. The auditor sees the same list.",
+    "",
+]
+for f in findings:
+    text = f"- [{f['severity']}] {f.get('id', '')}: " + " ".join(str(f.get("claim", "")).split())
+    evidence = " ".join(str(f.get("evidence", "")).split())
+    if evidence:
+        text += f" (evidence: {evidence})"
+    suggested = " ".join(str(f.get("suggestedChange", "")).split())
+    if suggested:
+        text += f" Suggested: {suggested}"
+    lines.append(text)
+section = "\n".join(lines) + "\n"
+pattern = re.compile(r"\n## Plan critique \(advisory\)\n.*?(?=\n## |\Z)", re.S)
+changed = False
+for path in sorted(glob.glob(os.path.join(candidate_dir, "TASK-*.candidate.md"))):
+    text = open(path, encoding="utf-8").read()
+    if pattern.search(text):
+        updated = pattern.sub("\n" + section.rstrip("\n"), text, count=1)
+        if not updated.endswith("\n"):
+            updated += "\n"
+    else:
+        updated = text.rstrip("\n") + "\n\n" + section
+    if updated != text:
+        changed = True
+    with open(os.path.join(replacement, os.path.basename(path)), "w", encoding="utf-8") as handle:
+        handle.write(updated)
+print("changed" if changed else "unchanged")
+PY
+)"
+  if [[ "$changed" != "changed" ]]; then
+    rm -rf -- "$replacement"
+    [[ "$changed" == "unchanged" ]]
+    return $?
+  fi
+  if ! singular_task_batch_replace_stage "$replacement" "$stage_dir"; then
+    rm -rf -- "$replacement"
+    return 1
+  fi
+  return 0
+}
+
 # The composed bounded revision loop. Composes ONLY integrated functions; prints
 # EXACTLY one terminal line. See header for the full contract.
 singular_plan_revise_loop() {
@@ -212,6 +297,10 @@ singular_plan_revise_loop() {
 
     # Terminal accept: approve -> import; leave the staged set intact for L0.
     if [[ "$action" == "import" ]]; then
+      # Carry the critic's non-blocking findings into the tasks themselves
+      # BEFORE the approved snapshot is taken, so a replayed import restores
+      # the annotated candidates.
+      singular_plan_critique_annotate_candidates "$record" "$stage_dir" || true
       local approved_snapshot=""
       approved_snapshot="$(singular_plan_attempt_snapshot_candidates \
         "$attempt_record" "$current_context_sha" "$stage_dir" 2>/dev/null || printf '%s' "")"

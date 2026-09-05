@@ -245,10 +245,28 @@ run_dir="${SINGULAR_PLANNING_ARTIFACT_DIR:-$(singular_run_dir "$run_id")}"
 mkdir -p "$run_dir"
 prompt_file="$run_dir/planner-prompt.md"
 
+# Stack-neutral placeholders (0.21.0). The shipped planner template used to
+# hard-code one consumer's toolchain (a Go gate command, `internal/<area>/`
+# paths, `_test.go` suffixes), so a fresh `singular init` planned Go tasks for
+# every repository until someone rewrote the prompt by hand. The gate command
+# and the area's owned paths are facts the config already holds; render them.
+area_paths="$(python3 - "${SINGULAR_JSON_CONFIG_FILE:-$SINGULAR_ROOT/singular.config.json}" "$active_area" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    config = json.load(open(sys.argv[1], encoding="utf-8"))
+    paths = (config.get("areas") or {}).get(sys.argv[2], [])
+    if isinstance(paths, str):
+        paths = [paths] if paths else []
+    print(", ".join("`%s`" % p for p in paths if isinstance(p, str) and p))
+except Exception:
+    print("")
+PY
+)"
+[[ -n "$area_paths" ]] || area_paths="the area's owned paths declared in \`singular.config.json\`"
 python3 - "$SINGULAR_ORCH_DIR/prompts/l1-planner.md" "$prompt_file" \
   "$active_area" "$SINGULAR_TARGET_BRANCH" "$next_id" "$next_ids_csv" "$count" "$task_summary" \
   "$active_node" "$active_stage" "$active_layer" "$active_kind" "$active_required" \
-  "$effective_slice_budget" <<'PY'
+  "$effective_slice_budget" "${SINGULAR_DEFAULT_GATE_CMD:-}" "$area_paths" <<'PY'
 import sys
 (
     tmpl_path,
@@ -265,10 +283,14 @@ import sys
     kind,
     required,
     slice_budget,
-) = sys.argv[1:15]
+    gate_command,
+    area_paths,
+) = sys.argv[1:17]
 with open(tmpl_path) as f:
     t = (
         f.read()
+        .replace("[GATE-COMMAND]", gate_command or "(the repository gate command)")
+        .replace("[AREA-PATHS]", area_paths)
         .replace("[AREA]", area)
         .replace("[TARGET]", target)
         .replace("[NEXT-ID]", next_id)

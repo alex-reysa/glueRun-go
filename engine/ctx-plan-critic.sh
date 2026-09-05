@@ -64,6 +64,17 @@ singular_ctx_plan_critic_run() {
   # literal. Runtime resolution is unaffected.
   local _pn="plan-critic"
   local prompt="${SINGULAR_ORCH_DIR}/prompts/${_pn}.md"
+  # A repository initialized before this prompt existed (`singular init` copies
+  # templates with cp -n, once) has no copy of it, and an absent policy used to
+  # make the critic run blind and every revise loop park on an empty verdict.
+  # The engine template is the authoritative fallback; the event makes the
+  # substitution visible so an operator can materialize a repo copy on purpose.
+  if [[ ! -f "$prompt" && -f "${SINGULAR_ENGINE_HOME}/templates/prompts/${_pn}.md" ]]; then
+    prompt="${SINGULAR_ENGINE_HOME}/templates/prompts/${_pn}.md"
+    singular_append_event "ctx.plan_critic_prompt_fallback" \
+      "repository has no plan-critic prompt; using the engine template" \
+      "{\"node\":\"$node\",\"runId\":\"$run_id\",\"prompt\":\"$prompt\"}" || true
+  fi
   # DEFAULT runner (cross-provider independence): a module-routed planner still
   # gets a default-runner critic.
   local runner="${SINGULAR_RUNNER:-$SINGULAR_ENGINE_DIR/codex-run.sh}"
@@ -233,10 +244,11 @@ PY
     # claim text to the singular_finding_id identity so formatting-only re-reports
     # collapse to the same id. Emit "verdict<TAB>count" for the event.
     local summary
-    summary="$(python3 - "$record" "$node" "$run_id" "$batch_csv" <<'PY'
+    summary="$(python3 - "$record" "$node" "$run_id" "$batch_csv" \
+      "${SINGULAR_PLAN_CRITIQUE_REQUIRE_BLOCKING:-1}" <<'PY'
 import hashlib, json, sys
 
-record, node, run_id, batch_csv = sys.argv[1:5]
+record, node, run_id, batch_csv, require_blocking = sys.argv[1:6]
 
 def finding_id(claim):
     text = " ".join(str(claim).replace(chr(96), "").lower().split())
@@ -289,6 +301,28 @@ rationale = str(obj.get("rationale", "")).strip()
 if not rationale:
     rationale = "critic returned no rationale"
 
+# Host severity gate (0.21.0). The verdict field is a model opinion; the
+# severities the critic attached to its own findings are the evidence. A revise
+# that names no blocking finding asks the planner to spend a bounded revision
+# (this heredoc sits inside a command substitution, so it must stay free of
+# apostrophes and backticks: bash 3.2 scans it for quotes while looking for the
+# closing paren, and lib.sh sources this file under whatever bash a test uses)
+# round on advice the implementer can act on directly, and in the field that
+# shape produced 113 revise verdicts out of 140 critiques and parked every
+# node on budget exhaustion. Downgrade it to approve, keep every finding (they
+# travel with the imported tasks as advisory context), and say so in the
+# rationale so the record explains itself. SINGULAR_PLAN_CRITIQUE_REQUIRE_BLOCKING=0
+# restores verdict-as-written.
+host_disposition = ""
+if (verdict == "revise" and require_blocking != "0"
+        and not any(f["severity"] == "blocking" for f in norm_findings)):
+    verdict = "approve"
+    host_disposition = "revise-downgraded-no-blocking"
+    rationale = ("[host] revise downgraded to approve: the critique carries no "
+                 "blocking finding, so its findings are carried forward as "
+                 "advisory context instead of spending a revision round. "
+                 + rationale)
+
 rec = {
     "schema": "singular.orchestration.plan-critique.v0",
     "node": node,
@@ -303,14 +337,19 @@ with open(record, "w", encoding="utf-8") as f:
     json.dump(rec, f, indent=2)
     f.write("\n")
 
-sys.stdout.write("%s\t%d" % (verdict, len(norm_findings)))
+sys.stdout.write("%s\t%d\t%s" % (verdict, len(norm_findings), host_disposition))
 PY
 )"
-    local verdict="${summary%%$'\t'*}"
-    local count="${summary##*$'\t'}"
+    local verdict count host_disposition
+    IFS=$'\t' read -r verdict count host_disposition <<<"$summary"
     [[ -n "$verdict" ]] || verdict="approve"
     [[ "$count" =~ ^[0-9]+$ ]] || count=0
 
+    if [[ -n "${host_disposition:-}" ]]; then
+      singular_append_event "plan.critique_downgraded" \
+        "host severity gate downgraded a revise verdict with no blocking finding" \
+        "{\"node\":\"$node\",\"runId\":\"$run_id\",\"disposition\":\"$host_disposition\",\"findingsCount\":$count,\"critiqueIdentity\":\"$critique_identity\"}"
+    fi
     singular_append_event "plan.critiqued" "plan critic recorded a critique" \
       "{\"node\":\"$node\",\"runId\":\"$run_id\",\"verdict\":\"$verdict\",\"findingsCount\":$count,\"critiqueIdentity\":\"$critique_identity\",\"contextSha256\":\"$context_sha\"}"
 

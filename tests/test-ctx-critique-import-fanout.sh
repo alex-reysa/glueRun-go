@@ -221,7 +221,7 @@ verdict="approve"
 vf="${SINGULAR_TEST_VERDICT_DIR:-}/$node"
 [[ -n "${SINGULAR_TEST_VERDICT_DIR:-}" && -f "$vf" ]] && verdict="$(cat "$vf")"
 cat >"$out" <<EOF
-{"verdict":"$verdict","findings":[],"assumptionsChallenged":[],"rationale":"stub critic verdict for $node"}
+{"verdict":"$verdict","findings":$([[ "$verdict" == "approve" ]] && printf '[]' || printf '[{"id":"f-000000000000","severity":"blocking","claim":"stub blocking finding for %s","evidence":"stub"}]' "$node"),"assumptionsChallenged":[],"rationale":"stub critic verdict for $node"}
 EOF
 exit 0
 STUB

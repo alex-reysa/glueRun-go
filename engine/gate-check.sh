@@ -262,7 +262,72 @@ case "$outcome" in
   *) result_code="$exit_code"; [[ "$result_code" -ne 0 ]] || result_code=1 ;;
 esac
 
+# Proof ledger (0.21.0). An integration-phase gate runs in a disposable checkout
+# of the exact staged merge tree (integrate.sh), which is the strongest gate
+# evidence the engine produces; the promotion gate that follows it runs the
+# same command on the same tree in the origin checkout, which is weaker, and
+# used to run it again unconditionally. Record the passing integration result
+# by TREE (not commit) so the promoter can cite it when the promoted tree is
+# byte-identical, and fall back to a fresh run otherwise. Only the host writes
+# here, only for integration-phase passes with verified source integrity; the
+# record binds the command, the campaign, the report hash and the log bytes,
+# and the promoter re-verifies every one of them before reuse.
+proof_tree=""
+if [[ "$phase" == "integration" && "$integrity_status" == "verified" ]] \
+  && [[ "$outcome" == "passed" || "$outcome" == "passed-with-acknowledged-baseline" ]]; then
+  proof_tree="$(git -C "$PWD" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+  # The ledger keys on the consumer's gate command, not on this script's argv:
+  # integrate.sh spawns the gate as `<bash> -c "<gateCommand>"`, while the
+  # promoter compares the bare gateCommand string. Unwrap that one shape;
+  # anything else is recorded verbatim and simply never matches.
+  proof_command="$command_text"
+  if [[ $# -eq 3 && "$2" == "-c" && "$(basename -- "$1")" == bash* ]]; then
+    proof_command="$3"
+  fi
+  if [[ "$proof_tree" =~ ^[0-9a-f]{40,64}$ ]]; then
+    proofs_dir="$SINGULAR_STATE_DIR/proofs"
+    mkdir -p "$proofs_dir"
+    python3 - "$proofs_dir/$proof_tree.json" "$proof_tree" "$head_sha" "$proof_command" \
+      "$outcome" "$run_id" "$task_id" "$report" "$log" "$observation" \
+      "$(singular_campaign_binding 2>/dev/null || echo legacy)" \
+      "$(tr -d '[:space:]' <"$SINGULAR_ENGINE_HOME/VERSION" 2>/dev/null || echo unknown)" \
+      "$(singular_timestamp)" <<'PY' 2>>"$run_dir/gate-report.err" || proof_tree=""
+import hashlib, json, os, sys
+(out, tree, head, command, outcome, run_id, task_id, report, log, observation,
+ binding, engine_version, recorded_at) = sys.argv[1:14]
+def sha(path):
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+record = {
+    "schema": "singular.orchestration.gate-proof.v0",
+    "treeSha": tree,
+    "headSha": head,
+    "command": command,
+    "commandSha256": hashlib.sha256(command.encode("utf-8")).hexdigest(),
+    "outcome": outcome,
+    "phase": "integration",
+    "workspaceKind": "integration",
+    "runId": run_id,
+    "taskId": task_id,
+    "reportPath": report,
+    "reportSha256": sha(report),
+    "logPath": log,
+    "logSha256": sha(log),
+    "observationPath": observation if os.path.isfile(observation) else "",
+    "campaignBinding": binding,
+    "engineVersion": engine_version,
+    "recordedAt": recorded_at,
+}
+tmp = out + ".tmp"
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(record, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+os.replace(tmp, out)
+PY
+  fi
+fi
+
 singular_append_event "gate_check.completed" "gate check completed" \
-  "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"exitCode\":$exit_code,\"resultCode\":$result_code,\"outcome\":\"$outcome\",\"cacheHit\":false,\"logRef\":\"$log\",\"reportRef\":\"$report\"}"
+  "{\"runId\":\"$run_id\",\"taskId\":\"$task_id\",\"exitCode\":$exit_code,\"resultCode\":$result_code,\"outcome\":\"$outcome\",\"cacheHit\":false,\"proofTree\":\"$proof_tree\",\"logRef\":\"$log\",\"reportRef\":\"$report\"}"
 echo "gate check exit_code=$exit_code outcome=$outcome cache_hit=no log=$log report=$report"
 exit "$result_code"

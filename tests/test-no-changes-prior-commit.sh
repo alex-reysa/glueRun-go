@@ -299,15 +299,51 @@ grep -q 'host verification classification is `not-rerun-evidence-verified`' \
   "${audit_path%/audit.json}"/auditor-bound-prompt-attempt-*.md \
   || fail "auditor prompt omitted the host-derived evidence-only classification"
 
-# 3. A model that upgrades the same evidence-only host result to passed is
-# rejected before its accepted verdict can influence task state.
+# 3. A model that upgrades the same evidence-only host result to passed does
+# not get to: the host rewrites verificationResults to its own classification
+# (0.21.0), keeps the model's product verdict, preserves the original beside
+# the record, and does not spend a second auditor pass on the echo.
 reset_fixture
 rc=0
 out="$(
   run_drive env WRITE_MODE=fixed SINGULAR_AUDIT_VERIFY=0 \
     SINGULAR_AUDIT_INFRA_MAX=0 AUDIT_STATUS_OVERRIDE=passed
 )" || rc=$?
-[[ "$rc" -ne 0 ]] || fail "mismatched evidence-only v1 classification must fail closed"
+[[ "$rc" -eq 0 ]] || fail "host-normalized evidence-only verdict should accept: $out"
+events="$(cat "$root/.singular-state/events.ndjson")"
+assert_contains "$events" '"type":"l1.audit_verification_normalized"' \
+  "host/model classification normalization recorded"
+[[ "$events" != *'"type":"l1.audit_verification_mismatch"'* ]] \
+  || fail "normalization must not also spend an auditor repair retry"
+[[ "$events" != *'"type":"audit.infra_retry"'* ]] \
+  || fail "normalization must not re-run the auditor"
+assert_contains "$events" '"type":"l1.task_accepted"' \
+  "normalized evidence-only audit accepted"
+audit_path="$(ls "$root"/.singular-state/runs/*/audit.json | head -1)"
+python3 - "$audit_path" <<'PY'
+import json
+import os
+import sys
+
+path = sys.argv[1]
+data = json.load(open(path, encoding="utf-8"))
+statuses = [item["status"] for item in data["verificationResults"]]
+assert statuses == ["not-rerun-evidence-verified"], statuses
+assert "host-authoritative" in data["verificationResults"][0]["rationale"]
+original = json.load(open(path + ".pre-normalize.json", encoding="utf-8"))
+assert [item["status"] for item in original["verificationResults"]] == ["passed"], original
+PY
+
+# 3b. With normalization disabled the 0.20 fail-closed behavior is intact:
+# the mismatch is recorded, the auditor is not accepted, the task is not.
+reset_fixture
+rc=0
+out="$(
+  run_drive env WRITE_MODE=fixed SINGULAR_AUDIT_VERIFY=0 \
+    SINGULAR_AUDIT_INFRA_MAX=0 AUDIT_STATUS_OVERRIDE=passed \
+    SINGULAR_AUDIT_VERIFY_NORMALIZE=0
+)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "mismatched evidence-only v1 classification must fail closed when normalization is off"
 events="$(cat "$root/.singular-state/events.ndjson")"
 assert_contains "$events" '"type":"l1.audit_verification_mismatch"' \
   "host/model classification mismatch recorded"

@@ -14,6 +14,18 @@ gate_report_file="${SINGULAR_GATE_REPORT_FILE:-}"
 # per-test logs and no progress file — the output below is then byte-identical
 # to what this harness has always printed.
 run_dir="${SINGULAR_TEST_RUN_DIR:-}"
+# Parallelism (0.21.0). SINGULAR_TEST_JOBS=N runs up to N test files at once;
+# unset or 1 keeps the historical serial loop byte-for-byte. Read before the
+# scrub below for the same reason as the two variables above. Every test file
+# already builds its own scratch repository under mktemp, so files are
+# independent by construction; a file that is NOT (it binds a fixed port,
+# mutates a shared cache, or inspects the checkout's own state) declares
+# `# singular-test: serial` anywhere in its first 40 lines and is run after the
+# parallel batch, one at a time. Output ordering is preserved: results are
+# printed in discovery order regardless of completion order, so the PASS/FAIL
+# lines, the summary, and progress.jsonl look exactly like a serial run.
+jobs="${SINGULAR_TEST_JOBS:-1}"
+[[ "$jobs" =~ ^[0-9]+$ && "$jobs" -ge 1 ]] || jobs=1
 
 # Environmental preflights, before any test is discovered or run. Both fail
 # once, loudly, instead of letting every dependent test fail separately.
@@ -67,26 +79,12 @@ if [[ -n "$run_dir" ]]; then mkdir -p "$run_dir/logs"; fi
 
 # Generic engine suite + the singular-ext (opt-in module) suite, if present.
 EXT_DIR="$(cd "$TESTS_DIR/../singular-ext/tests" 2>/dev/null && pwd || true)"
-for t in "$TESTS_DIR"/test-*.sh ${EXT_DIR:+"$EXT_DIR"/test-*.sh}; do
-  [[ -e "$t" ]] || continue
-  name="$(basename "$t")"
-  if [[ "$#" -gt 0 && "$filter" != *" $name "* ]]; then continue; fi
-  started=$SECONDS
-  # </dev/null: no test may inherit the harness's stdin. A test that lets a
-  # child read stdin (e.g. a runner mock's `cat` consuming a prompt) hangs
-  # forever when the calling harness holds stdin open (detached l1-drive
-  # gate) yet passes when stdin is /dev/null — harness-dependent flakiness
-  # this closes for every current and future test.
-  #
-  # With a run dir the same combined stream is tee'd to a durable per-test log
-  # as it is produced (an attached operator can watch a slow test grow), while
-  # $out still holds it for the tail -3 display below. `set -o pipefail` (line
-  # 3) is what keeps the TEST's exit status, not tee's, decisive.
-  if [[ -n "$run_dir" ]]; then
-    out="$("$BASH" "$t" </dev/null 2>&1 | tee "$run_dir/logs/$name.log")"; rc=$?
-  else
-    out="$("$BASH" "$t" </dev/null 2>&1)"; rc=$?
-  fi
+
+# One finished test -> one PASS/FAIL line, the failure tail, the counters, and
+# the progress.jsonl row. Shared by the serial loop and the parallel flusher so
+# the two cannot drift in what they print.
+record_result() {
+  local name="$1" rc="$2" out="$3" seconds="$4" status
   if [[ "$rc" -eq 0 ]]; then
     printf "PASS  %s\n" "$name"
     pass=$((pass + 1))
@@ -104,8 +102,101 @@ for t in "$TESTS_DIR"/test-*.sh ${EXT_DIR:+"$EXT_DIR"/test-*.sh}; do
   # come from a `test-*.sh` glob and need no JSON escaping.
   if [[ -n "$run_dir" ]]; then
     printf '{"test":"%s","status":"%s","seconds":%d,"log":"logs/%s.log"}\n' \
-      "$name" "$status" "$((SECONDS - started))" "$name" >>"$run_dir/progress.jsonl"
+      "$name" "$status" "$seconds" "$name" >>"$run_dir/progress.jsonl"
   fi
+}
+
+# Discovery is shared too: the filter is applied to one list, so a parallel run
+# executes exactly the files a serial run would, in the same order.
+declare -a discovered=()
+for t in "$TESTS_DIR"/test-*.sh ${EXT_DIR:+"$EXT_DIR"/test-*.sh}; do
+  [[ -e "$t" ]] || continue
+  name="$(basename "$t")"
+  if [[ "$#" -gt 0 && "$filter" != *" $name "* ]]; then continue; fi
+  discovered+=("$t")
+done
+
+run_parallel() {
+  local pool total launched=0 finished=0 next_print=0 i t name rc out seconds
+  local -a parallel=() serial=()
+  pool="$(mktemp -d "${TMPDIR:-/tmp}/singular-test-pool.XXXXXX")"
+  for t in "${discovered[@]}"; do
+    if head -40 "$t" 2>/dev/null | grep -q '^# singular-test: serial'; then
+      serial+=("$t")
+    else
+      parallel+=("$t")
+    fi
+  done
+  total=${#parallel[@]}
+  run_one() {
+    local index="$1" path="$2" started rc
+    started=$SECONDS
+    "$BASH" "$path" </dev/null >"$pool/$index.out" 2>&1
+    rc=$?
+    printf '%s\n' "$((SECONDS - started))" >"$pool/$index.sec"
+    # Written last: its presence is the completion signal the flusher polls.
+    printf '%s\n' "$rc" >"$pool/$index.rc"
+  }
+  while (( next_print < total )); do
+    while (( launched - finished < jobs && launched < total )); do
+      run_one "$launched" "${parallel[$launched]}" &
+      launched=$((launched + 1))
+    done
+    sleep 0.3
+    finished=0
+    for ((i = 0; i < launched; i++)); do
+      [[ -f "$pool/$i.rc" ]] && finished=$((finished + 1))
+    done
+    while (( next_print < total )) && [[ -f "$pool/$next_print.rc" ]]; do
+      t="${parallel[$next_print]}"
+      name="$(basename "$t")"
+      rc="$(<"$pool/$next_print.rc")"
+      seconds="$(<"$pool/$next_print.sec")"
+      out="$(<"$pool/$next_print.out")"
+      [[ -n "$run_dir" ]] && cp "$pool/$next_print.out" "$run_dir/logs/$name.log"
+      record_result "$name" "$rc" "$out" "$seconds"
+      next_print=$((next_print + 1))
+    done
+  done
+  wait
+  rm -rf "$pool"
+  # Declared-serial files run last, one at a time, exactly as the serial loop
+  # would have run them.
+  for t in "${serial[@]}"; do
+    name="$(basename "$t")"
+    started=$SECONDS
+    if [[ -n "$run_dir" ]]; then
+      out="$("$BASH" "$t" </dev/null 2>&1 | tee "$run_dir/logs/$name.log")"; rc=$?
+    else
+      out="$("$BASH" "$t" </dev/null 2>&1)"; rc=$?
+    fi
+    record_result "$name" "$rc" "$out" "$((SECONDS - started))"
+  done
+}
+
+if [[ "$jobs" -gt 1 ]]; then
+  run_parallel
+fi
+for t in "${discovered[@]}"; do
+  [[ "$jobs" -gt 1 ]] && break
+  name="$(basename "$t")"
+  started=$SECONDS
+  # </dev/null: no test may inherit the harness's stdin. A test that lets a
+  # child read stdin (e.g. a runner mock's `cat` consuming a prompt) hangs
+  # forever when the calling harness holds stdin open (detached l1-drive
+  # gate) yet passes when stdin is /dev/null — harness-dependent flakiness
+  # this closes for every current and future test.
+  #
+  # With a run dir the same combined stream is tee'd to a durable per-test log
+  # as it is produced (an attached operator can watch a slow test grow), while
+  # $out still holds it for the tail -3 display below. `set -o pipefail` (line
+  # 3) is what keeps the TEST's exit status, not tee's, decisive.
+  if [[ -n "$run_dir" ]]; then
+    out="$("$BASH" "$t" </dev/null 2>&1 | tee "$run_dir/logs/$name.log")"; rc=$?
+  else
+    out="$("$BASH" "$t" </dev/null 2>&1)"; rc=$?
+  fi
+  record_result "$name" "$rc" "$out" "$((SECONDS - started))"
 done
 
 # A filter that matched nothing is an error, not an empty green run: silently

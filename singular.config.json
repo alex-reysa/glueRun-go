@@ -1,8 +1,8 @@
 {
   "schemaVersion": "v2",
-  "engineVersion": "0.20.0",
+  "engineVersion": "0.21.0",
   "targetBranch": "agent/integration",
-  "gateCommand": "bash tests/run.sh",
+  "gateCommand": "SINGULAR_TEST_JOBS=4 bash tests/run.sh",
   "runner": "claude-run.sh",
   "areaPrefix": "engine/",
   "areas": {

@@ -69,7 +69,7 @@ Required completion: `[REQUIRED-COMPLETION]`
   - Task owns ANY existing file (driver hooks: `l1-drive.sh`,
     `generate-tasks.sh`, `l1-plan-node.sh`, `reconcile.sh`, `cli/singular`,
     `secret-scan.sh`, or any other pre-existing engine/test file):
-    `Gate command: bash tests/run.sh` (full suite — these are the tasks that
+    `Gate command: SINGULAR_TEST_JOBS=4 bash tests/run.sh` (full suite — these are the tasks that
     can break unrelated behavior).
 - `Dispatch mode: canonical`.
 - `Depends on: []` — ALWAYS empty in this dock. Anything your task builds on
@@ -139,7 +139,7 @@ Output ONLY a JSON object matching
   "tasks": [
     {
       "taskId": "TASK-XXXX",
-      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nTarget branch: `[TARGET]`\nWorker branch: `agent/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `bash tests/run.sh`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
+      "markdown": "# TASK-XXXX: <title>\n\nStatus: ready\nArea: [AREA]\nTarget branch: `[TARGET]`\nWorker branch: `agent/[AREA]/TASK-XXXX-<slug>`\nTest policy: `strict_test_first`\nGate command: `SINGULAR_TEST_JOBS=4 bash tests/run.sh`\nDispatch mode: canonical\nDepends on: []\n\n## Objective\n\n...\n"
     }
   ]
 }

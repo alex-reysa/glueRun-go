@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# singular-test: serial — asserts wall-clock bounds (a detached cycle must return before
+# its stubs finish / a headless browser must settle focus) that a loaded machine breaks.
 set -euo pipefail
 
 # Detached dispatch (SINGULAR_DETACHED_DISPATCH=1): reconcile spawns workers and

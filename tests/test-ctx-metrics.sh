@@ -85,6 +85,31 @@ cat > "$events" <<'EOF'
 {"ts":"2026-07-11T00:00:11Z","type":"runner.completed","message":"m","data":{"role":"auditor","provider":"claude","outcome":"succeeded"}}
 EOF
 
+# Runner-result sidecars (0.21.0): one per provider invocation. The archived
+# copy under attempts/ must not be double-counted; a foreign schema is ignored.
+mkdir -p "$runs/RUN-A/attempts/1"
+cat > "$runs/RUN-A/implementer-attempt-1-try-0-runner-result.json" <<'EOF'
+{"schema":"singular.orchestration.runner-result.v0","provider":"fable","role":"implementer",
+ "outcome":"succeeded","failureClass":"none","usage":{"inputTokens":1000,"cachedInputTokens":800,"outputTokens":50}}
+EOF
+cp "$runs/RUN-A/implementer-attempt-1-try-0-runner-result.json" \
+  "$runs/RUN-A/attempts/1/implementer-attempt-1-try-0-runner-result.json"
+cat > "$runs/RUN-A/auditor-attempt-1-try-0-runner-result.json" <<'EOF'
+{"schema":"singular.orchestration.runner-result.v0","provider":"claude","role":"auditor",
+ "outcome":"succeeded","failureClass":"none","usage":{"inputTokens":500,"outputTokens":20}}
+EOF
+cat > "$runs/RUN-B/planner-runner-result.json" <<'EOF'
+{"schema":"singular.orchestration.runner-result.v0","provider":"fable","role":"planner",
+ "outcome":"failed","failureClass":"timeout"}
+EOF
+cat > "$runs/RUN-B/planner-try-1-runner-result.json" <<'EOF'
+{"schema":"singular.orchestration.runner-result.v0","provider":"fable","role":"planner",
+ "outcome":"succeeded","failureClass":"none","usage":{"inputTokens":2500,"outputTokens":100}}
+EOF
+cat > "$runs/RUN-B/not-a-runner-result.json" <<'EOF'
+{"schema":"something.else","role":"planner"}
+EOF
+
 before="$(tree_hash "$runs")"
 before_events="$(shasum "$events" | awk '{print $1}')"
 
@@ -133,6 +158,33 @@ eq(a["deciderAuthorityCounts"], {"auditor": 1, "decider": 1}, "RUN-A deciderAuth
 b = by_run["RUN-B"]
 eq(b["attemptsToAccept"], None, "RUN-B attemptsToAccept (never accepted)")
 eq(b["accepted"], False, "RUN-B accepted")
+
+# roles + ceremony (0.21.0): from runner-result sidecars, archives excluded.
+roles = m["aggregate"]["roles"]
+eq(sorted(roles), ["auditor", "implementer", "planner"], "roles present")
+eq(roles["implementer"]["invocations"], 1, "implementer invocations (archive not double counted)")
+eq(roles["implementer"]["inputTokens"], 1000, "implementer inputTokens")
+eq(roles["implementer"]["cachedInputTokens"], 800, "implementer cachedInputTokens")
+eq(roles["implementer"]["outputTokens"], 50, "implementer outputTokens")
+eq(roles["planner"]["invocations"], 2, "planner invocations")
+eq(roles["planner"]["outcomes"], {"failed": 1, "succeeded": 1}, "planner outcomes")
+eq(roles["planner"]["failureClasses"], {"none": 1, "timeout": 1}, "planner failureClasses")
+eq(roles["planner"]["usageRecords"], 1, "planner usageRecords")
+eq(roles["planner"]["inputTokens"], 2500, "planner inputTokens")
+c = m["aggregate"]["ceremony"]
+eq(c["runnerResultsScanned"], 4, "ceremony scanned")
+eq(c["modelInvocations"], 4, "ceremony modelInvocations")
+eq(c["controlPlaneInvocations"], 3, "ceremony controlPlaneInvocations")
+eq(c["implementerInvocations"], 1, "ceremony implementerInvocations")
+eq(c["controlPlaneInvocationFraction"], 0.75, "ceremony invocation fraction")
+eq(c["controlPlaneInputTokens"], 3000, "ceremony control tokens")
+eq(c["implementerInputTokens"], 1000, "ceremony implementer tokens")
+eq(c["controlPlaneInputTokenFraction"], 0.75, "ceremony token fraction")
+eq(c["acceptedTasks"], 1, "ceremony acceptedTasks")
+eq(c["integrations"], 1, "ceremony integrations")
+eq(c["invocationsPerAcceptedTask"], 4.0, "ceremony invocationsPerAcceptedTask")
+eq(c["invocationsPerIntegration"], 4.0, "ceremony invocationsPerIntegration")
+eq(c["inputTokensPerIntegration"], 4000, "ceremony inputTokensPerIntegration")
 
 # aggregate across all runs
 g = m["aggregate"]

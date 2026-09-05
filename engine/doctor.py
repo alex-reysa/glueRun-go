@@ -454,6 +454,84 @@ class Doctor:
                 seam = state
         self.process_group_kill_check(seam)
         self.process_enumeration_check(seam)
+        self.interpreter_crash_check()
+
+    def interpreter_crash_check(self) -> None:
+        """Surface recent crash reports for the interpreters every run depends on.
+
+        A shell or Python that dies with SIGSEGV under load turns into a red
+        gate, a worker that "produced no packet", or a planner that "failed"
+        — every one of them attributed to product or provider by the loop,
+        none of them fixable by a retry. macOS keeps the evidence in
+        ~/Library/Logs/DiagnosticReports; during the 0.21.0 release run the
+        Homebrew bash crashed twenty times inside Apple's os_log preferences
+        refresh and only that directory said so. This check does not diagnose
+        the crash; it makes sure nobody spends a day blaming the product.
+        """
+        # Never a `skip`: this check has no dependency that could block it, and
+        # doctor prints skipped checks after the diagnosis that blocked them.
+        # An absent directory or another platform is simply "nothing found".
+        check_id = "runtime.interpreter-crashes"
+        if sys.platform != "darwin":
+            self.add(check_id, "pass",
+                     "no interpreter crash-report source on this platform",
+                     details={"platform": sys.platform})
+            return
+        reports_dir = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+        interpreters = ("bash", "python3", "python", "git", "sh", "zsh")
+        window_seconds = 24 * 3600
+        now = time.time()
+        counts: dict[str, int] = {}
+        newest = 0.0
+        try:
+            entries = list(reports_dir.iterdir())
+        except OSError as exc:
+            self.add(check_id, "pass",
+                     "no interpreter crash reports found (directory not readable)",
+                     details={"path": str(reports_dir), "error": str(exc)})
+            return
+        for entry in entries:
+            if entry.suffix != ".ips":
+                continue
+            name = entry.name.split("-", 1)[0]
+            if name not in interpreters:
+                continue
+            try:
+                mtime = entry.stat().st_mtime
+            except OSError:
+                continue
+            if now - mtime > window_seconds:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            newest = max(newest, mtime)
+        total = sum(counts.values())
+        details: dict[str, Any] = {
+            "path": str(reports_dir),
+            "windowHours": 24,
+            "counts": dict(sorted(counts.items())),
+        }
+        if total == 0:
+            self.add(check_id, "pass",
+                     "no interpreter crash reports in the last 24h",
+                     details=details)
+            return
+        details["newestAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(newest))
+        summary = ", ".join(f"{k} x{v}" for k, v in sorted(counts.items()))
+        self.add(
+            check_id,
+            "warn",
+            f"{total} interpreter crash report(s) in the last 24h ({summary})",
+            required_for=("unattended-runs",),
+            remediation=(
+                "An interpreter that segfaults under load makes gates and workers "
+                "fail at random and the loop attributes each failure to the product. "
+                "Read the newest report under ~/Library/Logs/DiagnosticReports, pin a "
+                "different build with SINGULAR_BASH_BIN if the crashing binary is bash, "
+                "and lower SINGULAR_MAX_CONCURRENT / SINGULAR_TEST_JOBS until the "
+                "reports stop."
+            ),
+            details=details,
+        )
 
     def process_group_kill_check(self, seam: str) -> None:
         details: dict[str, Any] = {"probe": "spawn-setsid-killpg-verify"}

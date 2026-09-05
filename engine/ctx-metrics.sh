@@ -652,10 +652,82 @@ for ev in events:
     data = data_object(ev)
     bump(reason_counts, str(data.get("reason", "")) or "none")
 
+# Role and ceremony accounting (0.21.0). Every provider invocation leaves a
+# runner-result sidecar (singular.orchestration.runner-result.v0) with its role,
+# outcome, failure class and, when the provider reports it, token usage. Those
+# sidecars are the only complete record of what the model calls were spent on;
+# the field audit that found 88% of invocations going to planners and critics
+# had to reconstruct this by hand. Scan them (bounded, read-only) so the
+# question "what fraction of model work was ceremony?" is one command.
+CONTROL_PLANE_ROLES = {"planner", "critic", "auditor", "decider", "supervisor", "assistant"}
+role_stats = {}
+runner_results_scanned = 0
+if runs_dir and os.path.isdir(runs_dir):
+    for dirpath, dirnames, filenames in os.walk(runs_dir):
+        # Attempt archives duplicate live sidecars; count each invocation once.
+        dirnames[:] = [d for d in dirnames if d not in ("attempts", "worker-evidence")]
+        for name in filenames:
+            if "runner-result" not in name or not name.endswith(".json"):
+                continue
+            record = read_json(os.path.join(dirpath, name))
+            if not isinstance(record, dict) or record.get("schema") != "singular.orchestration.runner-result.v0":
+                continue
+            runner_results_scanned += 1
+            role = str(record.get("role") or "unknown")
+            stats = role_stats.setdefault(role, {
+                "invocations": 0,
+                "outcomes": {},
+                "failureClasses": {},
+                "usageRecords": 0,
+                "inputTokens": 0,
+                "cachedInputTokens": 0,
+                "outputTokens": 0,
+            })
+            stats["invocations"] += 1
+            bump(stats["outcomes"], str(record.get("outcome") or "unknown"))
+            bump(stats["failureClasses"], str(record.get("failureClass") or "none"))
+            usage = record.get("usage")
+            if isinstance(usage, dict):
+                stats["usageRecords"] += 1
+                for key in ("inputTokens", "cachedInputTokens", "outputTokens"):
+                    value = usage.get(key)
+                    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                        stats[key] += value
+control_invocations = sum(v["invocations"] for k, v in role_stats.items() if k in CONTROL_PLANE_ROLES)
+implementer_invocations = sum(v["invocations"] for k, v in role_stats.items() if k == "implementer")
+model_invocations = sum(v["invocations"] for v in role_stats.values())
+control_input = sum(v["inputTokens"] for k, v in role_stats.items() if k in CONTROL_PLANE_ROLES)
+implementer_input = sum(v["inputTokens"] for k, v in role_stats.items() if k == "implementer")
+total_input = sum(v["inputTokens"] for v in role_stats.values())
+integrations = sum(1 for ev in events if ev.get("type") == "integration.integrated")
+accepted = sum(1 for ev in events if ev.get("type") == "l1.task_accepted")
+ceremony = {
+    "runnerResultsScanned": runner_results_scanned,
+    "modelInvocations": model_invocations,
+    "controlPlaneInvocations": control_invocations,
+    "implementerInvocations": implementer_invocations,
+    "controlPlaneInvocationFraction": (
+        round(control_invocations / model_invocations, 4) if model_invocations else None),
+    "controlPlaneInputTokens": control_input,
+    "implementerInputTokens": implementer_input,
+    "controlPlaneInputTokenFraction": (
+        round(control_input / total_input, 4) if total_input else None),
+    "acceptedTasks": accepted,
+    "integrations": integrations,
+    "invocationsPerAcceptedTask": (
+        round(model_invocations / accepted, 2) if accepted else None),
+    "invocationsPerIntegration": (
+        round(model_invocations / integrations, 2) if integrations else None),
+    "inputTokensPerIntegration": (
+        round(total_input / integrations) if integrations and total_input else None),
+}
+
 metrics = {
     "schema": "singular.orchestration.ctx-metrics.v0",
     "perTask": per_task_list,
     "aggregate": {
+        "roles": role_stats,
+        "ceremony": ceremony,
         "runsTotal": len(per_task_list),
         "attemptsTotal": attempts_total,
         "acceptedRuns": accepted_runs,

@@ -2263,6 +2263,101 @@ run_gate_command_with_progress() {
   return "$ec"
 }
 
+# Proof reuse (0.21.0). integrate.sh proves every merge on a disposable checkout
+# of the exact staged tree and gate-check.sh records that pass in the proof
+# ledger keyed by tree. When the tree about to be promoted is byte-identical to
+# a recorded tree, the same command already passed on the same bytes in a
+# cleaner workspace than this one: running it again here buys no evidence.
+# Every binding is re-verified before reuse — command text, campaign identity,
+# report and log hashes, and a bounded age — and any doubt runs the gate.
+# The reused log and observation become this promotion's own evidence files so
+# the strict report, the hash citations and the gate-result are produced by
+# exactly the code path a fresh run uses. SINGULAR_PROMOTE_PROOF_REUSE=0 forces
+# a fresh run; SINGULAR_PROMOTE_PROOF_TTL_SEC bounds the age (default 7 days).
+promotion_proof_source_run=""
+promotion_proof_tree=""
+promotion_proof_reuse() {
+  local node="$1" command="$2" log_path="$3" observation_path="${4:-}"
+  promotion_proof_source_run=""
+  promotion_proof_tree=""
+  [[ "${SINGULAR_PROMOTE_PROOF_REUSE:-1}" != "0" ]] || return 1
+  local tree proof
+  tree="$(git -C "$SINGULAR_ROOT" rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+  [[ "$tree" =~ ^[0-9a-f]{40,64}$ ]] || return 1
+  proof="$SINGULAR_STATE_DIR/proofs/$tree.json"
+  [[ -f "$proof" ]] || return 1
+  local verdict
+  verdict="$(python3 - "$proof" "$tree" "$command" "$promotion_campaign_binding" \
+    "${SINGULAR_PROMOTE_PROOF_TTL_SEC:-604800}" "$log_path" "$observation_path" <<'PY' 2>/dev/null || printf 'no\tproof-check-error'
+import datetime as dt, hashlib, json, os, shutil, sys
+(proof_path, tree, command, binding, ttl, log_path, observation_path) = sys.argv[1:8]
+def out(status, detail):
+    print("%s\t%s" % (status, detail)); raise SystemExit(0)
+def sha(path):
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+try:
+    proof = json.load(open(proof_path, encoding="utf-8"))
+except Exception:
+    out("no", "proof-unreadable")
+if proof.get("schema") != "singular.orchestration.gate-proof.v0":
+    out("no", "proof-schema")
+if proof.get("treeSha") != tree:
+    out("no", "tree-mismatch")
+if proof.get("phase") != "integration" or proof.get("workspaceKind") != "integration":
+    out("no", "phase")
+if proof.get("outcome") not in ("passed", "passed-with-acknowledged-baseline"):
+    out("no", "outcome-%s" % proof.get("outcome"))
+if proof.get("commandSha256") != hashlib.sha256(command.encode("utf-8")).hexdigest():
+    out("no", "command-mismatch")
+proof_binding = proof.get("campaignBinding") or "legacy"
+if binding not in ("", "legacy") and proof_binding != binding:
+    out("no", "campaign-mismatch")
+try:
+    recorded = dt.datetime.fromisoformat(str(proof.get("recordedAt", "")).replace("Z", "+00:00"))
+    age = (dt.datetime.now(dt.timezone.utc) - recorded).total_seconds()
+except Exception:
+    out("no", "recorded-at-invalid")
+if age < 0 or age > int(ttl):
+    out("no", "expired")
+report_path = proof.get("reportPath") or ""
+log_source = proof.get("logPath") or ""
+observation_source = proof.get("observationPath") or ""
+if not (report_path and os.path.isfile(report_path) and sha(report_path) == proof.get("reportSha256")):
+    out("no", "report-missing-or-changed")
+if not (log_source and os.path.isfile(log_source) and sha(log_source) == proof.get("logSha256")):
+    out("no", "log-missing-or-changed")
+try:
+    report = json.load(open(report_path, encoding="utf-8"))
+except Exception:
+    out("no", "report-unreadable")
+if report.get("logSha256") != proof.get("logSha256") or report.get("outcome") != proof.get("outcome"):
+    out("no", "report-binding-mismatch")
+if observation_path:
+    if not (observation_source and os.path.isfile(observation_source)):
+        out("no", "observation-missing")
+    os.makedirs(os.path.dirname(observation_path) or ".", exist_ok=True)
+    shutil.copyfile(observation_source, observation_path)
+os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+shutil.copyfile(log_source, log_path)
+out("ok", str(proof.get("runId") or ""))
+PY
+)"
+  local status="${verdict%%$'\t'*}" detail="${verdict#*$'\t'}"
+  if [[ "$status" != "ok" ]]; then
+    echo "promote-gate: node=$node integration proof for tree $tree not reusable ($detail); running the gate" >&2
+    return 1
+  fi
+  promotion_proof_source_run="$detail"
+  promotion_proof_tree="$tree"
+  echo "promote-gate: node=$node reusing the integration gate proof from run $detail (tree $tree)" >&2
+  singular_append_event "gate_promotion.proof_reused" \
+    "promotion cited the integration gate proof for a byte-identical tree" \
+    "{\"runId\":\"$run_id\",\"node\":\"$node\",\"treeSha\":\"$tree\",\"sourceRunId\":\"$detail\"}" || true
+  gate_rationale="$gate_rationale The regression evidence is the integration gate proof recorded by run $detail on the byte-identical tree $tree; the command was not re-executed at promotion."
+  return 0
+}
+
 promote_node() {
   local node="$1" strict="${2:-yes}"
   if ! gate_promoter_config "$node"; then
@@ -2357,12 +2452,17 @@ promote_node() {
   singular_append_event "gate_promotion.started" "gate promotion started" \
     "{\"runId\":\"$run_id\",\"node\":\"$node\"}"
   local exit_code=0
-  echo "promote-gate: node=$node running regression (log: $log_ref)" >&2
-  run_gate_command_with_progress \
-    "$command" \
-    "$log_path" \
-    "$([[ "$schema_id" == "singular.orchestration.gate-result.v1" ]] && printf '%s' "$observation_path")" \
-    || exit_code=$?
+  if promotion_proof_reuse "$node" "$command" "$log_path" \
+      "$([[ "$schema_id" == "singular.orchestration.gate-result.v1" ]] && printf '%s' "$observation_path")"; then
+    exit_code=0
+  else
+    echo "promote-gate: node=$node running regression (log: $log_ref)" >&2
+    run_gate_command_with_progress \
+      "$command" \
+      "$log_path" \
+      "$([[ "$schema_id" == "singular.orchestration.gate-result.v1" ]] && printf '%s' "$observation_path")" \
+      || exit_code=$?
+  fi
 
   local sha head_sha recorded_at report_sha="" report_outcome=""
   sha="$(shasum -a 256 "$log_path" | awk '{print $1}')"

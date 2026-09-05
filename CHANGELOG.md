@@ -7,6 +7,126 @@ and the plugin negotiate on `schemaVersion`.
 
 ---
 
+## [0.21.0] — 2026-09-05 — Throughput without assumption
+
+The 0.20 line finished the governance work: every decision in a run is bound,
+budgeted, and terminates. This release turns to the other half of a factory,
+throughput, and it starts from a measurement rather than a hunch. The
+35-hour field campaign on the previous engine spent 855 provider invocations
+to integrate six tasks. Planners and critics took 430 of them; the critic
+returned `revise` on 113 of 140 critiques, 335 of its findings were marked
+blocking, and every node parked on revision-budget exhaustion. Per accepted
+task the host ran the consumer's full regression suite four times on trees it
+had already proven. None of that produced software. `schemaVersion` stays
+**v2**.
+
+### The plan critic is calibrated, and its findings travel
+
+- **Severities now have binding meanings.** The prompt reserves `blocking` for
+  defects only the planner can fix (owned-file collisions, undeclared
+  dependencies on unintegrated work, unverifiable acceptance criteria,
+  duplicates, batch tasks that cannot land independently, contract
+  violations); design completeness a task file cannot carry is `should-fix`
+  or `note`.
+- **The host enforces them.** A `revise` verdict that names no blocking
+  finding is downgraded to `approve` (`plan.critique_downgraded`), findings
+  intact, rationale annotated. `SINGULAR_PLAN_CRITIQUE_REQUIRE_BLOCKING=0`
+  restores verdict-as-written.
+- **Approved batches carry their findings.** Should-fix and note findings are
+  appended to every candidate as `## Plan critique (advisory)` before the
+  approved snapshot is taken (so replays restore them). `singular_task_json`
+  exposes them as `planCritique`; the implementer prompt renders them as work
+  to address-or-decline and the auditor prompt as something to check. They
+  never widen scope. `SINGULAR_PLAN_CRITIQUE_ADVISORY=0` disables it.
+- **A repository without `prompts/plan-critic.md` no longer runs the critic
+  blind.** `singular init` copies prompt templates once (`cp -n`), so repos
+  initialized before the critic existed had no policy and parked every plan
+  on an empty verdict. The engine template is the fallback, recorded as
+  `ctx.plan_critic_prompt_fallback`.
+
+### Gate ceremony is proof-scoped
+
+- **`SINGULAR_AUDIT_VERIFY=auto` is the default.** The disposable rerun of the
+  worker gate before the auditor happens only when the worker gate cannot
+  stand on its own: a high-risk task, an outcome other than a clean `passed`
+  at the exact committed head, a source-integrity anomaly, or a report from
+  another phase. Otherwise the host-executed worker gate (gate-check.sh ran
+  it, not the model) is hash-bound as the audit's gate evidence
+  (`audit.verification_skipped`), and the exact-tree integration gate remains
+  the clean-checkout proof. `1` restores the unconditional rerun, `0` never
+  reruns.
+- **The auditor no longer pays to echo the host.** The verification
+  classification is a host fact; when the model's `verificationResults`
+  aggregate disagreed, 0.20 rejected the verdict and spent another auditor
+  pass at the highest effort setting. The host now rewrites the aggregate to
+  its own classification, keeps the model's product verdict, and preserves
+  the original beside the record (`l1.audit_verification_normalized`).
+  `SINGULAR_AUDIT_VERIFY_NORMALIZE=0` restores the retry.
+- **Promotion cites the integration proof.** integrate.sh already proves each
+  merge on a disposable checkout of the exact staged tree. gate-check.sh now
+  records passing integration-phase gates in a proof ledger keyed by tree
+  (`.singular-state/proofs/<tree>.json`: command, campaign binding, report and
+  log hashes). When the tree about to be promoted is byte-identical, the
+  promoter reuses that proof instead of re-executing the suite in the weaker
+  origin checkout (`gate_promotion.proof_reused`); any binding mismatch,
+  changed tree, or age past `SINGULAR_PROMOTE_PROOF_TTL_SEC` (7 days) runs the
+  gate. `SINGULAR_PROMOTE_PROOF_REUSE=0` forces a fresh run. Only the host
+  writes the ledger, only for integration-phase passes with verified integrity.
+
+### Ceremony is measured
+
+- **`singular metrics` reports per-role invocations and tokens**
+  (`aggregate.roles`) and a `ceremony` block: control-plane versus implementer
+  invocation and input-token fractions, invocations per accepted task, and
+  input tokens per integration, all from the runner-result sidecars every
+  invocation already writes. The field audit had to reconstruct these by hand.
+
+### The engine's own gate is four times faster
+
+- **`tests/run.sh` runs test files in parallel** with `SINGULAR_TEST_JOBS=N`.
+  Results print in discovery order, so PASS/FAIL lines, the summary and
+  `progress.jsonl` look exactly like a serial run; unset or `1` is the
+  historical loop byte-for-byte. A file that must not share the machine
+  declares `# singular-test: serial` and runs after the batch. On the
+  reference machine the 211-file suite went from 57 to 12 minutes with six
+  jobs; this repository's `gateCommand` now uses four.
+
+### The oldest bash on the machine is a test subject
+
+- `tests/test-bash32-parse.sh` parses `lib.sh` and every file it sources under
+  `/bin/bash` 3.2 when one exists. Tests that restrict `PATH` run engine
+  scripts under that interpreter, whose parser scans a heredoc inside a command
+  substitution for quotes and backticks; a single apostrophe in a comment there
+  had turned into eight unrelated adapter failures during this release.
+
+### Doctor reports interpreter crashes
+
+- `runtime.interpreter-crashes` scans `~/Library/Logs/DiagnosticReports` (macOS)
+  for bash, Python and git crash reports from the last 24 hours and warns with
+  the counts and the newest timestamp. During this release's validation the
+  Homebrew bash 5.3.9 segfaulted twenty times inside Apple's `os_log`
+  preferences refresh under six-way test load; every one of those became a
+  random red gate or an empty test log, and nothing in the engine could tell
+  that apart from a product failure. Now the operator is told first.
+
+### The planner template is stack-neutral
+
+- The shipped `l1-planner.md` hard-coded one consumer's toolchain (a Go gate
+  command, `internal/<area>/` paths, `_test.go` suffixes), so a fresh
+  `singular init` planned Go tasks for every repository. `[GATE-COMMAND]` and
+  `[AREA-PATHS]` are rendered from `singular.config.json`.
+
+### Upgrade note
+
+- Repositories that copied `prompts/plan-critic.md` before this release keep
+  their copy; refresh it from `templates/prompts/plan-critic.md` to get the
+  severity contract, or delete it to follow the engine template.
+- A task that previously parked as `audit-infra` because the disposable rerun
+  could not be provisioned will now be audited on its worker gate evidence.
+  Set `SINGULAR_AUDIT_VERIFY=1` to keep the old behavior.
+
+---
+
 ## [0.20.0] — 2026-08-18 — Governed by default
 
 The context subsystem was built, tested, and shipped switched off. This release

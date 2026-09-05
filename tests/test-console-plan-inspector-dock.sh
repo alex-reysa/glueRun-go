@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# singular-test: serial — asserts wall-clock bounds (a detached cycle must return before
+# its stubs finish / a headless browser must settle focus) that a loaded machine breaks.
 set -uo pipefail
 
 # Shared Plan inspector contract: one detail primitive, wide bottom dock, narrow

@@ -388,6 +388,15 @@ No additional top-level fields are permitted. Do not emit `risks`; put any
 unresolved blocking condition in blockers[] and any non-blocking note in
 nextAction. Emit ONLY that JSON object.
 """
+advisory = t.get("planCritique") or []
+if advisory:
+    contract += (
+        "\n## Plan critique (advisory, recorded before dispatch)\n\n"
+        "The plan critic recorded these findings about this task. Address each one "
+        "within your owned files, or state in the packet's nextAction why it does "
+        "not apply. They do not widen your scope.\n\n"
+        + "\n".join(f"- {item}" for item in advisory) + "\n"
+    )
 with open(out_path, "w", encoding="utf-8") as f:
     f.write(tmpl + contract)
 PY
@@ -442,14 +451,27 @@ contract = f"""
 - To inspect one raw artifact declared by the manifest, use only:
   `{script_dir}/evidence-show.sh {run_dir}/evidence-manifest.json <artifact-ref> [max-bytes]`
 
-Read-only. The host already reran the gate in a disposable writable worktree
-at the exact committed head with isolated caches. Do not rerun tests in the
-original worktree. Start from the compact manifest and fetch a bounded raw
-artifact only for a named finding; do not bulk-read raw evidence. Verify scope,
-red/green evidence, and acceptance criteria. Do NOT approve without evidence.
+Read-only. The host has already verified the committed gate: either by
+rerunning it in a disposable writable worktree at the exact committed head with
+isolated caches, or by hash-binding the worker's own gate evidence to that head.
+The Host Verification Binding section at the end of this prompt states which.
+Do not rerun tests in the original worktree. Start from the compact manifest
+and fetch a bounded raw artifact only for a named finding; do not bulk-read raw
+evidence. Verify scope, red/green evidence, and acceptance criteria. Do NOT
+approve without evidence.
 
 {verdict_contract}
 """
+advisory = t.get("planCritique") or []
+if advisory:
+    contract += (
+        "\n## Plan critique (advisory, recorded before dispatch)\n\n"
+        "The plan critic recorded these findings about this task before it was "
+        "dispatched. Check that the worker addressed each one or explicitly declined "
+        "it in the packet's nextAction. An ignored should-fix finding inside the "
+        "owned files is a finding; a note never blocks.\n\n"
+        + "\n".join(f"- {item}" for item in advisory) + "\n"
+    )
 with open(out_path, "w", encoding="utf-8") as f:
     f.write(tmpl + contract)
 PY
@@ -2012,9 +2034,59 @@ run_audit_phase() {
   local host_verification_status=""
   local verification_try=0 verification_ready="no"
 
+  # Disposable rerun policy (0.21.0). SINGULAR_AUDIT_VERIFY:
+  #   1     always rerun the committed gate in a disposable worktree (0.20 default)
+  #   0     never rerun; hash-bound worker evidence only
+  #   auto  (default) rerun only when the worker gate cannot stand on its own:
+  #         a high-risk task, a worker gate that is not a clean `passed` at this
+  #         exact head, a source-integrity anomaly, or a report from another
+  #         phase. Otherwise the host-executed worker gate (it ran under
+  #         gate-check.sh, not under the model) is the audit's gate evidence,
+  #         and the exact-tree integration gate remains the clean-checkout proof.
+  # In the field the rerun repeated a suite the host had just run, on every
+  # attempt of every task, and was the largest single share of gate time.
+  local audit_verify_mode="${SINGULAR_AUDIT_VERIFY:-auto}" audit_verify_run="yes"
+  local audit_verify_reason=""
+  case "$audit_verify_mode" in
+    1) audit_verify_run="yes"; audit_verify_reason="always" ;;
+    0) audit_verify_run="no"; audit_verify_reason="disabled" ;;
+    *)
+      audit_verify_reason="$(python3 - "$run_dir/gate-report.json" "$head_sha" "$risk_tier" <<'PY'
+import json, sys
+report_path, head, tier = sys.argv[1:4]
+try:
+    report = json.load(open(report_path, encoding="utf-8"))
+except Exception:
+    print("rerun:worker-gate-report-unreadable"); raise SystemExit(0)
+if tier == "high":
+    print("rerun:high-risk"); raise SystemExit(0)
+if report.get("outcome") != "passed":
+    print("rerun:worker-gate-outcome-%s" % (report.get("outcome") or "unknown")); raise SystemExit(0)
+if (report.get("sourceIntegrity") or {}).get("status") != "verified":
+    print("rerun:worker-gate-integrity-unverified"); raise SystemExit(0)
+if report.get("phase") != "worker" or report.get("workspaceKind") != "worker":
+    print("rerun:worker-gate-phase-mismatch"); raise SystemExit(0)
+if not head or report.get("headSha") != head:
+    print("rerun:worker-gate-head-mismatch"); raise SystemExit(0)
+print("skip:host-executed-worker-gate-verified")
+PY
+)"
+      if [[ "$audit_verify_reason" == skip:* ]]; then
+        audit_verify_run="no"
+      else
+        audit_verify_run="yes"
+      fi
+      ;;
+  esac
+  if [[ "$audit_verify_run" == "no" && "$audit_verify_mode" != "0" ]]; then
+    singular_append_event "audit.verification_skipped" \
+      "disposable gate rerun skipped; hash-bound host-executed worker gate stands" \
+      "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"mode\":\"$audit_verify_mode\",\"reason\":\"${audit_verify_reason#skip:}\",\"riskTier\":\"$risk_tier\"}" || true
+  fi
+
   # Re-run the committed gate in a disposable writable worktree. Cache and log
   # writes are isolated there; the original audited worktree remains untouched.
-  if [[ "${SINGULAR_AUDIT_VERIFY:-1}" == "1" ]]; then
+  if [[ "$audit_verify_run" == "yes" ]]; then
     for ((verification_try=0; verification_try<=verify_infra_max; verification_try++)); do
       if [[ "$verification_try" -gt 0 ]]; then
         singular_append_event "audit.verification_infra_retry" \
@@ -2075,7 +2147,7 @@ run_audit_phase() {
   # A deterministic, successful worker gate may substitute only after every
   # disposable rerun was infrastructure-inconclusive (or reruns were disabled).
   if [[ "$verification_ready" != "yes" ]]; then
-    if [[ "${SINGULAR_AUDIT_VERIFY:-1}" == "1" ]]; then
+    if [[ "$audit_verify_run" == "yes" ]]; then
       singular_append_event "audit.verification_infra_exhausted" \
         "disposable verification retry budget exhausted; checking exact evidence" \
         "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"budgetDomain\":\"verification-infrastructure\",\"retriesUsed\":$verify_infra_max,\"maxExtraRetries\":$verify_infra_max,\"consumesProductRepairBudget\":false}" \
@@ -2387,6 +2459,29 @@ PY
           audit_parsed="yes"
           break
         else
+          # Host authority (0.21.0). The classification is a host fact the
+          # model was asked to echo. When the echo is wrong, rewrite the
+          # verdict's verificationResults to the host value and keep the
+          # model's product judgment, instead of paying for a second auditor
+          # pass whose only job would be to type the host's own value back.
+          # The pre-normalization verdict is kept beside it.
+          # SINGULAR_AUDIT_VERIFY_NORMALIZE=0 restores the repair retry.
+          if [[ "${SINGULAR_AUDIT_VERIFY_NORMALIZE:-1}" != "0" ]] \
+            && model_verification_status="$(
+              python3 "$SCRIPT_DIR/audit-verdict-host-bind.py" \
+                --host-report "$run_dir/audit-verification.json" \
+                --verdict "$audit_record" --normalize \
+                --command "$gate_cmd" \
+                --evidence-ref "runs/$run_id/audit-verification.json" \
+                2>"$run_dir/audit-verification-normalize.err"
+            )"; then
+            singular_append_event "l1.audit_verification_normalized" \
+              "auditor verification classification rewritten to the host classification" \
+              "{\"taskId\":\"$task_id\",\"runId\":\"$run_id\",\"attempt\":$n,\"hostVerification\":\"$host_verification_status\",\"detail\":\"$(head -1 "$run_dir/audit-verification-bind.err" 2>/dev/null | tr '"' "'" | head -c 300)\"}" \
+              || true
+            audit_parsed="yes"
+            break
+          fi
           model_verification_status=""
           infra_reason="verification-classification-mismatch"
           audit_repair_response_file="$run_dir/audit-attempt-${n}-try-${audit_try}.invalid.json"

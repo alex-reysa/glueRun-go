@@ -759,6 +759,9 @@ PY
   export MOCK_COUNTER_DIR="$FIXTURE_TMP/counters-integrity"
   export SINGULAR_MAX_RETRIES=2
   export SINGULAR_DECIDER_FAST=0
+  # This scenario exercises the disposable rerun's own integrity guard, which
+  # 0.21.0's risk-tiered default skips for a clean normal-risk worker gate.
+  export SINGULAR_AUDIT_VERIFY=1
 
   local out rc=0
   out="$("$SCRIPT_DIR/l1-drive.sh" TASK-0001 2>&1)" || rc=$?
@@ -787,7 +790,7 @@ PY
   assert_contains "$(cat "$idx")" '"deciderAction": "escalate-parked"' "integrity-violation: archived action"
   assert_contains "$(cat "$idx")" '"deciderAuthority": "policy"' "integrity-violation: archived authority policy"
   assert_eq "$(singular_lease_field TASK-0001 retryCount)" "0" "integrity-violation: retryCount unchanged"
-  unset SINGULAR_MAX_RETRIES SINGULAR_DECIDER_FAST
+  unset SINGULAR_MAX_RETRIES SINGULAR_DECIDER_FAST SINGULAR_AUDIT_VERIFY
   echo "ok: driver integrity violation parks for human judgment (retryCount=0)"
 }
 
